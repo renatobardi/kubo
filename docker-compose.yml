@@ -1,0 +1,88 @@
+# docker-compose.yml — Kubo
+# SurrealDB (único datastore, invariante 2) + sidecar de backup diário.
+# Pin de imagem PROVISÓRIO (v2.1.4): o pin definitivo sai do spike M2 (ADR).
+#
+# Postura de rede (CLAUDE.md §Segurança): SurrealDB NUNCA é exposto fora da rede
+# interna do compose — sem `ports:` publicado. Serviços do mesmo compose o
+# alcançam por DNS interno (`surrealdb:8000`). Expor à VCN/host é opt-in consciente.
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v2.1.4
+    restart: unless-stopped
+    # A imagem roda como uid 65532 (nonroot), mas o volume nomeado é root:root e o
+    # RocksDB precisa criar seu diretório. root evita um init-container de chown.
+    # ponytail: root aqui; se quiser nonroot, um init que faça chown 65532 do volume.
+    user: root
+    command:
+      - start
+      - --user
+      - ${SURREAL_USER:-root}
+      - --pass
+      - ${SURREAL_PASS:-root}
+      - rocksdb:/data/kubo.db
+    volumes:
+      - surreal-data:/data
+    # Imagem distroless (sem shell): healthcheck em exec form, binário em /surreal.
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Backup diário. A imagem oficial do SurrealDB é distroless (sem shell/cron),
+  # então o dump não roda dentro dela: um sidecar alpine consome o endpoint HTTP
+  # de export do SurrealDB (operação equivalente ao `surreal export` — D2) via
+  # busybox wget, sem dependências extras. Loop de sleep = cron de 1 job/dia.
+  backup:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    volumes:
+      - surreal-backups:/backups
+    environment:
+      SURREAL_USER: ${SURREAL_USER:-root}
+      SURREAL_PASS: ${SURREAL_PASS:-root}
+      SURREAL_NS: ${SURREAL_NS:-kubo}
+      SURREAL_DB: ${SURREAL_DB:-kubo}
+      # Upload OCI — parametrizado, nunca commitado. Vazio = upload pulado.
+      OCI_UPLOAD_PAR_URL: ${OCI_UPLOAD_PAR_URL:-}
+    command:
+      - sh
+      - -c
+      - |
+        set -u   # sem -e: uma falha transitória de rede não pode matar o loop diário
+        AUTH=$$(printf '%s:%s' "$$SURREAL_USER" "$$SURREAL_PASS" | base64)
+        while true; do
+          TS=$$(date -u +%Y%m%dT%H%M%SZ)
+          OUT="/backups/kubo-$$TS.surql"
+          if wget -q --timeout=30 --tries=2 -O "$$OUT" \
+              --header="Authorization: Basic $$AUTH" \
+              --header="surreal-ns: $$SURREAL_NS" \
+              --header="surreal-db: $$SURREAL_DB" \
+              "http://surrealdb:8000/export"; then
+            echo "[backup] dump local: $$OUT ($$(wc -c < "$$OUT") bytes)"
+            if [ -n "$${OCI_UPLOAD_PAR_URL:-}" ]; then
+              # Upload por Pre-Authenticated Request (PUT). curl só é necessário
+              # aqui e só quando o OCI está configurado — busybox wget não faz PUT.
+              apk add --no-cache curl >/dev/null 2>&1 || true
+              curl -sf --max-time 120 -X PUT --upload-file "$$OUT" \
+                "$${OCI_UPLOAD_PAR_URL}kubo-$$TS.surql" \
+                && echo "[backup] upload OCI ok" \
+                || echo "[backup] upload OCI FALHOU (nova tentativa no próximo ciclo)"
+            else
+              echo "[backup] OCI não configurado — upload pulado (ver .env.example)"
+            fi
+          else
+            echo "[backup] export FALHOU (timeout/erro) — nova tentativa no próximo ciclo"
+            rm -f "$$OUT"
+          fi
+          sleep 86400
+        done
+
+volumes:
+  surreal-data:
+  surreal-backups:

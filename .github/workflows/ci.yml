@@ -1,0 +1,59 @@
+# CI do Kubo — os mesmos gates do harness local, como verdade final no PR.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"   # auditoria semanal de dependências
+
+# Least-privilege: os jobs só leem o repo (CodeRabbit PR#1).
+permissions:
+  contents: read
+
+# Cancela runs obsoletos do mesmo ref (economia + feedback rápido).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen            # lockfile íntegro ou falha
+      - name: Lint (inclui regras de segurança S/bandit)
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Types
+        run: uv run pyright
+      - name: Segredos
+        # Forma ENFORÇANTE: `detect-secrets scan --baseline` sai 0 mesmo com segredo
+        # novo (ele reconcilia o baseline). Quem FALHA (exit 1) diante de segredo novo
+        # é o `detect-secrets-hook`. Comprovado empiricamente na sessão 0001.
+        run: uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+      - name: Auditoria de dependências
+        run: uv run pip-audit
+
+  tests:
+    runs-on: ubuntu-latest
+    # NOTA (M1) — serviço SurrealDB deferido para o M2. O bloco `services:` do GitHub
+    # Actions não tem campo de comando; a imagem oficial (distroless, sem shell) não
+    # sobe servidor sem `start ...`, então subiria e sairia na hora, matando o job.
+    # O M1 não tem teste de integração (spike = M2). Religar no M2 via um step
+    # `docker run -d surrealdb/surrealdb:<pin> start --user ... memory` + probe
+    # `surreal isready`. Obrigação registrada em docs/sessions/0001-fundacao.md.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      # Gate de cobertura CONFIGURADO mas ADIADO: com módulos vazios não há dados
+      # (--cov-fail-under falharia por "no data" ou passaria vacuamente). ENFORCE a
+      # partir do M3. NUNCA remover o gate — apenas manter `--cov-fail-under` comentado.
+      - name: Unit (integração religa no M2)
+        run: >
+          uv run pytest -m "not integration"
+          --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
+        # enforce a partir do M3:  --cov-fail-under=85
