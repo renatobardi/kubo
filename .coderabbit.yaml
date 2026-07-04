@@ -51,6 +51,14 @@ reviews:
         TDD é obrigatório: código de produção no PR sem teste correspondente é
         finding bloqueante. Verificar que testes exercitam comportamento, não
         implementação, e que nenhum teste chama provider LLM real.
+    - path: "kubo/runtime/**"
+      instructions: |
+        Runtime aplica o contrato do worker e retorna RunResult estruturado em
+        falhas — nunca deixar exceção de worker explodir o runtime.
+    - path: "kubo/api/**"
+      instructions: |
+        Fase 1: FastAPI + HTMX + tokens do Tailwind 4 do design system. Não
+        inventar padrões de UI fora do design system.
 
 chat:
   auto_reply: true

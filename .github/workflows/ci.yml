@@ -9,6 +9,15 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # auditoria semanal de dependências
 
+# Least-privilege: os jobs só leem o repo (CodeRabbit PR#1).
+permissions:
+  contents: read
+
+# Cancela runs obsoletos do mesmo ref (economia + feedback rápido).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest

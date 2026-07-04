@@ -54,27 +54,31 @@ services:
       - sh
       - -c
       - |
-        set -eu
+        set -u   # sem -e: uma falha transitória de rede não pode matar o loop diário
         AUTH=$$(printf '%s:%s' "$$SURREAL_USER" "$$SURREAL_PASS" | base64)
         while true; do
           TS=$$(date -u +%Y%m%dT%H%M%SZ)
           OUT="/backups/kubo-$$TS.surql"
-          wget -q -O "$$OUT" \
-            --header="Authorization: Basic $$AUTH" \
-            --header="surreal-ns: $$SURREAL_NS" \
-            --header="surreal-db: $$SURREAL_DB" \
-            "http://surrealdb:8000/export"
-          echo "[backup] dump local: $$OUT ($$(wc -c < "$$OUT") bytes)"
-          if [ -n "$${OCI_UPLOAD_PAR_URL:-}" ]; then
-            # Upload por Pre-Authenticated Request (PUT). curl só é necessário
-            # aqui e só quando o OCI está configurado — busybox wget não faz PUT.
-            apk add --no-cache curl >/dev/null 2>&1
-            curl -sf -X PUT --upload-file "$$OUT" \
-              "$${OCI_UPLOAD_PAR_URL}kubo-$$TS.surql" \
-              && echo "[backup] upload OCI ok" \
-              || echo "[backup] upload OCI FALHOU"
+          if wget -q --timeout=30 --tries=2 -O "$$OUT" \
+              --header="Authorization: Basic $$AUTH" \
+              --header="surreal-ns: $$SURREAL_NS" \
+              --header="surreal-db: $$SURREAL_DB" \
+              "http://surrealdb:8000/export"; then
+            echo "[backup] dump local: $$OUT ($$(wc -c < "$$OUT") bytes)"
+            if [ -n "$${OCI_UPLOAD_PAR_URL:-}" ]; then
+              # Upload por Pre-Authenticated Request (PUT). curl só é necessário
+              # aqui e só quando o OCI está configurado — busybox wget não faz PUT.
+              apk add --no-cache curl >/dev/null 2>&1 || true
+              curl -sf --max-time 120 -X PUT --upload-file "$$OUT" \
+                "$${OCI_UPLOAD_PAR_URL}kubo-$$TS.surql" \
+                && echo "[backup] upload OCI ok" \
+                || echo "[backup] upload OCI FALHOU (nova tentativa no próximo ciclo)"
+            else
+              echo "[backup] OCI não configurado — upload pulado (ver .env.example)"
+            fi
           else
-            echo "[backup] OCI não configurado — upload pulado (ver .env.example)"
+            echo "[backup] export FALHOU (timeout/erro) — nova tentativa no próximo ciclo"
+            rm -f "$$OUT"
           fi
           sleep 86400
         done

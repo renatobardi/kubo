@@ -23,10 +23,19 @@ echo "$CMD" | grep -Eq 'git[[:space:]]+push[[:space:]]+.*\b(main|master)\b.*(--f
 echo "$CMD" | grep -Eq 'git[[:space:]]+(reset[[:space:]]+--hard[[:space:]]+origin|clean[[:space:]]+-[a-z]*x)' \
   && deny "git reset --hard origin / clean -x (perda de trabalho não commitado)"
 
-# Segredos e exfiltração
-echo "$CMD" | grep -Eq '(cat|less|head|tail|grep)[[:space:]]+[^|;]*\.env([[:space:]]|$|\.)' \
-  && grep -vq '\.env\.example' <<<"$CMD" \
-  && deny "leitura direta de .env (use variáveis de ambiente)"
+# Segredos e exfiltração. Bypass corrigido (CodeRabbit PR#1): a exclusão de
+# .env.example era feita contra o comando inteiro, então `cat .env .env.example`
+# passava. Agora a decisão é por TOKEN — bloqueia .env que não seja .env.example.
+if echo "$CMD" | grep -Eq '(cat|less|head|tail|grep)[[:space:]]'; then
+  set -f  # sem globbing ao iterar tokens
+  for tok in $CMD; do
+    case "$tok" in
+      *.env.example) : ;;
+      *.env|*.env.*) deny "leitura direta de .env (use variáveis de ambiente)" ;;
+    esac
+  done
+  set +f
+fi
 echo "$CMD" | grep -Eq 'curl[[:space:]]+.*(-d|--data|--upload-file)[[:space:]]+.*\.(env|pem|key)' \
   && deny "upload de arquivo de segredo"
 
