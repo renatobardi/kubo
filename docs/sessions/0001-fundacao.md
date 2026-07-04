@@ -131,6 +131,17 @@ Fontes: sessão de planejamento Cowork de 2026-07-04, com 2 consultas ao advisor
 
 ---
 
+## Notas de execução (2026-07-04, sessão CLII) — pendências herdadas pelo M2
+
+Registradas aqui (não só em comentário de YAML) para que o M2 herde obrigação explícita. Correções de harness aplicadas nesta sessão além das previstas, todas bugfix (harness comprovadamente funcional), com reconcile do advisor:
+
+1. **Religar o serviço SurrealDB no CI (M2).** O bloco `services:` do GitHub Actions não tem campo de comando e a imagem oficial é distroless (sem shell) — não sobe servidor sem `start ...`, então subiria e sairia, matando o job. Como o M1 não tem teste de integração, o serviço foi **deferido** (não é remoção de gate: sequenciamento). No M2, subir o SurrealDB num *step* `docker run -d surrealdb/surrealdb:<pin> start --user ... --pass ... memory` + probe `surreal isready --conn ...` antes de rodar os testes `@pytest.mark.integration`. Backend `memory` no CI (sem volume, mais rápido).
+2. **Enforce do gate de cobertura a partir do M3.** Em `ci.yml`, `--cov-fail-under=85` está comentado (módulos vazios não geram dados). Descomentar no M3, quando `kubo/store` passar a existir por TDD.
+3. **Pin definitivo do SurrealDB.** `v2.1.4` (compose + comentário do CI) é provisório; o pin definitivo sai do spike M2 (ADR).
+4. **Harness corrigido:** `stop-tests.sh` e `check-quality.sh` usavam `command -v pytest`/`ruff`/`pyright` (global), que num projeto uv retornam falso — os hooks no-opavam silenciosamente. Reescritos para `uv run`. `stop-tests.sh` também: 1 execução (era até 3×), flag inexistente `--deselect-on-failure` removida, exit 5 (nenhum teste) tratado como não-bloqueante. Gate de segredos do CI trocado de `detect-secrets scan --baseline` (sai 0 mesmo com segredo novo — vácuo) para `detect-secrets-hook` (falha, exit 1), comprovado empiricamente.
+
+---
+
 ## Adendo (2026-07-04, pós-aprovação) — design MVP no repo
 
 Entre a aprovação deste plano e sua execução, o dono produziu e commitou o design de referência em `docs/design/mvp/` (export do Claude Design), com nota de decisões em `docs/design/README.md`. Impactos NESTA sessão (nenhum reabre o escopo):

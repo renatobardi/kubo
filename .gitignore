@@ -219,3 +219,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# staging de artefatos da sessao de planejamento (consumido pela sessao 0001)
+planning/
+
+# config local do Claude Code (por maquina, nao versionada)
+.claude/settings.local.json
+
+# Kubo — staging e segredos
+.env.*
+!.env.example

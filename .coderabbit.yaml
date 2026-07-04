@@ -1,0 +1,56 @@
+# .coderabbit.yaml — Kubo
+# Review acontece NO PR, nunca em tempo de commit.
+# (Não instalar o CodeRabbit CLI como pre-commit hook; o harness bloqueia por convenção.)
+
+language: pt-BR
+
+reviews:
+  # Perfil rigoroso — qualidade máxima é requisito do projeto
+  profile: assertive
+  request_changes_workflow: true      # findings críticos bloqueiam o merge
+  high_level_summary: true
+  poem: false
+  review_status: true
+
+  # Dispara automaticamente na ABERTURA do PR e a cada push subsequente no PR
+  auto_review:
+    enabled: true
+    drafts: false                     # draft PR = trabalho em andamento, sem review ainda
+    base_branches:
+      - main
+
+  path_filters:
+    - "!**/uv.lock"
+    - "!docs/kubo-design-system.md"   # documento de referência extraído, não código
+
+  path_instructions:
+    - path: "kubo/store/**"
+      instructions: |
+        Camada única de acesso ao SurrealDB. Verifique: queries parametrizadas
+        (nunca interpolação de string com input externo), transações onde há
+        múltiplas escritas, e que nenhum módulo fora de store/ fala com o banco.
+    - path: "kubo/contracts/**"
+      instructions: |
+        Contrato de worker é fronteira de segurança: código gerado por agentes
+        será validado aqui. Rigor máximo em validação de manifest, tipos e
+        tratamento de erro estruturado (RunResult, nunca exceção vazando).
+    - path: "kubo/executors/**"
+      instructions: |
+        Subprocess de CLIs agênticos: verifique injeção de comando, timeout
+        obrigatório, e que nenhum segredo é passado via argv (só env).
+    - path: "catalogs/**"
+      instructions: |
+        YAML declarativo: rejeitar qualquer coisa que pareça lógica (condicional,
+        template string executável). Segredos só por referência, nunca valor.
+    - path: "kubo/workers/**"
+      instructions: |
+        Conteúdo coletado é hostil: validar sanitização de entrada externa antes
+        de persistir ou de compor prompts (prompt injection é ameaça primária).
+    - path: "tests/**"
+      instructions: |
+        TDD é obrigatório: código de produção no PR sem teste correspondente é
+        finding bloqueante. Verificar que testes exercitam comportamento, não
+        implementação, e que nenhum teste chama provider LLM real.
+
+chat:
+  auto_reply: true
