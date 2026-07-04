@@ -1,0 +1,23 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Neutrals (light)" subtitle="Warm stone surfaces, borders and muted text" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.sw{width:104px}
+.chip{height:56px;border-radius:var(--radius-lg);box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent)}
+.name{font-size:12px;font-weight:500;color:var(--foreground);margin-top:6px}
+.val{font-size:10px;color:var(--muted-foreground)}
+</style></head>
+<body>
+<div class="row">
+  <div class="sw"><div class="chip" style="background:var(--background)"></div><div class="name">background</div></div>
+  <div class="sw"><div class="chip" style="background:var(--card)"></div><div class="name">card</div></div>
+  <div class="sw"><div class="chip" style="background:var(--muted)"></div><div class="name">muted</div></div>
+  <div class="sw"><div class="chip" style="background:var(--secondary)"></div><div class="name">secondary</div></div>
+  <div class="sw"><div class="chip" style="background:var(--border)"></div><div class="name">border</div></div>
+  <div class="sw"><div class="chip" style="background:var(--foreground)"></div><div class="name">foreground</div></div>
+  <div class="sw"><div class="chip" style="background:var(--muted-foreground)"></div><div class="name">muted-fg</div></div>
+</div>
+</body></html>

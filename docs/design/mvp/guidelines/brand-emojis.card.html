@@ -1,0 +1,19 @@
+<!-- @dsCard group="Brand" viewport="700x160" name="Agent emojis" subtitle="The only sanctioned emoji use — agent identity" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.grid{display:flex;flex-wrap:wrap;gap:10px}
+.a{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:9999px;background:var(--muted);font-size:20px;line-height:1}
+.note{font-size:11px;color:var(--muted-foreground);margin-top:12px}
+</style></head>
+<body>
+<div class="grid" id="grid"></div>
+<p class="note">Preset avatars in <code>assets/agent-emojis.js</code> — 72 presets. Emoji appears nowhere else in the UI.</p>
+<script src="../assets/agent-emojis.js"></script>
+<script>
+const show = window.KUBO_AGENT_EMOJIS.slice(0, 24);
+document.getElementById('grid').innerHTML = show.map(e => `<div class="a">${e}</div>`).join('');
+</script>
+</body></html>

@@ -1,0 +1,20 @@
+<!-- @dsCard group="Foundations" viewport="700x180" name="Radii" subtitle="Pill buttons (4xl) · cards (2xl) · the signature combo" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}
+.box{width:96px;height:64px;background:var(--muted);box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent)}
+.name{font-size:11px;font-weight:500;color:var(--foreground);margin-top:6px}
+.val{font-size:10px;color:var(--muted-foreground)}
+</style></head>
+<body>
+<div class="row">
+  <div><div class="box" style="border-radius:var(--radius-sm)"></div><div class="name">sm</div><div class="val">4px</div></div>
+  <div><div class="box" style="border-radius:var(--radius-lg)"></div><div class="name">lg (base)</div><div class="val">8px</div></div>
+  <div><div class="box" style="border-radius:var(--radius-xl)"></div><div class="name">xl</div><div class="val">12px · textarea</div></div>
+  <div><div class="box" style="border-radius:var(--radius-2xl)"></div><div class="name">2xl</div><div class="val">14.4px · cards</div></div>
+  <div><div class="box" style="border-radius:var(--radius-4xl)"></div><div class="name">4xl</div><div class="val">20.8px · pill</div></div>
+</div>
+</body></html>

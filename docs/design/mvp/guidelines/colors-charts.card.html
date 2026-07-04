@@ -1,0 +1,23 @@
+<!-- @dsCard group="Colors" viewport="700x140" name="Chart ramp" subtitle="Monochrome stone — color stays reserved for action" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.ramp{display:flex;gap:0;border-radius:var(--radius-lg);overflow:hidden;box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent)}
+.seg{flex:1;height:64px}
+.labels{display:flex;gap:0;margin-top:6px}
+.lab{flex:1;font-size:10px;color:var(--muted-foreground);text-align:center}
+</style></head>
+<body>
+<div class="ramp">
+  <div class="seg" style="background:var(--chart-1)"></div>
+  <div class="seg" style="background:var(--chart-2)"></div>
+  <div class="seg" style="background:var(--chart-3)"></div>
+  <div class="seg" style="background:var(--chart-4)"></div>
+  <div class="seg" style="background:var(--chart-5)"></div>
+</div>
+<div class="labels">
+  <div class="lab">chart-1</div><div class="lab">chart-2</div><div class="lab">chart-3</div><div class="lab">chart-4</div><div class="lab">chart-5</div>
+</div>
+</body></html>

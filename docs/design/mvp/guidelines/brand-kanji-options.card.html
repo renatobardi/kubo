@@ -1,0 +1,24 @@
+<!-- @dsCard group="Brand" viewport="700x210" name="Kanji options" subtitle="Pick the mark glyph — rendered in the near-black tile" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.opt{display:flex;flex-direction:column;align-items:center;gap:8px;width:92px}
+.tile{display:flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:calc(64px*0.26);background:var(--primary);color:var(--primary-foreground);font-family:'Noto Sans JP',sans-serif;font-weight:600;font-size:40px}
+.k{font-family:'Noto Sans JP',sans-serif;font-weight:600;font-size:14px;color:var(--foreground)}
+.m{font-size:10px;color:var(--muted-foreground);text-align:center;line-height:1.3}
+.cur{box-shadow:0 0 0 2px var(--background),0 0 0 4px var(--foreground)}
+</style></head>
+<body>
+<div class="row">
+  <div class="opt"><div class="tile">匠</div><div class="k">匠 shō</div><div class="m">artisan / master</div></div>
+  <div class="opt"><div class="tile cur">智</div><div class="k">智 chi</div><div class="m">wisdom<br><b>current</b></div></div>
+  <div class="opt"><div class="tile">創</div><div class="k">創 sō</div><div class="m">create</div></div>
+  <div class="opt"><div class="tile">結</div><div class="k">結 ketsu</div><div class="m">connect / weave</div></div>
+  <div class="opt"><div class="tile">織</div><div class="k">織 ori</div><div class="m">weave / orchestrate</div></div>
+  <div class="opt"><div class="tile">巧</div><div class="k">巧 kō</div><div class="m">deft / craft</div></div>
+  <div class="opt"><div class="tile">房</div><div class="k">房 bō</div><div class="m">room / studio</div></div>
+</div>
+</body></html>

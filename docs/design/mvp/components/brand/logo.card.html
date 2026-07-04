@@ -1,0 +1,42 @@
+<!-- @dsCard group="Brand" viewport="700x220" name="Logo" subtitle="The 智 kanji mark + Kubo wordmark" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:24px;background:var(--background)}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { Logo } = window.KoboDesignSystem_6efae6;
+function Demo() {
+  return (
+    <div style={{display:'flex',flexWrap:'wrap',gap:40,alignItems:'center'}}>
+      <div style={{display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start'}}>
+        <Logo variant="mark" size={48} />
+        <span style={{fontSize:10,color:'var(--muted-foreground)'}}>mark · 工</span>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start'}}>
+        <Logo variant="kanji" size={44} />
+        <span style={{fontSize:10,color:'var(--muted-foreground)'}}>kanji · 智</span>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start'}}>
+        <Logo variant="full" size={36} />
+        <span style={{fontSize:10,color:'var(--muted-foreground)'}}>full lockup</span>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start',background:'var(--card)',padding:16,borderRadius:'var(--radius-2xl)'}} className="dark">
+        <Logo variant="full" size={36} onDark />
+        <span style={{fontSize:10,color:'var(--muted-foreground)'}}>on dark</span>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script>
+</body>
+</html>

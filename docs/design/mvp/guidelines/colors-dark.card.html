@@ -1,0 +1,23 @@
+<!-- @dsCard group="Colors" viewport="700x160" name="Dark theme" subtitle="Warm stone-950 surfaces, translucent white borders, deeper amber" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+html,body{margin:0}
+body{padding:20px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.sw{width:104px}
+.chip{height:56px;border-radius:var(--radius-lg);box-shadow:0 0 0 1px var(--border)}
+.name{font-size:12px;font-weight:500;color:var(--foreground);margin-top:6px}
+.val{font-size:10px;color:var(--muted-foreground)}
+</style></head>
+<body class="dark">
+<div class="row">
+  <div class="sw"><div class="chip" style="background:var(--background)"></div><div class="name">background</div></div>
+  <div class="sw"><div class="chip" style="background:var(--card)"></div><div class="name">card</div></div>
+  <div class="sw"><div class="chip" style="background:var(--muted)"></div><div class="name">muted</div></div>
+  <div class="sw"><div class="chip" style="background:var(--primary)"></div><div class="name">primary</div></div>
+  <div class="sw"><div class="chip" style="background:var(--sidebar-primary)"></div><div class="name">sidebar-primary</div></div>
+  <div class="sw"><div class="chip" style="background:var(--border)"></div><div class="name">border</div><div class="val">white / 10%</div></div>
+</div>
+</body></html>

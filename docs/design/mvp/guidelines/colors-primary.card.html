@@ -1,0 +1,21 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Primary & Semantic" subtitle="Near-black mono primary, tinted destructive" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:20px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.sw{width:112px}
+.chip{height:56px;border-radius:var(--radius-lg);box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent)}
+.name{font-size:12px;font-weight:500;color:var(--foreground);margin-top:6px}
+.val{font-size:10px;color:var(--muted-foreground)}
+</style></head>
+<body>
+<div class="row">
+  <div class="sw"><div class="chip" style="background:var(--primary)"></div><div class="name">primary</div><div class="val">near-black · action</div></div>
+  <div class="sw"><div class="chip" style="background:var(--primary-foreground)"></div><div class="name">primary-fg</div><div class="val">near-white</div></div>
+  <div class="sw"><div class="chip" style="background:var(--sidebar-primary)"></div><div class="name">sidebar-primary</div><div class="val">near-black</div></div>
+  <div class="sw"><div class="chip" style="background:var(--destructive)"></div><div class="name">destructive</div><div class="val">red</div></div>
+  <div class="sw"><div class="chip" style="background:color-mix(in oklab,var(--destructive) 10%,transparent)"></div><div class="name">destructive/10</div><div class="val">tinted bg</div></div>
+</div>
+</body></html>

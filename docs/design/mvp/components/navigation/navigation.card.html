@@ -1,0 +1,39 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Navigation" subtitle="256px sidebar · breadcrumb · page header" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:16px;background:var(--muted)}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const K = window.KoboDesignSystem_6efae6;
+const { Sidebar, Breadcrumb, PageHeader, Button, Icon } = K;
+function Demo() {
+  return (
+    <div style={{display:'flex',height:300,borderRadius:'var(--radius-2xl)',overflow:'hidden',boxShadow:'0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)'}}>
+      <div style={{height:'100%'}}><Sidebar active="Agents" /></div>
+      <div style={{flex:1,display:'flex',flexDirection:'column',background:'var(--background)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,height:56,padding:'0 16px',borderBottom:'1px solid color-mix(in oklab, var(--border) 50%, transparent)'}}>
+          <Icon name="panel-left" size={16} style={{color:'var(--muted-foreground)'}} />
+          <div style={{width:1,height:16,background:'color-mix(in oklab, var(--border) 60%, transparent)',margin:'0 4px'}} />
+          <Breadcrumb segments={[{label:'Agents',href:'#'},{label:'Research Agent'}]} />
+        </div>
+        <div style={{padding:20}}>
+          <PageHeader title="Agents" description="Create and manage your AI agents."
+            actions={<Button icon="plus">New agent</Button>} />
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script>
+</body>
+</html>

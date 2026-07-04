@@ -1,0 +1,29 @@
+/* Kubo webfonts.
+   The source app self-hosts @fontsource-variable/inter + @fontsource-variable/noto-serif.
+   Those binaries are NOT in the repo. Until the user uploads them:
+     1) the Google Fonts import below renders Inter + Noto Serif (the fallback in each token stack), and
+     2) the @font-face rules register the exact family names the tokens use
+        (--font-sans → 'Inter Variable', --font-heading → 'Noto Serif Variable'),
+        resolving via local() so no request 404s.
+   TO USE THE REAL FONTS: drop the variable woff2 files into this folder and change each
+   src to url('./InterVariable.woff2') format('woff2-variations') etc. Do NOT rename the families. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif:wght@400;500;600;700&family=Noto+Sans+JP:wght@500;600;700&display=swap');
+
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  /* swap in url('./InterVariable.woff2') format('woff2-variations') when the file is uploaded */
+  src: local('Inter'), local('Inter Variable');
+}
+
+@font-face {
+  font-family: 'Noto Serif Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  /* swap in url('./NotoSerifVariable.woff2') format('woff2-variations') when the file is uploaded */
+  src: local('Noto Serif'), local('Noto Serif Variable');
+}
