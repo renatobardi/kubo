@@ -338,7 +338,7 @@ def test_fetch_failure_is_http_error_without_leaking_body() -> None:
 def test_disallowed_config_scheme_rejected_at_construction() -> None:
     """feed_url com esquema != http/https é rejeitado na validação da CONFIG, não no run."""
     with pytest.raises(ValidationError):
-        FeedConfig(feed_url="ftp://x/feed")
+        FeedConfig(feed_url="gopher://x/feed")  # gopher: vetor SSRF clássico, fora do allowlist
 
 
 @respx.mock
@@ -360,7 +360,8 @@ def test_redirect_to_internal_ip_is_refused() -> None:
     """Servidor de feed que responde 302 apontando para um IP interno (metadata da
     OCI 169.254.169.254) é RECUSADO no hop de redirect — SSRF de exfiltração fechado.
     O IP-literal torna o teste determinístico (o guard valida sem DNS)."""
-    internal = "http://169.254.169.254/opc/v2/instance/"
+    # O IP de metadata da OCI é literal DE PROPÓSITO: é o destino que o teste prova ser recusado.
+    internal = "http://169.254.169.254/opc/v2/instance/"  # NOSONAR
     respx.get(_FEED_URL).mock(return_value=httpx.Response(302, headers={"Location": internal}))
     # O destino interno é mockado com um feed VÁLIDO de propósito: sem o guard, o worker
     # SEGUIRIA o redirect, parsearia e coletaria a resposta interna (payloads != []). Com o
@@ -376,7 +377,7 @@ def test_redirect_to_internal_ip_is_refused() -> None:
     assert result.error.kind == "http"
 
 
-class _VálidTwoHandler(http.server.BaseHTTPRequestHandler):
+class _ValidTwoHandler(http.server.BaseHTTPRequestHandler):
     """Handler mínimo que serve `VALID_TWO` em `/feed` — servidor local, nunca internet real."""
 
     def do_GET(self) -> None:  # noqa: N802 — nome exigido pela API de http.server
@@ -393,7 +394,7 @@ class _VálidTwoHandler(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def _feed_server() -> Iterator[str]:
     """Servidor HTTP local (porta efêmera, loopback) servindo o feed válido."""
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _VálidTwoHandler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ValidTwoHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

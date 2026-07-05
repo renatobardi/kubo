@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock
+from urllib.parse import urlsplit
 
 import pytest
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -157,7 +158,7 @@ def test_load_schedules_reads_real_repo_config() -> None:
         feed_url = entry.config["feed_url"]
         assert isinstance(feed_url, str)
         assert feed_url != ""
-        assert feed_url.startswith(("http://", "https://"))
+        assert urlsplit(feed_url).scheme in ("http", "https")
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ def test_build_scheduler_propagates_bad_cron() -> None:
         schedules=[ScheduleEntry(worker="feed", cron="not a cron", config={})],
     )
 
-    with pytest.raises(Exception):  # noqa: B017 — qualquer exceção do parser de cron serve
+    with pytest.raises(ValueError):  # CronTrigger.from_crontab levanta ValueError em cron inválido
         build_scheduler(schedules)
 
 
