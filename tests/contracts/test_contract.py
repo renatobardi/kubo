@@ -201,6 +201,27 @@ def test_error_info_instancia_e_serializa_para_fail_run() -> None:
     }
 
 
+def test_error_info_message_is_capped() -> None:
+    """ErrorInfo.message tem teto de 500 (Field max_length): um worker que
+    RETORNA erro com conteúdo coletado longo é rejeitado POR TIPO — não só o
+    caminho de exceção do runner trunca (fecha o furo F3 da revisão)."""
+    with pytest.raises(ValidationError):
+        ErrorInfo(kind="parse", message="a" * 501)
+
+
+def test_run_result_revalidates_constructed_instances() -> None:
+    """revalidate_instances="always": um RunResult montado por model_construct
+    (que PULA a validação) com Stats hostil é REvalidado ao passar por
+    model_validate e rejeitado. Sem isso, "validação antes de persistir" (regra 2
+    de D6) seria furável por instância pré-montada — a mesma classe de adversário
+    do TOCTOU que o contrato já protege (fecha o furo F1 da revisão)."""
+    hostile_stats = Stats.model_construct(leak="conteúdo coletado hostil")
+    hostile = RunResult.model_construct(payloads=[], stats=hostile_stats, error=None)
+
+    with pytest.raises(ValidationError):
+        RunResult.model_validate(hostile)
+
+
 # ---------------------------------------------------------------------------
 # validate_worker
 # ---------------------------------------------------------------------------

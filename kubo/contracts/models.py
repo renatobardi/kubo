@@ -27,7 +27,7 @@ class WorkerManifest(BaseModel):
     a classe (`manifest.config.model_validate(data)`).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     name: str
     version: str
@@ -39,7 +39,7 @@ class WorkerManifest(BaseModel):
 class SourcePayload(BaseModel):
     """Espelha `upsert_source(kind=..., canonical=..., title=...)`."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     type: Literal["source"] = "source"
     kind: str
@@ -55,7 +55,7 @@ class ItemPayload(BaseModel):
     a source em cada item é gratuito (ADR-0009 item III).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     type: Literal["item"] = "item"
     source: SourcePayload
@@ -78,7 +78,7 @@ class Stats(BaseModel):
     item IV, obrigação transversal do item VIII).
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", revalidate_instances="always")
 
     @model_validator(mode="after")
     def _counters_are_numeric(self) -> Self:
@@ -96,10 +96,12 @@ class ErrorInfo(BaseModel):
     `detail` carrega o diagnóstico estruturado que não cabe na mensagem.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     kind: str
-    message: str
+    # Teto de 500: fecha POR TIPO o vazamento de conteúdo coletado, mesmo quando o
+    # worker RETORNA o erro (não só quando o runner o constrói do exception).
+    message: str = Field(max_length=500)
     detail: dict[str, Any] | None = None
 
 
@@ -111,7 +113,7 @@ class RunResult(BaseModel):
     já gravados no lugar (ADR-0009 item VII).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     payloads: list[Payload] = []
     stats: Stats = Field(default_factory=Stats)

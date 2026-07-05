@@ -95,7 +95,10 @@ def _bearer_catalog() -> dict[str, Integration]:
             {
                 "name": "svc",
                 "kind": "http",
-                "auth": {"type": "bearer", "secret_ref": "env:KUBO_TEST_TOKEN"},
+                "auth": {
+                    "type": "bearer",
+                    "secret_ref": "env:KUBO_TEST_TOKEN",  # pragma: allowlist secret
+                },
             }
         )
     }
@@ -109,7 +112,7 @@ def test_resolve_secret_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     resolved = resolve_integrations(["svc"], _bearer_catalog())
 
     assert isinstance(resolved["svc"], ResolvedIntegration)
-    assert resolved["svc"].secret == "resolved-value"
+    assert resolved["svc"].secret == "resolved-value"  # pragma: allowlist secret
     assert resolved["svc"].auth_type == "bearer"
 
 
@@ -145,3 +148,32 @@ def test_resolved_integration_from_public_source() -> None:
 
     assert resolved["rss"].secret is None
     assert resolved["rss"].auth_type == "none"
+
+
+def test_resolved_secret_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O segredo resolvido NUNCA aparece no repr — fechado POR CONSTRUÇÃO
+    (field repr=False), não por disciplina de não-logar. Um worker que faz
+    `raise RuntimeError(ctx.integrations['svc'])` não exfiltra o segredo pelo
+    caminho de erro do runner (fecha o achado crítico #1 da revisão)."""
+    monkeypatch.setenv("KUBO_TEST_TOKEN", "super-secret-value")
+
+    resolved = resolve_integrations(["svc"], _bearer_catalog())
+
+    assert "super-secret-value" not in repr(resolved["svc"])
+    assert "super-secret-value" not in str(resolved["svc"])
+
+
+def test_inline_secret_value_not_echoed_in_error(tmp_path: Path) -> None:
+    """Ao rejeitar um secret_ref inline, a mensagem de erro NÃO ecoa o valor —
+    colar um token real por engano não o vaza para o ConfigError/run.error
+    (fecha o achado crítico #2 da revisão)."""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "name: bad\nkind: http\nauth:\n  type: bearer\n  secret_ref: sk-pasted-real-token\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_integration(bad)
+
+    assert "sk-pasted-real-token" not in str(exc_info.value)

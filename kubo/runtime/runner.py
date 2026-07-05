@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import ValidationError
 from surrealdb import RecordID
 
-from kubo.contracts.models import ErrorInfo, ItemPayload, Payload, RunResult
+from kubo.contracts.models import ErrorInfo, ItemPayload, Payload, RunResult, WorkerManifest
 from kubo.contracts.worker import validate_worker
 from kubo.errors import ConfigError
 from kubo.runtime.context import EmptyKnowledge, RunContext
@@ -28,15 +29,37 @@ _DEFAULT_CATALOG_DIR = Path(__file__).parents[2] / "catalogs" / "integrations"
 _MSG_CAP = 500
 
 
-def _error_from_exception(exc: Exception) -> ErrorInfo:
-    """Exceção capturada na fronteira → ErrorInfo, com `message` TRUNCADA (item VIII).
+def _error_message(exc: Exception) -> str:
+    """Mensagem da exceção para o ErrorInfo, TRUNCADA e sem vazar input.
 
-    ConfigError (permissão/segredo na montagem do ctx) é distinguido de falha do
-    próprio `run()`; ambos fecham o run em erro estruturado, não explodem."""
-    kind = "config" if isinstance(exc, ConfigError) else "worker_exception"
+    Para ValidationError, `str(exc)` embutiria o input_value (conteúdo coletado /
+    payload hostil); usa `errors(include_input=False)`. Depois trunca em 500: o
+    caminho de exceção é por onde conteúdo hostil vazaria para run.error/log."""
+    if isinstance(exc, ValidationError):
+        text = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+            for e in exc.errors(include_url=False, include_input=False)
+        )
+    else:
+        text = str(exc)
+    return text[:_MSG_CAP]
+
+
+def _error_from_exception(exc: Exception) -> ErrorInfo:
+    """Exceção capturada na fronteira → ErrorInfo estruturado (não explode).
+
+    `kind` distingue a origem: ConfigError (permissão/segredo na montagem do ctx),
+    ValidationError (RunResult malformado = violação de contrato) e o resto
+    (falha do próprio `run()`). Todos fecham o run em erro estruturado."""
+    if isinstance(exc, ConfigError):
+        kind = "config"
+    elif isinstance(exc, ValidationError):
+        kind = "contract"
+    else:
+        kind = "worker_exception"
     return ErrorInfo(
         kind=kind,
-        message=str(exc)[:_MSG_CAP],
+        message=_error_message(exc),
         detail={"exception": type(exc).__name__},
     )
 
@@ -72,7 +95,7 @@ def _persist(db: Any, payloads: list[Payload]) -> None:
 
 
 def _build_context(
-    manifest: Any,
+    manifest: WorkerManifest,
     config: dict[str, Any] | None,
     catalog_dir: Path,
     run_id: RecordID,
@@ -111,12 +134,13 @@ def run_worker(
         ctx = _build_context(manifest, config, catalog_dir, run_id)
         raw_result = worker.run(ctx)  # type: ignore[attr-defined]  # assinatura validada acima
         result = RunResult.model_validate(raw_result)
-    except Exception as exc:  # noqa: BLE001 — fronteira: exceção do worker é erro estruturado, não crash
+        # _persist DENTRO do try: uma falha de store não pode deixar o run travado
+        # em 'running' nem propagar exceção crua fora da fronteira.
+        _persist(db, result.payloads)
+        if result.error is not None:
+            fail_run(db, run_id, error=result.error.model_dump())
+        else:
+            finish_run(db, run_id, stats=result.stats.model_dump())
+    except Exception as exc:  # noqa: BLE001 — fronteira: exceção vira erro estruturado, não crash
         fail_run(db, run_id, error=_error_from_exception(exc).model_dump())
-        return run_id
-    _persist(db, result.payloads)
-    if result.error is not None:
-        fail_run(db, run_id, error=result.error.model_dump())
-    else:
-        finish_run(db, run_id, stats=result.stats.model_dump())
     return run_id

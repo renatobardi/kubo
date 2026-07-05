@@ -18,7 +18,9 @@ class Worker(Protocol):
     def run(self, ctx: RunContext) -> RunResult: ...
 ```
 
-O nome do contexto é `RunContext` (spec §3.3 é fonte de verdade; o plano 4.2.2 segue a spec). Todos os modelos do contrato usam `model_config = ConfigDict(extra="forbid")` — **exceto `Stats`** (item IV) — porque o default do pydantic é ignorar campo extra em silêncio, e numa fronteira de segurança isso fura a regra 2 de D6 (um worker que emite campo com nome errado teria o dado descartado sem erro; a "validação antes de persistir" viraria meia-verdade). `forbid` faz a validação ser um gate de verdade. Campos que mapeiam para colunas FLEXIBLE (`ItemPayload.metadata`, `ErrorInfo.detail`) continuam `dict[str, Any]` abertos — o `forbid` é na forma do payload, não no conteúdo do dict.
+O nome do contexto é `RunContext` (spec §3.3 é fonte de verdade; o plano 4.2.2 segue a spec). Todos os modelos do contrato usam `model_config = ConfigDict(extra="forbid", revalidate_instances="always")` — porque o default do pydantic é ignorar campo extra em silêncio, e numa fronteira de segurança isso fura a regra 2 de D6 (um worker que emite campo com nome errado teria o dado descartado sem erro; a "validação antes de persistir" viraria meia-verdade). `forbid` faz a validação ser um gate de verdade. Campos que mapeiam para colunas FLEXIBLE (`ItemPayload.metadata`, `ErrorInfo.detail`) continuam `dict[str, Any]` abertos — o `forbid` é na forma do payload, não no conteúdo do dict.
+
+**`revalidate_instances="always"` fecha o bypass por instância pré-montada:** por default o pydantic NÃO revalida uma instância de modelo passada a `model_validate` (`revalidate_instances="never"`). Sem isso, um worker que devolve `RunResult.model_construct(...)` (que pula a validação) com `Stats` hostil atravessaria a "validação antes de persistir" intacto — a mesma classe de adversário do TOCTOU (item V) que o contrato já protege. Com `always`, o `RunResult.model_validate(raw_result)` do runner revalida a instância e seus modelos aninhados, rejeitando o bypass. `Stats` também o carrega (item IV) — permissivo nos nomes, mas revalidado.
 
 O Protocol serve à checagem estática do pyright. **NÃO** é a validação de runtime — `@runtime_checkable`/`isinstance` só checam presença de membros, não a forma do manifest nem a assinatura de `run` (falsa validação). A validação de runtime é a função explícita `validate_worker` (item V).
 
@@ -124,7 +126,13 @@ Conteúdo coletado é hostil por padrão (prompt injection via conteúdo coletad
 
 Obrigação transversal, **enforce agora**: o **logger de worker NUNCA loga payload coletado** — nem `content`, nem `metadata`, nem `ErrorInfo.message`/`Stats` derivados de conteúdo. O logger carrega `run_id`/`worker`/contadores, não corpo coletado.
 
-**O runtime honra isso no próprio código de captura (item 4.2.3):** ao construir `ErrorInfo` a partir de uma exceção do worker, `message` é **truncado** (teto ~500 chars) e nunca embute repr de payload. Motivo concreto: `str(exc)` de um erro de parse costuma conter o trecho de conteúdo que quebrou o parser — o caminho de exceção é justamente por onde conteúdo coletado hostil vazaria para `run.error` e para o log. O `detail` estruturado existe para o diagnóstico que não cabe na mensagem.
+**O runtime honra isso no próprio código de captura (item 4.2.3):** ao construir `ErrorInfo` a partir de uma exceção do worker, `message` é **truncado** (teto 500 chars) e nunca embute repr de payload. Motivo concreto: `str(exc)` de um erro de parse costuma conter o trecho de conteúdo que quebrou o parser — o caminho de exceção é justamente por onde conteúdo coletado hostil vazaria para `run.error` e para o log. O `detail` estruturado existe para o diagnóstico que não cabe na mensagem.
+
+**Reforços cravados na revisão de segurança do M4 (fechar por construção, não por disciplina):**
+- **`ErrorInfo.message` tem `Field(max_length=500)`** — o teto vale também quando o worker RETORNA o erro (não só quando o runtime o constrói do exception): conteúdo coletado longo no `message` é rejeitado por tipo.
+- **`ResolvedIntegration.secret` é `field(repr=False)`** — o segredo resolvido nunca aparece em `repr`/`str`/traceback. Fecha o canal em que um worker faz `raise RuntimeError(ctx.integrations[x])` e o valor cairia em `run.error` via `str(exc)`.
+- **Mensagens de `ValidationError` nunca são propagadas com `str(exc)`** através da fronteira (loader, runner, `validate_worker`): usa-se `errors(include_input=False)`, porque `str(ValidationError)` embute o `input_value` inteiro (que carregaria conteúdo coletado ou um segredo colado por engano). E o validador de `IntegrationAuth` **não ecoa** o `secret_ref` candidato na mensagem.
+- **`_persist` roda DENTRO da fronteira try/except do runner** — uma falha de store no meio da persistência fecha o run em erro estruturado (não o deixa travado em `running` nem propaga exceção crua).
 
 ## O que este ADR não decide
 

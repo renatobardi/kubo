@@ -12,6 +12,7 @@ ADR-0009 item I). A validação de runtime é a função explícita
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
@@ -37,7 +38,9 @@ class RunContext(Protocol):
     """
 
     config: BaseModel
-    integrations: dict[str, Any]
+    # Mapping (não dict): atributo de Protocol é invariante — o ctx concreto usa
+    # Mapping[str, ResolvedIntegration] e precisa satisfazer este Protocol.
+    integrations: Mapping[str, Any]
     knowledge: KnowledgeReader
     logger: Any
 
@@ -68,7 +71,10 @@ def validate_worker(obj: object) -> WorkerManifest:
     try:
         manifest = WorkerManifest.model_validate(raw)
     except ValidationError as exc:
-        raise ContractError(f"manifest do worker é inválido: {exc}") from exc
+        # Sem str(exc): não propaga o input_value (que poderia carregar valor
+        # sensível colado no manifest) para o ContractError/log.
+        fields = ", ".join(".".join(str(p) for p in e["loc"]) for e in exc.errors())
+        raise ContractError(f"manifest do worker é inválido (campos: {fields})") from exc
 
     run = getattr(obj, "run", _MISSING)
     if not callable(run):

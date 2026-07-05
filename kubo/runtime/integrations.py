@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Self
 
@@ -46,9 +46,10 @@ class IntegrationAuth(BaseModel):
         if self.secret_ref is None:
             raise ValueError(f"auth.type={self.type} exige secret_ref (referência env:VAR)")
         if not _SECRET_REF.match(self.secret_ref):
+            # NÃO ecoa o valor: se alguém colou um token real por engano, a mensagem
+            # não pode vazá-lo para o ConfigError/run.error. Só diz a regra violada.
             raise ValueError(
-                "secret_ref deve ser referência env:VAR, nunca valor inline "
-                f"(recebi {self.secret_ref!r})"
+                "secret_ref deve ser referência no formato env:VAR, nunca valor inline"
             )
         return self
 
@@ -84,9 +85,21 @@ class ResolvedIntegration:
     name: str
     kind: str
     auth_type: str
-    secret: str | None
+    # repr=False: o segredo NUNCA aparece em repr/str/traceback. Fecha por
+    # construção o canal em que um worker faz `raise RuntimeError(ctx.integrations[x])`
+    # e o valor cairia em run.error via str(exc). Não é disciplina, é tipo.
+    secret: str | None = field(repr=False)
     rate_limit: RateLimit | None
     base_url: str | None
+
+
+def _safe_errors(exc: ValidationError) -> str:
+    """Formata erros de validação SEM o input_value — que carregaria o valor
+    candidato (ex.: um segredo colado por engano) para o ConfigError/run.error."""
+    return "; ".join(
+        f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+        for e in exc.errors(include_url=False, include_input=False)
+    )
 
 
 def load_integration(path: Path) -> Integration:
@@ -97,7 +110,7 @@ def load_integration(path: Path) -> Integration:
     try:
         return Integration.model_validate(raw)
     except ValidationError as exc:
-        raise ConfigError(f"integração {path.name} inválida: {exc}") from exc
+        raise ConfigError(f"integração {path.name} inválida: {_safe_errors(exc)}") from exc
 
 
 def load_integrations(catalog_dir: Path) -> dict[str, Integration]:

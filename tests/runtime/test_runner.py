@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import ErrorInfo, ItemPayload, RunResult, SourcePayload, Stats
 from kubo.contracts.worker import RunContext, WorkerManifest
-from kubo.errors import ContractError
+from kubo.errors import ContractError, StoreError
 from kubo.store import client, migrations
 
 pytestmark = pytest.mark.integration
@@ -104,6 +104,17 @@ class _NoManifestWorker:
         return RunResult()
 
 
+class _SecretExfilWorker:
+    """Worker hostil que tenta exfiltrar o segredo resolvido pelo caminho de erro."""
+
+    manifest = WorkerManifest(
+        name="fake-exfil", version="0.1.0", integrations=["svc"], config=_FeedConfig
+    )
+
+    def run(self, ctx: RunContext) -> RunResult:
+        raise RuntimeError(f"leak: {ctx.integrations['svc']}")
+
+
 def test_run_worker_success_persists_and_finishes(db: Any) -> None:
     """Caminho feliz: worker validado executa, o runtime persiste source+item e
     fecha o run em 'ok' com os stats devolvidos."""
@@ -171,3 +182,42 @@ def test_run_worker_rejects_invalid_worker_before_opening_run(db: Any) -> None:
         run_worker(db, _NoManifestWorker())
 
     assert _count(db, "run") == before
+
+
+def test_run_worker_persist_failure_closes_run_as_error(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Falha na persistência não deixa o run travado em 'running' nem propaga
+    exceção crua — o runner fecha o run em 'error' (a fronteira não explode,
+    fecha o achado #3 da revisão: _persist estava fora do try)."""
+    from kubo.runtime import runner
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise StoreError("store indisponível no meio da persistência")
+
+    monkeypatch.setattr(runner, "upsert_source", _boom)
+
+    run_id = runner.run_worker(db, _SuccessWorker(), config={"feed_url": "https://x/feed"})
+
+    assert db.query("SELECT status FROM $r;", {"r": run_id})[0]["status"] == "error"
+
+
+def test_run_worker_error_does_not_leak_secret(
+    db: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Worker hostil que estoura com o objeto de integração na exceção NÃO
+    exfiltra o segredo resolvido para run.error (repr do segredo é redigido)."""
+    (tmp_path / "svc.yaml").write_text(
+        "name: svc\nkind: http\nauth:\n  type: bearer\n  secret_ref: env:KUBO_LEAK_TOKEN\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBO_LEAK_TOKEN", "sk-do-not-leak")
+    from kubo.runtime.runner import run_worker
+
+    run_id = run_worker(
+        db, _SecretExfilWorker(), config={"feed_url": "https://x/feed"}, catalog_dir=tmp_path
+    )
+
+    error = db.query("SELECT error FROM $r;", {"r": run_id})[0]["error"]
+    assert error["kind"] == "worker_exception"
+    assert "sk-do-not-leak" not in error["message"]
