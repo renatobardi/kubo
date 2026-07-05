@@ -15,6 +15,13 @@ esac
 
 PROJ="${CLAUDE_PROJECT_DIR:-.}"
 
+# Só arquivos DENTRO do projeto: gate de qualidade não se aplica a scratchpad/tmp
+# ou qualquer caminho fora do repo (probes descartáveis não são código do projeto).
+case "$FILE" in
+  "$PROJ"/*) : ;;
+  /*) exit 0 ;;
+esac
+
 # Runner: neste projeto ruff/pyright vivem no venv do uv, não no PATH global.
 if command -v uv >/dev/null 2>&1 && [ -f "$PROJ/pyproject.toml" ]; then
   USE_UV=1
