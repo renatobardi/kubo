@@ -84,10 +84,12 @@ kubo/
 │   ├── store/               # ÚNICA camada de acesso ao SurrealDB + migrations/
 │   ├── runtime/             # flows, tasks, boards, gates
 │   ├── executors/           # api (LiteLLM) e cli (adapters)
-│   ├── workers/             # workers built-in portados (scribe, feed, harvest)
+│   ├── workers/             # workers built-in portados (feed; scribe, harvest futuros)
+│   ├── scheduler/           # agendamento APScheduler (ADR-0010); `python -m kubo.scheduler`
 │   ├── distribution/        # telegram, smtp, relatórios
 │   └── contracts/           # Worker protocol, manifests, validação
 ├── tests/
+├── schedules.yaml           # config de agendamento (operação, não catálogo — ADR-0010)
 ├── docker-compose.yml
 └── pyproject.toml
 ```

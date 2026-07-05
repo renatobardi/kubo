@@ -129,6 +129,8 @@ def test_run_worker_success_persists_and_finishes(db: Any) -> None:
     assert _count(db, "item") == 1
     linked = db.query("SELECT ->from_source->source AS s FROM item;")[0]["s"]
     assert len(linked) == 1  # a aresta item->source foi criada pelo runtime
+    collected = db.query("SELECT ->collected_by->run AS r FROM item;")[0]["r"]
+    assert collected == [run_id]  # proveniência de execução item->run (ADR-0008 §VI)
 
 
 def test_run_worker_failure_records_structured_error_and_persists_nothing(db: Any) -> None:

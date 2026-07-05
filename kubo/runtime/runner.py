@@ -58,15 +58,17 @@ def _error_from_exception(exc: Exception) -> ErrorInfo:
     )
 
 
-def _persist(db: Any, payloads: list[Payload]) -> None:
+def _persist(db: Any, payloads: list[Payload], run_id: RecordID) -> None:
     """Persiste cada payload por match EXPLÍCITO e hardcoded tipo→função da store.
 
     Sem registry/plugin de persistência (seria DSL disfarçada, proibido). É por-item
     e idempotente: cada upsert da store já é atômico (ADR-0009 item VII), então falha
     parcial deixa itens gravados e a re-execução cura — não há mega-transação nem retry.
     Para ItemPayload, a source (embutida inline) é upsertada antes; idempotência torna
-    a repetição gratuita. Membro novo da união (distilled, M6) força tratamento aqui:
-    o pyright acusa o acesso a campo inexistente no ramo `else`, não passa em silêncio."""
+    a repetição gratuita, e `run_id` grava a proveniência de execução `item -[collected_by]->
+    run` (ADR-0008 §VI) — a run já existe quando `_persist` roda, então a aresta ENFORCED é
+    segura. Membro novo da união (distilled, M6) força tratamento aqui: o pyright acusa o
+    acesso a campo inexistente no ramo `else`, não passa em silêncio."""
     for payload in payloads:
         if isinstance(payload, ItemPayload):
             source = upsert_source(
@@ -83,6 +85,7 @@ def _persist(db: Any, payloads: list[Payload]) -> None:
                 url=payload.url,
                 title=payload.title,
                 metadata=payload.metadata,
+                run=run_id,
             )
         else:  # SourcePayload — o único outro membro da união hoje
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
@@ -130,7 +133,7 @@ def run_worker(
         result = RunResult.model_validate(raw_result)
         # _persist DENTRO do try: uma falha de store não pode deixar o run travado
         # em 'running' nem propagar exceção crua fora da fronteira.
-        _persist(db, result.payloads)
+        _persist(db, result.payloads, run_id)
         if result.error is not None:
             fail_run(db, run_id, error=result.error.model_dump())
         else:
