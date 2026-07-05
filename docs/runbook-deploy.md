@@ -150,7 +150,7 @@ de passo único aborta. Separar em base-primeiro, relações-depois:
 
 ```bash
 # no kubo-test:
-DUMP=$(ls -S /backups/kubo-*.surql | head -1)     # ou o dump desejado
+DUMP=$(ls -1 /backups/kubo-*.surql | sort | tail -1)   # mais recente (nome ordena por timestamp); ou o dump desejado
 mkdir -p ~/restore-tmp
 grep -v '^INSERT RELATION' "$DUMP" > ~/restore-tmp/pass1.surql
 { echo 'OPTION IMPORT;'; grep '^INSERT RELATION' "$DUMP"; } > ~/restore-tmp/pass2.surql

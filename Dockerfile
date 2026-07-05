@@ -19,7 +19,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 # tzdata: a imagem slim não traz /usr/share/zoneinfo, e o scheduler valida a
 # timezone do schedules.yaml (America/Sao_Paulo) via zoneinfo no startup — sem
 # isto ele levanta ZoneInfoNotFoundError e não sobe.
-RUN apt-get update \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 

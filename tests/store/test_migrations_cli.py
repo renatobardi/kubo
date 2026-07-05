@@ -10,7 +10,16 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from kubo.store.migrations import __main__ as cli
+
+
+def test_main_reraises_on_failure() -> None:
+    """Falha de conexão/aplicação propaga (exit code não-zero preservado no deploy)."""
+    with patch.object(cli.client, "connect", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError, match="boom"):
+            cli.main()
 
 
 def test_main_connects_applies_and_returns() -> None:

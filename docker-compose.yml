@@ -25,7 +25,7 @@ services:
       - --user
       - ${SURREAL_USER:-root}
       - --pass
-      - ${SURREAL_PASS:-root}
+      - ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
       - rocksdb:/data/kubo.db
     volumes:
       - surreal-data:/data
@@ -50,11 +50,12 @@ services:
         condition: service_healthy
     stop_grace_period: 60s
     environment:
-      # Endpoint interno do compose — NÃO loopback, então SURREAL_USER/PASS viram
-      # obrigatórios de fato no client (não cai no default root/root contra o banco).
+      # Endpoint interno do compose — NÃO loopback. SURREAL_PASS é fail-fast aqui
+      # (`:?` — compose recusa subir sem senha explícita), reforçando o guard do
+      # client (kubo/store/client.py) que já barra o default root/root contra host real.
       SURREAL_URL: ws://surrealdb:8000/rpc
       SURREAL_USER: ${SURREAL_USER:-root}
-      SURREAL_PASS: ${SURREAL_PASS:-root}
+      SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
       # Timezone explícita: alinha timestamps de log ao horário do schedules.yaml.
@@ -85,7 +86,7 @@ services:
       - surreal-backups:/backups
     environment:
       SURREAL_USER: ${SURREAL_USER:-root}
-      SURREAL_PASS: ${SURREAL_PASS:-root}
+      SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
     command:

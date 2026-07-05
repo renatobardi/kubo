@@ -12,13 +12,21 @@ import structlog
 from kubo.store import client
 from kubo.store.migrations import apply_migrations
 
-_log = structlog.get_logger()
+# `worker` no contexto (convenção de log do CLAUDE.md); flow_id/task_id não se
+# aplicam a um runner de deploy one-shot (não há flow/task).
+_log = structlog.get_logger().bind(worker="migrations-cli")
 
 
 def main() -> list[str]:
     """Conecta por ambiente, aplica migrations pendentes e devolve as recém-aplicadas."""
-    with client.connect() as db:
-        applied = apply_migrations(db)
+    try:
+        with client.connect() as db:
+            applied = apply_migrations(db)
+    except Exception:  # noqa: BLE001 — loga estruturado e repropaga; não engole o erro
+        # Sem o log, uma falha de auth/query sairia só como traceback cru. O re-raise
+        # preserva o exit code não-zero que sinaliza a falha ao passo de deploy.
+        _log.exception("migrations_failed")
+        raise
     _log.info(
         "migrations applied" if applied else "migrations up to date",
         applied=applied,
