@@ -84,7 +84,9 @@ class Stats(BaseModel):
     def _counters_are_numeric(self) -> Self:
         """Todo contador extra deve ser int/float — string/objeto carregaria conteúdo."""
         for key, value in (self.__pydantic_extra__ or {}).items():
-            if not isinstance(value, (int, float)):
+            # bool é subclasse de int — exclui explícito: um contador não é flag, e o
+            # rigor máximo da fronteira não deixa `bool` passar como "numérico".
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"contador {key!r} deve ser numérico, veio {type(value).__name__}")
         return self
 
