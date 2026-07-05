@@ -75,14 +75,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen
-      # Gate de cobertura CONFIGURADO mas ADIADO: com módulos ainda quase vazios os
-      # dados são ralos (--cov-fail-under falharia/passaria vacuamente). ENFORCE a
-      # partir do M3. NUNCA remover o gate — apenas manter `--cov-fail-under` comentado.
-      - name: Unit (integração roda no job `integration`)
-        run: >
-          uv run pytest -m "not integration"
-          --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
-        # enforce a partir do M3:  --cov-fail-under=85
+      # Feedback rápido: só unit, SEM medir cobertura. O gate de 85% vive no job
+      # `integration` (M3), medido sobre a suíte COMPLETA — a store só é exercível
+      # contra banco real, e medir cobertura só com unit induziria mock-que-testa-mock.
+      - name: Unit (rápido; cobertura é gateada no job `integration`)
+        run: uv run pytest -m "not integration"
 
   # Integração religada no M2 (spike SurrealDB). A imagem oficial é distroless (sem
   # shell), então o probe NÃO usa `surreal isready` no runner — usa `curl` no health
@@ -107,5 +104,12 @@ jobs:
             sleep 1
           done
           echo "::error::SurrealDB não respondeu ao /health"; docker logs surreal; exit 1
-      - name: Testes de integração
-        run: uv run pytest -m integration
+      # Gate de cobertura (M3): roda a suíte COMPLETA (unit + integração) com o
+      # SurrealDB real de pé e mede cobertura sobre os caminhos críticos. 85% é
+      # ALARME, não meta (CLAUDE.md) — testa-se comportamento, não linhas. Marque
+      # este job como required na proteção de branch para o gate ter dente.
+      - name: Suíte completa + cobertura (gate 85%)
+        run: >
+          uv run pytest
+          --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
+          --cov-fail-under=85

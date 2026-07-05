@@ -1,0 +1,249 @@
+"""Contrato de comportamento da store de conhecimento (integração, SurrealDB).
+
+Cobre plano 0003 §3.2.1: upsert idempotente de source/item, dedup de entity por
+normalização, escrita atômica de destilado (feliz e com rollback), proveniência
+distilled->item->source e busca vetorial que devolve o destilado, não o chunk
+órfão. `kubo.store.knowledge` ainda é STUB (NotImplementedError) — estes testes
+devem falhar por isso agora; ficam verdes quando a implementação (GREEN) entrar.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import replace
+from typing import Any
+
+import pytest
+
+from kubo.errors import StoreError
+from kubo.store import client, knowledge, migrations
+from kubo.store.knowledge import Chunk
+
+pytestmark = pytest.mark.integration
+
+_KNOWLEDGE_DB = "test_knowledge"
+_DIM = 768
+_MODEL = "gemini-embedding-001"
+_TASK_TYPE = "SEMANTIC_SIMILARITY"
+
+
+@pytest.fixture
+def db() -> Iterator[Any]:
+    """Database próprio do teste, removido antes e depois — schema aplicado do zero."""
+    cfg = replace(client.config(), database=_KNOWLEDGE_DB)
+    with client.connect(cfg) as conn:
+        conn.query(f"REMOVE DATABASE IF EXISTS {_KNOWLEDGE_DB};")
+        conn.use(cfg.namespace, cfg.database)
+        migrations.apply_migrations(conn)
+        yield conn
+        conn.query(f"REMOVE DATABASE IF EXISTS {_KNOWLEDGE_DB};")
+
+
+def _vec(*nonzero: float, dim: int = _DIM) -> list[float]:
+    """Vetor de `dim` posições: os valores de `nonzero` nas primeiras posições, resto zero.
+
+    Usado para montar embeddings de teste sem hardcodar 768 números — e para
+    montar pares ortogonais (`_vec(1.0)` vs `_vec(0.0, 1.0)`) de forma legível.
+    """
+    values = [float(v) for v in nonzero] + [0.0] * (dim - len(nonzero))
+    return values[:dim]
+
+
+def _count(db: Any, table: str) -> int:
+    """Contagem de registros na tabela — nome de tabela é sempre um literal interno do teste."""
+    rows: list[dict[str, Any]] = db.query(f"SELECT count() FROM {table} GROUP ALL;")  # noqa: S608
+    return int(rows[0]["count"]) if rows else 0
+
+
+def _chunk(seq: int, embedding: list[float], text: str = "trecho") -> Chunk:
+    """Chunk válido (768 dims) com a tripla de proveniência do ADR-0006."""
+    return Chunk(
+        text=text,
+        seq=seq,
+        embedding=embedding,
+        model=_MODEL,
+        dim=_DIM,
+        task_type=_TASK_TYPE,
+    )
+
+
+def test_upsert_source_is_idempotent(db: Any) -> None:
+    """2x upsert_source com o mesmo canonical resolve ao MESMO record, sem duplicar
+    e sem reescrever created_at (READONLY) — chave natural, não SELECT-then-CREATE."""
+    first_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    first_created = db.query("SELECT created_at FROM $s;", {"s": first_id})[0]["created_at"]
+
+    second_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    second_created = db.query("SELECT created_at FROM $s;", {"s": second_id})[0]["created_at"]
+
+    assert first_id == second_id
+    assert first_created == second_created
+    assert _count(db, "source") == 1
+
+
+def test_upsert_item_is_idempotent_and_creates_from_source_edge(db: Any) -> None:
+    """2x upsert_item para o mesmo (source, external_id) resolve ao MESMO record e
+    cria a aresta item -[from_source]-> source uma única vez."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+
+    first_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+    second_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+
+    assert first_id == second_id
+    assert _count(db, "item") == 1
+
+    linked = db.query("SELECT ->from_source->source AS srcs FROM $i;", {"i": first_id})[0]["srcs"]
+    assert linked == [source_id]
+
+
+def test_get_or_create_entity_dedups_by_normalized_name(db: Any) -> None:
+    """ "Python" e "  python " resolvem à MESMA entity — dedup por `normalize_entity`,
+    não por igualdade literal da string de entrada."""
+    first_id = knowledge.get_or_create_entity(db, name="Python")
+    second_id = knowledge.get_or_create_entity(db, name="  python ")
+
+    assert first_id == second_id
+    assert _count(db, "entity") == 1
+
+
+def test_insert_distilled_creates_record_and_all_edges_atomically(db: Any) -> None:
+    """Caminho feliz: um insert_distilled cria o `distilled`, `derived_from -> item`,
+    os `chunk` + `chunk_of -> distilled`, `produced_by -> run` e `mentions -> entity`
+    numa única escrita — nada fica de fora nem precisa de segunda chamada."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+    run_id = knowledge.start_run(db, worker="scribe")
+    entity_id = knowledge.get_or_create_entity(db, name="Python")
+    chunks = [
+        _chunk(0, _vec(1.0), text="primeiro trecho"),
+        _chunk(1, _vec(0.0, 1.0), text="segundo trecho"),
+    ]
+
+    distilled_id = knowledge.insert_distilled(
+        db,
+        item=item_id,
+        summary="resumo do episódio",
+        chunks=chunks,
+        run=run_id,
+        entities=[entity_id],
+    )
+
+    assert _count(db, "distilled") == 1
+    assert _count(db, "chunk") == 2
+
+    derived = db.query("SELECT ->derived_from->item AS items FROM $d;", {"d": distilled_id})[0][
+        "items"
+    ]
+    assert derived == [item_id]
+
+    produced = db.query("SELECT ->produced_by->run AS runs FROM $d;", {"d": distilled_id})[0][
+        "runs"
+    ]
+    assert produced == [run_id]
+
+    mentioned = db.query("SELECT ->mentions->entity AS entities FROM $d;", {"d": distilled_id})[0][
+        "entities"
+    ]
+    assert mentioned == [entity_id]
+
+    chunk_of = db.query("SELECT <-chunk_of<-chunk AS chunks FROM $d;", {"d": distilled_id})[0][
+        "chunks"
+    ]
+    assert len(chunk_of) == 2
+
+
+def test_insert_distilled_rejects_wrong_dimension_and_reverts_everything(db: Any) -> None:
+    """Um chunk com embedding de dimensão != 768 levanta StoreError E não deixa
+    NENHUM rastro — nem o `distilled`, nem os `chunk` já processados antes do
+    ruim na lista. Prova o wrapper transacional (ADR-0005): tudo ou nada."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+    bad_chunk = Chunk(
+        text="trecho ruim",
+        seq=0,
+        embedding=[0.1, 0.2, 0.3],
+        model=_MODEL,
+        dim=3,
+        task_type=_TASK_TYPE,
+    )
+
+    with pytest.raises(StoreError):
+        knowledge.insert_distilled(
+            db,
+            item=item_id,
+            summary="resumo que não deveria persistir",
+            chunks=[bad_chunk],
+        )
+
+    assert _count(db, "distilled") == 0
+    assert _count(db, "chunk") == 0
+
+
+def test_provenance_traces_distilled_to_source(db: Any) -> None:
+    """provenance(distilled) devolve uma lista que inclui a source original —
+    o embrião da prova dos 90 dias (distilled -> item -> source)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+    distilled_id = knowledge.insert_distilled(
+        db,
+        item=item_id,
+        summary="resumo",
+        chunks=[_chunk(0, _vec(1.0))],
+    )
+
+    trail = knowledge.provenance(db, distilled_id)
+
+    assert source_id in trail
+
+
+def test_search_returns_the_distilled_for_the_nearest_chunk(db: Any) -> None:
+    """search(embedding=vetorA, k=1) devolve o SearchHit do destilado A (não B) quando
+    vetorA é ortogonal a vetorB — e o hit expõe o `distilled` (o conhecimento),
+    não só o `chunk` órfão."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+
+    distilled_a = knowledge.insert_distilled(
+        db, item=item_a, summary="resumo A", chunks=[_chunk(0, _vec(1.0), text="A")]
+    )
+    knowledge.insert_distilled(
+        db, item=item_b, summary="resumo B", chunks=[_chunk(0, _vec(0.0, 1.0), text="B")]
+    )
+
+    hits = knowledge.search(db, embedding=_vec(1.0), k=1)
+
+    assert len(hits) == 1
+    assert hits[0].distilled == distilled_a
+
+
+def test_run_lifecycle_running_then_ok_or_error(db: Any) -> None:
+    """start_run abre em 'running'; finish_run fecha em 'ok' com finished_at
+    preenchido; fail_run (em outro run) fecha em 'error' preservando o erro
+    estruturado aninhado, também com finished_at preenchido."""
+    run_id = knowledge.start_run(db, worker="feed")
+    started = db.query("SELECT status, finished_at FROM $r;", {"r": run_id})[0]
+    assert started["status"] == "running"
+    assert started["finished_at"] is None
+
+    knowledge.finish_run(db, run_id)
+    finished = db.query("SELECT status, finished_at FROM $r;", {"r": run_id})[0]
+    assert finished["status"] == "ok"
+    assert finished["finished_at"] is not None
+
+    other_run_id = knowledge.start_run(db, worker="feed")
+    knowledge.fail_run(db, other_run_id, error={"kind": "http", "detail": {"status": 503}})
+    failed = db.query("SELECT status, error, finished_at FROM $r;", {"r": other_run_id})[0]
+    assert failed["status"] == "error"
+    assert failed["error"]["detail"]["status"] == 503
+    assert failed["finished_at"] is not None
