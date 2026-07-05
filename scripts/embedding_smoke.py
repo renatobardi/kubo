@@ -96,7 +96,8 @@ def _embed(texts: list[str], model: str, dim: int, api_key: str) -> list[list[fl
             for t in texts
         ]
     }
-    req = urllib.request.Request(  # noqa: S310 (URL fixa https, não entrada externa)
+    # URL fixa https (host hardcoded em _ENDPOINT), não entrada externa — sem SSRF.
+    req = urllib.request.Request(  # noqa: S310
         _ENDPOINT.format(model=model),
         data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
@@ -112,7 +113,13 @@ def _embed(texts: list[str], model: str, dim: int, api_key: str) -> list[list[fl
         sys.exit(f"ERRO HTTP {e.code} da API Gemini (corpo truncado): {body}")
     except urllib.error.URLError as e:
         sys.exit(f"ERRO de rede ao chamar a API Gemini: {e.reason}")
-    return [emb["values"] for emb in payload["embeddings"]]
+    embeddings = payload["embeddings"]
+    if len(embeddings) != len(texts):
+        sys.exit(f"API devolveu {len(embeddings)} embeddings para {len(texts)} textos enviados.")
+    # ponytail: assume ordem-de-resposta == ordem-de-envio (contrato do batch inline;
+    # degrada só em lotes grandes — aqui são 30 textos curtos). Se um dia crescer,
+    # migrar para batch file-based (JSONL) com `key` por request.
+    return [emb["values"] for emb in embeddings]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
