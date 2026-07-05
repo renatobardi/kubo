@@ -22,8 +22,8 @@ O projeto é solo mas usa PR como registro obrigatório (CLAUDE.md §Fluxo de tr
 
 ### Limites conhecidos e pontos em aberto
 
-- **Enforcement é do título de PR, não dos commits individuais.** A decisão 2 (commits em inglês, convencionais) é disciplina, não gate — só o título do PR é validado pelo CI. Aceitável para solo; registrado por honestidade, como a cobertura parcial do guard.
-- **Estratégia de merge em aberto (decisão do dono):** os três métodos estão habilitados. `main` já tem merge commit não-convencional (`Merge pull request #1…`). Adotar squash-only faria o título validado do PR virar o commit de `main`, fechando de graça a lacuna acima. Fora do escopo desta sessão.
+- **Commits individuais na branch são disciplina, não gate.** O CI valida o título do PR, não cada commit. Com squash-only (abaixo), isso deixa de importar em `main`: os commits da branch são descartados no merge e só o squash — cuja mensagem é o título validado — entra. Na branch, a convenção dos commits segue por disciplina.
+- **Estratégia de merge — squash-only (decidido pelo dono na sessão 0002):** o merge do PR é sempre por *squash*, usando o título convencional do PR como mensagem do commit em `main`. Assim o único commit que chega a `main` já passou pela validação de título, fechando a lacuna acima (commits individuais não são enforçados). `merge commit` e `rebase` ficam desabilitados no repositório. O `Merge pull request #1…` pré-existente em `main` não se reescreve.
 - **Branches de bots (Dependabot/Renovate) usam `/` aninhado** (`dependabot/pip/…`) e falhariam no regex da taxonomia. Hoje não há bot de PR (pip-audit roda no CI, não abre PR); se um entrar, o job `pr-conventions` precisará de exceção.
 
 ## Consequências
