@@ -59,7 +59,7 @@ DEFINE INDEX OVERWRITE entity_normalized ON entity FIELDS normalized UNIQUE;
 -- A forma do erro estruturado NÃO se crava aqui — o contrato de worker (M4) a define.
 DEFINE TABLE OVERWRITE run SCHEMAFULL;
 DEFINE FIELD OVERWRITE worker      ON run TYPE string;
-DEFINE FIELD OVERWRITE started_at  ON run TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE started_at  ON run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE finished_at ON run TYPE option<datetime>;
 DEFINE FIELD OVERWRITE status      ON run TYPE string;
 DEFINE FIELD OVERWRITE stats       ON run TYPE object FLEXIBLE DEFAULT {};

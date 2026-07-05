@@ -187,6 +187,29 @@ def test_insert_distilled_rejects_wrong_dimension_and_reverts_everything(db: Any
     assert _count(db, "chunk") == 0
 
 
+def test_insert_distilled_rejects_dim_provenance_mismatch(db: Any) -> None:
+    """Um chunk cujo `dim` (proveniência) não bate com len(embedding) levanta
+    ValueError na borda ANTES de tocar o banco — o schema garante len == 768, mas
+    não que o `dim` registrado seja verdadeiro; um `dim` mentiroso corromperia a
+    proveniência do re-embed. Nada é persistido."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    lying_chunk = Chunk(
+        text="trecho",
+        seq=0,
+        embedding=_vec(1.0),  # 768 posições, válido para o schema
+        model=_MODEL,
+        dim=512,  # mas a proveniência mente: diz 512
+        task_type=_TASK_TYPE,
+    )
+
+    with pytest.raises(ValueError, match="dim"):
+        knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[lying_chunk])
+
+    assert _count(db, "distilled") == 0
+    assert _count(db, "chunk") == 0
+
+
 def test_provenance_traces_distilled_to_source(db: Any) -> None:
     """provenance(distilled) devolve uma lista que inclui a source original —
     o embrião da prova dos 90 dias (distilled -> item -> source)."""

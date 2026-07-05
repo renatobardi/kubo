@@ -140,7 +140,11 @@ def insert_distilled(
     """Insere um destilado e tudo que o acompanha numa ÚNICA transação atômica:
     o record `distilled`, `derived_from -> item`, cada `chunk` + `chunk_of ->
     distilled`, `produced_by -> run` (se dado) e `mentions -> entity` (se dados).
-    Vetor de dimensão != 768 é rejeitado na borda e reverte a transação inteira."""
+    Vetor de dimensão != 768 é rejeitado na borda e reverte a transação inteira.
+
+    Levanta `ValueError` se a proveniência de um chunk (`dim`) não bate com o vetor
+    real (`len(embedding)`): o schema garante `embedding` == 768, mas não que o `dim`
+    registrado seja verdadeiro — um `dim` mentiroso corromperia a proveniência do re-embed."""
     distilled = _fresh("distilled")
     stmts = [
         "CREATE $d SET summary = $summary, claims = $claims",
@@ -153,6 +157,10 @@ def insert_distilled(
         "claims": list(claims) if claims else [],
     }
     for i, ch in enumerate(chunks):
+        if len(ch.embedding) != ch.dim:
+            raise ValueError(
+                f"chunk seq={ch.seq}: dim={ch.dim} não bate com len(embedding)={len(ch.embedding)}"
+            )
         cid = _rid("chunk", f"{distilled}|{ch.seq}")
         stmts.append(
             f"CREATE $c{i} SET text = $ct{i}, seq = $cs{i}, embedding = $ce{i}, "
