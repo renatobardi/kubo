@@ -47,6 +47,8 @@ Nenhum dado coletado se perde: a próxima execução agendada re-coleta o feed (
 
 Para disparar uma coleta única sem esperar o cron — ex.: testar um feed novo antes de adicioná-lo ao `schedules.yaml`:
 
+> ⚠️ **Este comando GRAVA no banco que `client.config()` resolve** (env `SURREAL_URL`/`SURREAL_NS`/`SURREAL_DB`) — é o caminho de persistência real, não um dry-run. Confirme que o ambiente apontado é o certo (use staging, nunca produção por engano) ANTES de rodar: `echo $SURREAL_URL $SURREAL_NS $SURREAL_DB`. Os dados de teste (`title: 'Teste'`) vão para o grafo real do ambiente configurado.
+
 ```bash
 uv run python -c "
 from kubo.scheduler import execute_job

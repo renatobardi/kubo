@@ -17,6 +17,7 @@ do httpx (fechar exigiria pinning de IP em transporte custom — fora da fase 1)
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import ipaddress
 import socket
@@ -47,6 +48,7 @@ _CONTENT_CAP = 65536  # ~64k chars de content por item (folgado p/ full-content 
 _TITLE_CAP = 500  # título é rótulo, não corpo
 _TIMEOUT = httpx.Timeout(15.0)  # timeout POR-chunk do httpx (não é prazo total)
 _TOTAL_DEADLINE = 60.0  # prazo TOTAL do fetch — fecha slowloris (chunk lento sob o timeout)
+_DNS_TIMEOUT = 5.0  # teto de resolução DNS no guard (getaddrinfo não tem timeout nativo)
 _MAX_REDIRECTS = 3  # segue poucos redirects (http->https, moved); não cadeia arbitrária
 
 
@@ -132,15 +134,28 @@ def _reject_non_global_ip(host: str) -> None:
         raise _FetchError("destino sem host", {"reason": "host"})
     try:
         addrs = [ipaddress.ip_address(host)]
-    except ValueError:  # não é IP literal — resolve o hostname
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror as exc:
-            raise _FetchError("host do feed não resolve", {"reason": "dns"}) from exc
-        addrs = [ipaddress.ip_address(info[4][0]) for info in infos]
+    except ValueError:  # não é IP literal — resolve o hostname (com teto de tempo)
+        addrs = [ipaddress.ip_address(info[4][0]) for info in _resolve(host)]
     for addr in addrs:
         if not addr.is_global:
             raise _FetchError("destino não permitido (IP não-global)", {"reason": "ssrf"})
+
+
+def _resolve(host: str) -> list[Any]:
+    """Resolve `host` com TETO de tempo — `socket.getaddrinfo` não tem timeout nativo,
+    e um DNS lento/malicioso num hop de redirect penduraria a thread do job antes de
+    `_TOTAL_DEADLINE`. Roda num executor de 1 thread e o abandona (`shutdown(wait=False)`)
+    se estourar: a thread pendurada não bloqueia o worker e some quando o resolver do SO
+    desiste."""
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        return executor.submit(socket.getaddrinfo, host, None).result(timeout=_DNS_TIMEOUT)
+    except concurrent.futures.TimeoutError as exc:
+        raise _FetchError("resolução DNS excedeu o teto", {"reason": "dns_timeout"}) from exc
+    except socket.gaierror as exc:
+        raise _FetchError("host do feed não resolve", {"reason": "dns"}) from exc
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _make_request_guard() -> Callable[[httpx.Request], None]:
