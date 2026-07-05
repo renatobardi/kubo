@@ -1,0 +1,10 @@
+# Integração RSS — coleta de feeds públicos (HTTP GET, sem credencial).
+# Primeiro item do catálogo (plano 0004 §4.3.1); o worker `feed` do M5 a consome.
+# Declarativa: sem lógica (invariante 3). auth.type=none porque feed público não
+# tem segredo — os credenciados (M5+) usam secret_ref no formato env:VAR.
+name: rss
+kind: http
+auth:
+  type: none
+rate_limit:
+  requests_per_minute: 60

@@ -227,9 +227,17 @@ def start_run(db: Any, *, worker: str) -> RecordID:
     return rid
 
 
-def finish_run(db: Any, run: RecordID) -> None:
-    """Fecha um `run` com sucesso (status 'ok', finished_at)."""
-    db.query("UPDATE $r SET status = 'ok', finished_at = time::now();", {"r": run})
+def finish_run(db: Any, run: RecordID, *, stats: dict[str, Any] | None = None) -> None:
+    """Fecha um `run` com sucesso (status 'ok', finished_at, `stats` opcional).
+
+    `stats` são contadores da execução (ex.: itens vistos/gravados) — vão para o
+    campo FLEXIBLE `run.stats`. A forma tipada vem do contrato (`RunResult.stats`,
+    ADR-0009); a store só recebe o dict já serializado. Ausente = `{}` (default do
+    schema preservado)."""
+    db.query(
+        "UPDATE $r SET status = 'ok', finished_at = time::now(), stats = $stats;",
+        {"r": run, "stats": dict(stats) if stats else {}},
+    )
 
 
 def fail_run(db: Any, run: RecordID, *, error: dict[str, Any]) -> None:
