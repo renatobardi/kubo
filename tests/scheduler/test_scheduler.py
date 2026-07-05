@@ -191,17 +191,33 @@ def test_build_scheduler_rejects_unknown_worker() -> None:
         build_scheduler(schedules)
 
 
-def test_build_scheduler_propagates_bad_cron() -> None:
-    """Cron malformado deixa `CronTrigger.from_crontab` estourar — sem
-    validação própria escondendo o erro (qualquer exceção serve aqui)."""
+def test_build_scheduler_rejects_bad_cron_as_config_error() -> None:
+    """Cron malformado vira `ConfigError` (padrão de domínio), não a exceção crua da
+    lib — falha alta e legível antes do start, coerente com o resto do módulo."""
     from kubo.scheduler import ScheduleEntry, Schedules, build_scheduler
 
     schedules = Schedules(
         timezone="America/Sao_Paulo",
-        schedules=[ScheduleEntry(worker="feed", cron="not a cron", config={})],
+        schedules=[
+            ScheduleEntry(worker="feed", cron="not a cron", config={"feed_url": "https://x/f"})
+        ],
     )
 
-    with pytest.raises(ValueError):  # CronTrigger.from_crontab levanta ValueError em cron inválido
+    with pytest.raises(ConfigError, match="cron"):
+        build_scheduler(schedules)
+
+
+def test_build_scheduler_rejects_invalid_worker_config() -> None:
+    """Config incoerente com o schema do worker (ex.: feed sem `feed_url`) vira
+    `ConfigError` no BUILD — falha alta no start, não horas depois no 1º disparo do cron."""
+    from kubo.scheduler import ScheduleEntry, Schedules, build_scheduler
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo",
+        schedules=[ScheduleEntry(worker="feed", cron="0 8 * * *", config={"wrong": "field"})],
+    )
+
+    with pytest.raises(ConfigError, match="config"):
         build_scheduler(schedules)
 
 

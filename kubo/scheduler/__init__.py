@@ -26,7 +26,7 @@ _log = structlog.get_logger()
 
 # Mapa nome→classe HARDCODED (ADR-0010): sem registry/plugin/entry-point dinâmico
 # (seria DSL disfarçada). Ativar um worker novo = editar este dict + PR (gate humano).
-WORKER_REGISTRY: dict[str, type] = {"feed": FeedWorker}
+WORKER_REGISTRY: dict[str, type[Any]] = {"feed": FeedWorker}
 
 
 class ScheduleEntry(BaseModel):
@@ -72,21 +72,43 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     conexão, roda sob contrato (run_worker persiste), fecha. Sem handle global de
     DB (um ws de vida longa apodrece num processo que roda dias)."""
     worker_cls = WORKER_REGISTRY[worker_name]
-    with client.connect(client.config()) as db:
-        run_worker(db, worker_cls(), config=config)
+    try:
+        with client.connect(client.config()) as db:
+            run_worker(db, worker_cls(), config=config)
+    except Exception:  # noqa: BLE001 — loga estruturado e repropaga; APScheduler não perde o traço
+        # Falha de conexão/setup ocorre ANTES de run_worker abrir o run, então não vira
+        # run.error estruturado — este log garante visibilidade no formato do resto do módulo.
+        _log.exception("scheduler_job_failed", worker=worker_name)
+        raise
 
 
 def build_scheduler(schedules: Schedules) -> BlockingScheduler:
     """Monta o BlockingScheduler com um job cron por entry, tz explícita SEMPRE.
-    Worker fora do WORKER_REGISTRY falha alto (ConfigError) antes do start."""
+
+    Valida TUDO eagerly (falha alta antes do start, não horas depois no 1º disparo):
+    worker no registry, cron parseável e config coerente com o schema do worker — cada
+    falha vira `ConfigError` (padrão de domínio do módulo), nunca exceção crua da lib."""
     tz = ZoneInfo(schedules.timezone)
     scheduler = BlockingScheduler(timezone=tz)
     for entry in schedules.schedules:
-        if entry.worker not in WORKER_REGISTRY:
+        worker_cls = WORKER_REGISTRY.get(entry.worker)
+        if worker_cls is None:
             raise ConfigError(f"worker '{entry.worker}' não registrado no WORKER_REGISTRY")
+        try:
+            trigger = CronTrigger.from_crontab(entry.cron, timezone=tz)
+        except ValueError as exc:
+            raise ConfigError(
+                f"cron inválido para worker '{entry.worker}': {entry.cron!r}"
+            ) from exc
+        try:
+            worker_cls.manifest.config.model_validate(entry.config)
+        except ValidationError as exc:
+            raise ConfigError(
+                f"config inválida para worker '{entry.worker}': {format_validation_error(exc)}"
+            ) from exc
         scheduler.add_job(
             execute_job,
-            trigger=CronTrigger.from_crontab(entry.cron, timezone=tz),
+            trigger=trigger,
             kwargs={"worker_name": entry.worker, "config": entry.config},
         )
     return scheduler

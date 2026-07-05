@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import http.server
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -31,6 +32,7 @@ from pydantic import ValidationError
 from kubo.contracts.models import ItemPayload
 from kubo.runtime.context import EmptyKnowledge, RunContext
 from kubo.runtime.integrations import ResolvedIntegration
+from kubo.workers import feed as feed_mod
 from kubo.workers.feed import FeedConfig, FeedWorker
 
 _FEED_URL = "https://example.com/feed"
@@ -355,6 +357,24 @@ def test_byte_cap_exceeded_is_http_error() -> None:
     assert result.error.kind == "http"
 
 
+def test_guard_dns_resolution_has_a_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A validação de IP no guard de redirect não pode travar indefinidamente: se a
+    resolução DNS de um host (redirect malicioso/lento) exceder o teto, vira _FetchError
+    em vez de pendurar a thread do job (getaddrinfo não tem timeout nativo)."""
+
+    def _hang(*_a: Any, **_k: Any) -> list[Any]:
+        time.sleep(2.0)  # resolução que nunca retorna a tempo
+        return []
+
+    monkeypatch.setattr(feed_mod.socket, "getaddrinfo", _hang)
+    monkeypatch.setattr(feed_mod, "_DNS_TIMEOUT", 0.1)
+
+    started = time.monotonic()
+    with pytest.raises(feed_mod._FetchError):
+        feed_mod._reject_non_global_ip("slow.example.test")  # hostname, não IP literal
+    assert time.monotonic() - started < 1.5  # falhou rápido, não esperou os 2s
+
+
 @respx.mock
 def test_redirect_to_internal_ip_is_refused() -> None:
     """Servidor de feed que responde 302 apontando para um IP interno (metadata da
@@ -430,11 +450,10 @@ def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
                 "SELECT id, ->from_source->source AS s, ->collected_by->run AS r FROM item;"
             )
             assert len(items) == 2
+            # vínculo ao source CERTO, não só "existe 1 aresta" (asserção antes era fraca)
+            source_id = db.query("SELECT id FROM source;")[0]["id"]
             for item in items:
-                assert (
-                    item["s"] == [db.query("SELECT id FROM source;")[0]["id"]]
-                    or len(item["s"]) == 1
-                )
+                assert item["s"] == [source_id]
                 assert item["r"] == [run_id_1]
             sources = db.query("SELECT count() FROM source GROUP ALL;")
             assert int(sources[0]["count"]) == 1

@@ -58,11 +58,11 @@ from apscheduler.triggers.cron import CronTrigger
 scheduler = BlockingScheduler(timezone=tz_from_config)
 
 for entry in schedules:                       # entry: {worker, cron, config}
-    worker_cls = WORKER_REGISTRY[entry.worker]  # KeyError = falha alta, sem descoberta dinâmica
+    assert entry.worker in WORKER_REGISTRY     # valida eagerly (ConfigError); sem descoberta dinâmica
     scheduler.add_job(
         execute_job,
         trigger=CronTrigger.from_crontab(entry.cron, timezone=tz_from_config),
-        kwargs={"worker_cls": worker_cls, "config": entry.config},
+        kwargs={"worker_name": entry.worker, "config": entry.config},
     )
 
 def _sigterm(signum, frame):
@@ -81,10 +81,11 @@ scheduler.start()                             # bloqueia; a main thread dorme aq
 ### V. Conexão-por-job: cada execução abre e fecha a handle própria
 
 ```python
-def execute_job(worker_cls, config):
+def execute_job(worker_name, config):
     # Síncrono, via o context manager da store (kubo/store/client.py) — abre e
     # fecha a conexão POR execução. O worker NUNCA toca a store: run_worker valida
     # o contrato, monta o ctx read-only e persiste (ADR-0009).
+    worker_cls = WORKER_REGISTRY[worker_name]
     with client.connect(client.config()) as db:
         run_worker(db, worker_cls(), config=config)
 ```
