@@ -28,6 +28,7 @@ dev = [
     "detect-secrets",
     "pip-audit",
     "types-pyyaml>=6.0.12.20260518",
+    "respx>=0.23.1",
 ]
 
 [build-system]
