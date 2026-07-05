@@ -59,6 +59,18 @@ Esta decisão (ADR-0008) **registra os desvios, a justificativa técnica de cada
 
 **Gatilho de reversão:** quando houver produtor de `relates_to`, tipar o `kind` (enum/`ASSERT`) por migration, com o vocabulário derivado do uso real. O comentário na migration 0001 aponta este ADR.
 
+### VI. Aresta `collected_by`: proveniência de execução item→run (emenda, sessão 0005)
+
+**Desvio:** a migration 0003 (sessão 0005) introduz a aresta `item -[collected_by]-> run`, registrando qual execução coletou cada item.
+
+**Justificativa (o argumento central):** `collected_by` é o **análogo item-side da aresta `produced_by` que o próprio ADR-0002 criou**. Juntas, elas completam a cadeia de proveniência que a "prova dos 90 dias" exige — a missão da sessão 0005 declarava "proveniência completa (item→source E item→run)". A aresta `produced_by` rastreia `distilled -> run` (quem destilou); `collected_by` rastreia `item -> run` (quem coletou). Ambos os endpoints (`item`, `run`) já existem; zero nova superfície de tabela. O padrão é precedente em ADR-0008 §I (`chunk_of` é uma aresta de proveniência que entrou sem consumir o orçamento de tabelas extra-spec), com a diferença que `collected_by` nem sequer contraria a spec — apenas a estende onde a spec deixou silêncio (arestas provenance não são enumeradas em §2.3, só as tabelas).
+
+**Permanência explícita e contraste com `produced_by`:** `collected_by` é **PERMANENTE** e mantém apontando para `run` mesmo na fase 3. Fundamento: coleta é um fato de **EXECUÇÃO** — mesmo quando `flow` entrar (fase 3), runs continuarão coletando itens periodicamente. Destilação é que se torna produto de `flow` (por isso `produced_by` reaponta para `produced_by: distilled -> flow` na fase 3, per ADR-0008 §IV). Coleta nunca reaponta; um `run` coletou o item permanentemente. Esta assimetria (coleta permanente, destilação refatorada) é produto da diferença semântica: `run` é operacional (quando algo ocorre), `flow` é de design (o padrão armazenado). Só `produced_by` mudará.
+
+**Contenção e clarificação do orçamento (ADR-0002):** ADR-0002 limita **TABELAS** extra-spec ("uma terceira tabela extra-spec é sinal de scope creep"). ADR-0008 §III nota que o orçamento de 2 tabelas extras (run + chunk) está esgotado — uma **terceira** tabela reabre planejamento. `collected_by` **NÃO consome este orçamento**: é uma aresta (não tabela), ambos endpoints já existem e são do spec (`item`) ou da extensão aceita (`run`), e segue o precedente de aresta de proveniência (§I: "um chunk sem vetor é erro de construção"; uma aresta de proveniência é o mecanismo de registrar esse fato). Explicitamente: uma aresta extra-spec entra apenas quando (a) ambos endpoints já existem E (b) serve proveniência/observabilidade — qualquer outra finalidade reabre a contenção.
+
+**Semântica de re-coleta: last-write-wins.** A aresta é reescrita (DELETE+RELATE) na mesma transação que o upsert do item, consistente com a semântica de `from_source` do worker de coleta. Portanto a aresta registra o **ÚLTIMO run coletador**; o histórico **COMPLETO** de coleta mora na tabela `run` (não leia a aresta como auditoria — isso se leria como bug de projeto). O worker idempotente re-coletando o mesmo `external_id` sobrescreve a aresta e também sobrescreve o item (ambos por upsert determinístico de chave natural); o grafo fica íntegro.
+
 ---
 
 ## Detalhes técnicos menores (consequências do design principal)

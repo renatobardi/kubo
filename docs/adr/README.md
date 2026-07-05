@@ -15,3 +15,6 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0005](0005-veredito-spike-surrealdb-pins.md) | Veredito do spike SurrealDB + pins definitivos | aceito |
 | [0006](0006-embeddings-gemini-001-768.md) | Embeddings — `gemini-embedding-001` @ 768, cosseno | aceito |
 | [0007](0007-mecanica-migrations.md) | Mecânica de migrations do SurrealDB | aceito |
+| [0008](0008-desvios-schema-conhecimento.md) | Desvios do schema de conhecimento (§2.3) | aceito |
+| [0009](0009-contrato-worker.md) | Contrato de worker | aceito |
+| [0010](0010-agendamento-fase-1.md) | Agendamento na fase 1 (`schedules.yaml` + APScheduler) | aceito |
