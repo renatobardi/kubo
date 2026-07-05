@@ -107,6 +107,10 @@ Regra de parada do CodeRabbit (herdada do 0001): bloqueantes resolvidos; nitpick
 
 **Delegações:** advisor (Fable 5) 2× (ADR-0004; GO/NO-GO do spike) — ambas mudaram o resultado (emendas no fluxo git; pin 2.1.4→3.1.5). security-reviewer em `kubo/store/`. Demais artefatos (ADRs, tests, store, CI) escritos na thread: o conteúdo era ditado pelo plano/advisor ou pela descoberta empírica de API que vivia na thread — delegar custaria mais que fazer, com validação linha a linha inerente.
 
+### Mini-sessão diferida — smoke de embedding + ADR-0006 (branch `feat/0002-embedding-smoke`)
+
+O 2º corte do M2 (2.1.6 + ADR-0006) foi executado quando o dono forneceu `GEMINI_API_KEY`. `scripts/embedding_smoke.py` (stdlib pura, sem httpx/litellm): 10 trios PT-BR com distratores de **polissemia adversarial** (banco, fonte, prova, luz, remédio). Três configs rodadas ao vivo — `gemini-embedding-001` @768 e @3072, e `gemini-embedding-2` @768 — **todas 10/10**. Achados que decidiram: 768 == 3072 em qualidade (MRL grátis) a 4× menos custo de índice; o `embedding-2` separa 2× melhor mas n=10 não dá poder pra provar qualidade e seu contrato task-as-instruction é fuzzy. **ADR-0006: `gemini-embedding-001` @ 768, `task_type=SEMANTIC_SIMILARITY`, cosseno.** Advisor consultado (fable-advisor, nativo indisponível): **GO-com-emendas**, 8 emendas todas incorporadas (task_type na decisão, proveniência no schema, chunking obrigatório no M3, deprecação Google + ToS free como riscos, escada de fallback 768→1536→embedding-2, self-hosted como alternativa rejeitada, proibição de derivar thresholds do smoke). security-reviewer no `scripts/`. litellm segue fora (M6).
+
 ---
 
 *Fontes: sessão de planejamento Cowork de 2026-07-04; consulta de validação ao advisor (Fable 5): GO com emendas, todas incorporadas (probe corrigido, dependência nomeada, 2 PRs, ordem de sacrifício, ADR-0005 como veredito, injection no CI, transação single-query, verificação de restart do HNSW).*
