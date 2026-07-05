@@ -62,7 +62,7 @@ def test_hnsw_vector_search(db: Any) -> None:
         "WHERE embedding <|2,40|> [1.0, 0.0, 0.0, 0.0] ORDER BY dist;"
     )
     assert [r["id"].id for r in res] == [1, 2]  # os 2 mais próximos, em ordem
-    assert res[0]["dist"] == 0.0
+    assert res[0]["dist"] == pytest.approx(0.0)  # vetor idêntico: distância ~0
 
 
 def test_hnsw_knn_without_ef_raises(db: Any) -> None:
