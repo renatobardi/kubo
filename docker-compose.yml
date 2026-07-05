@@ -1,11 +1,16 @@
-# docker-compose.yml — Kubo
-# SurrealDB (único datastore, invariante 2) + sidecar de backup diário.
-# Pin DEFINITIVO (v3.1.5) por evidência do spike M2 — ADR-0005. Casado com o SDK
-# surrealdb==2.0.0 (pyproject). Bump do par sobe junto e roda a suíte de canário.
+# docker-compose.yml — Kubo (produção)
+# SurrealDB (único datastore, invariante 2) + scheduler da fase 1 + sidecar de
+# backup diário. Pin DEFINITIVO (v3.1.5) por evidência do spike M2 — ADR-0005.
+# Casado com o SDK surrealdb==2.0.0 (pyproject). Bump do par sobe junto.
 #
 # Postura de rede (CLAUDE.md §Segurança): SurrealDB NUNCA é exposto fora da rede
 # interna do compose — sem `ports:` publicado. Serviços do mesmo compose o
 # alcançam por DNS interno (`surrealdb:8000`). Expor à VCN/host é opt-in consciente.
+#
+# Este compose é o artefato de PRD (OCI). O deploy DEV no LXC do oute-server
+# sobrepõe `compose.dev-lxc.yml` (backup em bind no host) via COMPOSE_FILE no
+# .env — ver ADR-0011. O apparmor do dockerd é tratado no AMBIENTE (dpkg-divert no
+# kubo-test), não no compose, então este arquivo fica idêntico ao de PRD fora do backup.
 
 services:
   surrealdb:
@@ -33,10 +38,43 @@ services:
       retries: 10
       start_period: 10s
 
+  # Scheduler da fase 1 (ADR-0010): lê schedules.yaml, roda um worker por cron.
+  # BlockingScheduler síncrono; SIGTERM faz shutdown que espera a run em voo — daí
+  # o stop_grace_period 60s (o default de 10s mataria a run antes do shutdown limpo).
+  kubo-scheduler:
+    build: .
+    image: kubo:latest
+    restart: unless-stopped
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    stop_grace_period: 60s
+    environment:
+      # Endpoint interno do compose — NÃO loopback, então SURREAL_USER/PASS viram
+      # obrigatórios de fato no client (não cai no default root/root contra o banco).
+      SURREAL_URL: ws://surrealdb:8000/rpc
+      SURREAL_USER: ${SURREAL_USER:-root}
+      SURREAL_PASS: ${SURREAL_PASS:-root}
+      SURREAL_NS: ${SURREAL_NS:-kubo}
+      SURREAL_DB: ${SURREAL_DB:-kubo}
+      # Timezone explícita: alinha timestamps de log ao horário do schedules.yaml.
+      TZ: ${TZ:-America/Sao_Paulo}
+    # Sem healthcheck: BlockingScheduler sem porta não tem check honesto; a restart
+    # policy é o mecanismo de recuperação e `docker compose logs -f` é a
+    # observabilidade da fase 1 (runbook). Log rotation porque o scheduler emite
+    # JSON continuamente — sem teto, é o incidente de disco de 6 meses.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   # Backup diário. A imagem oficial do SurrealDB é distroless (sem shell/cron),
   # então o dump não roda dentro dela: um sidecar alpine consome o endpoint HTTP
-  # de export do SurrealDB (operação equivalente ao `surreal export` — D2) via
-  # busybox wget, sem dependências extras. Loop de sleep = cron de 1 job/dia.
+  # de export do SurrealDB (equivalente ao `surreal export` — D2) via busybox wget.
+  # Loop de sleep = cron de 1 job/dia. Sem upload externo (D2 emendada): o dump
+  # local, encadeado até o host pelo bind /backups, é a cópia fora do container;
+  # bucket OCI fica para PRD. Retenção 7d no próprio loop.
   backup:
     image: alpine:3.20
     restart: unless-stopped
@@ -50,8 +88,6 @@ services:
       SURREAL_PASS: ${SURREAL_PASS:-root}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
-      # Upload OCI — parametrizado, nunca commitado. Vazio = upload pulado.
-      OCI_UPLOAD_PAR_URL: ${OCI_UPLOAD_PAR_URL:-}
     command:
       - sh
       - -c
@@ -67,21 +103,13 @@ services:
               --header="surreal-db: $$SURREAL_DB" \
               "http://surrealdb:8000/export"; then
             echo "[backup] dump local: $$OUT ($$(wc -c < "$$OUT") bytes)"
-            if [ -n "$${OCI_UPLOAD_PAR_URL:-}" ]; then
-              # Upload por Pre-Authenticated Request (PUT). curl só é necessário
-              # aqui e só quando o OCI está configurado — busybox wget não faz PUT.
-              apk add --no-cache curl >/dev/null 2>&1 || true
-              curl -sf --max-time 120 -X PUT --upload-file "$$OUT" \
-                "$${OCI_UPLOAD_PAR_URL}kubo-$$TS.surql" \
-                && echo "[backup] upload OCI ok" \
-                || echo "[backup] upload OCI FALHOU (nova tentativa no próximo ciclo)"
-            else
-              echo "[backup] OCI não configurado — upload pulado (ver .env.example)"
-            fi
           else
             echo "[backup] export FALHOU (timeout/erro) — nova tentativa no próximo ciclo"
             rm -f "$$OUT"
           fi
+          # Retenção: apaga dumps com mais de 7 dias. `find -delete` (nunca rm -rf),
+          # escopo estreito no glob kubo-*.surql — não toca mais nada em /backups.
+          find /backups -name 'kubo-*.surql' -mtime +7 -delete 2>/dev/null || true
           sleep 86400
         done
 
