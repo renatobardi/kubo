@@ -338,7 +338,7 @@ def test_fetch_failure_is_http_error_without_leaking_body() -> None:
 def test_disallowed_config_scheme_rejected_at_construction() -> None:
     """feed_url com esquema != http/https é rejeitado na validação da CONFIG, não no run."""
     with pytest.raises(ValidationError):
-        FeedConfig(feed_url="gopher://x/feed")  # gopher: vetor SSRF clássico, fora do allowlist
+        FeedConfig(feed_url="unsupported://x/feed")  # qualquer esquema fora de http/https
 
 
 @respx.mock
