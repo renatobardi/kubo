@@ -71,21 +71,41 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # NOTA (M1) — serviço SurrealDB deferido para o M2. O bloco `services:` do GitHub
-    # Actions não tem campo de comando; a imagem oficial (distroless, sem shell) não
-    # sobe servidor sem `start ...`, então subiria e sairia na hora, matando o job.
-    # O M1 não tem teste de integração (spike = M2). Religar no M2 via um step
-    # `docker run -d surrealdb/surrealdb:<pin> start --user ... memory` + probe
-    # `surreal isready`. Obrigação registrada em docs/sessions/0001-fundacao.md.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen
-      # Gate de cobertura CONFIGURADO mas ADIADO: com módulos vazios não há dados
-      # (--cov-fail-under falharia por "no data" ou passaria vacuamente). ENFORCE a
+      # Gate de cobertura CONFIGURADO mas ADIADO: com módulos ainda quase vazios os
+      # dados são ralos (--cov-fail-under falharia/passaria vacuamente). ENFORCE a
       # partir do M3. NUNCA remover o gate — apenas manter `--cov-fail-under` comentado.
-      - name: Unit (integração religa no M2)
+      - name: Unit (integração roda no job `integration`)
         run: >
           uv run pytest -m "not integration"
           --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
         # enforce a partir do M3:  --cov-fail-under=85
+
+  # Integração religada no M2 (spike SurrealDB). A imagem oficial é distroless (sem
+  # shell), então o probe NÃO usa `surreal isready` no runner — usa `curl` no health
+  # endpoint em retry loop (corrigido do plano M1). Backend `memory`: efêmero, sem
+  # volume, sem problema de permissão. Pin do servidor casado com o SDK (ADR-0005).
+  integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: Sobe SurrealDB (mesmo comando do spike local)
+        run: |
+          docker run -d --name surreal -p 127.0.0.1:8000:8000 \
+            surrealdb/surrealdb:v3.1.5 start --user root --pass root memory
+      - name: Aguarda health (curl retry loop, sem surreal isready)
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && { echo "health OK ($i)"; exit 0; }
+            sleep 1
+          done
+          echo "::error::SurrealDB não respondeu ao /health"; docker logs surreal; exit 1
+      - name: Testes de integração
+        run: uv run pytest -m integration

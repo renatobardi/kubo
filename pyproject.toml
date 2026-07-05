@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Kubo (工房) — ateliê pessoal de agentes: coleta, cura conhecimento em grafo, distribui e fabrica seus próprios workers."
 readme = "README.md"
 requires-python = "==3.12.*"
-dependencies = []
+dependencies = [
+    # Pin por EVIDÊNCIA do spike M2 (ADR-0005): SDK 2.0.0 validado contra o
+    # servidor surrealdb:v3.1.5 nos 5 comportamentos + restart (14 testes verdes).
+    # Par SDK↔server move junto — ver docker-compose.yml e ci.yml.
+    "surrealdb==2.0.0",
+]
 
 [dependency-groups]
 # Tooling de qualidade (sem dependências de runtime na fase M1 — zero código de produção).
@@ -38,8 +43,8 @@ select = ["E", "F", "W", "I", "S", "B", "C90"]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-# Testes podem usar assert (S101) e não precisam de docstring de módulo.
-"tests/**" = ["S101"]
+# Testes podem usar assert (S101) e senhas/tokens fake em fixtures (S105/S106).
+"tests/**" = ["S101", "S105", "S106"]
 
 [tool.pyright]
 pythonVersion = "3.12"

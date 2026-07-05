@@ -92,4 +92,21 @@ Regra de parada do CodeRabbit (herdada do 0001): bloqueantes resolvidos; nitpick
 
 ---
 
+## Notas de execução (2026-07-05, CLI Opus + advisor Fable 5)
+
+**Marco 2.0 (PR #2, `ci/0002-git-flow`, squash-merged em `main`):** entregue completo. ADR-0004 validado pelo advisor (GO-com-emendas, todas aplicadas: `pr-conventions` como required check, trigger `edited`, force-create no guard, seção de limites). Estratégia de merge: **squash-only** decidida pelo dono, registrada no ADR-0004 e configurada no repo. CodeRabbit: 5 achados (3 aplicados, 2 declinados com justificativa técnica — `name:` quebraria o contexto do required check; MD041 sem markdownlint). SonarCloud S8264 (permissões por job) resolvido.
+
+**Correções de harness (mesma família de bug: hook agindo por substring/fora do repo — CLAUDE.md manda corrigir no hook, não contornar). Todas com evidência nesta sessão, teste `guard-bash.test.sh`:**
+1. `guard-bash.sh`: regras de git e coderabbit casam só em **posição de comando** (início ou após `; & |`), não substring — mensagem de commit citando `checkout -b`/`git push` e `... | grep coderabbit` deixaram de bloquear.
+2. `guard-files.sh`: `/private/tmp/*` no allowlist (scratchpad do Claude Code).
+3. `check-quality.sh`: arquivo fora de `$CLAUDE_PROJECT_DIR` → exit 0 (probes descartáveis não são código do projeto).
+
+**Marco 2.1 (spike) — veredito GO.** Advisor consultado com a evidência (2.1.7): **GO na aposta**, mas recusou o pin `v2.1.4` (versão de dez/2024, uma major atrás do 3.x GA). A suíte de 14 testes virou canário de upgrade e foi rodada contra `v3.1.5`: verde, e **corrige o footgun do EF** (KNN sem EF passa a falhar alto em vez de retornar vazio). **Pin definitivo: servidor `v3.1.5` + SDK `surrealdb==2.0.0`** (ADR-0005). O canário também pegou a quebra do healthcheck do compose (`isready --conn` → `is-ready --endpoint` no 3.x). Store (client + runner de migrations) por TDD (RED→GREEN visível), 14 testes verdes, pyright strict limpo. CI: job `integration` religado (docker run + probe `curl /health`).
+
+**Cortes exercidos:** 2º corte (smoke de embedding + ADR-0006) — `GEMINI_API_KEY` ausente; diferido para mini-sessão, com dono/prazo nomeados no ADR-0005. Nenhum outro corte (o guard local 2.0.5 foi mantido).
+
+**Delegações:** advisor (Fable 5) 2× (ADR-0004; GO/NO-GO do spike) — ambas mudaram o resultado (emendas no fluxo git; pin 2.1.4→3.1.5). security-reviewer em `kubo/store/`. Demais artefatos (ADRs, tests, store, CI) escritos na thread: o conteúdo era ditado pelo plano/advisor ou pela descoberta empírica de API que vivia na thread — delegar custaria mais que fazer, com validação linha a linha inerente.
+
+---
+
 *Fontes: sessão de planejamento Cowork de 2026-07-04; consulta de validação ao advisor (Fable 5): GO com emendas, todas incorporadas (probe corrigido, dependência nomeada, 2 PRs, ordem de sacrifício, ADR-0005 como veredito, injection no CI, transação single-query, verificação de restart do HNSW).*

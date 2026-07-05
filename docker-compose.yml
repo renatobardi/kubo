@@ -1,6 +1,7 @@
 # docker-compose.yml — Kubo
 # SurrealDB (único datastore, invariante 2) + sidecar de backup diário.
-# Pin de imagem PROVISÓRIO (v2.1.4): o pin definitivo sai do spike M2 (ADR).
+# Pin DEFINITIVO (v3.1.5) por evidência do spike M2 — ADR-0005. Casado com o SDK
+# surrealdb==2.0.0 (pyproject). Bump do par sobe junto e roda a suíte de canário.
 #
 # Postura de rede (CLAUDE.md §Segurança): SurrealDB NUNCA é exposto fora da rede
 # interna do compose — sem `ports:` publicado. Serviços do mesmo compose o
@@ -8,7 +9,7 @@
 
 services:
   surrealdb:
-    image: surrealdb/surrealdb:v2.1.4
+    image: surrealdb/surrealdb:v3.1.5
     restart: unless-stopped
     # A imagem roda como uid 65532 (nonroot), mas o volume nomeado é root:root e o
     # RocksDB precisa criar seu diretório. root evita um init-container de chown.
@@ -24,8 +25,9 @@ services:
     volumes:
       - surreal-data:/data
     # Imagem distroless (sem shell): healthcheck em exec form, binário em /surreal.
+    # 3.x renomeou o subcomando: `is-ready --endpoint` (era `isready --conn` no 2.x).
     healthcheck:
-      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
+      test: ["CMD", "/surreal", "is-ready", "--endpoint", "http://localhost:8000"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -13,7 +13,17 @@ case "$FILE" in
 esac
 [ -f "$FILE" ] || exit 0
 
-PROJ="${CLAUDE_PROJECT_DIR:-.}"
+PROJ="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-.}")"
+# Canoniza o caminho (resolve `..` e symlinks) antes de comparar — senão um path
+# relativo/`../` escaparia do teste de contenção abaixo.
+FILE="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$FILE" 2>/dev/null || echo "$FILE")"
+
+# Só arquivos DENTRO do projeto: gate de qualidade não se aplica a scratchpad/tmp
+# ou qualquer caminho fora do repo (probes descartáveis não são código do projeto).
+case "$FILE" in
+  "$PROJ"/*) : ;;
+  *) exit 0 ;;
+esac
 
 # Runner: neste projeto ruff/pyright vivem no venv do uv, não no PATH global.
 if command -v uv >/dev/null 2>&1 && [ -f "$PROJ/pyproject.toml" ]; then
