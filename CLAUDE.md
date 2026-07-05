@@ -48,14 +48,15 @@ uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files)   # segr
 uv run pip-audit                 # auditoria de deps
 
 # Testes:
-uv run pytest -m "not integration"                       # unit (default local)
-uv run pytest -m "not integration" --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
+uv run pytest -m "not integration"                       # unit (default local, rápido)
 uv run pytest tests/store/test_client.py                 # um arquivo
 uv run pytest tests/store/test_client.py::test_nome      # um teste
-uv run pytest -m integration                             # integração (exige SurrealDB, ver abaixo)
+uv run pytest -m integration                             # só integração (exige SurrealDB, ver abaixo)
+# gate de cobertura = suíte COMPLETA (unit+integração) com o banco de pé:
+uv run pytest --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime --cov-fail-under=85
 ```
 
-Cobertura tem `--cov-fail-under=85` **configurado mas adiado** (módulos ainda ralos); enforce a partir do M3 — ver comentário em `ci.yml`, nunca remover o gate.
+Cobertura: o gate `--cov-fail-under=85` **vale a partir do M3** e roda no job `integration` do CI sobre a suíte **completa** (unit+integração) — a store só é exercível contra banco real, então medir cobertura só com unit induziria mock-que-testa-mock. Não é gate do job unit. Cobertura é alarme, não meta; nunca remover o gate.
 
 **SurrealDB para integração** (mesmo comando do spike/CI — backend `memory`, efêmero):
 ```bash

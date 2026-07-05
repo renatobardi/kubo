@@ -82,4 +82,30 @@ M1 ✅ M2 ✅ (+ mini-sessão do smoke). Insumos herdados: runner de migrations 
 
 ---
 
+## Notas de execução (sessão CLI, 2026-07-05)
+
+**Entregue:** migrations 0001 (schema) + 0002 (HNSW), camada `kubo/store/` completa dos consumidores da fase 1 (`upsert_source`/`upsert_item`/`get_or_create_entity`/`insert_distilled`/`provenance`/`search`/`start_run`/`finish_run`/`fail_run` + wrapper `run_transaction`), ADR-0008 (aceito), gate de cobertura na nova mecânica. Suíte: 38 verdes; cobertura 99% (gate 85% passa). Todos os critérios de aceite cumpridos.
+
+**Descobertas empíricas contra v3.1.5** (probes, não palpite):
+- **HNSW aplica dentro de transação** — a armadilha 3.1.4 NÃO disparou; consulta extraordinária não foi necessária.
+- `FLEXIBLE` vem DEPOIS de `TYPE` na gramática 3.x (`TYPE ... FLEXIBLE [DEFAULT]`); materializa e preserva payload aninhado.
+- Aresta `TYPE RELATION` **não** aceita `UPSERT SET in/out` ("not a relation") — aresta idempotente = `DELETE $x->edge; RELATE ...`.
+- Operador KNN `<|k,ef|>` exige **inteiros literais** (bind param é rejeitado) — k/ef são ints da store, o vetor vai por bind.
+- `query_raw` devolve `{result: [{status, result}, ...]}` com um item por statement (inclui BEGIN/COMMIT); o wrapper checa `status == "ERR"` em todos.
+
+**Correções do advisor incorporadas:** DDL (3.1.5) — `order`→`seq`, arestas `ENFORCED`, EFC 150/M 12 pinados. ADR-0008 (3.1.6) — permanência do chunk-registro ancorada em granularidade de recuperação (não no limite de token); adiamento de `memory` justificado por D17 (não pela contenção da ADR-0002, que só governa tabelas extra-spec); desvio `relates_to.kind` registrado (§V); referências por seção/âncora em vez de linha.
+
+**Delegações e advisor (transparência de custo):** `doc-writer` (Haiku) draftou ADR-0008; `test-writer` (Sonnet) produziu o RED (12 testes); `security-reviewer` (Sonnet) auditou `kubo/store/`. O **GREEN da store foi escrito na thread principal** (não delegado ao `implementer`): caminho estrito de segurança (rule 1 reserva a validação linha-a-linha de `kubo/store/` à thread), wrapper transacional é entregável de segurança nomeado, e o contexto empírico de SurrealQL estava fresco na thread — delegar exigiria transferir esse contexto e arriscar erros de sintaxe no caminho estrito. Consultas ao advisor: 2 obrigatórias (DDL 3.1.5, ADR-0008 3.1.6) + trap não disparou. **Ressalva:** o subagent `fable-advisor` reportou o reviewer externo (Fable 5) indisponível nas duas consultas e caiu no próprio julgamento — a revisão foi rigorosa e empiricamente cruzada, mas a camada Fable 5 especificamente não engajou; o `advisor()` nativo também está indisponível neste ambiente.
+
+**Pendências explícitas para M4/M5 (fora do escopo desta sessão):**
+- **Proteção de branch:** marcar o job `integration` do CI como *required* para o gate de 85% ter dente (ação do dono — não é infra que a sessão configura).
+- **`relates_to.kind` tipado** (enum/ASSERT) quando houver produtor de relações entre entidades (ADR-0008 §V).
+- **Aresta `item -[?]-> run`** ("qual run coletou este item?") — útil ao depurar o feed worker; adicionar no M5 quando o consumidor existir (aresta é barata).
+- **`item.published_at`** vive em `metadata` FLEXIBLE por ora; promover a campo tipado só se um consumidor precisar (migration de uma linha).
+- **`run.stats`** fica no default `{}`: `start_run`/`finish_run`/`fail_run` não recebem `stats` (anti-especulação); adicionar param + teste quando um worker precisar registrar métricas finais.
+- **`memory`/`grounded_in`** (D17) e **`produced_by -> flow`** (ADR-0002): fase 3, por migration.
+- **Hardening de `client.py` (achados BAIXO do security-reviewer, pré-existentes, não corrigidos nesta sessão para não estourar escopo):** (a) no caminho loopback, `SURREAL_USER` sem `SURREAL_PASS` (ou vice-versa) cai no default `root` parcial em vez de exigir os dois juntos; (b) exceção de `db.signin(...)` pode carregar a senha na mensagem se um caller futuro logar `exc_info`. Sem exposição hoje (SurrealDB nunca sai da rede interna; nenhum log dessa exceção existe); fechar na trilha de hardening OCI ou quando a auth de produção for endurecida.
+
+---
+
 *Fontes: sessão de planejamento Cowork de 2026-07-05; consulta de validação ao advisor (Fable 5): GO com correções, todas incorporadas — gate de cobertura movido para o job de integração (bloqueador), wrapper transacional como entregável nomeado, chaves naturais/normalização pré-decididas, SCHEMAFULL, `mentions` junto de `entity`, `relates_to.kind`, `run.error` minimal, armadilha do HNSW-em-transação pré-autorizada, ADR-0008 alargado para todos os desvios, desenho chunk-registro validado ("nem é opcional": HNSW indexa um vetor por registro).*
