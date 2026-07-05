@@ -264,6 +264,19 @@ def test_run_lifecycle_running_then_ok_or_error(db: Any) -> None:
     assert finished["status"] == "ok"
     assert finished["finished_at"] is not None
 
+
+def test_finish_run_persists_stats(db: Any) -> None:
+    """finish_run(stats=...) grava os contadores no campo FLEXIBLE run.stats
+    (carry-over do 0003: o worker fake com métricas é o primeiro consumidor)."""
+    run_id = knowledge.start_run(db, worker="feed")
+
+    knowledge.finish_run(db, run_id, stats={"items_seen": 10, "items_written": 3})
+
+    row = db.query("SELECT status, stats FROM $r;", {"r": run_id})[0]
+    assert row["status"] == "ok"
+    assert row["stats"]["items_seen"] == 10
+    assert row["stats"]["items_written"] == 3
+
     other_run_id = knowledge.start_run(db, worker="feed")
     knowledge.fail_run(db, other_run_id, error={"kind": "http", "detail": {"status": 503}})
     failed = db.query("SELECT status, error, finished_at FROM $r;", {"r": other_run_id})[0]

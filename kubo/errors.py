@@ -22,3 +22,13 @@ class StoreError(KuboError):
     via `query()` (ADR-0005); o wrapper transacional da store inspeciona todos os
     statements e levanta este erro quando algum falhou.
     """
+
+
+class ContractError(KuboError):
+    """Objeto não honra o contrato de worker (ADR-0009).
+
+    Levantado por `validate_worker` quando `manifest` está ausente, não valida
+    como `WorkerManifest`, ou `run` não é callable com a assinatura esperada.
+    O runner chama `validate_worker` antes de abrir `run` — worker inválido
+    nunca executa.
+    """
