@@ -13,5 +13,5 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0003](0003-auth-api-bearer-estatico.md) | Auth da API — bearer token estático + security list OCI | aceito |
 | [0004](0004-fluxo-git.md) | Convenções de fluxo Git | aceito |
 | [0005](0005-veredito-spike-surrealdb-pins.md) | Veredito do spike SurrealDB + pins definitivos | aceito |
-| 0006 | Embeddings (modelo, dimensão, métrica) | diferido — mini-sessão (ver ADR-0005) |
+| [0006](0006-embeddings-gemini-001-768.md) | Embeddings — `gemini-embedding-001` @ 768, cosseno | aceito |
 | [0007](0007-mecanica-migrations.md) | Mecânica de migrations do SurrealDB | aceito |
