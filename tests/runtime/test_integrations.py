@@ -42,6 +42,21 @@ def test_load_integrations_indexes_by_name() -> None:
     assert isinstance(catalog["rss"], Integration)
 
 
+def test_load_integrations_rejects_duplicate_name(tmp_path: Path) -> None:
+    """Dois YAMLs declarando o mesmo `name` falham alto (ConfigError) em vez de o
+    segundo sobrescrever o primeiro em silêncio — least-privilege depende de o
+    catálogo ser inequívoco (um nome, uma integração, uma permissão)."""
+    (tmp_path / "a.yaml").write_text(
+        "name: dup\nkind: http\nauth:\n  type: none\n", encoding="utf-8"
+    )
+    (tmp_path / "b.yaml").write_text(
+        "name: dup\nkind: rss\nauth:\n  type: none\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError, match="dup"):
+        load_integrations(tmp_path)
+
+
 def test_loader_rejects_inline_secret(tmp_path: Path) -> None:
     """auth com secret_ref que NÃO é referência env:VAR (valor inline) é
     rejeitado — segredo só por referência (invariante 8, plano §4.3.1)."""

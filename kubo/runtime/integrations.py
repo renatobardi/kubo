@@ -107,10 +107,16 @@ def load_integration(path: Path) -> Integration:
 
 
 def load_integrations(catalog_dir: Path) -> dict[str, Integration]:
-    """Carrega todas as integrações de um diretório (1 YAML por item), por nome."""
+    """Carrega todas as integrações de um diretório (1 YAML por item), por nome.
+
+    Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
+    em silêncio: least-privilege depende de o catálogo ser inequívoco (um nome, uma
+    integração, uma permissão), senão um worker poderia herdar a auth/base_url errada."""
     catalog: dict[str, Integration] = {}
     for path in sorted(catalog_dir.glob("*.yaml")):
         integ = load_integration(path)
+        if integ.name in catalog:
+            raise ConfigError(f"integração '{integ.name}' declarada em mais de um arquivo")
         catalog[integ.name] = integ
     return catalog
 
