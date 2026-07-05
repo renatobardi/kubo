@@ -1,0 +1,90 @@
+"""Protocol do contrato de worker e validação de runtime (ADR-0009).
+
+`Worker`/`RunContext`/`KnowledgeReader` são Protocols — servem à checagem
+estática do pyright, NÃO validam nada em runtime (`isinstance`/
+`@runtime_checkable` só checam presença de membros, não a forma do manifest
+nem a assinatura de `run` — falsa validação de uma fronteira de segurança,
+ADR-0009 item I). A validação de runtime é a função explícita
+`validate_worker`.
+
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Any, Protocol
+
+from pydantic import BaseModel, ValidationError
+
+from kubo.contracts.models import RunResult, WorkerManifest
+from kubo.errors import ContractError
+
+_MISSING = object()
+
+
+class KnowledgeReader(Protocol):
+    """Seam de leitura do grafo, vazio na fase 1 (ADR-0009 item VI).
+
+    Métodos entram quando um worker exigir leitura do grafo, com teste que
+    justifique — não se especula agora.
+    """
+
+
+class RunContext(Protocol):
+    """Contexto somente-leitura entregue ao worker (ADR-0009 item VI).
+
+    O worker nunca recebe handle de `db` — persistir é do runtime.
+    """
+
+    config: BaseModel
+    integrations: dict[str, Any]
+    knowledge: KnowledgeReader
+    logger: Any
+
+
+class Worker(Protocol):
+    """O que o pyright vê: manifest declarado + `run(ctx) -> RunResult` (ADR-0009 item I)."""
+
+    manifest: WorkerManifest
+
+    def run(self, ctx: RunContext) -> RunResult: ...
+
+
+def validate_worker(obj: object) -> WorkerManifest:
+    """Valida que `obj` honra o contrato de worker; retorna o manifest validado.
+
+    Checa: (a) `obj.manifest` existe e é validável como `WorkerManifest`; (b)
+    `obj.run` é callable com a assinatura esperada (um parâmetro posicional
+    além de `self`). Falha em qualquer uma das duas condições levanta
+    `ContractError` (ADR-0009 item V).
+
+    O retorno é o manifest VALIDADO — o runner usa esse retorno e nunca relê
+    `obj.manifest` depois, fechando o TOCTOU de um worker hostil que expõe
+    `manifest` como property inconsistente entre leituras.
+    """
+    raw = getattr(obj, "manifest", _MISSING)
+    if raw is _MISSING:
+        raise ContractError("worker não expõe o atributo `manifest`")
+    try:
+        manifest = WorkerManifest.model_validate(raw)
+    except ValidationError as exc:
+        raise ContractError(f"manifest do worker é inválido: {exc}") from exc
+
+    run = getattr(obj, "run", _MISSING)
+    if not callable(run):
+        raise ContractError("worker.run não é callable")
+    try:
+        signature = inspect.signature(run)
+    except (TypeError, ValueError) as exc:  # callable sem assinatura inspecionável
+        raise ContractError("worker.run não tem assinatura inspecionável") from exc
+    # `run` é lido como método vinculado — `self` já não aparece; sobra só o ctx.
+    positional = [
+        p
+        for p in signature.parameters.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    if len(positional) != 1:
+        raise ContractError(
+            f"worker.run deve aceitar exatamente um parâmetro (ctx); tem {len(positional)}"
+        )
+    return manifest
