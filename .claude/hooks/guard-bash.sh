@@ -47,4 +47,13 @@ echo "$CMD" | grep -Eq '\bcoderabbit\b|\bcr[[:space:]]+review\b' \
 echo "$CMD" | grep -Eq '\bpip[3]?[[:space:]]+install\b' \
   && deny "pip install direto — use 'uv add' (lockfile é invariante)"
 
+# Branch fora da taxonomia (ADR-0004). Guard de conveniência — o gate real é o CI.
+# ponytail: cobre só `switch -c` e `checkout -b` (formas de criação comuns);
+# `git branch <nome>` não é parseado aqui — o CI barra no PR.
+NEWBRANCH="$(echo "$CMD" | grep -oE '(switch[[:space:]]+-[cC]|checkout[[:space:]]+-[bB])[[:space:]]+[^[:space:]]+' | grep -oE '[^[:space:]]+$' || true)"
+if [ -n "$NEWBRANCH" ]; then
+  echo "$NEWBRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9._-]+$' \
+    || deny "branch '$NEWBRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug — ver ADR-0004"
+fi
+
 exit 0
