@@ -36,10 +36,8 @@ def _error_message(exc: Exception) -> str:
     payload hostil); usa `errors(include_input=False)`. Depois trunca em 500: o
     caminho de exceção é por onde conteúdo hostil vazaria para run.error/log."""
     if isinstance(exc, ValidationError):
-        text = "; ".join(
-            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-            for e in exc.errors(include_url=False, include_input=False)
-        )
+        # Lê SÓ loc+msg, nunca e['input'] — o input carregaria o payload hostil.
+        text = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
     else:
         text = str(exc)
     return text[:_MSG_CAP]

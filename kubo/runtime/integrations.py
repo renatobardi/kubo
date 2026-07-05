@@ -94,12 +94,10 @@ class ResolvedIntegration:
 
 
 def _safe_errors(exc: ValidationError) -> str:
-    """Formata erros de validação SEM o input_value — que carregaria o valor
-    candidato (ex.: um segredo colado por engano) para o ConfigError/run.error."""
-    return "; ".join(
-        f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-        for e in exc.errors(include_url=False, include_input=False)
-    )
+    """Formata erros de validação lendo SÓ `loc`+`msg` — nunca o `input`, que
+    carregaria o valor candidato (ex.: um segredo colado por engano) para o
+    ConfigError/run.error. Não adicione `e['input']` a esta string."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
 
 
 def load_integration(path: Path) -> Integration:
