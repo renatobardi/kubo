@@ -360,11 +360,13 @@ def test_redirect_to_internal_ip_is_refused() -> None:
     """Servidor de feed que responde 302 apontando para um IP interno (metadata da
     OCI 169.254.169.254) é RECUSADO no hop de redirect — SSRF de exfiltração fechado.
     O IP-literal torna o teste determinístico (o guard valida sem DNS)."""
-    respx.get(_FEED_URL).mock(
-        return_value=httpx.Response(
-            302, headers={"Location": "http://169.254.169.254/opc/v2/instance/"}
-        )
-    )
+    internal = "http://169.254.169.254/opc/v2/instance/"
+    respx.get(_FEED_URL).mock(return_value=httpx.Response(302, headers={"Location": internal}))
+    # O destino interno é mockado com um feed VÁLIDO de propósito: sem o guard, o worker
+    # SEGUIRIA o redirect, parsearia e coletaria a resposta interna (payloads != []). Com o
+    # guard, o hop é recusado. Assim o teste falha se o event hook for removido — não passa
+    # só porque o respx bloquearia uma URL não-mockada.
+    respx.get(internal).mock(return_value=httpx.Response(200, content=VALID_TWO))
     config = FeedConfig(feed_url=_FEED_URL)
 
     result = FeedWorker().run(_ctx(config))
