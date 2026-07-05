@@ -35,14 +35,22 @@ class RunContext(Protocol):
     """Contexto somente-leitura entregue ao worker (ADR-0009 item VI).
 
     O worker nunca recebe handle de `db` — persistir é do runtime.
+
+    Membros são `@property` (só-leitura) de propósito: atributo mutável de
+    Protocol é INVARIANTE, e o ctx concreto (dataclass frozen) usa tipos mais
+    estreitos (`Mapping[str, ResolvedIntegration]`, `EmptyKnowledge`) — sob
+    invariância ele não satisfaria este Protocol. Property de leitura é
+    covariante, então o concreto o honra, coerente com "somente-leitura".
     """
 
-    config: BaseModel
-    # Mapping (não dict): atributo de Protocol é invariante — o ctx concreto usa
-    # Mapping[str, ResolvedIntegration] e precisa satisfazer este Protocol.
-    integrations: Mapping[str, Any]
-    knowledge: KnowledgeReader
-    logger: Any
+    @property
+    def config(self) -> BaseModel: ...
+    @property
+    def integrations(self) -> Mapping[str, Any]: ...
+    @property
+    def knowledge(self) -> KnowledgeReader: ...
+    @property
+    def logger(self) -> Any: ...
 
 
 class Worker(Protocol):
