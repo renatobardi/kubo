@@ -75,6 +75,11 @@ M1–M3 ✅. Store completa (39 testes, 99% cobertura, gate 85% no job integrati
 - Loaders de personas/flow_templates NÃO. Deploy NÃO (M5.5). Store sem método novo além do `stats` de `finish_run`.
 - Nenhuma decisão nova de arquitetura sem reabrir planejamento.
 
+## Notas de execução (CLI, 2026-07-05)
+
+- **Consulta de advisor #1 (ADR-0009) rodou DEGRADADA:** o `advisor` nativo do CLI está indisponível; o fallback `fable-advisor` reportou reviewer externo indisponível e caiu no próprio julgamento (cenário previsto, linha 19). Veredito: **GO com 7 correções**, todas incorporadas ao ADR-0009 antes de congelar (extra="forbid" nos modelos do contrato; validação numérica de Stats; truncamento de ErrorInfo.message na fronteira; rename WorkerContext→RunContext p/ spec §3.3; semântica payloads+error; last-write-wins + contrato valida forma-não-intenção + escrita não-escopada como limite v1; validate_worker retorna manifest validado, runner não relê obj.manifest — TOCTOU). **ADR-0009 exige revalidação na consulta de conclusão** (linha 19 + ponto de consulta #2).
+- **Pendências nomeadas para o M5:** (a) aresta `item→run` (carry-over do 0003, não implementada aqui); (b) deny completo de least-privilege se cortado pelo timebox; (c) `rss.yaml` se cortado.
+
 ---
 
 *Fontes: sessão de planejamento Cowork de 2026-07-05; consulta de validação ao advisor (Fable 5): GO com 6 correções, todas incorporadas — payloads espelham a store (C1), persistência por-item sem transação-mega (C2), seam de leitura vazio no ctx (C3), `finish_run.stats` como tarefa nomeada (C4), resolução de segredo pelo runtime (C5), fake em tests/ (C6) — mais: `validate_worker` explícito, config como classe pydantic, sem generics, noqa cirúrgico na fronteira, fallback de advisor degradado registrado.*
