@@ -1,0 +1,26 @@
+# compose.dev-lxc.yml — overlay do deploy DEV no container LXC do oute-server.
+#
+# NÃO é um compose autônomo: sobrepõe o docker-compose.yml via
+# `COMPOSE_FILE=docker-compose.yml:compose.dev-lxc.yml` no .env do servidor
+# (ambiente-específico, não commitado). Verifique o merge com `docker compose config`.
+#
+# Única diferença do ambiente DEV vs. PRD (ADR-0011): o volume de backup vira um
+# bind no /backups do container — disk device LXD (shift=true) → ~/backups/kubo do
+# host. O dump sobrevive a `lxc delete kubo-test` e o rsync do dono puxa do host.
+# Em PRD o backup vai para bucket OCI (outro mecanismo), então o compose principal
+# mantém o volume nomeado portável.
+#
+# NOTA: apparmor NÃO é tratado aqui. No kubo-test o dockerd não consegue verificar
+# o perfil docker-default (securityfs do host ilegível para container unprivileged),
+# o que quebraria `docker run` E `docker exec` (healthcheck, restore). A solução é
+# de AMBIENTE, não de compose: `dpkg-divert` do apparmor_parser desliga o apparmor
+# só para o dockerd do kubo-test (que já é unconfined no nível LXC). Ver ADR-0011 e
+# o runbook — por isso este compose fica limpo e idêntico ao de PRD fora do backup.
+
+volumes:
+  surreal-backups:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /backups
