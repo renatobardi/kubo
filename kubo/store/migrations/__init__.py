@@ -33,6 +33,10 @@ def apply_migrations(db: Any, migrations_dir: Path = MIGRATIONS_DIR) -> list[str
     Sem down-migrations: rollback é restaurar backup, não desfazer no schema.
     """
     db.query("DEFINE TABLE IF NOT EXISTS migration SCHEMALESS;")
+    # Índice UNIQUE: se dois runners concorrentes (ex.: réplicas subindo juntas)
+    # virem a mesma migration pendente, o 2º CREATE falha no índice e sua
+    # transação reverte — em vez de duplicar registro ou reaplicar DDL.
+    db.query("DEFINE INDEX IF NOT EXISTS migration_name ON migration FIELDS name UNIQUE;")
     already = _applied(db)
     newly: list[str] = []
     for path in sorted(migrations_dir.glob("*.surql")):

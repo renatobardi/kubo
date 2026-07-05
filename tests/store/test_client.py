@@ -51,6 +51,17 @@ def test_config_remote_url_requires_explicit_credentials(
         client.config()
 
 
+def test_config_spoofed_loopback_host_requires_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host remoto disfarçado de loopback (`127.attacker.com`) NÃO herda root/root."""
+    monkeypatch.setenv("SURREAL_URL", "wss://127.attacker.com:8000/rpc")
+    monkeypatch.delenv("SURREAL_USER", raising=False)
+    monkeypatch.delenv("SURREAL_PASS", raising=False)
+    with pytest.raises(ConfigError):
+        client.config()
+
+
 def test_config_remote_url_with_credentials_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     """Endpoint remoto COM credencial explícita é aceito."""
     monkeypatch.setenv("SURREAL_URL", "wss://db.internal:8000/rpc")

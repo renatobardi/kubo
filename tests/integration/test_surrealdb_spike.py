@@ -104,14 +104,15 @@ def test_async_query_and_traversal() -> None:
 
     async def scenario() -> Any:
         db = AsyncSurreal(cfg.url)
-        await db.signin({"username": cfg.user, "password": cfg.password})
-        await db.use(cfg.namespace, cfg.database)
-        await db.query("REMOVE TABLE IF EXISTS knows; REMOVE TABLE IF EXISTS person;")
-        await db.query("CREATE person:a; CREATE person:b;")
-        await db.query("RELATE person:a->knows->person:b;")
-        rows = await db.query("SELECT ->knows->person AS friends FROM person:a;")
-        await db.close()
-        return rows
+        try:
+            await db.signin({"username": cfg.user, "password": cfg.password})
+            await db.use(cfg.namespace, cfg.database)
+            await db.query("REMOVE TABLE IF EXISTS knows; REMOVE TABLE IF EXISTS person;")
+            await db.query("CREATE person:a; CREATE person:b;")
+            await db.query("RELATE person:a->knows->person:b;")
+            return await db.query("SELECT ->knows->person AS friends FROM person:a;")
+        finally:
+            await db.close()
 
     rows = asyncio.run(scenario())
     assert len(rows[0]["friends"]) == 1

@@ -6,6 +6,7 @@ Defaults servem dev local e CI (container efêmero em loopback).
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -18,7 +19,6 @@ from surrealdb import Surreal
 from kubo.errors import ConfigError
 
 _DEFAULT_URL = "ws://127.0.0.1:8000/rpc"
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 @dataclass(frozen=True)
@@ -44,9 +44,18 @@ class Config:
 
 
 def _is_loopback(url: str) -> bool:
-    """True se o host do URL é loopback — onde os defaults root/root são aceitáveis."""
+    """True se o host do URL é loopback — onde os defaults root/root são aceitáveis.
+
+    Usa `ipaddress` (não prefixo de string): `127.attacker.com` NÃO é loopback —
+    senão um host remoto controlado pelo atacante herdaria o default root/root.
+    """
     host = urlparse(url).hostname or ""
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def config() -> Config:
@@ -77,7 +86,7 @@ def config() -> Config:
 
 
 @contextmanager
-def connect(cfg: Config | None = None) -> Generator[Any]:
+def connect(cfg: Config | None = None) -> Generator[Any, None, None]:
     """Abre uma conexão autenticada e com ns/db selecionados; fecha ao sair.
 
     `Any` no yield é deliberado: o tipo concreto do SDK varia por scheme de URL
@@ -86,9 +95,11 @@ def connect(cfg: Config | None = None) -> Generator[Any]:
     """
     cfg = cfg or config()
     db = Surreal(cfg.url)
-    db.signin({"username": cfg.user, "password": cfg.password})
-    db.use(cfg.namespace, cfg.database)
+    # signin/use DENTRO do try: se qualquer um falhar, o finally ainda fecha a
+    # conexão (senão vaza socket a cada falha de auth).
     try:
+        db.signin({"username": cfg.user, "password": cfg.password})
+        db.use(cfg.namespace, cfg.database)
         yield db
     finally:
         db.close()
