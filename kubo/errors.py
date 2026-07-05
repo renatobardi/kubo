@@ -6,6 +6,18 @@ exceções são para falhas de configuração/programação que devem interrompe
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
+
+def format_validation_error(exc: ValidationError) -> str:
+    """Formata um ValidationError lendo SÓ `loc`+`msg`, nunca `input`.
+
+    O campo `input` (que `str(exc)` embute) carregaria o valor candidato —
+    conteúdo coletado hostil ou um segredo colado por engano — para o
+    ConfigError/ContractError/run.error. Formatador ÚNICO da fronteira; NÃO
+    adicione `e['input']` a esta string."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+
 
 class KuboError(Exception):
     """Base de todas as exceções do domínio Kubo."""

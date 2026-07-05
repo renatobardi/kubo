@@ -18,7 +18,7 @@ from surrealdb import RecordID
 
 from kubo.contracts.models import ErrorInfo, ItemPayload, Payload, RunResult, WorkerManifest
 from kubo.contracts.worker import validate_worker
-from kubo.errors import ConfigError
+from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import EmptyKnowledge, RunContext
 from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.store.knowledge import fail_run, finish_run, start_run, upsert_item, upsert_source
@@ -33,13 +33,9 @@ def _error_message(exc: Exception) -> str:
     """Mensagem da exceção para o ErrorInfo, TRUNCADA e sem vazar input.
 
     Para ValidationError, `str(exc)` embutiria o input_value (conteúdo coletado /
-    payload hostil); usa `errors(include_input=False)`. Depois trunca em 500: o
-    caminho de exceção é por onde conteúdo hostil vazaria para run.error/log."""
-    if isinstance(exc, ValidationError):
-        # Lê SÓ loc+msg, nunca e['input'] — o input carregaria o payload hostil.
-        text = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
-    else:
-        text = str(exc)
+    payload hostil): usa o formatador seguro da fronteira (só loc+msg). Trunca em
+    500 — o caminho de exceção é por onde conteúdo hostil vazaria para run.error/log."""
+    text = format_validation_error(exc) if isinstance(exc, ValidationError) else str(exc)
     return text[:_MSG_CAP]
 
 

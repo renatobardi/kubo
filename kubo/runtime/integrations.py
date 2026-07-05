@@ -19,7 +19,7 @@ from typing import Literal, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from kubo.errors import ConfigError
+from kubo.errors import ConfigError, format_validation_error
 
 # Referência de segredo aceita: env:NOME_DA_VAR (maiúsculas/underscore/dígitos).
 # Qualquer outra coisa em secret_ref é tratada como valor inline e rejeitada.
@@ -93,13 +93,6 @@ class ResolvedIntegration:
     base_url: str | None
 
 
-def _safe_errors(exc: ValidationError) -> str:
-    """Formata erros de validação lendo SÓ `loc`+`msg` — nunca o `input`, que
-    carregaria o valor candidato (ex.: um segredo colado por engano) para o
-    ConfigError/run.error. Não adicione `e['input']` a esta string."""
-    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
-
-
 def load_integration(path: Path) -> Integration:
     """Carrega e valida um YAML de integração; erro vira ConfigError (fronteira)."""
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -108,7 +101,9 @@ def load_integration(path: Path) -> Integration:
     try:
         return Integration.model_validate(raw)
     except ValidationError as exc:
-        raise ConfigError(f"integração {path.name} inválida: {_safe_errors(exc)}") from exc
+        raise ConfigError(
+            f"integração {path.name} inválida: {format_validation_error(exc)}"
+        ) from exc
 
 
 def load_integrations(catalog_dir: Path) -> dict[str, Integration]:

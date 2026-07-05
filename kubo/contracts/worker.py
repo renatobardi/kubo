@@ -53,6 +53,19 @@ class Worker(Protocol):
     def run(self, ctx: RunContext) -> RunResult: ...
 
 
+def _safe_getattr(obj: object, name: str) -> object:
+    """Lê um atributo tratando QUALQUER falha como ausência.
+
+    `getattr(obj, name, default)` só cai no default em AttributeError — uma
+    property/descriptor hostil que levanta outra exceção propagaria e faria
+    `validate_worker` explodir (em vez de rejeitar com ContractError). Aqui, um
+    worker não-confiável que estoura no acesso vira simplesmente "ausente"."""
+    try:
+        return getattr(obj, name, _MISSING)
+    except Exception:  # noqa: BLE001 — fronteira: descriptor hostil vira ausência, não crash
+        return _MISSING
+
+
 def validate_worker(obj: object) -> WorkerManifest:
     """Valida que `obj` honra o contrato de worker; retorna o manifest validado.
 
@@ -65,9 +78,9 @@ def validate_worker(obj: object) -> WorkerManifest:
     `obj.manifest` depois, fechando o TOCTOU de um worker hostil que expõe
     `manifest` como property inconsistente entre leituras.
     """
-    raw = getattr(obj, "manifest", _MISSING)
+    raw = _safe_getattr(obj, "manifest")
     if raw is _MISSING:
-        raise ContractError("worker não expõe o atributo `manifest`")
+        raise ContractError("worker não expõe um atributo `manifest` legível")
     try:
         manifest = WorkerManifest.model_validate(raw)
     except ValidationError as exc:
@@ -76,7 +89,7 @@ def validate_worker(obj: object) -> WorkerManifest:
         fields = ", ".join(".".join(str(p) for p in e["loc"]) for e in exc.errors())
         raise ContractError(f"manifest do worker é inválido (campos: {fields})") from exc
 
-    run = getattr(obj, "run", _MISSING)
+    run = _safe_getattr(obj, "run")
     if not callable(run):
         raise ContractError("worker.run não é callable")
     try:

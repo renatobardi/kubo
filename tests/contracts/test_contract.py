@@ -3,11 +3,10 @@
 Cobre plano 0004 §4.1: manifest com schema de config como classe pydantic,
 payloads que espelham a store via união discriminada, `Stats`/`ErrorInfo`
 alinhados a `run.stats`/`run.error`, e `validate_worker` como a única fronteira
-de validação de runtime (nunca `isinstance`/`@runtime_checkable`). Os modelos
-existem mas a fronteira de segurança ainda não fecha (`extra="forbid"`,
-validador numérico de `Stats`, lógica de `validate_worker`) — estes testes
-devem falhar por asserção/exceção agora; ficam verdes quando a implementação
-(GREEN) entrar.
+de validação de runtime (nunca `isinstance`/`@runtime_checkable`). Inclui os
+reforços da revisão de segurança: `extra="forbid"` + `revalidate_instances`,
+validador numérico de `Stats`, teto de `ErrorInfo.message`, e a blindagem de
+`validate_worker` contra descriptor hostil.
 """
 
 from __future__ import annotations
@@ -184,6 +183,13 @@ def test_stats_rejeita_valor_extra_nao_numerico() -> None:
         Stats(note="texto coletado")  # type: ignore[call-arg]
 
 
+def test_stats_rejects_bool_counter() -> None:
+    """bool é subclasse de int, mas um contador não é flag: rigor máximo da
+    fronteira rejeita `Stats(done=True)` (CodeRabbit, rigor de tipos)."""
+    with pytest.raises(ValidationError):
+        Stats(done=True)  # type: ignore[call-arg]
+
+
 # ---------------------------------------------------------------------------
 # ErrorInfo
 # ---------------------------------------------------------------------------
@@ -320,3 +326,20 @@ def test_validate_worker_retorna_snapshot_estavel_mesmo_com_manifest_toctou() ->
     # a property muda a cada leitura — prova que o retorno de validate_worker
     # é o snapshot que vale, não uma releitura futura de obj.manifest.
     assert outra_leitura.name != validated.name
+
+
+def test_validate_worker_rejects_hostile_manifest_descriptor() -> None:
+    """Um `manifest` que é property e ESTOURA (não-AttributeError) vira
+    ContractError — o worker não-confiável não faz validate_worker explodir
+    (blindagem de descriptor hostil, achado Major da revisão)."""
+
+    class _HostileWorker:
+        @property
+        def manifest(self) -> WorkerManifest:
+            raise RuntimeError("boom no acesso ao manifest")
+
+        def run(self, ctx: RunContext) -> RunResult:
+            return RunResult()
+
+    with pytest.raises(ContractError):
+        validate_worker(_HostileWorker())
