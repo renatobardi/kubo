@@ -20,7 +20,15 @@ pytestmark = pytest.mark.integration
 _KNOWLEDGE_DB = "test_knowledge_migrations"
 
 _TABLES = {"source", "item", "distilled", "chunk", "entity", "run"}
-_EDGES = {"from_source", "derived_from", "mentions", "chunk_of", "produced_by", "relates_to"}
+_EDGES = {
+    "from_source",
+    "derived_from",
+    "mentions",
+    "chunk_of",
+    "produced_by",
+    "collected_by",
+    "relates_to",
+}
 
 
 @pytest.fixture
@@ -39,7 +47,11 @@ def test_apply_is_idempotent(db: Any) -> None:
     """As duas migrations aplicaram (fixture); reexecutar é no-op e o registro persiste."""
     assert migrations.apply_migrations(db) == []
     recorded = {r["name"] for r in db.query("SELECT name FROM migration;")}
-    assert recorded == {"0001_knowledge_schema.surql", "0002_hnsw_index.surql"}
+    assert recorded == {
+        "0001_knowledge_schema.surql",
+        "0002_hnsw_index.surql",
+        "0003_collected_by_edge.surql",
+    }
 
 
 def test_all_tables_and_edges_defined(db: Any) -> None:

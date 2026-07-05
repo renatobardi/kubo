@@ -90,29 +90,39 @@ def upsert_item(
     url: str | None = None,
     title: str | None = None,
     metadata: dict[str, Any] | None = None,
+    run: RecordID | None = None,
 ) -> RecordID:
     """Cria/atualiza um item (chave natural: source + external_id, D4) e a aresta
     `item -[from_source]-> source`. Idempotente (2x = no-op): a aresta é reescrita
-    (DELETE + RELATE) para não duplicar; tudo numa transação atômica."""
+    (DELETE + RELATE) para não duplicar; tudo numa transação atômica.
+
+    `run` (opcional) registra a proveniência de execução `item -[collected_by]-> run`
+    (ADR-0008 §VI): quem coletou o item. Semântica de re-coleta = last-wins (DELETE +
+    RELATE na MESMA transação, como `from_source`). Um upsert SEM run não toca a aresta
+    — não pode apagar a proveniência de uma coleta anterior nem inventar uma agora."""
     rid = _rid("item", f"{source}|{external_id}")
-    run_transaction(
-        db,
-        [
-            "UPSERT $r SET external_id = $external_id, content = $content, "
-            "url = $url, title = $title, metadata = $metadata",
-            "DELETE $r->from_source",
-            "RELATE $r->from_source->$source",
-        ],
-        {
-            "r": rid,
-            "external_id": external_id,
-            "content": content,
-            "url": url,
-            "title": title,
-            "metadata": metadata,
-            "source": source,
-        },
-    )
+    statements = [
+        "UPSERT $r SET external_id = $external_id, content = $content, "
+        "url = $url, title = $title, metadata = $metadata",
+        "DELETE $r->from_source",
+        "RELATE $r->from_source->$source",
+    ]
+    params: dict[str, Any] = {
+        "r": rid,
+        "external_id": external_id,
+        "content": content,
+        "url": url,
+        "title": title,
+        "metadata": metadata,
+        "source": source,
+    }
+    if run is not None:
+        # Só reescreve collected_by quando HÁ run: DELETE incondicional só entra
+        # acompanhado do RELATE (last-wins), nunca sozinho — senão um upsert sem
+        # run apagaria a proveniência de quem coletou.
+        statements += ["DELETE $r->collected_by", "RELATE $r->collected_by->$run"]
+        params["run"] = run
+    run_transaction(db, statements, params)
     return rid
 
 

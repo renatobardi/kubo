@@ -100,6 +100,65 @@ def test_upsert_item_is_idempotent_and_creates_from_source_edge(db: Any) -> None
     assert linked == [source_id]
 
 
+def test_upsert_item_with_run_creates_collected_by_edge(db: Any) -> None:
+    """upsert_item(run=...) cria a aresta item -[collected_by]-> run — proveniência
+    de execução (quem coletou), simétrica a produced_by (ADR-0008 emenda 0005)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    run_id = knowledge.start_run(db, worker="feed")
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", run=run_id
+    )
+
+    runs = db.query("SELECT ->collected_by->run AS runs FROM $i;", {"i": item_id})[0]["runs"]
+    assert runs == [run_id]
+
+
+def test_upsert_item_re_collection_is_last_wins(db: Any) -> None:
+    """Re-coleta por outra run reescreve a aresta (DELETE+RELATE na mesma transação):
+    collected_by aponta para a ÚLTIMA run coletora, nunca acumula (last-wins). O
+    histórico completo vive na tabela run, não na aresta."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    run_a = knowledge.start_run(db, worker="feed")
+    run_b = knowledge.start_run(db, worker="feed")
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", run=run_a
+    )
+    knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto", run=run_b)
+
+    runs = db.query("SELECT ->collected_by->run AS runs FROM $i;", {"i": item_id})[0]["runs"]
+    assert runs == [run_b]
+    assert _count(db, "collected_by") == 1
+
+
+def test_upsert_item_without_run_preserves_existing_collected_by(db: Any) -> None:
+    """upsert_item sem run NÃO toca collected_by — não cria aresta e, crucialmente,
+    não apaga proveniência já registrada por uma coleta anterior. Um upsert sem run
+    não pode destruir a proveniência de quem coletou (advisor)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    run_a = knowledge.start_run(db, worker="feed")
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", run=run_a
+    )
+    # Re-upsert SEM run (ex.: outro produtor sem contexto de execução).
+    knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+
+    runs = db.query("SELECT ->collected_by->run AS runs FROM $i;", {"i": item_id})[0]["runs"]
+    assert runs == [run_a]  # preservada
+
+
+def test_upsert_item_without_run_creates_no_collected_by_edge(db: Any) -> None:
+    """Um item nunca-coletado-por-run (sem param run) não tem aresta collected_by."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+
+    runs = db.query("SELECT ->collected_by->run AS runs FROM $i;", {"i": item_id})[0]["runs"]
+    assert runs == []
+
+
 def test_get_or_create_entity_dedups_by_normalized_name(db: Any) -> None:
     """ "Python" e "  python " resolvem à MESMA entity — dedup por `normalize_entity`,
     não por igualdade literal da string de entrada."""

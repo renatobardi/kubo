@@ -1,0 +1,11 @@
+-- Migration 0003 — aresta collected_by: proveniência de execução item->run.
+-- Emenda ao ADR-0008 (§VI, sessão 0005): análogo item-side do produced_by
+-- (distilled->run) que o ADR-0002 criou; juntos fecham a cadeia de proveniência
+-- da prova dos 90 dias (item->source E item->run). PERMANENTE apontando para run
+-- (coleta é fato de EXECUÇÃO; produced_by é que religa a flow na fase 3).
+--
+-- ENFORCED como as demais arestas de proveniência (0001): os dois endpoints
+-- (item, run) já existem antes da aresta — a store cria a run e depois relaciona.
+-- O runner envolve o arquivo em BEGIN;...;COMMIT; (ADR-0007) — sem controle de
+-- transação aqui. DDL idempotente via OVERWRITE.
+DEFINE TABLE OVERWRITE collected_by TYPE RELATION IN item OUT run ENFORCED SCHEMAFULL;
