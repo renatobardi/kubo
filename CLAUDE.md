@@ -32,6 +32,41 @@ Em conflito entre este arquivo e a spec, a spec vence — e o conflito deve ser 
 - **Front (fase 1):** FastAPI + HTMX + Tailwind 4 com os tokens do design system. Views são descartáveis; o grafo é o contrato.
 - **Idioma:** conversas, docs, ADRs e planos de sessão em PT-BR; código, identificadores, schema e — a partir da sessão 0002 (D16) — mensagens de commit e PRs em inglês.
 
+## Comandos
+
+Deps por `uv` (grupo `dev` instala o tooling de qualidade). Os gates locais são exatamente os do CI (`.github/workflows/ci.yml`) — falhou, parou.
+
+```bash
+uv sync --frozen                 # instala deps do lock (dev incluso); CI usa --frozen
+uv lock --check                  # lockfile íntegro (gate 4)
+
+# Gates de qualidade, na ordem do CI:
+uv run ruff check .              # lint (E/F/W/I/S-bandit/B/C90, complexidade ≤ 10)
+uv run ruff format --check .     # formatação (sem --check para aplicar)
+uv run pyright                   # types (strict em store/contracts/runtime, basic no resto)
+uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files)   # segredos (falha em segredo novo)
+uv run pip-audit                 # auditoria de deps
+
+# Testes:
+uv run pytest -m "not integration"                       # unit (default local)
+uv run pytest -m "not integration" --cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime
+uv run pytest tests/store/test_client.py                 # um arquivo
+uv run pytest tests/store/test_client.py::test_nome      # um teste
+uv run pytest -m integration                             # integração (exige SurrealDB, ver abaixo)
+```
+
+Cobertura tem `--cov-fail-under=85` **configurado mas adiado** (módulos ainda ralos); enforce a partir do M3 — ver comentário em `ci.yml`, nunca remover o gate.
+
+**SurrealDB para integração** (mesmo comando do spike/CI — backend `memory`, efêmero):
+```bash
+docker run -d --name surreal -p 127.0.0.1:8000:8000 \
+  surrealdb/surrealdb:v3.1.5 start --user root --pass root memory
+# stack de produção (RocksDB + sidecar de backup): docker compose up -d
+```
+Conexão vem só de env (invariante 8): `SURREAL_URL` (default `ws://127.0.0.1:8000/rpc`), `SURREAL_USER`/`SURREAL_PASS`/`SURREAL_NS`/`SURREAL_DB` — ver `.env.example`.
+
+O par **SDK `surrealdb==2.0.0` ↔ server `v3.1.5`** é pinado por evidência (ADR-0005) e sobe junto: bump de um exige revalidar o outro.
+
 ## Estrutura do repositório
 
 ```
