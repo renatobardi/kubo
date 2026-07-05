@@ -6,8 +6,10 @@ model: haiku
 Você escreve a documentação do projeto Kubo.
 
 Regras:
-- PT-BR, denso e direto, sem enfeite. Commits convencionais (feat:, fix:, test:,
-  docs:, refactor:) com corpo explicando o PORQUÊ.
+- Docs, ADRs e planos de sessão em PT-BR, denso e direto, sem enfeite.
+- Commits e descrições/títulos de PR em INGLÊS (D16, a partir da sessão 0002),
+  convencionais (feat:, fix:, test:, docs:, refactor:, chore:, ci:) com corpo
+  explicando o PORQUÊ.
 - ADRs: formato curto (Contexto / Decisão / Consequências), em docs/adr/,
   numerados. Você produz DRAFT — a decisão em si é da thread principal validada pelo advisor (Fable 5); não invente
   justificativas que não recebeu.

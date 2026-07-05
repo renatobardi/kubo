@@ -11,3 +11,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0001](0001-nome-canonico-kubo.md) | Nome canônico Kubo | aceito |
 | [0002](0002-tabela-run-extensao-consciente.md) | Tabela `run` como extensão consciente da spec | aceito |
 | [0003](0003-auth-api-bearer-estatico.md) | Auth da API — bearer token estático + security list OCI | aceito |
+| [0004](0004-fluxo-git.md) | Convenções de fluxo Git | aceito |

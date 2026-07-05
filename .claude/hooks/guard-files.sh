@@ -14,10 +14,11 @@ case "$FILE" in
   */.git/*)           deny "edição direta de internals do git" ;;
 esac
 
-# Escrita fora do repositório
+# Escrita fora do repositório. /tmp e /private/tmp liberados: no macOS /tmp é
+# symlink de /private/tmp, e o scratchpad do Claude Code fica em /private/tmp/*.
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
   case "$FILE" in
-    "$CLAUDE_PROJECT_DIR"/*|/tmp/*) : ;;
+    "$CLAUDE_PROJECT_DIR"/*|/tmp/*|/private/tmp/*) : ;;
     /*) deny "escrita fora do diretório do projeto" ;;
   esac
 fi

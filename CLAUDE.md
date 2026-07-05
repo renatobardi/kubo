@@ -30,7 +30,7 @@ Em conflito entre este arquivo e a spec, a spec vence — e o conflito deve ser 
 - **API/serviço:** FastAPI. **Scheduling:** APScheduler. **LLM via API:** LiteLLM (roteamento por persona). **CLIs agênticos:** adapters sob a abstração `executor` (`api|cli`); Claude Code via Claude Agent SDK.
 - **SurrealDB:** schemas conforme spec §2.3. DDL versionada em `store/migrations/`. Nomes de tabelas/arestas em inglês, exatamente como na spec (`flow`, `task`, `persona`, `distilled`, `consults`, `produced_by`...).
 - **Front (fase 1):** FastAPI + HTMX + Tailwind 4 com os tokens do design system. Views são descartáveis; o grafo é o contrato.
-- **Idioma:** conversas, docs e mensagens de commit em PT-BR; código, identificadores e schema em inglês.
+- **Idioma:** conversas, docs, ADRs e planos de sessão em PT-BR; código, identificadores, schema e — a partir da sessão 0002 (D16) — mensagens de commit e PRs em inglês.
 
 ## Estrutura do repositório
 
@@ -58,8 +58,8 @@ kubo/
 
 ## Fluxo de trabalho
 
-- **Branches:** `feat/`, `fix/`, `chore/`, `docs/` a partir de `main`. PR sempre, mesmo solo — o PR é o registro.
-- **Commits:** convencionais (`feat:`, `fix:`...), mensagem em PT-BR, corpo explica o porquê.
+- **Branches:** taxonomia `(feat|fix|chore|docs|test|refactor|ci)/slug` a partir de `main` (`slug` em kebab-case, ex.: `ci/0002-git-flow`). PR sempre, mesmo solo — o PR é o registro. Duas camadas de enforce: guard-bash barra localmente; o CI é o gate final (ver ADR-0004). **Merge por squash-only** — o título convencional do PR vira o commit em `main`.
+- **Commits e PRs (D16, a partir da sessão 0002):** mensagens de commit e descrições/títulos de PR em **inglês**, convencionais (`feat:`, `fix:`...), corpo explica o porquê. ADRs, docs, planos de sessão e conversas seguem em **PT-BR**. Histórico anterior à sessão 0002 não se reescreve.
 - **Toda decisão de arquitetura** que contrarie ou estenda a spec vira ADR em `docs/adr/` ANTES do código.
 - **Code review:** CodeRabbit revisa **no PR, nunca em tempo de commit**. Não instalar CodeRabbit CLI como pre-commit hook nem rodá-lo localmente por padrão. Commits devem fluir rápido; o gate de review é o PR. Comentários do CodeRabbit no PR devem ser respondidos ou resolvidos antes do merge — nunca ignorados silenciosamente.
 
