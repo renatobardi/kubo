@@ -62,8 +62,11 @@ echo "$CMD" | grep -Eq '\bpip[3]?[[:space:]]+install\b' \
 # de comando, então uma mensagem que cita `checkout -b` não dispara.
 NEWBRANCH="$(echo "$CMD" | grep -oE "$CP"'git[[:space:]]+(switch[[:space:]]+-[cC]|checkout[[:space:]]+-[bB])[[:space:]]+[^[:space:]]+' | grep -oE '[^[:space:]]+$' || true)"
 if [ -n "$NEWBRANCH" ]; then
-  echo "$NEWBRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9._-]+$' \
-    || deny "branch '$NEWBRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug — ver ADR-0004"
+  # Valida TODAS as branches extraídas: com dois criadores na mesma linha
+  # (`... && git checkout -b hack`), um nome válido não pode absolver os demais.
+  # -vqE casa se ALGUMA linha ficar FORA da taxonomia (kebab-case).
+  echo "$NEWBRANCH" | grep -vqE '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9-]+$' \
+    && deny "branch fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug kebab-case — ver ADR-0004: $NEWBRANCH"
 fi
 
 exit 0

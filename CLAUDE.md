@@ -58,7 +58,7 @@ kubo/
 
 ## Fluxo de trabalho
 
-- **Branches:** taxonomia `(feat|fix|chore|docs|test|refactor|ci)/slug` a partir de `main` (`slug` em kebab-case, ex.: `ci/0002-git-flow`). PR sempre, mesmo solo — o PR é o registro. Duas camadas de enforce: guard-bash barra localmente, o CI é o gate final (ver ADR-0004).
+- **Branches:** taxonomia `(feat|fix|chore|docs|test|refactor|ci)/slug` a partir de `main` (`slug` em kebab-case, ex.: `ci/0002-git-flow`). PR sempre, mesmo solo — o PR é o registro. Duas camadas de enforce: guard-bash barra localmente; o CI é o gate final (ver ADR-0004).
 - **Commits e PRs (D16, a partir da sessão 0002):** mensagens de commit e descrições/títulos de PR em **inglês**, convencionais (`feat:`, `fix:`...), corpo explica o porquê. ADRs, docs, planos de sessão e conversas seguem em **PT-BR**. Histórico anterior à sessão 0002 não se reescreve.
 - **Toda decisão de arquitetura** que contrarie ou estenda a spec vira ADR em `docs/adr/` ANTES do código.
 - **Code review:** CodeRabbit revisa **no PR, nunca em tempo de commit**. Não instalar CodeRabbit CLI como pre-commit hook nem rodá-lo localmente por padrão. Commits devem fluir rápido; o gate de review é o PR. Comentários do CodeRabbit no PR devem ser respondidos ou resolvidos antes do merge — nunca ignorados silenciosamente.

@@ -39,6 +39,7 @@ expect BLOCK 'coderabbit review'
 expect BLOCK 'cr review .'
 expect BLOCK 'deploy && git push -f main'
 expect BLOCK 'cat .env'
+expect BLOCK 'git checkout -b feat/ok && git checkout -b hack'   # 1 válida não absolve a inválida
 
 # Strings que citam comandos, ou leitura legítima -> não bloqueiam
 expect ALLOW 'git commit -m "guard blocks checkout -b outside taxonomy"'
@@ -47,6 +48,7 @@ expect ALLOW 'gh pr checks 2 | grep -i coderabbit'
 expect ALLOW 'echo "run coderabbit review in the PR"'
 expect ALLOW 'git switch -c ci/0002-git-flow'
 expect ALLOW 'git checkout -b feat/spike origin/main'
+expect ALLOW 'git checkout -b feat/ok && git switch -c ci/also-ok'   # todas na taxonomia
 expect ALLOW 'git status'
 expect ALLOW 'cat .env.example'
 

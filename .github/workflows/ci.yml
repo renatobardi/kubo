@@ -13,9 +13,9 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # auditoria semanal de dependências
 
-# Least-privilege: os jobs só leem o repo (CodeRabbit PR#1).
-permissions:
-  contents: read
+# Least-privilege por job (SonarCloud S8264): sem permissões default no nível do
+# workflow; cada job declara só o que usa. quality/tests leem o repo (checkout),
+# pr-conventions não faz checkout e não precisa de nada.
 
 # Cancela runs obsoletos do mesmo ref (economia + feedback rápido).
 concurrency:
@@ -30,14 +30,15 @@ jobs:
   pr-conventions:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions: {}          # não faz checkout — nenhuma permissão necessária
     steps:
       - name: Nome do branch na taxonomia
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
           echo "branch: $BRANCH"
-          echo "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9._-]+$' \
-            || { echo "::error::branch '$BRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug"; exit 1; }
+          echo "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9-]+$' \
+            || { echo "::error::branch '$BRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug (kebab-case)"; exit 1; }
       - name: Título de PR convencional
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -48,6 +49,8 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -66,6 +69,8 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # NOTA (M1) — serviço SurrealDB deferido para o M2. O bloco `services:` do GitHub
     # Actions não tem campo de comando; a imagem oficial (distroless, sem shell) não
     # sobe servidor sem `start ...`, então subiria e sairia na hora, matando o job.
