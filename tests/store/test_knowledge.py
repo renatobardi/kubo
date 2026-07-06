@@ -288,6 +288,30 @@ def test_provenance_traces_distilled_to_source(db: Any) -> None:
     assert source_id in trail
 
 
+def test_distilled_for_returns_empty_when_item_has_no_distilled(db: Any) -> None:
+    """distilled_for(item) devolve [] quando nenhum destilado deriva do item —
+    a leitura que o import one-off usa para pular itens já destilados (insert_distilled
+    NÃO é idempotente; sem esta checagem, re-rodar o corpus duplicaria os destilados)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+
+    assert knowledge.distilled_for(db, item_id) == []
+
+
+def test_distilled_for_returns_distilled_derived_from_the_item(db: Any) -> None:
+    """distilled_for(item) devolve os destilados que derivam do item (item <-derived_from<-
+    distilled) e SÓ eles — o destilado de outro item não vaza. É a prova de no-op do
+    corpus de distillations: item com destilado é pulado na re-execução."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+
+    distilled_a = knowledge.insert_distilled(db, item=item_a, summary="resumo A", chunks=[])
+    knowledge.insert_distilled(db, item=item_b, summary="resumo B", chunks=[])
+
+    assert knowledge.distilled_for(db, item_a) == [distilled_a]
+
+
 def test_search_returns_the_distilled_for_the_nearest_chunk(db: Any) -> None:
     """search(embedding=vetorA, k=1) devolve o SearchHit do destilado A (não B) quando
     vetorA é ortogonal a vetorB — e o hit expõe o `distilled` (o conhecimento),

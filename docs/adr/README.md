@@ -18,3 +18,5 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0008](0008-desvios-schema-conhecimento.md) | Desvios do schema de conhecimento (§2.3) | aceito |
 | [0009](0009-contrato-worker.md) | Contrato de worker | aceito |
 | [0010](0010-agendamento-fase-1.md) | Agendamento na fase 1 (`schedules.yaml` + APScheduler) | aceito |
+| [0011](0011-topologia-deploy-oute-server.md) | Topologia de deploy no oute-server (LXD + Docker aninhado) | aceito |
+| [0012](0012-import-legado-neon.md) | Import do legado NeonDB (script one-off via store) | aceito |
