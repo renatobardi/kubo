@@ -16,7 +16,6 @@
         "patterns": [
           {
             "group": [
-              "assets/**",
               "components/actions/**",
               "components/brand/**",
               "components/forms/**",
@@ -38,8 +37,8 @@
         "message": "Raw hex color — use a design-system color token via var()."
       },
       {
-        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Inter Variable|Noto Serif Variable|Inter|Noto Serif|Noto Sans JP))/i]",
-        "message": "Font not provided by the design system. Available: Inter Variable, Noto Serif Variable, Inter, Noto Serif, Noto Sans JP."
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Inter Variable|Noto Sans JP))/i]",
+        "message": "Font not provided by the design system. Available: Inter Variable, Noto Sans JP."
       },
       {
         "selector": "JSXOpeningElement[name.name='AgentAvatar'] > JSXAttribute > JSXIdentifier[name!=/^(?:avatar|name|size|style|key|ref|className|style|children)$/]",
@@ -98,12 +97,12 @@
         "message": "<Icon> doesn't accept that prop. Declared props: name, size, style."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Logo'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|color|onDark|tagline|markGlyph|style|key|ref|className|style|children)$/]",
-        "message": "<Logo> doesn't accept that prop. Declared props: variant, size, color, onDark, tagline, markGlyph, style."
+        "selector": "JSXOpeningElement[name.name='Logo'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|color|onDark|tagline|style|key|ref|className|style|children)$/]",
+        "message": "<Logo> doesn't accept that prop. Declared props: variant, size, color, onDark, tagline, style."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Logo'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:full|mark|kanji)$/]",
-        "message": "<Logo> variant must be one of 'full' | 'mark' | 'kanji'."
+        "selector": "JSXOpeningElement[name.name='Logo'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:full|mark|glyph)$/]",
+        "message": "<Logo> variant must be one of 'full' | 'mark' | 'glyph'."
       },
       {
         "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute > JSXIdentifier[name!=/^(?:title|description|actions|key|ref|className|style|children)$/]",
@@ -232,7 +231,6 @@
       "--font-heading",
       "--font-jp",
       "--font-sans",
-      "--font-serif",
       "--foreground",
       "--input",
       "--leading-none",
@@ -255,6 +253,8 @@
       "--radius-sm",
       "--radius-xl",
       "--ring",
+      "--sakura-ink",
+      "--sakura-petal",
       "--secondary",
       "--secondary-foreground",
       "--sidebar",
@@ -306,9 +306,10 @@
       "--sidebar-accent-foreground": "color",
       "--sidebar-border": "color",
       "--sidebar-ring": "color",
+      "--sakura-petal": "color",
+      "--sakura-ink": "color",
       "--font-sans": "font",
       "--font-heading": "font",
-      "--font-serif": "font",
       "--font-jp": "font",
       "--text-2xs": "font",
       "--text-xs": "font",
@@ -333,11 +334,8 @@
       "--radius-full": "radius"
     },
     "fontFamilies": [
-      "Inter",
       "Inter Variable",
-      "Noto Sans JP",
-      "Noto Serif",
-      "Noto Serif Variable"
+      "Noto Sans JP"
     ]
   }
 }

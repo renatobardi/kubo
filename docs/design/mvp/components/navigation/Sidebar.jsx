@@ -1,14 +1,15 @@
 import { Icon } from '../icons/Icon.jsx';
+import { Sakura } from '../brand/Logo.jsx';
 
-const TOP = [{ title: 'Home', icon: 'house' }];
+const TOP = [{ title: 'Painel', icon: 'house' }];
 const GROUPS = [
-  { label: 'Conhecimento', items: [{ title: 'Conhecimento', icon: 'book-open' }, { title: 'Fontes', icon: 'rss' }] },
-  { label: 'Trabalho', items: [{ title: 'Flows', icon: 'workflow' }, { title: 'Execuções', icon: 'activity' }] },
+  { label: 'Conhecimento', items: [{ title: 'Destilados', icon: 'book-open' }, { title: 'Entidades', icon: 'network' }, { title: 'Fontes', icon: 'rss' }] },
+  { label: 'Trabalho', items: [{ title: 'Fluxos', icon: 'workflow' }, { title: 'Execuções', icon: 'activity' }] },
   { label: 'Distribuição', items: [{ title: 'Destinos', icon: 'send' }, { title: 'Envios', icon: 'mail' }] },
-  { label: 'Catálogos', items: [{ title: 'Integrações', icon: 'blocks' }, { title: 'Personas', icon: 'user' }, { title: 'Templates', icon: 'git-branch' }] },
+  { label: 'Catálogos', items: [{ title: 'Integrações', icon: 'blocks' }, { title: 'Atores', icon: 'user' }, { title: 'Modelos', icon: 'git-branch' }] },
 ];
 
-export function Sidebar({ top = TOP, groups = GROUPS, active = 'Home', onNavigate, user = { name: 'Renato Bardi', email: 'renato@kubo.studio' }, brand = 'Kubo', tagline = 'The art of getting things done' }) {
+export function Sidebar({ top = TOP, groups = GROUPS, active = 'Painel', onNavigate, user = { name: 'Renato Bardi', email: 'renato@kubo.studio' }, brand = 'Kubo', tagline = 'The art of getting things done', style }) {
   const initial = (user.name || user.email || '?').charAt(0).toUpperCase();
   const NavButton = (item) => {
     const isActive = item.title === active;
@@ -39,7 +40,7 @@ export function Sidebar({ top = TOP, groups = GROUPS, active = 'Home', onNavigat
       {/* Header — brand */}
       <div style={{ padding: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 56, padding: '0 8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 'var(--radius-lg)', background: 'var(--sidebar-primary)', color: 'var(--sidebar-primary-foreground)', fontFamily: "'Noto Sans JP', var(--font-sans)", fontWeight: 600, fontSize: 19, flexShrink: 0 }}>智</div>
+          <span style={{ display: 'inline-flex', flexShrink: 0 }}><Sakura size={30} sw={6} /></span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1 }}>
             <span style={{ fontFamily: 'var(--font-heading)', fontSize: 16, fontWeight: 600, letterSpacing: 'var(--tracking-tight)' }}>{brand}</span>
             <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{tagline}</span>

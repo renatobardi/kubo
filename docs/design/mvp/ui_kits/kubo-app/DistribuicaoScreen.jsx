@@ -1,6 +1,7 @@
 // Distribuição — Destinos (artefatos + destinos) e Envios (histórico).
 // Canais de status moram em Catálogos > Integrações.
 const K = window.KoboDesignSystem_6efae6;
+const { useState } = React;
 
 function DestinosScreen() {
   const { PageHeader, Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Button, Icon } = K;
@@ -66,27 +67,50 @@ function DestinosScreen() {
 window.DestinosScreen = DestinosScreen;
 
 function EnviosScreen() {
-  const { PageHeader, Card, CardHeader, CardTitle, CardDescription, CardContent, Badge, Icon } = K;
+  const { PageHeader, Badge, Icon } = K;
   const d = window.KUBO_DATA;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.envios.filter(s => window.matchQuery(query, s.kind, s.channel, s.to));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
       <PageHeader title="Envios" description="Histórico do que já saiu — artefato, canal, destino e quando." />
-      <Card>
-        <CardHeader><CardTitle>Histórico de envios</CardTitle><CardDescription>Digests e relatórios entregues.</CardDescription></CardHeader>
-        <CardContent style={{ padding: 0 }}>
-          <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {d.envios.map((s, i) => (
-              <li key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
-                <Icon name="send" size={16} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
-                <span style={{ fontSize: 14, color: 'var(--foreground)', flex: 1 }}>{s.kind}</span>
-                <Badge variant="outline">{s.channel}</Badge>
-                <span style={{ fontSize: 13, color: 'var(--muted-foreground)', minWidth: 110 }}>{s.to}</span>
-                <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{s.when}</span>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar envios por artefato, canal ou destino…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list', 'grid2']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhum envio encontrado"
+          description={`Nada casa com “${query}”. Tente outro termo ou limpe a busca.`} />
+      ) : view === 'grid2' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {filtered.map(s => (
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 84, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}><Icon name="send" size={16} /></div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14, color: 'var(--foreground)' }}>{s.kind}</span>
+                  <Badge variant="outline">{s.channel}</Badge>
+                </div>
+                <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>{s.to} · {s.when}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {filtered.map(s => (
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}><Icon name="send" size={16} /></div>
+              <span style={{ fontSize: 14, color: 'var(--foreground)', flex: 1 }}>{s.kind}</span>
+              <Badge variant="outline">{s.channel}</Badge>
+              <span style={{ fontSize: 13, color: 'var(--muted-foreground)', minWidth: 110 }}>{s.to}</span>
+              <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{s.when}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

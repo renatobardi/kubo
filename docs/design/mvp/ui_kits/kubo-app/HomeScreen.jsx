@@ -19,7 +19,7 @@ function HomeScreen({ onNavigate }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
-      <PageHeader title="Home" description="Seu ateliê de agentes — coleta, conhecimento e distribuição num relance." />
+      <PageHeader title="Painel" description="Seu ateliê de agentes — coleta, conhecimento e distribuição num relance." />
 
       {/* Gate alert */}
       {gateFlows.length > 0 && (
@@ -29,7 +29,7 @@ function HomeScreen({ onNavigate }) {
           <span style={{ fontSize: 14, color: 'var(--foreground)', flex: 1 }}>
             <strong style={{ fontWeight: 600 }}>1 decisão aguardando você</strong> — {gateFlows[0].name} tem um gate aberto.
           </span>
-          <Button size="sm" variant="outline" onClick={() => onNavigate('Flows')}>Revisar</Button>
+          <Button size="sm" variant="outline" onClick={() => onNavigate('Fluxos')}>Revisar</Button>
         </div>
       )}
 
@@ -58,7 +58,7 @@ function HomeScreen({ onNavigate }) {
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: 'ui-monospace, monospace', color: 'var(--foreground)' }}>{r.worker}</span>
+                      <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--foreground)' }}>{r.worker}</span>
                       <Badge variant={sv(r.status)}>{r.status}</Badge>
                     </div>
                     <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>{r.started} · {r.duration} · {r.items} itens</p>
@@ -72,21 +72,21 @@ function HomeScreen({ onNavigate }) {
         {/* Flows ativos */}
         <Card>
           <CardHeader>
-            <CardTitle>Flows ativos</CardTitle>
+            <CardTitle>Fluxos ativos</CardTitle>
             <CardDescription>Automações em andamento.</CardDescription>
-            <CardAction><Button variant="ghost" size="sm" onClick={() => onNavigate('Flows')}>Ver todos</Button></CardAction>
+            <CardAction><Button variant="ghost" size="sm" onClick={() => onNavigate('Fluxos')}>Ver todos</Button></CardAction>
           </CardHeader>
           <CardContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {d.flows.filter(f => f.status !== 'pausado').map(f => (
-                <button key={f.id} onClick={() => onNavigate('Flows')} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
+                <button key={f.id} onClick={() => onNavigate('Fluxos')} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--foreground)', flex: 1 }}>{f.name}</span>
                     {f.gate && <Badge icon="triangle-alert">gate</Badge>}
                     <Badge variant={sv(f.status)}>{f.status}</Badge>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--muted-foreground)' }}>
-                    <span style={{ fontFamily: 'ui-monospace, monospace' }}>{f.template}</span>
+                    <span>{f.template}</span>
                     <span style={{ display: 'flex', gap: 3 }}>{f.cast.map((e, i) => <window.PersonaGlyph key={i} glyph={e} size={20} />)}</span>
                     <span style={{ marginLeft: 'auto' }}>{f.tasksOpen} tasks abertas</span>
                   </div>

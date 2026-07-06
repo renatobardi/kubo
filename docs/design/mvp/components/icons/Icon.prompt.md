@@ -1,4 +1,4 @@
-Lucide icon wrapper — use for every glyph in Kubo UI (never emoji, except agent avatars).
+Lucide icon wrapper — use for every glyph in Kubo UI. Never emoji.
 
 ```jsx
 <Icon name="bot" />

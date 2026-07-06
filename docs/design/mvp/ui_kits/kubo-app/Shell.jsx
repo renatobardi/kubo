@@ -78,6 +78,57 @@ function PersonaGlyph({ glyph, size = 20, title, tone = 'muted' }) {
 }
 window.PersonaGlyph = PersonaGlyph;
 
+// Reusable search bar — the Conhecimento pattern (lupa + Input, maxWidth 420).
+function SearchBar({ value, onChange, placeholder = 'Buscar…' }) {
+  const { Input, Icon } = window.KoboDesignSystem_6efae6;
+  return (
+    <div style={{ position: 'relative', maxWidth: 420 }}>
+      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-foreground)', pointerEvents: 'none' }}><Icon name="search" size={16} /></span>
+      <Input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ paddingLeft: 34 }} />
+    </div>
+  );
+}
+window.SearchBar = SearchBar;
+
+// View toggle — segmented control: Lista / Duas colunas / Quadrados.
+// Options not in `allowed` render greyed + disabled with an explanatory tooltip.
+function ViewToggle({ value, onChange, allowed = ['list', 'grid2', 'squares'] }) {
+  const { Icon } = window.KoboDesignSystem_6efae6;
+  const opts = [
+    { key: 'list', icon: 'list', label: 'Lista' },
+    { key: 'grid2', icon: 'columns-2', label: 'Duas colunas' },
+    { key: 'squares', icon: 'grid-2x2', label: 'Quadrados' },
+  ];
+  return (
+    <div style={{ display: 'inline-flex', padding: 3, gap: 2, background: 'var(--muted)', borderRadius: 'var(--radius-4xl)', flexShrink: 0 }}>
+      {opts.map(o => {
+        const on = value === o.key;
+        const dis = !allowed.includes(o.key);
+        return (
+          <button key={o.key} disabled={dis} onClick={() => !dis && onChange(o.key)} aria-label={o.label}
+            title={dis ? o.label + ' — não se aplica a esta tela' : o.label}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 26, border: 'none',
+              cursor: dis ? 'not-allowed' : 'pointer', borderRadius: 'calc(var(--radius-4xl) - 2px)',
+              background: on ? 'var(--background)' : 'transparent',
+              color: dis ? 'var(--muted-foreground)' : on ? 'var(--foreground)' : 'var(--muted-foreground)',
+              opacity: dis ? 0.4 : 1,
+              boxShadow: on ? '0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent)' : 'none', transition: 'all 120ms' }}>
+            <Icon name={o.icon} size={15} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+window.ViewToggle = ViewToggle;
+
+// Case-insensitive substring match across any number of fields.
+window.matchQuery = function (query, ...fields) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return true;
+  return fields.some(f => String(f == null ? '' : f).toLowerCase().includes(q));
+};
+
 // Reusable empty / first-run state.
 function EmptyState({ icon = 'sparkles', title, description, action }) {
   const { Icon, Button } = window.KoboDesignSystem_6efae6;

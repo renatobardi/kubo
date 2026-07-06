@@ -108,7 +108,7 @@ function FlowBoard({ flow, onBack }) {
       {gate && <GateSheet task={gate} onClose={() => setGate(null)} />}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: 'var(--muted-foreground)', fontFamily: 'var(--font-sans)' }}>
-          <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Flows
+          <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Fluxos
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -155,6 +155,8 @@ function FlowsScreen() {
   const d = window.KUBO_DATA;
   const sv = window.KUBO_STATUS;
   const [flow, setFlow] = useState(null);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
 
   if (flow) return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24, height: '100%', minHeight: 0 }}>
@@ -162,32 +164,54 @@ function FlowsScreen() {
     </div>
   );
 
+  const filtered = d.flows.filter(f => window.matchQuery(query, f.name, f.template, f.status));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const flowIcon = <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)' }}><Icon name="workflow" size={18} style={{ color: 'var(--muted-foreground)' }} /></div>;
+  const flowBody = (f) => (
+    <div style={{ minWidth: 0, flex: 1 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{f.name}</span>
+        <Badge variant="secondary">{f.template}</Badge>
+        {f.gate && <Badge icon="triangle-alert">gate</Badge>}
+        <Badge variant={sv(f.status)}>{f.status}</Badge>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: 'var(--muted-foreground)', flexWrap: 'wrap' }}>
+        <span style={{ display: 'flex', gap: 3 }}>{f.cast.map((e, i) => <window.PersonaGlyph key={i} glyph={e} size={20} />)}</span>
+        <span>{f.tasksOpen} tasks abertas · budget {f.budget.used}/{f.budget.limit} · criado {f.created}</span>
+      </div>
+    </div>
+  );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
-      <PageHeader title="Flows" description="Automações multi-persona instanciadas de templates. Abra um flow para ver seu board."
-        actions={<Button icon="plus">Novo flow</Button>} />
+      <PageHeader title="Fluxos" description="Automações multi-persona instanciadas de templates. Abra um flow para ver seu board."
+        actions={<Button icon="plus">Novo fluxo</Button>} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar fluxos por nome, template ou status…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list', 'grid2']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhum fluxo encontrado"
+          description={`Nada casa com “${query}”. Tente outro termo ou limpe a busca.`} />
+      ) : view === 'grid2' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {filtered.map(f => (
+            <button key={f.id} onClick={() => setFlow(f)} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, height: 108, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring, overflow: 'hidden' }}>
+              {flowIcon}
+              {flowBody(f)}
+            </button>
+          ))}
+        </div>
+      ) : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {d.flows.map(f => (
+        {filtered.map(f => (
           <button key={f.id} onClick={() => setFlow(f)} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16, padding: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)' }}>
-              <Icon name="workflow" size={18} style={{ color: 'var(--muted-foreground)' }} />
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{f.name}</span>
-                <Badge variant="secondary">{f.template}</Badge>
-                {f.gate && <Badge icon="triangle-alert">gate</Badge>}
-                <Badge variant={sv(f.status)}>{f.status}</Badge>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: 'var(--muted-foreground)', flexWrap: 'wrap' }}>
-                <span style={{ display: 'flex', gap: 3 }}>{f.cast.map((e, i) => <window.PersonaGlyph key={i} glyph={e} size={20} />)}</span>
-                <span>{f.tasksOpen} tasks abertas · budget {f.budget.used}/{f.budget.limit} · criado {f.created}</span>
-              </div>
-            </div>
+            {flowIcon}
+            {flowBody(f)}
             <Icon name="chevron-right" size={16} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
           </button>
         ))}
       </div>
+      )}
     </div>
   );
 }

@@ -3,6 +3,13 @@ const K = window.KoboDesignSystem_6efae6;
 const { useState } = React;
 
 const TYPE_ICON = { pessoa: 'user', tecnologia: 'cpu', 'organização': 'building-2', conceito: 'lightbulb' };
+const SOURCE_ICON = (src) => {
+  const s = (src || '').toLowerCase();
+  if (s.includes('youtube')) return 'youtube';
+  if (s.includes('github')) return 'git-branch';
+  if (s.includes('post') || s.includes('blog')) return 'file';
+  return 'rss';
+};
 
 function ProvenanceStep({ icon, kind, label, sub, url, last }) {
   const { Icon } = K;
@@ -198,42 +205,70 @@ function EntityDetail({ entity, onBack, onOpenDestilado, onOpenEntity }) {
 function EntitiesView({ onOpen }) {
   const { Card, CardContent, Badge, Icon } = K;
   const d = window.KUBO_DATA;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.entities.filter(e => window.matchQuery(query, e.name, e.type));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const body = (e) => (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}><Icon name={TYPE_ICON[e.type] || 'network'} size={16} /></div>
+        <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--foreground)', flex: 1 }}>{e.name}</span>
+        <window.Sparkline values={e.trend} width={64} height={20} fill={false} stroke="var(--muted-foreground)" />
+        <Badge variant="outline">{e.type}</Badge>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{e.mentions} menções</span>
+        {e.relations.map((r, i) => (
+          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted-foreground)' }}>
+            <span style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--foreground)' }}>{r.rel}</span>
+            <Icon name="chevron-right" size={12} /> {r.target}
+          </span>
+        ))}
+      </div>
+    </>
+  );
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-      {d.entities.map(e => (
-        <button key={e.id} onClick={() => onOpen(e)} style={{ textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: 0 }}>
-          <Card size="sm">
-            <CardContent style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 9999, background: 'var(--muted)', color: 'var(--muted-foreground)' }}><Icon name={TYPE_ICON[e.type] || 'network'} size={14} /></span>
-                <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--foreground)', flex: 1 }}>{e.name}</span>
-                <window.Sparkline values={e.trend} width={64} height={20} fill={false} stroke="var(--muted-foreground)" />
-                <Badge variant="outline">{e.type}</Badge>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 12, color: 'var(--muted-foreground)' }}>{e.mentions} menções</span>
-                {e.relations.map((r, i) => (
-                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted-foreground)' }}>
-                    <span style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--foreground)' }}>{r.rel}</span>
-                    <Icon name="chevron-right" size={12} /> {r.target}
-                  </span>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </button>
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar entidades por nome ou tipo…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list', 'grid2']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhuma entidade encontrada" description={`Nada casa com “${query}”. Tente outro termo ou limpe a busca.`} />
+      ) : view === 'grid2' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {filtered.map(e => (
+            <button key={e.id} onClick={() => onOpen(e)} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, height: 108, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring, overflow: 'hidden' }}>
+              {body(e)}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {filtered.map(e => (
+            <button key={e.id} onClick={() => onOpen(e)} style={{ textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: 0 }}>
+              <Card size="sm">
+                <CardContent style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {body(e)}
+                </CardContent>
+              </Card>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ConhecimentoScreen() {
+function ConhecimentoScreen({ initialTab } = {}) {
   const { PageHeader, Input, Icon, Badge } = K;
   const d = window.KUBO_DATA;
-  const [tab, setTab] = useState('Destilados');
+  const [tab, setTab] = useState(initialTab || 'Destilados');
   const [selected, setSelected] = useState(null);
   const [entity, setEntity] = useState(null);
   const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
 
   const openEntity = (name) => {
     const e = typeof name === 'string' ? d.entities.find(x => x.name === name) : name;
@@ -260,18 +295,16 @@ function ConhecimentoScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
-      <PageHeader title="Conhecimento" description="Grafo consultável de destilados, com citação de origem em cada nó." />
-      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginTop: -8 }}>
-        {['Destilados', 'Entidades'].map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{ padding: '8px 12px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, fontFamily: 'var(--font-sans)', fontWeight: tab === t ? 600 : 400, color: tab === t ? 'var(--foreground)' : 'var(--muted-foreground)', borderBottom: tab === t ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -1 }}>{t}</button>
-        ))}
-      </div>
+      <PageHeader title={tab === 'Entidades' ? 'Entidades' : 'Destilados'} description={tab === 'Entidades' ? 'Entidades tipadas extraídas dos destilados, com menções e relações.' : 'Grafo consultável de destilados, com citação de origem em cada nó.'} />
 
       {tab === 'Destilados' ? (
         <>
-          <div style={{ position: 'relative', maxWidth: 420 }}>
-            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-foreground)', pointerEvents: 'none' }}><Icon name="search" size={16} /></span>
-            <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Busca por texto ou semântica…" style={{ paddingLeft: 34 }} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ position: 'relative', flex: '1 1 auto', maxWidth: 420 }}>
+              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-foreground)', pointerEvents: 'none' }}><Icon name="search" size={16} /></span>
+              <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Busca por texto ou semântica…" style={{ paddingLeft: 34 }} />
+            </div>
+            <window.ViewToggle value={view} onChange={setView} allowed={['list']} />
           </div>
           {filtered.length === 0 ? (
             <window.EmptyState icon="search" title="Nenhum destilado encontrado"
@@ -279,15 +312,20 @@ function ConhecimentoScreen() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {filtered.map(dd => (
-                <button key={dd.id} onClick={() => setSelected(dd)} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 8, padding: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)', flex: 1 }}>{dd.title}</span>
-                    <span style={{ fontSize: 12, color: 'var(--muted-foreground)', flexShrink: 0 }}>{dd.date}</span>
+                <button key={dd.id} onClick={() => setSelected(dd)} style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', gap: 12, padding: 16, border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', background: 'var(--card)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
+                    <Icon name={SOURCE_ICON(dd.source)} size={16} />
                   </div>
-                  <p style={{ margin: 0, fontSize: 13, color: 'var(--muted-foreground)' }}>{dd.summary}</p>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-                    {dd.entities.map(e => <Badge key={e} variant="outline">{e}</Badge>)}
-                    <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted-foreground)' }}><Icon name="rss" size={12} /> {dd.source}</span>
+                  <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                      <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)', flex: 1 }}>{dd.title}</span>
+                      <span style={{ fontSize: 12, color: 'var(--muted-foreground)', flexShrink: 0 }}>{dd.date}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--muted-foreground)' }}>{dd.summary}</p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                      {dd.entities.map(e => <Badge key={e} variant="outline">{e}</Badge>)}
+                      <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted-foreground)' }}><Icon name={SOURCE_ICON(dd.source)} size={12} /> {dd.source}</span>
+                    </div>
                   </div>
                 </button>
               ))}

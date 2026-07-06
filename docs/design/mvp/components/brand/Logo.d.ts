@@ -1,18 +1,28 @@
 /**
- * Kubo logo. The mark is the kanji 智 (chi = wisdom/intellect) in a tile beside the "Kubo" wordmark.
- * @startingPoint section="Brand" subtitle="Kanji mark + full lockup" viewport="700x120"
+ * Kubo logo. The mark is a five-petal sakura (cherry blossom) in line style, beside the "Kubo" wordmark.
+ * @startingPoint section="Brand" subtitle="Sakura mark + full lockup" viewport="700x120"
  */
 export interface LogoProps {
-  /** full = tile + "Kubo" (+tagline) · mark = 智 tile only · kanji = 智 typographic */
-  variant?: 'full' | 'mark' | 'kanji';
-  /** Base pixel size (tile edge for full/mark; font-size for kanji) */
+  /** full = loose line sakura + "Kubo" (+tagline) · mark = sakura in near-black tile · glyph = bare blossom */
+  variant?: 'full' | 'mark' | 'glyph';
+  /** Base pixel size (tile edge for full/mark; blossom size for glyph) */
   size?: number;
-  /** Override wordmark color (defaults to foreground) */
+  /** Override the foreground color (defaults to --foreground) */
   color?: string;
+  /** Render for a dark surface */
   onDark?: boolean;
   /** Tagline under the wordmark in the full lockup; pass '' to hide */
   tagline?: string;
-  /** Kanji shown in the tile mark. Default 智 (wisdom/intellect). */
-  markGlyph?: string;
+  style?: React.CSSProperties;
+}
+
+/** The bare five-petal sakura SVG mark — reusable outside the Logo lockup. Theme-aware by default. */
+export interface SakuraProps {
+  size?: number;
+  /** Line/stamen color. Defaults to --sakura-ink (near-black on light, pink on dark). */
+  stroke?: string;
+  /** Petal fill. Defaults to --sakura-petal (pink on light, transparent on dark). */
+  fill?: string;
+  sw?: number;
   style?: React.CSSProperties;
 }

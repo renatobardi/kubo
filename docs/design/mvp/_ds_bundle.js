@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"KoboDesignSystem_6efae6","components":[{"name":"Badge","sourcePath":"components/actions/Badge.jsx"},{"name":"Button","sourcePath":"components/actions/Button.jsx"},{"name":"Logo","sourcePath":"components/brand/Logo.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Label","sourcePath":"components/forms/Label.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"Textarea","sourcePath":"components/forms/Textarea.jsx"},{"name":"Icon","sourcePath":"components/icons/Icon.jsx"},{"name":"AgentAvatar","sourcePath":"components/kubo/AgentAvatar.jsx"},{"name":"AgentCard","sourcePath":"components/kubo/AgentCard.jsx"},{"name":"ChatInput","sourcePath":"components/kubo/ChatInput.jsx"},{"name":"StatTile","sourcePath":"components/kubo/StatTile.jsx"},{"name":"Breadcrumb","sourcePath":"components/navigation/Breadcrumb.jsx"},{"name":"PageHeader","sourcePath":"components/navigation/PageHeader.jsx"},{"name":"Sidebar","sourcePath":"components/navigation/Sidebar.jsx"},{"name":"Card","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardHeader","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardTitle","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardDescription","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardAction","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardContent","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardFooter","sourcePath":"components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"components/surfaces/Dialog.jsx"},{"name":"Separator","sourcePath":"components/surfaces/Separator.jsx"},{"name":"Skeleton","sourcePath":"components/surfaces/Skeleton.jsx"},{"name":"Tooltip","sourcePath":"components/surfaces/Skeleton.jsx"}],"sourceHashes":{"assets/agent-emojis.js":"b579e984ce23","components/actions/Badge.jsx":"7645cd70fff2","components/actions/Button.jsx":"7208b817692f","components/brand/Logo.jsx":"d46c7ab1e863","components/forms/Input.jsx":"16cf32d9af06","components/forms/Label.jsx":"504bf32309de","components/forms/Select.jsx":"34a879be207c","components/forms/Switch.jsx":"e51389263744","components/forms/Textarea.jsx":"e8db9154c886","components/icons/Icon.jsx":"69529f8794af","components/kubo/AgentAvatar.jsx":"2774729001f2","components/kubo/AgentCard.jsx":"213da60df25d","components/kubo/ChatInput.jsx":"80f3ecf111cb","components/kubo/StatTile.jsx":"0bc18b68aa27","components/navigation/Breadcrumb.jsx":"1b69126016f0","components/navigation/PageHeader.jsx":"dc4801440756","components/navigation/Sidebar.jsx":"dc5b40e01ac8","components/surfaces/Card.jsx":"caf8d958114d","components/surfaces/Dialog.jsx":"282626c68fef","components/surfaces/Separator.jsx":"407801818ae0","components/surfaces/Skeleton.jsx":"d8155241d182","ui_kits/kubo-app/CatalogosScreen.jsx":"bc1002dd9cf2","ui_kits/kubo-app/ConfiguracoesScreen.jsx":"0d41d0967254","ui_kits/kubo-app/ConhecimentoScreen.jsx":"f713171c5136","ui_kits/kubo-app/DistribuicaoScreen.jsx":"416df5289168","ui_kits/kubo-app/ExecucoesScreen.jsx":"8786b344646d","ui_kits/kubo-app/FlowsScreen.jsx":"1d554f1eef94","ui_kits/kubo-app/FontesScreen.jsx":"7b7c09aae6ef","ui_kits/kubo-app/HomeScreen.jsx":"e5be6e60cc27","ui_kits/kubo-app/Shell.jsx":"3e667ef27f41","ui_kits/kubo-app/data.js":"4a4a8f7b30f6"},"inlinedExternals":[],"unexposedExports":[]} */
+/* @ds-bundle: {"format":4,"namespace":"KoboDesignSystem_6efae6","components":[{"name":"Badge","sourcePath":"components/actions/Badge.jsx"},{"name":"Button","sourcePath":"components/actions/Button.jsx"},{"name":"Sakura","sourcePath":"components/brand/Logo.jsx"},{"name":"Logo","sourcePath":"components/brand/Logo.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Label","sourcePath":"components/forms/Label.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"Textarea","sourcePath":"components/forms/Textarea.jsx"},{"name":"Icon","sourcePath":"components/icons/Icon.jsx"},{"name":"AgentAvatar","sourcePath":"components/kubo/AgentAvatar.jsx"},{"name":"AgentCard","sourcePath":"components/kubo/AgentCard.jsx"},{"name":"ChatInput","sourcePath":"components/kubo/ChatInput.jsx"},{"name":"StatTile","sourcePath":"components/kubo/StatTile.jsx"},{"name":"Breadcrumb","sourcePath":"components/navigation/Breadcrumb.jsx"},{"name":"PageHeader","sourcePath":"components/navigation/PageHeader.jsx"},{"name":"Sidebar","sourcePath":"components/navigation/Sidebar.jsx"},{"name":"Card","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardHeader","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardTitle","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardDescription","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardAction","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardContent","sourcePath":"components/surfaces/Card.jsx"},{"name":"CardFooter","sourcePath":"components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"components/surfaces/Dialog.jsx"},{"name":"Separator","sourcePath":"components/surfaces/Separator.jsx"},{"name":"Skeleton","sourcePath":"components/surfaces/Skeleton.jsx"},{"name":"Tooltip","sourcePath":"components/surfaces/Skeleton.jsx"}],"sourceHashes":{"components/actions/Badge.jsx":"7645cd70fff2","components/actions/Button.jsx":"7208b817692f","components/brand/Logo.jsx":"6a74e1e44fae","components/forms/Input.jsx":"16cf32d9af06","components/forms/Label.jsx":"504bf32309de","components/forms/Select.jsx":"34a879be207c","components/forms/Switch.jsx":"e51389263744","components/forms/Textarea.jsx":"e8db9154c886","components/icons/Icon.jsx":"f9d97533caf8","components/kubo/AgentAvatar.jsx":"4a73d7dd35cc","components/kubo/AgentCard.jsx":"213da60df25d","components/kubo/ChatInput.jsx":"80f3ecf111cb","components/kubo/StatTile.jsx":"0bc18b68aa27","components/navigation/Breadcrumb.jsx":"1b69126016f0","components/navigation/PageHeader.jsx":"dc4801440756","components/navigation/Sidebar.jsx":"d1a16533c75b","components/surfaces/Card.jsx":"caf8d958114d","components/surfaces/Dialog.jsx":"282626c68fef","components/surfaces/Separator.jsx":"407801818ae0","components/surfaces/Skeleton.jsx":"d8155241d182","ui_kits/kubo-app/CatalogosScreen.jsx":"77dd9a31c90e","ui_kits/kubo-app/ConfiguracoesScreen.jsx":"0d41d0967254","ui_kits/kubo-app/ConhecimentoScreen.jsx":"7423b87eac0e","ui_kits/kubo-app/DistribuicaoScreen.jsx":"65db372dda92","ui_kits/kubo-app/ExecucoesScreen.jsx":"97d60e93ccda","ui_kits/kubo-app/FlowsScreen.jsx":"cea2c3f087e8","ui_kits/kubo-app/FontesScreen.jsx":"625b3cb1fd95","ui_kits/kubo-app/HomeScreen.jsx":"9f9d394cd75a","ui_kits/kubo-app/Shell.jsx":"58751563deb4","ui_kits/kubo-app/data.js":"4a4a8f7b30f6"},"inlinedExternals":[],"unexposedExports":[]} */
 
 (() => {
 
@@ -8,33 +8,84 @@ const __ds_scope = {};
 
 (__ds_ns.__errors = __ds_ns.__errors || []);
 
-// assets/agent-emojis.js
-try { (() => {
-// Agent avatar emoji presets — copied from valmis apps/web/src/lib/components/custom/agent-emojis.ts
-window.KUBO_AGENT_EMOJIS = ['🤖', '🧠', '💡', '🔧', '📊', '🎯', '🚀', '🌐', '📝', '🔍', '💬', '⚡', '🛡️', '🔮', '🎨', '🗣️', '🧩', '📚', '⏳', '🗂️', '🔗', '🌟', '🧪', '🤝', '📡', '🏆', '💻', '📱', '⌨️', '⚙️', '🧰', '📉', '📅', '✅', '📌', '🛠️', '⚖️', '🔥', '✏️', '📦', '🔑', '🧭', '⏱️', '📁', '🗑️', '📋', '💸', '🔔', '📢', '🗺️', '📈', '💰', '🕓', '👨‍💼', '👩‍💼', '🧑‍💻', '🧑‍🔬', '🧑‍🏫', '🧑‍🔧', '🧑‍⚕️', '🧑‍🚀', '🧑‍🍳', '🧑‍🎨', '🧑‍⚖️', '🧑‍💼', '🕵️', '👷', '👮', '🧑‍🚒', '🧑‍✈️', '🧑‍🌾'];
-})(); } catch (e) { __ds_ns.__errors.push({ path: "assets/agent-emojis.js", error: String((e && e.message) || e) }); }
-
 // components/brand/Logo.jsx
 try { (() => {
-// Kubo logo. The mark is the kanji 智 (chi = wisdom / intellect) in a tile,
-// beside the "Kubo" wordmark. There is no separate drawn logotype.
-// Kanji set in Noto Sans JP to match the Inter wordmark.
+// Kubo logo. The mark is a five-petal sakura (cherry blossom) drawn in line style —
+// a nod to the "atelier" idea. Mono, near-black. No colored variant.
+//   variant="mark"  → line sakura inside a near-black tile (app icon / favicon)
+//   variant="full"  → loose line sakura (no tile) beside the "Kubo" wordmark (+ tagline)
+//   variant="glyph" → the bare blossom on its own, near-black on the page
 
+// Reusable blossom: 5 notched petals rotated 72°, radiating stamens + center dot.
+// Theme-aware by default — petal fill and ink follow --sakura-petal / --sakura-ink
+// (light: pink petals + near-black ink · dark: no fill + pink ink). Override with props.
+function Sakura({
+  size = 32,
+  stroke,
+  fill,
+  sw = 6,
+  style
+}) {
+  const ink = stroke || 'var(--sakura-ink)';
+  const petalFill = fill || 'var(--sakura-petal)';
+  const petal = 'M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z';
+  const arms = [0, 1, 2, 3, 4];
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 100 100",
+    fill: "none",
+    style: {
+      display: 'block',
+      ...style
+    }
+  }, arms.map(i => /*#__PURE__*/React.createElement("path", {
+    key: 'p' + i,
+    d: petal,
+    transform: `rotate(${i * 72} 50 50)`,
+    fill: petalFill,
+    stroke: ink,
+    strokeWidth: sw,
+    strokeLinejoin: "round"
+  })), arms.map(i => /*#__PURE__*/React.createElement("line", {
+    key: 'l' + i,
+    x1: "50",
+    y1: "50",
+    x2: "50",
+    y2: "34",
+    transform: `rotate(${i * 72 + 36} 50 50)`,
+    stroke: ink,
+    strokeWidth: sw * 0.55,
+    strokeLinecap: "round"
+  })), arms.map(i => /*#__PURE__*/React.createElement("circle", {
+    key: 'c' + i,
+    cx: "50",
+    cy: "33",
+    r: sw * 0.5,
+    transform: `rotate(${i * 72 + 36} 50 50)`,
+    fill: ink
+  })), /*#__PURE__*/React.createElement("circle", {
+    cx: "50",
+    cy: "50",
+    r: sw * 0.9,
+    fill: ink
+  }));
+}
 function Logo({
   variant = 'full',
   size = 32,
   color,
   onDark = false,
   tagline = 'The art of getting things done',
-  markGlyph = '智',
   style
 }) {
-  const fg = color || (onDark ? 'var(--foreground)' : 'var(--foreground)');
+  const fg = color || 'var(--foreground)';
   const markBg = 'var(--sidebar-primary)';
   const markFg = 'var(--sidebar-primary-foreground)';
 
-  // The kanji mark in a near-black tile. Default 智 (chi) = "wisdom / intellect".
-  const Mark = /*#__PURE__*/React.createElement("div", {
+  // Line sakura in a near-black tile — the compact app-icon mark (option 1b).
+  // The tile is a fixed dark surface, so it always uses the pink outline treatment.
+  const TileMark = /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -43,48 +94,48 @@ function Logo({
       height: size,
       flexShrink: 0,
       borderRadius: `calc(${size}px * 0.26)`,
-      background: markBg,
-      color: markFg,
-      fontFamily: "'Noto Sans JP', var(--font-sans)",
-      fontWeight: 600,
-      fontSize: size * 0.6,
-      lineHeight: 1
+      background: markBg
     }
-  }, markGlyph);
+  }, /*#__PURE__*/React.createElement(Sakura, {
+    size: size * 0.68,
+    stroke: "#f4c9d4",
+    fill: "none",
+    sw: 6
+  }));
   if (variant === 'mark') {
     return /*#__PURE__*/React.createElement("span", {
       style: {
         display: 'inline-flex',
         ...style
       }
-    }, Mark);
+    }, TileMark);
   }
 
-  // Kanji-only lockup — the 智 mark as a large pure typographic glyph
-  if (variant === 'kanji') {
+  // Bare blossom on its own — theme-aware (pink petals on light, pink outline on dark).
+  if (variant === 'glyph') {
     return /*#__PURE__*/React.createElement("span", {
       style: {
         display: 'inline-flex',
-        alignItems: 'baseline',
-        fontFamily: "'Noto Sans JP', var(--font-sans)",
-        fontWeight: 600,
-        fontSize: size,
-        lineHeight: 1,
-        color: fg,
         ...style
       }
-    }, markGlyph);
+    }, /*#__PURE__*/React.createElement(Sakura, {
+      size: size,
+      sw: 6
+    }));
   }
 
-  // Full lockup: mark + wordmark (+ optional tagline)
+  // Full lockup: loose theme-aware sakura (no tile) + wordmark (+ optional tagline).
   return /*#__PURE__*/React.createElement("span", {
     style: {
       display: 'inline-flex',
       alignItems: 'center',
-      gap: size * 0.34,
+      gap: size * 0.4,
       ...style
     }
-  }, Mark, /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(Sakura, {
+    size: size * 1.05,
+    sw: 6
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -107,7 +158,7 @@ function Logo({
     }
   }, tagline)));
 }
-Object.assign(__ds_scope, { Logo });
+Object.assign(__ds_scope, { Sakura, Logo });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "components/brand/Logo.jsx", error: String((e && e.message) || e) }); }
 
 // components/forms/Input.jsx
@@ -328,6 +379,9 @@ const PATHS = {
   'file': ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z', 'M14 2v4a2 2 0 0 0 2 2h4'],
   'image': ['M3 3h18v18H3z', 'M9 8a1 1 0 1 0 0 2 1 1 0 0 0 0-2z', 'm21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'],
   'panel-left': ['M3 3h18v18H3z', 'M9 3v18'],
+  'list': ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
+  'columns-2': ['M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M12 3v18'],
+  'grid-2x2': ['M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M12 3v18', 'M3 12h18'],
   'square': ['M3 3h18v18H3z'],
   'bell': ['M10.268 21a2 2 0 0 0 3.464 0', 'M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326'],
   'ellipsis': ['M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z', 'M19 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z', 'M5 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z'],
@@ -724,25 +778,17 @@ try { (() => {
 const SIZES = {
   sm: {
     box: 28,
-    font: 14,
     icon: 14
   },
   md: {
     box: 32,
-    font: 16,
     icon: 16
   },
   lg: {
     box: 40,
-    font: 20,
     icon: 20
   }
 };
-function isEmoji(str) {
-  if (!str) return false;
-  const segments = [...str];
-  return segments.length <= 2 && /\p{Emoji}/u.test(str);
-}
 function AgentAvatar({
   avatar,
   name,
@@ -761,15 +807,10 @@ function AgentAvatar({
       height: s.box,
       borderRadius: 9999,
       background: 'var(--muted)',
-      fontSize: s.font,
       lineHeight: 1,
       ...style
     }
-  }, isEmoji(avatar) ? /*#__PURE__*/React.createElement("span", {
-    style: {
-      lineHeight: 1
-    }
-  }, avatar) : avatar ? /*#__PURE__*/React.createElement("img", {
+  }, avatar ? /*#__PURE__*/React.createElement("img", {
     src: avatar,
     alt: name || 'Agent',
     style: {
@@ -1185,14 +1226,17 @@ Object.assign(__ds_scope, { PageHeader });
 // components/navigation/Sidebar.jsx
 try { (() => {
 const TOP = [{
-  title: 'Home',
+  title: 'Painel',
   icon: 'house'
 }];
 const GROUPS = [{
   label: 'Conhecimento',
   items: [{
-    title: 'Conhecimento',
+    title: 'Destilados',
     icon: 'book-open'
+  }, {
+    title: 'Entidades',
+    icon: 'network'
   }, {
     title: 'Fontes',
     icon: 'rss'
@@ -1200,7 +1244,7 @@ const GROUPS = [{
 }, {
   label: 'Trabalho',
   items: [{
-    title: 'Flows',
+    title: 'Fluxos',
     icon: 'workflow'
   }, {
     title: 'Execuções',
@@ -1221,24 +1265,25 @@ const GROUPS = [{
     title: 'Integrações',
     icon: 'blocks'
   }, {
-    title: 'Personas',
+    title: 'Atores',
     icon: 'user'
   }, {
-    title: 'Templates',
+    title: 'Modelos',
     icon: 'git-branch'
   }]
 }];
 function Sidebar({
   top = TOP,
   groups = GROUPS,
-  active = 'Home',
+  active = 'Painel',
   onNavigate,
   user = {
     name: 'Renato Bardi',
     email: 'renato@kubo.studio'
   },
   brand = 'Kubo',
-  tagline = 'The art of getting things done'
+  tagline = 'The art of getting things done',
+  style
 }) {
   const initial = (user.name || user.email || '?').charAt(0).toUpperCase();
   const NavButton = item => {
@@ -1300,22 +1345,15 @@ function Sidebar({
       height: 56,
       padding: '0 8px'
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: 32,
-      height: 32,
-      borderRadius: 'var(--radius-lg)',
-      background: 'var(--sidebar-primary)',
-      color: 'var(--sidebar-primary-foreground)',
-      fontFamily: "'Noto Sans JP', var(--font-sans)",
-      fontWeight: 600,
-      fontSize: 19,
+      display: 'inline-flex',
       flexShrink: 0
     }
-  }, "\u667A"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(__ds_scope.Sakura, {
+    size: 30,
+    sw: 6
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -1918,7 +1956,7 @@ function SkillDetail({
     style: {
       transform: 'rotate(180deg)'
     }
-  }), " Personas"), /*#__PURE__*/React.createElement("div", {
+  }), " Atores"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -1934,9 +1972,10 @@ function SkillDetail({
   }), /*#__PURE__*/React.createElement("h2", {
     style: {
       margin: 0,
-      fontFamily: 'ui-monospace, monospace',
+      fontFamily: 'var(--font-heading)',
       fontSize: 18,
       fontWeight: 600,
+      letterSpacing: '-0.025em',
       color: 'var(--foreground)'
     }
   }, name), /*#__PURE__*/React.createElement(VersionBadge, {
@@ -2136,28 +2175,17 @@ function IntegracoesTab() {
   } = K;
   const d = window.KUBO_DATA;
   const sv = window.KUBO_STATUS;
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(2, 1fr)',
-      gap: 12
-    }
-  }, d.integracoes.map(it => /*#__PURE__*/React.createElement(Card, {
-    key: it.id,
-    size: "sm"
-  }, /*#__PURE__*/React.createElement(CardContent, {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.integracoes.filter(it => window.matchQuery(query, it.name, it.status, it.rateLimit));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const intIcon = (it, sz = 36) => /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      width: 36,
-      height: 36,
+      width: sz,
+      height: sz,
       flexShrink: 0,
       borderRadius: 'var(--radius-lg)',
       background: 'var(--muted)',
@@ -2165,8 +2193,88 @@ function IntegracoesTab() {
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: it.icon,
-    size: 18
-  })), /*#__PURE__*/React.createElement("div", {
+    size: Math.round(sz / 2)
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar integra\xE7\xF5es por nome ou status\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2', 'squares']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhuma integra\xE7\xE3o encontrada",
+    description: `Nada casa com “${query}”.`
+  }) : view === 'squares' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(4, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(it => /*#__PURE__*/React.createElement("div", {
+    key: it.id,
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      textAlign: 'center',
+      gap: 8,
+      height: 176,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, intIcon(it, 44), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--foreground)'
+    }
+  }, it.name), /*#__PURE__*/React.createElement(Badge, {
+    variant: sv(it.status)
+  }, it.status), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginTop: 'auto',
+      fontSize: 11,
+      color: 'var(--muted-foreground)'
+    }
+  }, "rate ", it.rateLimit)))) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(it => /*#__PURE__*/React.createElement("div", {
+    key: it.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      height: 84,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, intIcon(it), /*#__PURE__*/React.createElement("div", {
     style: {
       minWidth: 0,
       flex: 1
@@ -2181,7 +2289,49 @@ function IntegracoesTab() {
     style: {
       fontSize: 14,
       fontWeight: 600,
-      fontFamily: 'ui-monospace, monospace',
+      color: 'var(--foreground)'
+    }
+  }, it.name), /*#__PURE__*/React.createElement(Badge, {
+    variant: sv(it.status)
+  }, it.status)), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: '3px 0 0',
+      fontSize: 12,
+      color: 'var(--muted-foreground)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, "rate ", it.rateLimit))))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(it => /*#__PURE__*/React.createElement(Card, {
+    key: it.id,
+    size: "sm"
+  }, /*#__PURE__*/React.createElement(CardContent, {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12
+    }
+  }, intIcon(it), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
       color: 'var(--foreground)'
     }
   }, it.name), /*#__PURE__*/React.createElement(Badge, {
@@ -2196,7 +2346,7 @@ function IntegracoesTab() {
     style: {
       fontFamily: 'ui-monospace, monospace'
     }
-  }, "\u25CF\u25CF\u25CF ", it.secret), " \xB7 rate ", it.rateLimit))))));
+  }, "\u25CF\u25CF\u25CF ", it.secret), " \xB7 rate ", it.rateLimit)))))));
 }
 function PersonasTab({
   onOpenSkill
@@ -2209,13 +2359,168 @@ function PersonasTab({
   } = K;
   const d = window.KUBO_DATA;
   const exists = s => Boolean(d.skills[s]);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.personas.filter(p => window.matchQuery(query, p.name, p.executor, p.model, (p.skills || []).join(' ')));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const skillBadges = p => p.skills.map(s => exists(s) ? /*#__PURE__*/React.createElement("button", {
+    key: s,
+    onClick: () => onOpenSkill(s),
+    style: {
+      border: 'none',
+      background: 'transparent',
+      padding: 0,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement(Badge, {
+    variant: "outline"
+  }, s)) : /*#__PURE__*/React.createElement("span", {
+    key: s,
+    title: "Skill referenciada n\xE3o existe no cat\xE1logo"
+  }, /*#__PURE__*/React.createElement(Badge, {
+    variant: "destructive",
+    icon: "triangle-alert"
+  }, s)));
+  const execBadge = p => /*#__PURE__*/React.createElement(Badge, {
+    variant: p.executor === 'cli' ? 'outline' : 'secondary'
+  }, p.executor);
   return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar atores por nome, executor, modelo ou skill\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2', 'squares']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhum ator encontrado",
+    description: `Nada casa com “${query}”.`
+  }) : view === 'squares' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(4, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      textAlign: 'center',
+      gap: 8,
+      height: 176,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, /*#__PURE__*/React.createElement(window.PersonaGlyph, {
+    glyph: p.emoji,
+    size: 48
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--foreground)'
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center'
+    }
+  }, execBadge(p), p.isHuman && /*#__PURE__*/React.createElement(Badge, {
+    icon: "triangle-alert"
+  }, "gates")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginTop: 'auto',
+      maxWidth: '100%',
+      fontSize: 11,
+      color: 'var(--muted-foreground)',
+      fontFamily: 'ui-monospace, monospace',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, p.model)))) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(2, 1fr)',
-      gap: 12
+      gap: 10
     }
-  }, d.personas.map(p => /*#__PURE__*/React.createElement(Card, {
+  }, filtered.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    style: {
+      display: 'flex',
+      gap: 12,
+      height: 128,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement(window.PersonaGlyph, {
+    glyph: p.emoji,
+    size: 40
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--foreground)'
+    }
+  }, p.name), execBadge(p), p.isHuman && /*#__PURE__*/React.createElement(Badge, {
+    icon: "triangle-alert"
+  }, "gates")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: '3px 0 0',
+      fontSize: 12,
+      color: 'var(--muted-foreground)',
+      fontFamily: 'ui-monospace, monospace'
+    }
+  }, p.model), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 4,
+      marginTop: 8
+    }
+  }, skillBadges(p)))))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(p => /*#__PURE__*/React.createElement(Card, {
     key: p.id,
     size: "sm"
   }, /*#__PURE__*/React.createElement(CardContent, {
@@ -2244,9 +2549,7 @@ function PersonasTab({
       fontWeight: 600,
       color: 'var(--foreground)'
     }
-  }, p.name), /*#__PURE__*/React.createElement(Badge, {
-    variant: p.executor === 'cli' ? 'outline' : 'secondary'
-  }, p.executor), p.isHuman && /*#__PURE__*/React.createElement(Badge, {
+  }, p.name), execBadge(p), p.isHuman && /*#__PURE__*/React.createElement(Badge, {
     icon: "triangle-alert"
   }, "gates")), /*#__PURE__*/React.createElement("p", {
     style: {
@@ -2262,30 +2565,13 @@ function PersonasTab({
       gap: 4,
       marginTop: 8
     }
-  }, p.skills.map(s => exists(s) ? /*#__PURE__*/React.createElement("button", {
-    key: s,
-    onClick: () => onOpenSkill(s),
-    style: {
-      border: 'none',
-      background: 'transparent',
-      padding: 0,
-      cursor: 'pointer'
-    }
-  }, /*#__PURE__*/React.createElement(Badge, {
-    variant: "outline"
-  }, s)) : /*#__PURE__*/React.createElement("span", {
-    key: s,
-    title: "Skill referenciada n\xE3o existe no cat\xE1logo"
-  }, /*#__PURE__*/React.createElement(Badge, {
-    variant: "destructive",
-    icon: "triangle-alert"
-  }, s)))), /*#__PURE__*/React.createElement("p", {
+  }, skillBadges(p)), /*#__PURE__*/React.createElement("p", {
     style: {
       margin: '8px 0 0',
       fontSize: 11,
       color: 'var(--muted-foreground)'
     }
-  }, "permiss\xF5es: ", p.perms.join(' · ')))))));
+  }, "permiss\xF5es: ", p.perms.join(' · '))))))));
 }
 
 // Nome da persona a partir do emoji preset.
@@ -2348,7 +2634,7 @@ function TemplateDetail({
     style: {
       transform: 'rotate(180deg)'
     }
-  }), " Templates"), /*#__PURE__*/React.createElement("div", {
+  }), " Modelos"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -2364,9 +2650,10 @@ function TemplateDetail({
   }), /*#__PURE__*/React.createElement("h2", {
     style: {
       margin: 0,
-      fontFamily: 'ui-monospace, monospace',
+      fontFamily: 'var(--font-heading)',
       fontSize: 18,
       fontWeight: 600,
+      letterSpacing: '-0.025em',
       color: 'var(--foreground)'
     }
   }, tpl.name), /*#__PURE__*/React.createElement(Badge, {
@@ -2521,13 +2808,41 @@ function TemplatesTab({
     Icon
   } = K;
   const d = window.KUBO_DATA;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.templates.filter(t => window.matchQuery(query, t.name, t.trigger));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
       gap: 12
     }
-  }, d.templates.map(t => /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar modelos por nome ou gatilho\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhum modelo encontrado",
+    description: `Nada casa com “${query}”.`
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(t => /*#__PURE__*/React.createElement("button", {
     key: t.id,
     onClick: () => onOpen(t),
     style: {
@@ -2556,7 +2871,6 @@ function TemplatesTab({
     style: {
       fontSize: 14,
       fontWeight: 600,
-      fontFamily: 'ui-monospace, monospace',
       color: 'var(--foreground)'
     }
   }, t.name), /*#__PURE__*/React.createElement(Badge, {
@@ -2610,7 +2924,7 @@ function TemplatesTab({
     style: {
       color: 'var(--muted-foreground)'
     }
-  })))))))));
+  }))))))))));
 }
 function CatalogosScreen({
   section = 'Integrações'
@@ -2621,7 +2935,7 @@ function CatalogosScreen({
   } = K;
   const [skill, setSkill] = useState(null);
   const [tpl, setTpl] = useState(null);
-  if (section === 'Personas' && skill) {
+  if (section === 'Atores' && skill) {
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -2634,7 +2948,7 @@ function CatalogosScreen({
       onBack: () => setSkill(null)
     }));
   }
-  if (section === 'Templates' && tpl) {
+  if (section === 'Modelos' && tpl) {
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -2652,14 +2966,14 @@ function CatalogosScreen({
       desc: 'Conexões declaradas — segredos por referência, nunca expostos.',
       body: /*#__PURE__*/React.createElement(IntegracoesTab, null)
     },
-    'Personas': {
+    'Atores': {
       desc: 'Agentes do ateliê — clique numa skill para ver e versionar.',
       body: /*#__PURE__*/React.createElement(PersonasTab, {
         onOpenSkill: setSkill
       })
     },
-    'Templates': {
-      desc: 'Máquinas de estado reutilizáveis que definem os boards dos flows. Abra um para ver o detalhe.',
+    'Modelos': {
+      desc: 'Máquinas de estado reutilizáveis que definem os boards dos fluxos. Abra um para ver o detalhe.',
       body: /*#__PURE__*/React.createElement(TemplatesTab, {
         onOpen: setTpl
       })
@@ -3061,6 +3375,13 @@ const TYPE_ICON = {
   tecnologia: 'cpu',
   'organização': 'building-2',
   conceito: 'lightbulb'
+};
+const SOURCE_ICON = src => {
+  const s = (src || '').toLowerCase();
+  if (s.includes('youtube')) return 'youtube';
+  if (s.includes('github')) return 'git-branch';
+  if (s.includes('post') || s.includes('blog')) return 'file';
+  return 'rss';
 };
 function ProvenanceStep({
   icon,
@@ -3659,50 +3980,31 @@ function EntitiesView({
     Icon
   } = K;
   const d = window.KUBO_DATA;
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(2, 1fr)',
-      gap: 12
-    }
-  }, d.entities.map(e => /*#__PURE__*/React.createElement("button", {
-    key: e.id,
-    onClick: () => onOpen(e),
-    style: {
-      textAlign: 'left',
-      cursor: 'pointer',
-      border: 'none',
-      background: 'transparent',
-      padding: 0
-    }
-  }, /*#__PURE__*/React.createElement(Card, {
-    size: "sm"
-  }, /*#__PURE__*/React.createElement(CardContent, {
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.entities.filter(e => window.matchQuery(query, e.name, e.type));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const body = e => /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      flexDirection: 'column',
+      alignItems: 'center',
       gap: 8
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
       justifyContent: 'center',
-      width: 26,
-      height: 26,
-      borderRadius: 9999,
+      width: 34,
+      height: 34,
+      flexShrink: 0,
+      borderRadius: 'var(--radius-lg)',
       background: 'var(--muted)',
       color: 'var(--muted-foreground)'
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: TYPE_ICON[e.type] || 'network',
-    size: 14
+    size: 16
   })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 14,
@@ -3747,9 +4049,84 @@ function EntitiesView({
   }, r.rel), /*#__PURE__*/React.createElement(Icon, {
     name: "chevron-right",
     size: 12
-  }), " ", r.target))))))));
+  }), " ", r.target))));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar entidades por nome ou tipo\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhuma entidade encontrada",
+    description: `Nada casa com “${query}”. Tente outro termo ou limpe a busca.`
+  }) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(e => /*#__PURE__*/React.createElement("button", {
+    key: e.id,
+    onClick: () => onOpen(e),
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      height: 108,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring,
+      overflow: 'hidden'
+    }
+  }, body(e)))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(e => /*#__PURE__*/React.createElement("button", {
+    key: e.id,
+    onClick: () => onOpen(e),
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer',
+      border: 'none',
+      background: 'transparent',
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement(Card, {
+    size: "sm"
+  }, /*#__PURE__*/React.createElement(CardContent, {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, body(e)))))));
 }
-function ConhecimentoScreen() {
+function ConhecimentoScreen({
+  initialTab
+} = {}) {
   const {
     PageHeader,
     Input,
@@ -3757,10 +4134,11 @@ function ConhecimentoScreen() {
     Badge
   } = K;
   const d = window.KUBO_DATA;
-  const [tab, setTab] = useState('Destilados');
+  const [tab, setTab] = useState(initialTab || 'Destilados');
   const [selected, setSelected] = useState(null);
   const [entity, setEntity] = useState(null);
   const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
   const openEntity = name => {
     const e = typeof name === 'string' ? d.entities.find(x => x.name === name) : name;
     if (e) {
@@ -3813,33 +4191,19 @@ function ConhecimentoScreen() {
       padding: 24
     }
   }, /*#__PURE__*/React.createElement(PageHeader, {
-    title: "Conhecimento",
-    description: "Grafo consult\xE1vel de destilados, com cita\xE7\xE3o de origem em cada n\xF3."
-  }), /*#__PURE__*/React.createElement("div", {
+    title: tab === 'Entidades' ? 'Entidades' : 'Destilados',
+    description: tab === 'Entidades' ? 'Entidades tipadas extraídas dos destilados, com menções e relações.' : 'Grafo consultável de destilados, com citação de origem em cada nó.'
+  }), tab === 'Destilados' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 4,
-      borderBottom: '1px solid var(--border)',
-      marginTop: -8
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
     }
-  }, ['Destilados', 'Entidades'].map(t => /*#__PURE__*/React.createElement("button", {
-    key: t,
-    onClick: () => setTab(t),
-    style: {
-      padding: '8px 12px',
-      border: 'none',
-      background: 'transparent',
-      cursor: 'pointer',
-      fontSize: 14,
-      fontFamily: 'var(--font-sans)',
-      fontWeight: tab === t ? 600 : 400,
-      color: tab === t ? 'var(--foreground)' : 'var(--muted-foreground)',
-      borderBottom: tab === t ? '2px solid var(--primary)' : '2px solid transparent',
-      marginBottom: -1
-    }
-  }, t))), tab === 'Destilados' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'relative',
+      flex: '1 1 auto',
       maxWidth: 420
     }
   }, /*#__PURE__*/React.createElement("span", {
@@ -3861,6 +4225,10 @@ function ConhecimentoScreen() {
     style: {
       paddingLeft: 34
     }
+  })), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list']
   })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
     icon: "search",
     title: "Nenhum destilado encontrado",
@@ -3878,12 +4246,34 @@ function ConhecimentoScreen() {
       textAlign: 'left',
       cursor: 'pointer',
       display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
+      gap: 12,
       padding: 16,
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius-xl)',
       background: 'var(--card)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 34,
+      height: 34,
+      flexShrink: 0,
+      borderRadius: 'var(--radius-lg)',
+      background: 'var(--muted)',
+      color: 'var(--muted-foreground)'
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: SOURCE_ICON(dd.source),
+    size: 16
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3930,9 +4320,9 @@ function ConhecimentoScreen() {
       color: 'var(--muted-foreground)'
     }
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "rss",
+    name: SOURCE_ICON(dd.source),
     size: 12
-  }), " ", dd.source)))))) : /*#__PURE__*/React.createElement(EntitiesView, {
+  }), " ", dd.source))))))) : /*#__PURE__*/React.createElement(EntitiesView, {
     onOpen: openEntity
   }));
 }
@@ -3944,6 +4334,9 @@ try { (() => {
 // Distribuição — Destinos (artefatos + destinos) e Envios (histórico).
 // Canais de status moram em Catálogos > Integrações.
 const K = window.KoboDesignSystem_6efae6;
+const {
+  useState
+} = React;
 function DestinosScreen() {
   const {
     PageHeader,
@@ -4108,15 +4501,14 @@ window.DestinosScreen = DestinosScreen;
 function EnviosScreen() {
   const {
     PageHeader,
-    Card,
-    CardHeader,
-    CardTitle,
-    CardDescription,
-    CardContent,
     Badge,
     Icon
   } = K;
   const d = window.KUBO_DATA;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.envios.filter(s => window.matchQuery(query, s.kind, s.channel, s.to));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -4127,33 +4519,116 @@ function EnviosScreen() {
   }, /*#__PURE__*/React.createElement(PageHeader, {
     title: "Envios",
     description: "Hist\xF3rico do que j\xE1 saiu \u2014 artefato, canal, destino e quando."
-  }), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(CardHeader, null, /*#__PURE__*/React.createElement(CardTitle, null, "Hist\xF3rico de envios"), /*#__PURE__*/React.createElement(CardDescription, null, "Digests e relat\xF3rios entregues.")), /*#__PURE__*/React.createElement(CardContent, {
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: 0
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
     }
-  }, /*#__PURE__*/React.createElement("ul", {
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar envios por artefato, canal ou destino\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhum envio encontrado",
+    description: `Nada casa com “${query}”. Tente outro termo ou limpe a busca.`
+  }) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
     style: {
-      margin: 0,
-      padding: 0,
-      listStyle: 'none'
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 10
     }
-  }, d.envios.map((s, i) => /*#__PURE__*/React.createElement("li", {
+  }, filtered.map(s => /*#__PURE__*/React.createElement("div", {
     key: s.id,
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 12,
-      padding: '12px 24px',
-      borderTop: i ? '1px solid var(--border)' : 'none'
+      height: 84,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 34,
+      height: 34,
+      flexShrink: 0,
+      borderRadius: 'var(--radius-lg)',
+      background: 'var(--muted)',
+      color: 'var(--muted-foreground)'
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "send",
-    size: 16,
+    size: 16
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
-      color: 'var(--muted-foreground)',
-      flexShrink: 0
+      minWidth: 0,
+      flex: 1
     }
-  }), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      color: 'var(--foreground)'
+    }
+  }, s.kind), /*#__PURE__*/React.createElement(Badge, {
+    variant: "outline"
+  }, s.channel)), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: '2px 0 0',
+      fontSize: 12,
+      color: 'var(--muted-foreground)'
+    }
+  }, s.to, " \xB7 ", s.when))))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: 16,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-xl)',
+      background: 'var(--card)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 34,
+      height: 34,
+      flexShrink: 0,
+      borderRadius: 'var(--radius-lg)',
+      background: 'var(--muted)',
+      color: 'var(--muted-foreground)'
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "send",
+    size: 16
+  })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 14,
       color: 'var(--foreground)',
@@ -4172,14 +4647,14 @@ function EnviosScreen() {
       fontSize: 12,
       color: 'var(--muted-foreground)'
     }
-  }, s.when)))))));
+  }, s.when)))));
 }
 window.EnviosScreen = EnviosScreen;
 })(); } catch (e) { __ds_ns.__errors.push({ path: "ui_kits/kubo-app/DistribuicaoScreen.jsx", error: String((e && e.message) || e) }); }
 
 // ui_kits/kubo-app/ExecucoesScreen.jsx
 try { (() => {
-// Execuções — tabela de runs com filtros e erros estruturados expansíveis.
+// Execuções — lista de runs com busca e erros estruturados expansíveis.
 const K = window.KoboDesignSystem_6efae6;
 const {
   useState
@@ -4193,68 +4668,75 @@ function RunRow({
   } = K;
   const sv = window.KUBO_STATUS;
   const [open, setOpen] = useState(false);
-  const td = {
-    padding: '12px',
-    fontSize: 14,
-    color: 'var(--foreground)',
-    borderBottom: '1px solid var(--border)',
-    verticalAlign: 'middle'
-  };
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("tr", {
+  return /*#__PURE__*/React.createElement("div", {
     style: {
+      display: 'flex',
+      flexDirection: 'column',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-xl)',
+      background: 'var(--card)',
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: () => r.error && setOpen(o => !o),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: 16,
       cursor: r.error ? 'pointer' : 'default'
-    },
-    onClick: () => r.error && setOpen(o => !o)
-  }, /*#__PURE__*/React.createElement("td", {
-    style: {
-      ...td,
-      paddingLeft: 24,
-      fontFamily: 'ui-monospace, monospace',
-      fontWeight: 500
     }
-  }, r.worker), /*#__PURE__*/React.createElement("td", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      ...td,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 34,
+      height: 34,
+      flexShrink: 0,
+      borderRadius: 'var(--radius-lg)',
+      background: 'var(--muted)',
       color: 'var(--muted-foreground)'
     }
-  }, r.flow), /*#__PURE__*/React.createElement("td", {
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "activity",
+    size: 16
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
-      ...td,
-      color: 'var(--muted-foreground)'
+      minWidth: 0,
+      flex: 1
     }
-  }, r.started), /*#__PURE__*/React.createElement("td", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      ...td,
-      color: 'var(--muted-foreground)'
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
     }
-  }, r.duration), /*#__PURE__*/React.createElement("td", {
-    style: td
-  }, /*#__PURE__*/React.createElement(Badge, {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 500,
+      color: 'var(--foreground)'
+    }
+  }, r.worker), /*#__PURE__*/React.createElement(Badge, {
     variant: sv(r.status)
-  }, r.status)), /*#__PURE__*/React.createElement("td", {
+  }, r.status)), /*#__PURE__*/React.createElement("p", {
     style: {
-      ...td,
-      textAlign: 'right',
+      margin: '2px 0 0',
+      fontSize: 12,
       color: 'var(--muted-foreground)'
     }
-  }, r.items), /*#__PURE__*/React.createElement("td", {
-    style: {
-      ...td,
-      paddingRight: 24,
-      width: 32
-    }
-  }, r.error && /*#__PURE__*/React.createElement(Icon, {
+  }, r.flow, " \xB7 ", r.started, " \xB7 ", r.duration, " \xB7 ", r.items, " itens")), r.error && /*#__PURE__*/React.createElement(Icon, {
     name: "chevron-down",
     size: 16,
     style: {
       color: 'var(--muted-foreground)',
+      flexShrink: 0,
       transform: open ? 'rotate(180deg)' : 'none'
     }
-  }))), open && r.error && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-    colSpan: 7,
+  })), open && r.error && /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: '0 24px 12px',
-      borderBottom: '1px solid var(--border)'
+      padding: '0 16px 16px'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -4273,25 +4755,16 @@ function RunRow({
     style: {
       flexShrink: 0
     }
-  }), " ", r.error))));
+  }), " ", r.error)));
 }
 function ExecucoesScreen() {
   const {
-    PageHeader,
-    Card,
-    CardContent,
-    Select
+    PageHeader
   } = K;
   const d = window.KUBO_DATA;
-  const th = {
-    textAlign: 'left',
-    padding: '10px 12px',
-    fontSize: 12,
-    fontWeight: 500,
-    color: 'var(--muted-foreground)',
-    borderBottom: '1px solid var(--border)',
-    whiteSpace: 'nowrap'
-  };
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.runs.filter(r => window.matchQuery(query, r.worker, r.flow, r.status));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -4305,57 +4778,32 @@ function ExecucoesScreen() {
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 10,
-      flexWrap: 'wrap'
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
     }
-  }, /*#__PURE__*/React.createElement(Select, {
-    options: ['Todos os workers', 'yt-collector', 'rss-collector', 'distiller', 'digest-builder'],
-    defaultValue: "Todos os workers",
-    size: "sm"
-  }), /*#__PURE__*/React.createElement(Select, {
-    options: ['Todos os status', 'concluída', 'rodando', 'falhou'],
-    defaultValue: "Todos os status",
-    size: "sm"
-  }), /*#__PURE__*/React.createElement(Select, {
-    options: ['Últimos 7 dias', 'Hoje', 'Últimos 30 dias'],
-    defaultValue: "\xDAltimos 7 dias",
-    size: "sm"
-  })), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(CardContent, {
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar runs por worker, fluxo ou status\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhuma run encontrada",
+    description: `Nada casa com “${query}”. Tente outro termo ou limpe a busca.`
+  }) : /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: 0
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
     }
-  }, /*#__PURE__*/React.createElement("table", {
-    style: {
-      width: '100%',
-      borderCollapse: 'collapse'
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      ...th,
-      paddingLeft: 24
-    }
-  }, "Worker"), /*#__PURE__*/React.createElement("th", {
-    style: th
-  }, "Flow"), /*#__PURE__*/React.createElement("th", {
-    style: th
-  }, "In\xEDcio"), /*#__PURE__*/React.createElement("th", {
-    style: th
-  }, "Dura\xE7\xE3o"), /*#__PURE__*/React.createElement("th", {
-    style: th
-  }, "Status"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      ...th,
-      textAlign: 'right'
-    }
-  }, "Itens"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      ...th,
-      paddingRight: 24
-    }
-  }))), /*#__PURE__*/React.createElement("tbody", null, d.runs.map(r => /*#__PURE__*/React.createElement(RunRow, {
+  }, filtered.map(r => /*#__PURE__*/React.createElement(RunRow, {
     key: r.id,
     r: r
-  })))))), /*#__PURE__*/React.createElement("p", {
+  }))), /*#__PURE__*/React.createElement("p", {
     style: {
       margin: 0,
       fontSize: 12,
@@ -4742,7 +5190,7 @@ function FlowBoard({
     style: {
       transform: 'rotate(180deg)'
     }
-  }), " Flows"), /*#__PURE__*/React.createElement("div", {
+  }), " Fluxos"), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -4871,6 +5319,8 @@ function FlowsScreen() {
   const d = window.KUBO_DATA;
   const sv = window.KUBO_STATUS;
   const [flow, setFlow] = useState(null);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
   if (flow) return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -4884,40 +5334,9 @@ function FlowsScreen() {
     flow: flow,
     onBack: () => setFlow(null)
   }));
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 24,
-      padding: 24
-    }
-  }, /*#__PURE__*/React.createElement(PageHeader, {
-    title: "Flows",
-    description: "Automa\xE7\xF5es multi-persona instanciadas de templates. Abra um flow para ver seu board.",
-    actions: /*#__PURE__*/React.createElement(Button, {
-      icon: "plus"
-    }, "Novo flow")
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 10
-    }
-  }, d.flows.map(f => /*#__PURE__*/React.createElement("button", {
-    key: f.id,
-    onClick: () => setFlow(f),
-    style: {
-      textAlign: 'left',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 16,
-      padding: 16,
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-xl)',
-      background: 'var(--card)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+  const filtered = d.flows.filter(f => window.matchQuery(query, f.name, f.template, f.status));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const flowIcon = /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -4934,7 +5353,8 @@ function FlowsScreen() {
     style: {
       color: 'var(--muted-foreground)'
     }
-  })), /*#__PURE__*/React.createElement("div", {
+  }));
+  const flowBody = f => /*#__PURE__*/React.createElement("div", {
     style: {
       minWidth: 0,
       flex: 1
@@ -4977,7 +5397,83 @@ function FlowsScreen() {
     key: i,
     glyph: e,
     size: 20
-  }))), /*#__PURE__*/React.createElement("span", null, f.tasksOpen, " tasks abertas \xB7 budget ", f.budget.used, "/", f.budget.limit, " \xB7 criado ", f.created))), /*#__PURE__*/React.createElement(Icon, {
+  }))), /*#__PURE__*/React.createElement("span", null, f.tasksOpen, " tasks abertas \xB7 budget ", f.budget.used, "/", f.budget.limit, " \xB7 criado ", f.created)));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 24,
+      padding: 24
+    }
+  }, /*#__PURE__*/React.createElement(PageHeader, {
+    title: "Fluxos",
+    description: "Automa\xE7\xF5es multi-persona instanciadas de templates. Abra um flow para ver seu board.",
+    actions: /*#__PURE__*/React.createElement(Button, {
+      icon: "plus"
+    }, "Novo fluxo")
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar fluxos por nome, template ou status\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhum fluxo encontrado",
+    description: `Nada casa com “${query}”. Tente outro termo ou limpe a busca.`
+  }) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(f => /*#__PURE__*/React.createElement("button", {
+    key: f.id,
+    onClick: () => setFlow(f),
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      height: 108,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring,
+      overflow: 'hidden'
+    }
+  }, flowIcon, flowBody(f)))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(f => /*#__PURE__*/React.createElement("button", {
+    key: f.id,
+    onClick: () => setFlow(f),
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      padding: 16,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-xl)',
+      background: 'var(--card)'
+    }
+  }, flowIcon, flowBody(f), /*#__PURE__*/React.createElement(Icon, {
     name: "chevron-right",
     size: 16,
     style: {
@@ -4993,6 +5489,9 @@ window.FlowsScreen = FlowsScreen;
 try { (() => {
 // Fontes — de onde vem o que eu sei. Saúde da coleta por fonte.
 const K = window.KoboDesignSystem_6efae6;
+const {
+  useState
+} = React;
 const TYPE_ICON = {
   youtube: 'youtube',
   rss: 'rss',
@@ -5012,50 +5511,16 @@ const HEALTH_LABEL = {
 function FontesScreen() {
   const {
     PageHeader,
-    Card,
-    CardHeader,
-    CardTitle,
-    CardDescription,
-    CardContent,
     Badge,
     Button,
     Icon
   } = K;
   const d = window.KUBO_DATA;
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 24,
-      padding: 24
-    }
-  }, /*#__PURE__*/React.createElement(PageHeader, {
-    title: "Fontes",
-    description: "De onde vem o que voc\xEA sabe \u2014 canais, feeds e sites, com a sa\xFAde de cada coleta.",
-    actions: /*#__PURE__*/React.createElement(Button, {
-      variant: "outline",
-      icon: "plus"
-    }, "Adicionar fonte")
-  }), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(CardHeader, null, /*#__PURE__*/React.createElement(CardTitle, null, "Fontes ativas"), /*#__PURE__*/React.createElement(CardDescription, null, d.fontes.length, " fontes \xB7 coletadas por workers do Operador.")), /*#__PURE__*/React.createElement(CardContent, {
-    style: {
-      padding: 0
-    }
-  }, /*#__PURE__*/React.createElement("ul", {
-    style: {
-      margin: 0,
-      padding: 0,
-      listStyle: 'none'
-    }
-  }, d.fontes.map((f, i) => /*#__PURE__*/React.createElement("li", {
-    key: f.id,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      padding: '14px 24px',
-      borderTop: i ? '1px solid var(--border)' : 'none'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.fontes.filter(f => window.matchQuery(query, f.name, f.type, f.integ, f.health));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const typeIcon = f => /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -5070,7 +5535,146 @@ function FontesScreen() {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: TYPE_ICON[f.type] || 'rss',
     size: 16
-  })), /*#__PURE__*/React.createElement("div", {
+  }));
+  const health = f => /*#__PURE__*/React.createElement(Badge, {
+    variant: HEALTH_VARIANT[f.health]
+  }, HEALTH_LABEL[f.health]);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 24,
+      padding: 24
+    }
+  }, /*#__PURE__*/React.createElement(PageHeader, {
+    title: "Fontes",
+    description: "De onde vem o que voc\xEA sabe \u2014 canais, feeds e sites, com a sa\xFAde de cada coleta.",
+    actions: /*#__PURE__*/React.createElement(Button, {
+      variant: "outline",
+      icon: "plus"
+    }, "Adicionar fonte")
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement(window.SearchBar, {
+    value: query,
+    onChange: setQuery,
+    placeholder: "Buscar fontes por nome, tipo ou integra\xE7\xE3o\u2026"
+  }), /*#__PURE__*/React.createElement(window.ViewToggle, {
+    value: view,
+    onChange: setView,
+    allowed: ['list', 'grid2', 'squares']
+  })), filtered.length === 0 ? /*#__PURE__*/React.createElement(window.EmptyState, {
+    icon: "search",
+    title: "Nenhuma fonte encontrada",
+    description: `Nada casa com “${query}”. Tente outro termo ou limpe a busca.`
+  }) : view === 'squares' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(4, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(f => /*#__PURE__*/React.createElement("div", {
+    key: f.id,
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      textAlign: 'center',
+      gap: 8,
+      height: 176,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, typeIcon(f), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 500,
+      color: 'var(--foreground)'
+    }
+  }, f.name), /*#__PURE__*/React.createElement(Badge, {
+    variant: "outline"
+  }, f.type), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted-foreground)'
+    }
+  }, f.items, " itens"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 'auto'
+    }
+  }, health(f))))) : view === 'grid2' ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: 10
+    }
+  }, filtered.map(f => /*#__PURE__*/React.createElement("div", {
+    key: f.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      height: 84,
+      padding: 16,
+      boxSizing: 'border-box',
+      background: 'var(--card)',
+      borderRadius: 'var(--radius-2xl)',
+      boxShadow: ring
+    }
+  }, typeIcon(f), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 500,
+      color: 'var(--foreground)'
+    }
+  }, f.name), /*#__PURE__*/React.createElement(Badge, {
+    variant: "outline"
+  }, f.type)), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: '2px 0 0',
+      fontSize: 12,
+      color: 'var(--muted-foreground)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, "via ", f.integ, " \xB7 ", f.items, " itens")), health(f)))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, filtered.map(f => /*#__PURE__*/React.createElement("div", {
+    key: f.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: 16,
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-xl)',
+      background: 'var(--card)'
+    }
+  }, typeIcon(f), /*#__PURE__*/React.createElement("div", {
     style: {
       minWidth: 0,
       flex: 1
@@ -5095,13 +5699,7 @@ function FontesScreen() {
       fontSize: 12,
       color: 'var(--muted-foreground)'
     }
-  }, "via ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontFamily: 'ui-monospace, monospace'
-    }
-  }, f.integ), " \xB7 \xFAltima coleta ", f.last, " \xB7 ", f.items, " itens acumulados")), /*#__PURE__*/React.createElement(Badge, {
-    variant: HEALTH_VARIANT[f.health]
-  }, HEALTH_LABEL[f.health])))))));
+  }, "via ", /*#__PURE__*/React.createElement("span", null, f.integ), " \xB7 \xFAltima coleta ", f.last, " \xB7 ", f.items, " itens acumulados")), health(f)))));
 }
 window.FontesScreen = FontesScreen;
 })(); } catch (e) { __ds_ns.__errors.push({ path: "ui_kits/kubo-app/FontesScreen.jsx", error: String((e && e.message) || e) }); }
@@ -5146,7 +5744,7 @@ function HomeScreen({
       padding: 24
     }
   }, /*#__PURE__*/React.createElement(PageHeader, {
-    title: "Home",
+    title: "Painel",
     description: "Seu ateli\xEA de agentes \u2014 coleta, conhecimento e distribui\xE7\xE3o num relance."
   }), gateFlows.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5177,7 +5775,7 @@ function HomeScreen({
   }, "1 decis\xE3o aguardando voc\xEA"), " \u2014 ", gateFlows[0].name, " tem um gate aberto."), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     variant: "outline",
-    onClick: () => onNavigate('Flows')
+    onClick: () => onNavigate('Fluxos')
   }, "Revisar")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
@@ -5266,7 +5864,6 @@ function HomeScreen({
     style: {
       fontSize: 14,
       fontWeight: 500,
-      fontFamily: 'ui-monospace, monospace',
       color: 'var(--foreground)'
     }
   }, r.worker), /*#__PURE__*/React.createElement(Badge, {
@@ -5277,10 +5874,10 @@ function HomeScreen({
       fontSize: 12,
       color: 'var(--muted-foreground)'
     }
-  }, r.started, " \xB7 ", r.duration, " \xB7 ", r.items, " itens"))))))), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(CardHeader, null, /*#__PURE__*/React.createElement(CardTitle, null, "Flows ativos"), /*#__PURE__*/React.createElement(CardDescription, null, "Automa\xE7\xF5es em andamento."), /*#__PURE__*/React.createElement(CardAction, null, /*#__PURE__*/React.createElement(Button, {
+  }, r.started, " \xB7 ", r.duration, " \xB7 ", r.items, " itens"))))))), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(CardHeader, null, /*#__PURE__*/React.createElement(CardTitle, null, "Fluxos ativos"), /*#__PURE__*/React.createElement(CardDescription, null, "Automa\xE7\xF5es em andamento."), /*#__PURE__*/React.createElement(CardAction, null, /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
-    onClick: () => onNavigate('Flows')
+    onClick: () => onNavigate('Fluxos')
   }, "Ver todos"))), /*#__PURE__*/React.createElement(CardContent, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -5289,7 +5886,7 @@ function HomeScreen({
     }
   }, d.flows.filter(f => f.status !== 'pausado').map(f => /*#__PURE__*/React.createElement("button", {
     key: f.id,
-    onClick: () => onNavigate('Flows'),
+    onClick: () => onNavigate('Fluxos'),
     style: {
       textAlign: 'left',
       cursor: 'pointer',
@@ -5326,11 +5923,7 @@ function HomeScreen({
       fontSize: 12,
       color: 'var(--muted-foreground)'
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontFamily: 'ui-monospace, monospace'
-    }
-  }, f.template), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, f.template), /*#__PURE__*/React.createElement("span", {
     style: {
       display: 'flex',
       gap: 3
@@ -5611,6 +6204,115 @@ function PersonaGlyph({
   }));
 }
 window.PersonaGlyph = PersonaGlyph;
+
+// Reusable search bar — the Conhecimento pattern (lupa + Input, maxWidth 420).
+function SearchBar({
+  value,
+  onChange,
+  placeholder = 'Buscar…'
+}) {
+  const {
+    Input,
+    Icon
+  } = window.KoboDesignSystem_6efae6;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      maxWidth: 420
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      left: 12,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      color: 'var(--muted-foreground)',
+      pointerEvents: 'none'
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "search",
+    size: 16
+  })), /*#__PURE__*/React.createElement(Input, {
+    value: value,
+    onChange: e => onChange(e.target.value),
+    placeholder: placeholder,
+    style: {
+      paddingLeft: 34
+    }
+  }));
+}
+window.SearchBar = SearchBar;
+
+// View toggle — segmented control: Lista / Duas colunas / Quadrados.
+// Options not in `allowed` render greyed + disabled with an explanatory tooltip.
+function ViewToggle({
+  value,
+  onChange,
+  allowed = ['list', 'grid2', 'squares']
+}) {
+  const {
+    Icon
+  } = window.KoboDesignSystem_6efae6;
+  const opts = [{
+    key: 'list',
+    icon: 'list',
+    label: 'Lista'
+  }, {
+    key: 'grid2',
+    icon: 'columns-2',
+    label: 'Duas colunas'
+  }, {
+    key: 'squares',
+    icon: 'grid-2x2',
+    label: 'Quadrados'
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      padding: 3,
+      gap: 2,
+      background: 'var(--muted)',
+      borderRadius: 'var(--radius-4xl)',
+      flexShrink: 0
+    }
+  }, opts.map(o => {
+    const on = value === o.key;
+    const dis = !allowed.includes(o.key);
+    return /*#__PURE__*/React.createElement("button", {
+      key: o.key,
+      disabled: dis,
+      onClick: () => !dis && onChange(o.key),
+      "aria-label": o.label,
+      title: dis ? o.label + ' — não se aplica a esta tela' : o.label,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 32,
+        height: 26,
+        border: 'none',
+        cursor: dis ? 'not-allowed' : 'pointer',
+        borderRadius: 'calc(var(--radius-4xl) - 2px)',
+        background: on ? 'var(--background)' : 'transparent',
+        color: dis ? 'var(--muted-foreground)' : on ? 'var(--foreground)' : 'var(--muted-foreground)',
+        opacity: dis ? 0.4 : 1,
+        boxShadow: on ? '0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent)' : 'none',
+        transition: 'all 120ms'
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: o.icon,
+      size: 15
+    }));
+  }));
+}
+window.ViewToggle = ViewToggle;
+
+// Case-insensitive substring match across any number of fields.
+window.matchQuery = function (query, ...fields) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return true;
+  return fields.some(f => String(f == null ? '' : f).toLowerCase().includes(q));
+};
 
 // Reusable empty / first-run state.
 function EmptyState({
@@ -6506,6 +7208,8 @@ window.KUBO_DATA = {
 __ds_ns.Badge = __ds_scope.Badge;
 
 __ds_ns.Button = __ds_scope.Button;
+
+__ds_ns.Sakura = __ds_scope.Sakura;
 
 __ds_ns.Logo = __ds_scope.Logo;
 

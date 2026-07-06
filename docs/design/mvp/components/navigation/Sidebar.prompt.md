@@ -1,4 +1,4 @@
-App-shell navigation. Sidebar is 256px, uses the `--sidebar-*` token set (vivid amber active state); Breadcrumb + PageHeader live in the content area.
+App-shell navigation. Sidebar is 256px, uses the `--sidebar-*` token set (near-black mono active state); Breadcrumb + PageHeader live in the content area.
 
 ```jsx
 <Sidebar active="Chat" onNavigate={(t) => setPage(t)} user={{name:'Alex Rivera', email:'alex@kubo.ai'}} />

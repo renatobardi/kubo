@@ -60,12 +60,12 @@ function SkillDetail({ name, onBack }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: 'var(--muted-foreground)', fontFamily: 'var(--font-sans)' }}>
-        <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Personas
+        <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Atores
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Icon name="sparkles" size={18} style={{ color: 'var(--muted-foreground)' }} />
-        <h2 style={{ margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 18, fontWeight: 600, color: 'var(--foreground)' }}>{name}</h2>
+        <h2 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 18, fontWeight: 600, letterSpacing: '-0.025em', color: 'var(--foreground)' }}>{name}</h2>
         <VersionBadge state={selected ? selected.state : 'ativa'} />
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', fontSize: 12, color: 'var(--muted-foreground)' }}>
           Usada por: {(skill.usedBy || []).map((e, i) => <window.PersonaGlyph key={i} glyph={e} size={20} />)}
@@ -137,17 +137,54 @@ function IntegracoesTab() {
   const { Card, CardContent, Badge, Icon } = K;
   const d = window.KUBO_DATA;
   const sv = window.KUBO_STATUS;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.integracoes.filter(it => window.matchQuery(query, it.name, it.status, it.rateLimit));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const intIcon = (it, sz = 36) => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: sz, height: sz, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}><Icon name={it.icon} size={Math.round(sz / 2)} /></div>;
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-      {d.integracoes.map(it => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar integrações por nome ou status…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list', 'grid2', 'squares']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhuma integração encontrada" description={`Nada casa com “${query}”.`} />
+      ) : view === 'squares' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          {filtered.map(it => (
+            <div key={it.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8, height: 176, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring }}>
+              {intIcon(it, 44)}
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{it.name}</span>
+              <Badge variant={sv(it.status)}>{it.status}</Badge>
+              <span style={{ marginTop: 'auto', fontSize: 11, color: 'var(--muted-foreground)' }}>rate {it.rateLimit}</span>
+            </div>
+          ))}
+        </div>
+      ) : view === 'grid2' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {filtered.map(it => (
+            <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 12, height: 84, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring }}>
+              {intIcon(it)}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{it.name}</span>
+                  <Badge variant={sv(it.status)}>{it.status}</Badge>
+                </div>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>rate {it.rateLimit}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {filtered.map(it => (
         <Card key={it.id} size="sm">
           <CardContent style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, flexShrink: 0, borderRadius: 'var(--radius-lg)', background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-              <Icon name={it.icon} size={18} />
-            </div>
+            {intIcon(it)}
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, fontFamily: 'ui-monospace, monospace', color: 'var(--foreground)' }}>{it.name}</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{it.name}</span>
                 <Badge variant={sv(it.status)}>{it.status}</Badge>
               </div>
               <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)' }}>
@@ -157,6 +194,8 @@ function IntegracoesTab() {
           </CardContent>
         </Card>
       ))}
+      </div>
+      )}
     </div>
   );
 }
@@ -165,29 +204,69 @@ function PersonasTab({ onOpenSkill }) {
   const { Card, CardContent, Badge, Icon } = K;
   const d = window.KUBO_DATA;
   const exists = (s) => Boolean(d.skills[s]);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.personas.filter(p => window.matchQuery(query, p.name, p.executor, p.model, (p.skills||[]).join(' ')));
+  const ring = '0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent)';
+  const skillBadges = (p) => p.skills.map(s => exists(s)
+    ? <button key={s} onClick={() => onOpenSkill(s)} style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' }}><Badge variant="outline">{s}</Badge></button>
+    : <span key={s} title="Skill referenciada não existe no catálogo"><Badge variant="destructive" icon="triangle-alert">{s}</Badge></span>);
+  const execBadge = (p) => <Badge variant={p.executor === 'cli' ? 'outline' : 'secondary'}>{p.executor}</Badge>;
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-      {d.personas.map(p => (
-        <Card key={p.id} size="sm">
-          <CardContent style={{ display: 'flex', gap: 12 }}>
-            <window.PersonaGlyph glyph={p.emoji} size={40} />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{p.name}</span>
-                <Badge variant={p.executor === 'cli' ? 'outline' : 'secondary'}>{p.executor}</Badge>
-                {p.isHuman && <Badge icon="triangle-alert">gates</Badge>}
-              </div>
-              <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)', fontFamily: 'ui-monospace, monospace' }}>{p.model}</p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
-                {p.skills.map(s => exists(s)
-                  ? <button key={s} onClick={() => onOpenSkill(s)} style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' }}><Badge variant="outline">{s}</Badge></button>
-                  : <span key={s} title="Skill referenciada não existe no catálogo"><Badge variant="destructive" icon="triangle-alert">{s}</Badge></span>)}
-              </div>
-              <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--muted-foreground)' }}>permissões: {p.perms.join(' · ')}</p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar atores por nome, executor, modelo ou skill…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list', 'grid2', 'squares']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhum ator encontrado" description={`Nada casa com “${query}”.`} />
+      ) : view === 'squares' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          {filtered.map(p => (
+            <div key={p.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8, height: 176, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring }}>
+              <window.PersonaGlyph glyph={p.emoji} size={48} />
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{p.name}</span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{execBadge(p)}{p.isHuman && <Badge icon="triangle-alert">gates</Badge>}</div>
+              <span style={{ marginTop: 'auto', maxWidth: '100%', fontSize: 11, color: 'var(--muted-foreground)', fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.model}</span>
             </div>
-          </CardContent>
-        </Card>
-      ))}
+          ))}
+        </div>
+      ) : view === 'grid2' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          {filtered.map(p => (
+            <div key={p.id} style={{ display: 'flex', gap: 12, height: 128, padding: 16, boxSizing: 'border-box', background: 'var(--card)', borderRadius: 'var(--radius-2xl)', boxShadow: ring, overflow: 'hidden' }}>
+              <window.PersonaGlyph glyph={p.emoji} size={40} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{p.name}</span>
+                  {execBadge(p)}{p.isHuman && <Badge icon="triangle-alert">gates</Badge>}
+                </div>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)', fontFamily: 'ui-monospace, monospace' }}>{p.model}</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>{skillBadges(p)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {filtered.map(p => (
+            <Card key={p.id} size="sm">
+              <CardContent style={{ display: 'flex', gap: 12 }}>
+                <window.PersonaGlyph glyph={p.emoji} size={40} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{p.name}</span>
+                    {execBadge(p)}{p.isHuman && <Badge icon="triangle-alert">gates</Badge>}
+                  </div>
+                  <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted-foreground)', fontFamily: 'ui-monospace, monospace' }}>{p.model}</p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>{skillBadges(p)}</div>
+                  <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--muted-foreground)' }}>permissões: {p.perms.join(' · ')}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -207,12 +286,12 @@ function TemplateDetail({ tpl, onBack }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: 'var(--muted-foreground)', fontFamily: 'var(--font-sans)' }}>
-        <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Templates
+        <Icon name="chevron-right" size={14} style={{ transform: 'rotate(180deg)' }} /> Modelos
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Icon name="workflow" size={18} style={{ color: 'var(--muted-foreground)' }} />
-        <h2 style={{ margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 18, fontWeight: 600, color: 'var(--foreground)' }}>{tpl.name}</h2>
+        <h2 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 18, fontWeight: 600, letterSpacing: '-0.025em', color: 'var(--foreground)' }}>{tpl.name}</h2>
         <Badge variant="outline" icon="clock">{tpl.trigger}</Badge>
         <Badge variant="secondary">budget {tpl.budget}</Badge>
       </div>
@@ -281,14 +360,25 @@ function TemplateDetail({ tpl, onBack }) {
 function TemplatesTab({ onOpen }) {
   const { Card, CardContent, Badge, Icon } = K;
   const d = window.KUBO_DATA;
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('list');
+  const filtered = d.templates.filter(t => window.matchQuery(query, t.name, t.trigger));
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {d.templates.map(t => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <window.SearchBar value={query} onChange={setQuery} placeholder="Buscar modelos por nome ou gatilho…" />
+        <window.ViewToggle value={view} onChange={setView} allowed={['list']} />
+      </div>
+      {filtered.length === 0 ? (
+        <window.EmptyState icon="search" title="Nenhum modelo encontrado" description={`Nada casa com “${query}”.`} />
+      ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {filtered.map(t => (
         <button key={t.id} onClick={() => onOpen(t)} style={{ textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: 0 }}>
         <Card size="sm">
           <CardContent style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: 'ui-monospace, monospace', color: 'var(--foreground)' }}>{t.name}</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>{t.name}</span>
               <Badge variant="outline" icon="clock">{t.trigger}</Badge>
               <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted-foreground)' }}>budget {t.budget} · <span style={{ display: 'flex', gap: 3 }}>{t.cast.map((e, i) => <window.PersonaGlyph key={i} glyph={e} size={20} />)}</span></span>
             </div>
@@ -308,6 +398,8 @@ function TemplatesTab({ onOpen }) {
         </Card>
         </button>
       ))}
+      </div>
+      )}
     </div>
   );
 }
@@ -317,14 +409,14 @@ function CatalogosScreen({ section = 'Integrações' }) {
   const [skill, setSkill] = useState(null);
   const [tpl, setTpl] = useState(null);
 
-  if (section === 'Personas' && skill) {
+  if (section === 'Atores' && skill) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
         <SkillDetail name={skill} onBack={() => setSkill(null)} />
       </div>
     );
   }
-  if (section === 'Templates' && tpl) {
+  if (section === 'Modelos' && tpl) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 24 }}>
         <TemplateDetail tpl={tpl} onBack={() => setTpl(null)} />
@@ -334,8 +426,8 @@ function CatalogosScreen({ section = 'Integrações' }) {
 
   const meta = {
     'Integrações': { desc: 'Conexões declaradas — segredos por referência, nunca expostos.', body: <IntegracoesTab /> },
-    'Personas': { desc: 'Agentes do ateliê — clique numa skill para ver e versionar.', body: <PersonasTab onOpenSkill={setSkill} /> },
-    'Templates': { desc: 'Máquinas de estado reutilizáveis que definem os boards dos flows. Abra um para ver o detalhe.', body: <TemplatesTab onOpen={setTpl} /> },
+    'Atores': { desc: 'Agentes do ateliê — clique numa skill para ver e versionar.', body: <PersonasTab onOpenSkill={setSkill} /> },
+    'Modelos': { desc: 'Máquinas de estado reutilizáveis que definem os boards dos fluxos. Abra um para ver o detalhe.', body: <TemplatesTab onOpen={setTpl} /> },
   };
   const m = meta[section] || meta['Integrações'];
   return (

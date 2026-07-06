@@ -1,5 +1,5 @@
-/* Kubo color tokens — copied verbatim from valmis apps/web/src/routes/layout.css (OKLCH).
-   Warm stone neutrals, burnt-amber primary. Dark mode via .dark class. */
+/* Kubo color tokens — warm stone neutrals, near-black mono primary (OKLCH).
+   Dark mode via .dark class. */
 
 :root {
   --background: oklch(1 0 0);
@@ -33,6 +33,10 @@
   --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
   --sidebar-border: oklch(0.923 0.003 48.717);
   --sidebar-ring: oklch(0.709 0.01 56.259);
+
+  /* Sakura logo mark. Light: pink-filled petals, near-black ink (lines/stamens). */
+  --sakura-petal: #f4c9d4;
+  --sakura-ink: var(--foreground);
 }
 
 .dark {
@@ -62,4 +66,8 @@
   --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.553 0.013 58.071);
+
+  /* Dark: petals read as the black background (no fill), pink outline + stamens. */
+  --sakura-petal: transparent;
+  --sakura-ink: #f4c9d4;
 }

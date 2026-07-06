@@ -9,10 +9,10 @@ If creating visual artifacts (slides, mocks, throwaway prototypes, etc), copy as
 If the user invokes this skill without any other guidance, ask them what they want to build or design, ask some questions, and act as an expert designer who outputs HTML artifacts _or_ production code, depending on the need.
 
 ## Quick reference
-- **Fonts**: Noto Serif (ALL headings/titles), Inter (all body/UI). App density is 14px (`text-sm`).
+- **Fonts**: Inter everywhere — body, UI, and headings (ChatGPT-clean). App density is 14px (`text-sm`).
 - **Color**: warm stone neutrals + **near-black mono primary** (ChatGPT-style; dark inverts to near-white). Never a saturated accent for chrome. Tokens in `tokens/colors.css` (OKLCH, light + `.dark`).
 - **Shape**: pill buttons/inputs (`--radius-4xl`), cards `--radius-2xl` defined by `ring-1 ring-foreground/10` (no shadow).
-- **Signature rules**: destructive is tinted (10% bg + red text), charts are monochrome stone, agent identity is a preset emoji.
-- **Icons**: Lucide via the `Icon` component. **Emoji only as agent avatars** (`assets/agent-emojis.js`).
+- **Signature rules**: destructive is tinted (10% bg + red text), charts are monochrome stone, persona identity is a monochrome Lucide glyph in a muted circle.
+- **Icons**: Lucide via the `Icon` component. Never emoji.
 - **Components**: `components/*/` — link `styles.css`, load `_ds_bundle.js`, read `const { Button } = window.KoboDesignSystem_6efae6`.
 - **Full app recreation**: `ui_kits/kubo-app/`.

@@ -11,4 +11,4 @@ The flat Kubo card — no shadow, no border, just a subtle `ring-1 ring-foregrou
 </Card>
 ```
 
-Title is Noto Serif 16px medium. Use `size="sm"` for denser cards (kanban). For list cards, give CardContent `style={{padding:0}}` and use divided `<ul>` rows.
+Title is Inter 16px medium. Use `size="sm"` for denser cards (kanban). For list cards, give CardContent `style={{padding:0}}` and use divided `<ul>` rows.
