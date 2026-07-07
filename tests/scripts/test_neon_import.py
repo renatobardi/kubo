@@ -8,6 +8,9 @@ o Neon vivo (ADR-0012 §VII).
 
 from __future__ import annotations
 
+import pytest
+
+from kubo.errors import ConfigError
 from scripts import neon_import as ni
 
 
@@ -153,3 +156,35 @@ def test_recon_report_flags_discrepancy_when_rows_unaccounted() -> None:
     r.record_imported()
     assert r.reconciled is False
     assert "DISCREPÂNCIA: 3" in r.render()
+
+
+# ── Camada I/O/CLI: lógica determinística sem Neon vivo (achado do CodeRabbit) ──
+# _neon_dsn (falha explícita sem env) e main (dispatch) são testáveis sem conexão.
+# Valor de env é um placeholder não-secreto: _neon_dsn só checa presença; main chama
+# _neon_dsn e depois _handler_pending, que levanta NotImplementedError antes de
+# qualquer conexão.
+_ENV = "NEON_DATABASE_URL"
+_DUMMY_DSN = "present"
+
+
+def test_neon_dsn_raises_config_error_when_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sem NEON_DATABASE_URL, _neon_dsn falha explícito (invariante 8: conexão só por
+    env; falha-fechada, nunca cai num default)."""
+    monkeypatch.delenv(_ENV, raising=False)
+    with pytest.raises(ConfigError):
+        ni._neon_dsn()
+
+
+def test_main_fails_early_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main valida a presença da conexão ANTES de despachar — sem env, ConfigError."""
+    monkeypatch.delenv(_ENV, raising=False)
+    with pytest.raises(ConfigError):
+        ni.main(["--corpus", "sources"])
+
+
+def test_main_dispatches_to_handler_when_env_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Com env presente, main despacha para o handler do corpus — hoje o stub levanta
+    NotImplementedError (SQL escrito na execução contra o Neon vivo)."""
+    monkeypatch.setenv(_ENV, _DUMMY_DSN)
+    with pytest.raises(NotImplementedError):
+        ni.main(["--corpus", "sources"])
