@@ -205,6 +205,17 @@ def provenance(db: Any, distilled: RecordID) -> list[RecordID]:
     return list(rows[0]["srcs"]) if rows else []
 
 
+def distilled_for(db: Any, item: RecordID) -> list[RecordID]:
+    """Destilados que derivam de um item (travessia item <-derived_from<- distilled).
+
+    Leitura mínima que o import one-off usa para pular itens já destilados —
+    `insert_distilled` NÃO é idempotente (cada chamada cria um evento novo), então
+    sem esta checagem re-rodar o corpus duplicaria os destilados. O M6 precisa da
+    mesma travessia para o backfill de embeddings."""
+    rows = db.query("SELECT <-derived_from<-distilled AS d FROM $item;", {"item": item})
+    return list(rows[0]["d"]) if rows else []
+
+
 def search(db: Any, *, embedding: Sequence[float], k: int) -> list[SearchHit]:
     """Busca vetorial KNN sobre `chunk`, resolvendo cada acerto ao seu `distilled`.
 

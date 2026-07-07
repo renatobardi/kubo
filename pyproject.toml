@@ -30,6 +30,12 @@ dev = [
     "types-pyyaml>=6.0.12.20260518",
     "respx>=0.23.1",
 ]
+# Import one-off do legado NeonDB (sessão 0007): psycopg v3 SÓ para a migração,
+# fora do runtime — não entra na imagem de produção. `[binary]` evita toolchain de
+# build no LXC. Instala com `uv sync --group import`; pip-audit audita o grupo.
+import = [
+    "psycopg[binary]>=3.2,<4",
+]
 
 [build-system]
 requires = ["hatchling"]
