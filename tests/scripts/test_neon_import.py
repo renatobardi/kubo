@@ -119,7 +119,7 @@ def test_feed_match_suggestion_matches_by_normalized_url_only() -> None:
     # barra final e caixa divergentes ainda casam (normalização de sugestão):
     assert sugg("HTTPS://Y.dev/rss") == "source:b"
     # esquema diferente não casa — vira "sem sugestão", o dono decide:
-    assert sugg("http://blog.x/feed") is None
+    assert sugg("http://blog.x/feed") is None  # NOSONAR: http literal é o caso de teste
 
 
 def test_render_feed_map_lists_both_sides_and_flags_suggestion_as_hint() -> None:
