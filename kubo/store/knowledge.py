@@ -205,6 +205,46 @@ def provenance(db: Any, distilled: RecordID) -> list[RecordID]:
     return list(rows[0]["srcs"]) if rows else []
 
 
+@dataclass(frozen=True)
+class SourceInfo:
+    """Uma source do grafo (id + chave natural + classificação), para consumidores
+    que LISTAM ou RESOLVEM sources sem regravá-las: o import one-off (resolve a source
+    de um item por canonical) e a UI da fase 1 (lista/agrupa por kind)."""
+
+    id: RecordID
+    canonical: str
+    kind: str
+    title: str | None
+
+
+def list_sources(db: Any) -> list[SourceInfo]:
+    """Lista todas as sources (id, canonical, kind, title) numa leitura.
+
+    Porta única para 'quais sources existem' — o import resolve a source de um item
+    pelo canonical a partir daqui (sem upsert, para não mutar dado vivo) e a fase 1
+    lista por aqui; substitui SELECTs de `source` espalhados fora da store (inv. 2)."""
+    rows = db.query("SELECT id, canonical, kind, title FROM source;")
+    return [
+        SourceInfo(id=r["id"], canonical=r["canonical"], kind=r["kind"], title=r.get("title"))
+        for r in rows
+    ]
+
+
+def item_index(db: Any) -> dict[str, RecordID]:
+    """Mapa `external_id -> item` de todos os itens numa leitura.
+
+    O import resolve `derived_from` (distilled -> item pela chave natural do legado)
+    e detecta itens já presentes por aqui — sem 1 query por linha nem SELECT de `item`
+    espalhado fora da store (invariante 2). Primeira ocorrência vence se um external_id
+    se repetir entre sources (não esperado — é parte da chave natural do item)."""
+    index: dict[str, RecordID] = {}
+    for r in db.query("SELECT external_id, id FROM item;"):
+        ext = r.get("external_id")
+        if ext and ext not in index:
+            index[ext] = r["id"]
+    return index
+
+
 def distilled_for(db: Any, item: RecordID) -> list[RecordID]:
     """Destilados que derivam de um item (travessia item <-derived_from<- distilled).
 

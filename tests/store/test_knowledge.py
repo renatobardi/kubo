@@ -288,6 +288,33 @@ def test_provenance_traces_distilled_to_source(db: Any) -> None:
     assert source_id in trail
 
 
+def test_list_sources_returns_all_with_their_fields(db: Any) -> None:
+    """list_sources devolve toda source com id/canonical/kind/title — leitura única
+    que o import usa para resolver a source de um item por canonical (sem regravá-la,
+    ADR-0012) e a UI da fase 1 para listar; substitui queries de source espalhadas."""
+    a = knowledge.upsert_source(db, kind="rss", canonical="https://a/feed", title="A")
+    knowledge.upsert_source(db, kind="youtube", canonical="https://b")
+
+    by_canonical = {s.canonical: s for s in knowledge.list_sources(db)}
+
+    assert set(by_canonical) == {"https://a/feed", "https://b"}
+    assert by_canonical["https://a/feed"].id == a
+    assert by_canonical["https://a/feed"].kind == "rss"
+    assert by_canonical["https://a/feed"].title == "A"
+    assert by_canonical["https://b"].title is None
+
+
+def test_item_index_maps_external_id_to_item(db: Any) -> None:
+    """item_index devolve o mapa external_id -> item de todos os itens numa leitura —
+    o import resolve derived_from (distilled -> item pela chave natural) e detecta
+    itens já presentes por aqui, sem 1 query por linha nem SELECT de item espalhado."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    i1 = knowledge.upsert_item(db, source=src, external_id="ext-1", content="a")
+    i2 = knowledge.upsert_item(db, source=src, external_id="ext-2", content="b")
+
+    assert knowledge.item_index(db) == {"ext-1": i1, "ext-2": i2}
+
+
 def test_distilled_for_returns_empty_when_item_has_no_distilled(db: Any) -> None:
     """distilled_for(item) devolve [] quando nenhum destilado deriva do item —
     a leitura que o import one-off usa para pular itens já destilados (insert_distilled

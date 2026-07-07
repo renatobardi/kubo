@@ -158,13 +158,12 @@ def test_recon_report_flags_discrepancy_when_rows_unaccounted() -> None:
     assert "DISCREPÂNCIA: 3" in r.render()
 
 
-# ── Camada I/O/CLI: lógica determinística sem Neon vivo (achado do CodeRabbit) ──
-# _neon_dsn (falha explícita sem env) e main (dispatch) são testáveis sem conexão.
-# Valor de env é um placeholder não-secreto: _neon_dsn só checa presença; main chama
-# _neon_dsn e depois _handler_pending, que levanta NotImplementedError antes de
-# qualquer conexão.
+# ── Camada I/O/CLI: só o caminho determinístico sem Neon vivo (achado do CodeRabbit) ──
+# _neon_dsn (falha explícita sem env) e main (fail-fast ANTES de conectar) são
+# testáveis sem conexão. O dispatch com env presente NÃO é testável aqui: main abre
+# a conexão psycopg (grupo `import`, ausente no job unit do CI) e depois exige Neon
+# vivo — validado na execução, não em teste que dependa de banco (docstring do módulo).
 _ENV = "NEON_DATABASE_URL"
-_DUMMY_DSN = "present"
 
 
 def test_neon_dsn_raises_config_error_when_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,15 +175,172 @@ def test_neon_dsn_raises_config_error_when_env_missing(monkeypatch: pytest.Monke
 
 
 def test_main_fails_early_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """main valida a presença da conexão ANTES de despachar — sem env, ConfigError."""
+    """main valida a presença da conexão ANTES de despachar/conectar — sem env,
+    ConfigError (não chega a importar psycopg nem a tocar o Neon)."""
     monkeypatch.delenv(_ENV, raising=False)
     with pytest.raises(ConfigError):
         ni.main(["--corpus", "sources"])
 
 
-def test_main_dispatches_to_handler_when_env_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Com env presente, main despacha para o handler do corpus — hoje o stub levanta
-    NotImplementedError (SQL escrito na execução contra o Neon vivo)."""
-    monkeypatch.setenv(_ENV, _DUMMY_DSN)
-    with pytest.raises(NotImplementedError):
-        ni.main(["--corpus", "sources"])
+# ── Funções puras novas dos handlers de I/O (sessão 0007 execução) ─────────────
+# Extraídas da casca de I/O porque não tocam o Neon/SurrealDB — testáveis com
+# valores explícitos, como o resto da camada pura (docstring do módulo).
+
+
+def test_resolve_news_source_canonical_uses_manual_map_first() -> None:
+    """O mapa manual do dono (checkpoint 2026-07-06) vence — inclusive para nomes
+    que também teriam um feed_sources homônimo."""
+    assert (
+        ni.resolve_news_source_canonical("OpenAI", feed_sources_by_name={"OpenAI": "outro"})
+        == "https://openai.com/news/rss.xml"
+    )
+    assert ni.resolve_news_source_canonical("Hacker News") == "https://news.ycombinator.com"
+
+
+def test_resolve_news_source_canonical_falls_back_to_feed_sources_then_none() -> None:
+    """Nome fora do mapa manual cai pro endpoint do feed_sources homônimo; sem
+    nenhum dos dois, None (o I/O conta skipped_invalid "source desconhecida")."""
+    assert (
+        ni.resolve_news_source_canonical(
+            "Blog Novo", feed_sources_by_name={"Blog Novo": "https://x/rss"}
+        )
+        == "https://x/rss"
+    )
+    assert ni.resolve_news_source_canonical("Blog Novo") is None
+    assert ni.resolve_news_source_canonical("Blog Novo", feed_sources_by_name={}) is None
+
+
+def test_youtube_canonical_helpers_build_stable_urls() -> None:
+    """Canonical determinístico de canal/playlist — a chave de gravação da source."""
+    assert ni.youtube_channel_canonical("UC123") == "https://www.youtube.com/channel/UC123"
+    assert ni.youtube_playlist_canonical("PL456") == "https://www.youtube.com/playlist?list=PL456"
+
+
+def test_video_source_prefers_channel_over_playlist_then_none() -> None:
+    """Prioridade canal > playlist > None (o I/O usa a source sintética
+    legacy:youtube quando nenhum resolve, ADR-0012 §VII)."""
+    channels = {1: ("https://www.youtube.com/channel/UC1", "Canal 1")}
+    playlists = {9: ("https://www.youtube.com/playlist?list=PL9", "Playlist 9")}
+    assert ni._video_source({"channel_id": 1, "playlist_id": 9}, channels, playlists) == (
+        "https://www.youtube.com/channel/UC1",
+        "Canal 1",
+    )
+    assert ni._video_source({"channel_id": None, "playlist_id": 9}, channels, playlists) == (
+        "https://www.youtube.com/playlist?list=PL9",
+        "Playlist 9",
+    )
+    assert ni._video_source({"channel_id": None, "playlist_id": None}, channels, playlists) is None
+    # channel_id/playlist_id presentes mas sem correspondência no dict -> None também:
+    assert ni._video_source({"channel_id": 404, "playlist_id": None}, channels, playlists) is None
+
+
+def test_exceeds_cap_flags_only_content_over_1mib() -> None:
+    """Cap de sanidade do import (1 MiB, ADR-0012 §VI) — reject+log, nunca trunca."""
+    assert ni._exceeds_cap("conteúdo pequeno") is False
+    assert ni._exceeds_cap("x" * ni._MAX_CONTENT_BYTES) is False
+    assert ni._exceeds_cap("x" * (ni._MAX_CONTENT_BYTES + 1)) is True
+
+
+def test_iso_normalizes_datetime_passes_through_none_and_str() -> None:
+    """datetime do driver -> ISO 8601; None e string já formatada passam direto."""
+    import datetime
+
+    dt = datetime.datetime(2021, 5, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    assert ni._iso(dt) == dt.isoformat()
+    assert ni._iso(None) is None
+    assert ni._iso("2021-05-01T10:00:00Z") == "2021-05-01T10:00:00Z"
+
+
+def test_neon_dsn_requires_sslmode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neon exige SSL — DSN sem `sslmode=` é erro do operador, pego cedo e sem
+    detalhe da DSN na mensagem (invariante 8)."""
+    monkeypatch.setenv(_ENV, "postgresql://user:pw@host/db")
+    with pytest.raises(ConfigError):
+        ni._neon_dsn()
+
+
+# ── Achados de segurança/arquitetura (review + advisor, sessão 0007 execução) ──
+
+
+def test_safe_error_redacts_dsn_from_exception_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`str(exc)` do psycopg pode ecoar a DSN com senha (invariante 8) — _safe_error
+    redige antes de virar `run.error`/log."""
+    fake_dsn = "postgresql://user:s3cr3t@ep-fake.neon.tech/db?sslmode=require"
+    monkeypatch.setenv(_ENV, fake_dsn)
+    err = ni._safe_error(RuntimeError(f"connection failed: {fake_dsn}"))
+    assert fake_dsn not in err["message"]
+    assert "<NEON_DATABASE_URL redigida>" in err["message"]
+    assert err["kind"] == "RuntimeError"
+
+
+def test_safe_error_passes_through_message_without_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sem a DSN no texto do erro, a mensagem passa intacta (nada a redigir)."""
+    monkeypatch.setenv(_ENV, "postgresql://user:pw@host/db?sslmode=require")
+    err = ni._safe_error(ValueError("algo não relacionado"))
+    assert err == {"kind": "ValueError", "message": "algo não relacionado"}
+
+
+def test_resolve_source_returns_id_on_hit_and_raises_fatal_on_miss() -> None:
+    """_resolve_source é a fronteira do achado do advisor #1: handler de item NUNCA
+    upserta source — miss é erro FATAL (força rodar --corpus sources antes)."""
+    from surrealdb import RecordID
+
+    sid = RecordID("source", "a")
+    index = {"https://x/feed": sid}
+    assert ni._resolve_source(index, "https://x/feed") is sid
+    with pytest.raises(RuntimeError, match="rode --corpus sources primeiro"):
+        ni._resolve_source(index, "https://outra/feed")
+
+
+def test_source_index_maps_canonical_to_id_via_list_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_source_index usa SÓ `knowledge.list_sources` (invariante 2: nenhum SELECT
+    cru de `source` no script) — testável sem SurrealDB via monkeypatch do único
+    ponto de leitura (list_sources já é validado contra banco real em
+    tests/store/test_knowledge.py)."""
+    from surrealdb import RecordID
+
+    from kubo.store.knowledge import SourceInfo
+
+    sources = [
+        SourceInfo(id=RecordID("source", "a"), canonical="https://x/feed", kind="rss", title="X"),
+        SourceInfo(id=RecordID("source", "b"), canonical="legacy:email", kind="email", title=None),
+    ]
+    monkeypatch.setattr(ni.knowledge, "list_sources", lambda db: sources)
+    index = ni._source_index(object())
+    assert index == {"https://x/feed": sources[0].id, "legacy:email": sources[1].id}
+
+
+def test_item_args_with_extra_carries_extra_into_legacy_metadata() -> None:
+    """Como item_args, mas com extra (sender/author) no namespace legacy — usado
+    pelos handlers de email/linkedin, que item_args (camada pública) não cobre."""
+    args = ni._item_args_with_extra(
+        external_id="msg-1",
+        content="corpo",
+        url=None,
+        title="Assunto",
+        published_at="2021-01-01T00:00:00Z",
+        legacy_id="msg-1",
+        extra={"sender": "a@b.com"},
+    )
+    assert args is not None
+    assert args.metadata == {
+        "legacy": {
+            "published_at": "2021-01-01T00:00:00Z",
+            "id": "msg-1",
+            "sender": "a@b.com",
+        }
+    }
+    assert (
+        ni._item_args_with_extra(
+            external_id=None,
+            content="x",
+            url=None,
+            title=None,
+            published_at=None,
+            legacy_id=None,
+            extra={},
+        )
+        is None
+    )
