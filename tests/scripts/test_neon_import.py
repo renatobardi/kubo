@@ -1,29 +1,14 @@
 """Camada pura de mapeamento do import legado (sessão 0007) — sem I/O, sem DB.
 
 Testa SÓ a transformação legado→args-da-store com valores explícitos (não linhas
-do Neon): a fronteira tipada isola estes testes do schema real do Neon, que ainda
-não conhecemos. O SQL e os adapters `row -> tipo de borda` são a única peça adiada
-para quando o dono entregar o `pg_dump --schema-only` (checkpoint do plano 0007).
+do Neon): a fronteira tipada isola estes testes do schema real do Neon. Os handlers
+(SQL contra o schema legado) são escritos e validados na sessão de execução, contra
+o Neon vivo (ADR-0012 §VII).
 """
 
 from __future__ import annotations
 
 from scripts import neon_import as ni
-
-
-def test_feed_external_id_prefers_guid_then_link() -> None:
-    """Cadeia guid->link IDÊNTICA à do feed worker (_external_id): guid quando há,
-    senão link — para o período de sobreposição com a coleta viva DEDUPLICAR."""
-    assert ni.feed_external_id("guid-1", "https://x/a") == "guid-1"
-    assert ni.feed_external_id(None, "https://x/a") == "https://x/a"
-    assert ni.feed_external_id("", "https://x/a") == "https://x/a"
-
-
-def test_feed_external_id_none_when_no_identity() -> None:
-    """Sem guid nem link não há chave estável — None (o corpus conta skipped_invalid,
-    nunca inventa id, senão a idempotência do re-run quebra)."""
-    assert ni.feed_external_id(None, None) is None
-    assert ni.feed_external_id("", "") is None
 
 
 def test_legacy_metadata_preserves_original_timestamp_and_tags() -> None:
@@ -72,11 +57,41 @@ def test_item_args_none_without_external_id() -> None:
     )
 
 
-def test_join_transcript_concatenates_in_order_dropping_empties() -> None:
-    """Junta os segmentos JÁ ordenados por seq (ordenação/agrupamento por vídeo é do
-    I/O em streaming); descarta vazios/whitespace e une por espaço único."""
-    assert ni.join_transcript(["Olá", "  ", "mundo", "", " tudo bem "]) == "Olá mundo tudo bem"
-    assert ni.join_transcript([]) == ""
+def test_legacy_metadata_extra_carries_corpus_specifics() -> None:
+    """`extra` leva o que é específico do corpus (ex.: sender de email) pro namespace
+    legacy; valores None em extra são ignorados (não poluem o metadata)."""
+    md = ni.legacy_metadata(
+        published_at=None, tags=[], legacy_id="m-1", extra={"sender": "a@b.com", "cc": None}
+    )
+    assert md == {"legacy": {"id": "m-1", "sender": "a@b.com"}}
+
+
+def test_pick_content_returns_first_nonempty_in_priority_order() -> None:
+    """Prioridade transcript > corpo > "" (ADR-0012 §VII): o primeiro não-vazio vence;
+    whitespace conta como vazio; nada preenchido -> "" (item entra como âncora)."""
+    assert ni.pick_content("transcrição", "corpo") == "transcrição"
+    assert ni.pick_content(None, "corpo") == "corpo"
+    assert ni.pick_content("   ", "", "excerpt") == "excerpt"
+    assert ni.pick_content(None, "", "  ") == ""
+
+
+def test_claims_from_structured_extracts_claim_texts() -> None:
+    """structured.claims[].text -> claims; evidence/ts_start são perda consciente.
+    Robusto a lixo (conteúdo legado hostil): não-dict, sem claims, ou claim malformado
+    viram lista vazia / são ignorados, nunca explodem."""
+    structured = {
+        "claims": [
+            {"text": "fato 1", "evidence": "cit", "ts_start": 10},
+            {"text": "  fato 2  ", "evidence": ""},
+            {"text": "", "evidence": "vazio ignorado"},
+            {"evidence": "sem text"},
+            "não é dict",
+        ]
+    }
+    assert ni.claims_from_structured(structured) == ["fato 1", "  fato 2  "]
+    assert ni.claims_from_structured(None) == []
+    assert ni.claims_from_structured({"claims": "não é lista"}) == []
+    assert ni.claims_from_structured({}) == []
 
 
 def test_distilled_args_requires_summary() -> None:
@@ -122,10 +137,12 @@ def test_recon_report_accounts_every_source_row() -> None:
     Uma linha a menos (buraco) marca DISCREPÂNCIA no render (nada some em silêncio)."""
     r = ni.ReconReport(corpus="videos", source_count=3)
     r.record_imported()
-    r.record_preexisting()
+    r.record_imported(empty=True)  # item sem texto: sub-contagem de imported, não 4ª categoria
     r.record_skipped("vid-x", "sem external_id")
-    assert r.accounted == 3 and r.reconciled is True
+    assert r.accounted == 3 and r.reconciled is True  # a soma continua fechando
+    assert r.imported == 2 and r.sem_conteudo == 1
     assert "RECONCILIADO" in r.render()
+    assert "sem_conteudo=1" in r.render()
     assert "vid-x: sem external_id" in r.render()
 
 

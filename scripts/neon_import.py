@@ -4,7 +4,7 @@
 Script one-off, NÃO worker sob contrato (D19 emendada): as garantias vêm da store
 existente — idempotência por record ID determinístico, proveniência via
 start_run/finish_run + collected_by. Precedente: scripts/embedding_smoke.py (fora
-de kubo/). Roda um corpus por invocação (--corpus), na ordem sources -> items ->
+de kubo/). Roda um corpus por invocação (--corpus), na ordem sources -> itens ->
 distillations (derived_from é ENFORCED). Neon estritamente read-only.
 
 Duas camadas, deliberadamente separadas (o plano exige "funções puras testadas,
@@ -14,9 +14,11 @@ casca de I/O fina"):
      valores legados -> args da store. Recebe valores explícitos, nunca uma linha do
      Neon — assim os testes independem do schema real do Neon.
 
-  2. Camada de I/O (adiada até o `pg_dump --schema-only` do dono chegar no
-     checkpoint): named cursor do psycopg em streaming, adapters `row -> valores`,
-     contadores de reconciliação. As query strings SQL são a única peça em aberto.
+  2. Camada de I/O (handlers): o schema real do Neon é conhecido (ADR-0012 §VII),
+     mas o SQL só é EXECUTÁVEL contra o Neon vivo. Handlers são escritos + validados
+     na sessão de EXECUÇÃO (gated no NEON_DATABASE_URL do servidor + backup/pg_dump),
+     onde os poucos joins residuais (news->source, chave de join do transcript) se
+     confirmam contra dado real numa passada só, em vez de chutados agora.
 
 Uso (conexão SÓ por env, invariante 8; o agente nunca lê o valor):
     NEON_DATABASE_URL=... uv run --group import python scripts/neon_import.py --corpus <nome>
@@ -32,16 +34,21 @@ from typing import Any
 
 from kubo.errors import ConfigError
 
-_SEGMENT_SEP = " "  # segmentos de transcrição rejuntam com um espaço
-
 # Ordem OBRIGATÓRIA entre invocações (derived_from é ENFORCED no schema): sources
 # antes de qualquer item, distillations por último — uma distillation apontando para
-# item inexistente falha (a órfã vira skipped_invalid contada, não crash).
-_CORPUS_ORDER = ("sources", "items", "videos", "podcasts", "emails", "distillations")
+# item inexistente falha (a órfã vira skipped_invalid contada, não crash). Corpora
+# que ancoram destilados entram todos (ADR-0012 §X): cortá-los orfanaria destilados.
+_CORPUS_ORDER = ("sources", "news", "videos", "podcasts", "emails", "linkedin", "distillations")
 
-# named cursor lê em blocos deste tamanho — NUNCA fetchall dos ~790k segments de
-# transcrição (7.1.3). O valor é ajustável no checkpoint conforme o payload real.
+# Cursor server-side lê em blocos deste tamanho (segurança de memória nas tabelas de
+# conteúdo). O texto da transcrição vem pronto na coluna transcripts.transcript — não
+# há concat dos 816k transcript_segments (ADR-0012 §II).
 _NEON_ITERSIZE = 2000
+
+# Sources sintéticas para corpora sem cadastro de origem (ADR-0012 §VII): canonical
+# byte-estável (é a chave do record ID). O `sender`/origem real vai para o metadata.
+_SOURCE_EMAIL_CANONICAL = "legacy:email"
+_SOURCE_LINKEDIN_CANONICAL = "legacy:linkedin"
 
 
 @dataclass(frozen=True)
@@ -63,34 +70,21 @@ class DistilledArgs:
     claims: list[str]
 
 
-def feed_external_id(guid: str | None, link: str | None) -> str | None:
-    """Cadeia de identidade de item de feed — guid, senão link.
-
-    Reproduz o PREFIXO da cadeia do feed worker (`_external_id`: id -> link) — não a
-    cadeia inteira. O worker tem mais 2 degraus (sha256 de title\\x1fpublished, depois
-    sha256 do content) que NÃO são reproduzidos de propósito: hasheiam strings brutas
-    do feedparser que não são reconstituíveis byte a byte das colunas do Neon, então
-    reproduzi-los criaria falsa confiança de dedup. Onde guid/link batem, o item
-    legado dedup com a coleta viva; sem guid nem link -> None (o corpus conta
-    skipped_invalid; nunca inventa id, senão a idempotência do re-run quebra). Se
-    essa contagem de rejeitados for material na execução, a decisão volta ao dono no
-    checkpoint (ADR-0012 §VII)."""
-    for candidate in (guid, link):
-        if candidate:
-            return str(candidate)
-    return None
-
-
 def legacy_metadata(
-    *, published_at: str | None, tags: Sequence[str], legacy_id: str | None = None
+    *,
+    published_at: str | None,
+    tags: Sequence[str],
+    legacy_id: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preserva no metadata o que os campos READONLY do schema descartariam.
 
     `item.collected_at` é READONLY e recebe a data do IMPORT — o timestamp ORIGINAL
     e as tags iriam a lugar nenhum. Vão para o namespace `legacy` de `item.metadata`
-    (option<object> FLEXIBLE), custo zero. A MARCA de legado em si é proveniência
-    (produced_by/collected_by -> run com worker='neon_import'), não um campo: o
-    metadata só carrega o que o schema perderia."""
+    (option<object> FLEXIBLE), custo zero. `extra` carrega o que é específico do
+    corpus (ex.: `sender` de email — a origem real, já que emails penduram numa
+    source sintética, ADR-0012 §VII). A MARCA de legado em si é proveniência
+    (produced_by/collected_by -> run com worker='neon_import'), não um campo."""
     legacy: dict[str, Any] = {}
     if published_at:
         legacy["published_at"] = published_at
@@ -98,6 +92,8 @@ def legacy_metadata(
         legacy["tags"] = list(tags)
     if legacy_id:
         legacy["id"] = legacy_id
+    if extra:
+        legacy.update({k: v for k, v in extra.items() if v is not None})
     return {"legacy": legacy} if legacy else {}
 
 
@@ -127,15 +123,39 @@ def item_args(
     )
 
 
-def join_transcript(segments: Sequence[str]) -> str:
-    """Concatena os segmentos de UMA transcrição já ordenados por seq.
+def pick_content(*candidates: str | None) -> str:
+    """Primeiro conteúdo não-vazio, na ordem de prioridade dada; senão "".
 
-    A ordenação (ORDER BY video_id, seq) e o agrupamento por vídeo são do I/O em
-    streaming (named cursor — nunca fetchall dos 790k segments); esta função só
-    junta. Segmentos vazios/whitespace são descartados; o resto é unido por espaço
-    único. É texto puro — quem persiste (upsert_item) usa bind param (conteúdo
-    legado é hostil)."""
-    return _SEGMENT_SEP.join(s.strip() for s in segments if s and s.strip()).strip()
+    Prioridade do import (ADR-0012 §VII): `transcripts.transcript` (o texto que foi
+    de fato destilado) antes do corpo/descrição/excerpt da tabela-tipo. Item sem
+    NENHUM texto entra com content="" (é a âncora do derived_from de um destilado
+    real; pulá-lo orfanaria o destilado) — o I/O conta isso como sub-categoria
+    `sem_conteudo` dentro de imported."""
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return candidate
+    return ""
+
+
+def claims_from_structured(structured: Any) -> list[str]:
+    """Extrai `distilled.claims` do jsonb `distillations.structured`.
+
+    `structured.claims` é uma lista de objetos `{text, evidence, ts_start}`
+    (verificado nas amostras); só o `text` cabe em `distilled.claims`
+    (array<string>) — evidence/ts_start são perda consciente (ADR-0012 §XI). Robusto
+    a formatos inesperados (conteúdo legado é hostil): o que não for str não-vazia é
+    ignorado, nunca explode."""
+    if not isinstance(structured, dict):
+        return []
+    raw = structured.get("claims")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for claim in raw:
+        text = claim.get("text") if isinstance(claim, dict) else None
+        if isinstance(text, str) and text.strip():
+            out.append(text)
+    return out
 
 
 def distilled_args(
@@ -228,11 +248,18 @@ class ReconReport:
     corpus: str
     source_count: int = 0
     imported: int = 0
+    sem_conteudo: int = 0
     preexisting: int = 0
     skipped_invalid: list[tuple[str, str]] = field(default_factory=list)
 
-    def record_imported(self) -> None:
+    def record_imported(self, *, empty: bool = False) -> None:
+        """Conta um item/registro gravado. `empty=True` marca item importado sem
+        texto (content="") — SUB-contagem de imported (ADR-0012 §VIII), não uma 4ª
+        categoria disjunta: entra em imported e também em sem_conteudo, para a soma
+        da reconciliação continuar fechando."""
         self.imported += 1
+        if empty:
+            self.sem_conteudo += 1
 
     def record_preexisting(self) -> None:
         """Linha que resolveu a um registro já presente (re-run idempotente ou
@@ -258,8 +285,8 @@ class ReconReport:
         """Bloco de texto para as notas da sessão (commitado — plano 0007 §7.2.1)."""
         head = (
             f"corpus={self.corpus}  origem(Neon)={self.source_count}  "
-            f"importados={self.imported}  já-presentes={self.preexisting}  "
-            f"rejeitados={len(self.skipped_invalid)}"
+            f"importados={self.imported} (sem_conteudo={self.sem_conteudo})  "
+            f"já-presentes={self.preexisting}  rejeitados={len(self.skipped_invalid)}"
         )
         status = (
             "RECONCILIADO ✓"
@@ -273,22 +300,25 @@ class ReconReport:
         return "\n".join(lines)
 
 
-# ── Camada de I/O ──────────────────────────────────────────────────────────────
-# A MECÂNICA está aqui; a ÚNICA peça adiada até o checkpoint 0007 são, por corpus,
-# (a) a query SQL contra o schema legado e (b) o adapter `row -> tipo de borda`.
-# Cada handler, quando implementado, deve:
+# ── Camada de I/O (handlers) ───────────────────────────────────────────────────
+# O modelo legado é conhecido (ADR-0012 §VII); os handlers são escritos e validados
+# na sessão de EXECUÇÃO, contra o Neon vivo (a única forma de validar o SQL). Cada
+# handler deve:
 #   1. abrir um run (knowledge.start_run(db, worker="neon_import")) e fechá-lo com
-#      finish_run(stats=report contadores) / fail_run em exceção;
-#   2. ler o Neon por NAMED CURSOR (server-side) com itersize=_NEON_ITERSIZE e
-#      ORDER BY estável — NUNCA fetchall (7.1.3); transcripts: ORDER BY video_id, seq,
-#      agrupando por vídeo em streaming e concatenando com join_transcript;
-#   3. mapear cada linha pela camada pura acima (item_args/distilled_args/...),
-#      contabilizando em ReconReport (imported / preexisting / skipped_invalid);
-#   4. gravar SÓ pela store (upsert_source/upsert_item/insert_distilled), passando o
-#      run para a proveniência; distillations: pular item que já tem distilled_for;
-#   5. cap de sanidade = reject+log (record_skipped), NUNCA truncar conteúdo (7.1.6).
-# Armadilhas Neon (7.1.7): retry na 1ª conexão (cold-start do autosuspend); evitar
-# transação gigante por corpus (statement timeout); DSN NUNCA logada.
+#      finish_run(stats=contadores do report) / fail_run em exceção;
+#   2. ler o Neon por cursor SERVER-SIDE (itersize=_NEON_ITERSIZE), ORDER BY estável,
+#      NUNCA fetchall; o texto vem pronto de transcripts.transcript (sem concat de
+#      transcript_segments — ADR-0012 §II);
+#   3. montar o conteúdo por prioridade (pick_content: transcript > corpo > ""),
+#      mapear pela camada pura (item_args/distilled_args/claims_from_structured);
+#   4. detectar preexisting por POINT-READ do record ID determinístico antes do
+#      upsert (ADR-0012 §VIII); gravar SÓ pela store, passando o run; distillations:
+#      resolver derived_from por dict em memória (SELECT external_id,id FROM item) e
+#      pular item que já tem distilled_for;
+#   5. contabilizar tudo em ReconReport (imported[/sem_conteudo] / preexisting /
+#      skipped_invalid); cap 1 MiB = reject+log, NUNCA truncar (ADR-0012 §VI).
+# Armadilhas Neon: retry na 1ª conexão (cold-start do autosuspend); evitar transação
+# gigante por corpus (statement timeout); DSN NUNCA logada.
 
 
 def _neon_dsn() -> str:
@@ -305,13 +335,15 @@ def _neon_dsn() -> str:
 
 
 def _handler_pending(corpus: str) -> int:
-    """Handler ainda não implementado: o SQL legado e o adapter row->tipo são a peça
-    adiada. NÃO inventar SQL contra um schema desconhecido (decisão do advisor) — o
-    dono entrega `pg_dump --schema-only` + amostras LIMIT 5 no checkpoint e isto é
-    preenchido então, validado contra o Neon vivo."""
+    """Handler escrito e validado na sessão de EXECUÇÃO, contra o Neon vivo.
+
+    O modelo é conhecido (ADR-0012 §VII), mas o SQL só é validável executando: os
+    joins residuais (news->source; chave de join do transcript por tipo) se
+    confirmam com dado real numa passada só, em vez de chutados agora sem poder
+    rodar. Requer NEON_DATABASE_URL no servidor + backup/pg_dump prontos."""
     raise NotImplementedError(
-        f"corpus {corpus!r}: SQL + adapter pendentes do schema do Neon (checkpoint da "
-        "sessão 0007). Ver docs/sessions/0007-neon-import.md e docs/adr/0012-*."
+        f"corpus {corpus!r}: handler escrito na execução contra o Neon vivo "
+        "(ADR-0012 §VII; docs/sessions/0007-neon-import.md)."
     )
 
 
