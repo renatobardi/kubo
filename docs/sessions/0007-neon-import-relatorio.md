@@ -72,8 +72,9 @@ acervo provados.**
 
 ## Checklist de desligamento do Neon (tarefas do dono)
 
-1. [ ] **Relatório de reconciliação aceito** pelo dono (este documento).
+1. [x] **Relatório de reconciliação aceito** pelo dono — 2026-07-08.
 2. [x] **pg_dump completo do Neon** feito e guardado (44 MB, `~/Backups/neon/`, 2026-07-06).
 3. [x] **Restore do backup Kubo com acervo** testado (§7.2.4 acima).
-4. [ ] Só então **desativar o Neon**. 2ª rodada de cortes (se houver) roda do pg_dump
-   restaurado localmente (rota de fallback, ADR-0012 §IX).
+4. [ ] **Desativar o Neon** — os 3 pré-requisitos acima estão ✅; liberado para o dono
+   desativar. 2ª rodada de cortes (se houver) roda do pg_dump restaurado localmente
+   (rota de fallback, ADR-0012 §IX).
