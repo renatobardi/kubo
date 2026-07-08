@@ -6,6 +6,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Kubo</title>
+<link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
 <link rel="stylesheet" href="../../styles.css" />
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -39,9 +40,8 @@ function SignIn({ onSignIn }) {
   return (
     <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', background: 'color-mix(in oklab, var(--muted) 40%, transparent)' }}>
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <header style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 32 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 'var(--radius-lg)', background: 'var(--sidebar-primary)', color: 'var(--sidebar-primary-foreground)', fontFamily: "'Noto Sans JP', var(--font-sans)", fontWeight: 600, fontSize: 21 }}>智</div>
-          <span style={{ fontFamily: 'var(--font-heading)', fontSize: 24, fontWeight: 600, letterSpacing: '-0.025em', color: 'var(--foreground)' }}>Kubo</span>
+        <header style={{ marginBottom: 32 }}>
+          <K.Logo variant="full" size={30} tagline="" />
         </header>
         <div style={{ width: '100%', maxWidth: 384 }}>
           <LoginCard onDone={onSignIn} />
@@ -127,10 +127,10 @@ function LoginCard({ onDone }) {
 }
 
 const GROUP_OF = {
-  Conhecimento: 'Conhecimento', Fontes: 'Conhecimento',
-  Flows: 'Trabalho', 'Execuções': 'Trabalho',
+  Conhecimento: 'Conhecimento', Destilados: 'Conhecimento', Entidades: 'Conhecimento', Fontes: 'Conhecimento',
+  Fluxos: 'Trabalho', 'Execuções': 'Trabalho',
   Destinos: 'Distribuição', Envios: 'Distribuição',
-  'Integrações': 'Catálogos', Personas: 'Catálogos', Templates: 'Catálogos',
+  'Integrações': 'Catálogos', Atores: 'Catálogos', Modelos: 'Catálogos',
 };
 
 function SkeletonBlock({ w = '100%', h = 16, r = 'var(--radius-md)' }) {
@@ -162,8 +162,9 @@ function LoginModal({ onClose, onDone }) {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'color-mix(in oklab, black 45%, transparent)' }} />
-      <div style={{ position: 'relative', width: '100%', maxWidth: 384 }}>
-        <LoginCard onDone={onDone} />
+      <div style={{ position: 'relative', width: '100%', maxWidth: 384, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+        <K.Logo variant="full" size={26} tagline="" />
+        <div style={{ width: '100%' }}><LoginCard onDone={onDone} /></div>
       </div>
     </div>
   );
@@ -173,19 +174,20 @@ function LoginModal({ onClose, onDone }) {
 function CommandPalette({ onClose, onNavigate, onToggleTheme }) {
   const { Icon } = K;
   const commands = [
-    { group: 'Ir para', icon: 'house', label: 'Home', run: () => onNavigate('Home') },
-    { group: 'Ir para', icon: 'book-open', label: 'Conhecimento', run: () => onNavigate('Conhecimento') },
+    { group: 'Ir para', icon: 'house', label: 'Painel', run: () => onNavigate('Painel') },
+    { group: 'Ir para', icon: 'book-open', label: 'Destilados', run: () => onNavigate('Destilados') },
+    { group: 'Ir para', icon: 'network', label: 'Entidades', run: () => onNavigate('Entidades') },
     { group: 'Ir para', icon: 'rss', label: 'Fontes', run: () => onNavigate('Fontes') },
-    { group: 'Ir para', icon: 'workflow', label: 'Flows', run: () => onNavigate('Flows') },
+    { group: 'Ir para', icon: 'workflow', label: 'Fluxos', run: () => onNavigate('Fluxos') },
     { group: 'Ir para', icon: 'activity', label: 'Execuções', run: () => onNavigate('Execuções') },
     { group: 'Ir para', icon: 'send', label: 'Destinos', run: () => onNavigate('Destinos') },
     { group: 'Ir para', icon: 'mail', label: 'Envios', run: () => onNavigate('Envios') },
     { group: 'Ir para', icon: 'blocks', label: 'Integrações', run: () => onNavigate('Integrações') },
-    { group: 'Ir para', icon: 'bot', label: 'Personas', run: () => onNavigate('Personas') },
-    { group: 'Ir para', icon: 'workflow', label: 'Templates', run: () => onNavigate('Templates') },
+    { group: 'Ir para', icon: 'bot', label: 'Atores', run: () => onNavigate('Atores') },
+    { group: 'Ir para', icon: 'workflow', label: 'Modelos', run: () => onNavigate('Modelos') },
     { group: 'Ir para', icon: 'settings', label: 'Configurações', run: () => onNavigate('Configurações') },
-    { group: 'Ações', icon: 'plus', label: 'Novo flow', run: () => onNavigate('Flows') },
-    { group: 'Ações', icon: 'search', label: 'Buscar destilados', run: () => onNavigate('Conhecimento') },
+    { group: 'Ações', icon: 'plus', label: 'Novo fluxo', run: () => onNavigate('Fluxos') },
+    { group: 'Ações', icon: 'search', label: 'Buscar destilados', run: () => onNavigate('Destilados') },
     { group: 'Ações', icon: 'moon', label: 'Alternar tema', run: () => onToggleTheme() },
   ];
   const [q, setQ] = useState('');
@@ -238,7 +240,7 @@ function App() {
   const [authed, setAuthed] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showCmd, setShowCmd] = useState(false);
-  const [page, setPage] = useState('Home');
+  const [page, setPage] = useState('Painel');
   const [dark, setDark] = useState(false);
 
   React.useEffect(() => {
@@ -257,19 +259,19 @@ function App() {
   }, [authed]);
 
   const group = GROUP_OF[page];
-  const bc = page === 'Home' ? [{ label: 'Home' }]
+  const bc = page === 'Painel' ? [{ label: 'Painel' }]
     : group && group !== page ? [{ label: group }, { label: page }]
     : [{ label: page }];
 
   let screen;
-  if (page === 'Home') screen = <HomeScreen onNavigate={setPage} />;
-  else if (page === 'Conhecimento') screen = <ConhecimentoScreen />;
+  if (page === 'Painel') screen = <HomeScreen onNavigate={setPage} />;
+  else if (page === 'Conhecimento' || page === 'Destilados' || page === 'Entidades') screen = <ConhecimentoScreen initialTab={page === 'Entidades' ? 'Entidades' : 'Destilados'} />;
   else if (page === 'Fontes') screen = <FontesScreen />;
-  else if (page === 'Flows') screen = <FlowsScreen />;
+  else if (page === 'Fluxos') screen = <FlowsScreen />;
   else if (page === 'Execuções') screen = <ExecucoesScreen />;
   else if (page === 'Destinos') screen = <DestinosScreen />;
   else if (page === 'Envios') screen = <EnviosScreen />;
-  else if (page === 'Integrações' || page === 'Personas' || page === 'Templates') screen = <CatalogosScreen section={page} />;
+  else if (page === 'Integrações' || page === 'Atores' || page === 'Modelos') screen = <CatalogosScreen section={page} />;
   else if (page === 'Configurações') screen = <ConfiguracoesScreen dark={dark} onToggleDark={setDark} />;
   else screen = <HomeScreen onNavigate={setPage} />;
 

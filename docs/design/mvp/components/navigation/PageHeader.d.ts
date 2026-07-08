@@ -1,5 +1,5 @@
 /**
- * Unified page header — Noto Serif h1 + muted description + right actions + separator.
+ * Unified page header — Inter h1 + muted description + right actions + separator.
  * @startingPoint section="Navigation" subtitle="Page title block" viewport="700x120"
  */
 export interface PageHeaderProps {

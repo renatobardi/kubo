@@ -8,7 +8,7 @@ export interface DialogProps {
   onOpenChange?: (open: boolean) => void;
   /** Element that opens the dialog when clicked */
   trigger?: React.ReactNode;
-  /** Noto Serif 18px title */
+  /** Inter 18px title */
   title?: string;
   description?: string;
   /** Footer actions row (right-aligned) */

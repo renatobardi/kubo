@@ -1,5 +1,5 @@
 /**
- * Chat composer — rounded-2xl card, attach button, auto-growing textarea, amber send button.
+ * Chat composer — rounded-2xl card, attach button, auto-growing textarea, near-black mono send button.
  * @startingPoint section="Kubo Patterns" subtitle="Chat composer" viewport="700x140"
  */
 export interface ChatInputProps {

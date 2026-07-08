@@ -1,13 +1,10 @@
 /* Kubo typography tokens.
-   Signature: Noto Serif for ALL headings/titles, Inter for body + UI.
+   Inter everywhere — body, UI, and headings (ChatGPT-clean).
    The whole app runs at text-sm (14px). */
 
 :root {
   --font-sans: 'Inter Variable', 'Inter', sans-serif;
-  /* Direction B (ChatGPT-clean): headings use Inter too. The serif signature
-     (Noto Serif) is kept available below for a quick revert to Direction A. */
   --font-heading: 'Inter Variable', 'Inter', sans-serif;
-  --font-serif: 'Noto Serif Variable', 'Noto Serif', serif;
   --font-jp: 'Noto Sans JP', sans-serif;
 
   /* Tailwind scale used by the app */

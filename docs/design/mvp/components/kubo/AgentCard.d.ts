@@ -1,5 +1,5 @@
 /**
- * Clickable agent card — avatar + name + description, hover lifts border to amber.
+ * Clickable agent card — avatar + name + description, hover lifts border to primary.
  * @startingPoint section="Kubo Patterns" subtitle="Agent picker card" viewport="360x160"
  */
 export interface AgentCardProps {

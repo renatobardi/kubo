@@ -5,18 +5,20 @@
 
 ---
 
-## 0. Identidade canônica — Direção B (decisão do dono, 2026-07-04)
+## 0. Identidade canônica — Direção B v2 (decisão do dono, 2026-07-04; revisada 2026-07-06)
 
 > **Esta seção prevalece.** O restante do documento é a extração crua do Valmis
-> (**Direção A**, rejeitada); mantido abaixo apenas como referência/opção de revert.
-> Onde a Direção B diverge, vale a Direção B.
+> (**Direção A**, rejeitada); mantido abaixo apenas como referência histórica.
+> Onde a Direção B diverge, vale a Direção B. A revisão v2 (export do dono em
+> `docs/design/mvp/`) tornou a Direção B definitiva: **não há mais opção de
+> revert** para elementos da Direção A.
 
-| Item | Direção A (Valmis, rejeitada) | **Direção B (canônica)** |
+| Item | Direção A (Valmis, rejeitada) | **Direção B v2 (canônica)** |
 |---|---|---|
 | Primária | Âmbar queimado `oklch(0.555 0.163 49)` | **Preto mono** `oklch(0.216 0.006 56)` (dark inverte p/ quase-branco `0.92`) |
-| Títulos | Noto Serif (`--font-heading`) | **Inter em tudo** (Noto Serif preservada em `--font-serif` só como opção de revert) |
-| Identidade de persona | Emoji de lista preset | **Glifos Lucide monocromáticos** em círculo muted (`PersonaGlyph`); a lista de emojis permanece como capability do `AgentAvatar`, sem uso no produto |
-| Logo | — | **Kanji 智 em tile** + "Kubo" em Inter; alternativas registradas: 匠 / 創 / 結 / 織 / 巧 / 房 |
+| Títulos | Noto Serif (`--font-heading`) | **Inter em tudo**, self-hosted (`InterVariable.woff2`, sem Google Fonts). Noto Serif **eliminada na v2** — sem opção de revert |
+| Identidade de persona | Emoji de lista preset | **Glifos Lucide monocromáticos** em círculo muted (`PersonaGlyph`). Emoji **removido por completo na v2** (`agent-emojis` deletado do export) — nunca emoji, em nenhum contexto |
+| Logo | — | **Sakura de linha** (5 pétalas, traço mono; componente `Sakura`, variantes `mark`/`full`/`glyph`). Light: pétalas `--sakura-petal #f4c9d4` + traço near-black; dark: só contorno rosa, sem preenchimento. **Única cor fora da paleta stone, escopada ao logo** — não vaza para UI. *v2 substitui o kanji 智 da v1* |
 | Tagline | — | "The art of getting things done" (raiz: 段取り *dandori*) |
 
 **Permanece da identidade original (inegociável nas duas direções):** stone quente,
@@ -24,9 +26,15 @@ botões-pílula com afundamento de 1px, cards planos com `ring-1 ring-foreground
 (sem shadow/border), destructive sempre *tinted*, charts monocromáticos, densidade
 `text-sm`, bordas translúcidas no dark.
 
-Nota de consistência: o README interno do export se contradiz ("emoji everywhere"
-vs. "nunca emoji"). **Vale o glifo Lucide** — emoji não é identidade de persona na
-Direção B.
+**Idioma (regra do dono, 2026-07-06):** PT-BR é **só apresentação** — labels de
+navegação e textos visíveis na UI. Código, variáveis, rotas, identificadores,
+nomes de componente e schema: **inglês mandatório** (coerente com D16/CLAUDE.md).
+Ex.: label "Destilados" → rota `/distilled`, tabela `distilled`.
+
+Notas v2: a inconsistência interna do export v1 ("emoji everywhere" vs. "nunca
+emoji") foi **resolvida** — "nunca emoji" vale em todos os documentos. Faxina
+pendente no export: `fonts.css` ainda importa Noto Sans JP do Google (resíduo do
+logo kanji v1) — remover, kanji não existe mais na identidade.
 
 ---
 
