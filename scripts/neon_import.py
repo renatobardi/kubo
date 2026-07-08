@@ -29,6 +29,7 @@ import argparse
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -611,6 +612,22 @@ def _report_stats(report: ReconReport) -> dict[str, Any]:
     }
 
 
+@contextmanager
+def _run_context(db: Any, report: ReconReport) -> Iterator[RecordID]:
+    """Envolve cada handler de corpus: abre/fecha o run, redige o erro antes de
+    persistir (invariante 8) e imprime o relatório no fim. Centraliza o boilerplate
+    idêntico dos 7 handlers — o corpo do `with` só faz a lógica de linhas do corpus."""
+    run = knowledge.start_run(db, worker="neon_import")
+    try:
+        yield run
+        knowledge.finish_run(db, run, stats=_report_stats(report))
+    except Exception as exc:
+        knowledge.fail_run(db, run, error=_safe_error(exc))
+        raise
+    finally:
+        print(report.render())
+
+
 def _write_source(
     db: Any, *, report: ReconReport, known: set[str], kind: str, canonical: str, title: str | None
 ) -> None:
@@ -794,19 +811,13 @@ def _import_sources(neon: Any, db: Any, report: ReconReport) -> None:
     partir de feed_sources, podcast_feeds, target_channels, playlists + as
     sintéticas email/linkedin/youtube. Roda ANTES de qualquer item (§X: sources ->
     itens -> distillations)."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report):
         known = {s.canonical for s in knowledge.list_sources(db)}
         _import_feed_sources(neon, db, report, known)
         _import_podcast_feeds(neon, db, report, known)
         _import_target_channels(neon, db, report, known)
         _import_playlists(neon, db, report, known)
         _import_synthetic_sources(db, report, known)
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 _NEWS_QUERY = (
@@ -855,8 +866,7 @@ def _import_news(neon: Any, db: Any, report: ReconReport) -> None:
     """news_items -> item (ADR-0012 §VII): source resolvida pelo mapa manual do
     dono com fallback ao endpoint do feed_sources homônimo; content por
     prioridade transcript(news, source_ref=url) > body > excerpt."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         transcripts = _transcript_map(neon, "news")
         feed_by_name = _feed_sources_by_name(neon)
         existing = set(knowledge.item_index(db).keys())
@@ -866,11 +876,6 @@ def _import_news(neon: Any, db: Any, report: ReconReport) -> None:
             _import_news_row(
                 row, db, report, run, transcripts, feed_by_name, source_index, existing
             )
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 def _import_video_row(
@@ -935,8 +940,7 @@ def _import_videos(neon: Any, db: Any, report: ReconReport) -> None:
     por transcripts, nunca por channel_videos/playlist_videos — senão orfanaria
     destilados de vídeos sem linha de cadastro). LEFT JOIN por youtube_video_id
     para título/data/url; canal > playlist > source sintética `legacy:youtube`."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         source_index = _source_index(db)
         legacy_source = _resolve_source(source_index, _SOURCE_YOUTUBE_CANONICAL)
         channels = _channel_canonicals(neon)
@@ -947,11 +951,6 @@ def _import_videos(neon: Any, db: Any, report: ReconReport) -> None:
             _import_video_row(
                 row, db, report, run, channels, playlists, source_index, legacy_source, existing
             )
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 _PODCASTS_QUERY = (
@@ -1000,8 +999,7 @@ def _import_podcast_row(
 
 def _import_podcasts(neon: Any, db: Any, report: ReconReport) -> None:
     """podcast_episodes -> item; source = podcast_feeds via feed_id."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         feeds = _podcast_feed_map(neon)
         transcripts = _transcript_map(neon, "podcast")
         existing = set(knowledge.item_index(db).keys())
@@ -1009,11 +1007,6 @@ def _import_podcasts(neon: Any, db: Any, report: ReconReport) -> None:
         for row in _iter_rows(neon, "ni_podcast_episodes", _PODCASTS_QUERY):
             report.source_count += 1
             _import_podcast_row(row, db, report, run, feeds, transcripts, source_index, existing)
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 _EMAILS_QUERY = "SELECT id, message_id, sender, subject, body, received_at FROM emails ORDER BY id"
@@ -1053,19 +1046,13 @@ def _import_email_row(
 def _import_emails(neon: Any, db: Any, report: ReconReport) -> None:
     """emails -> item; source sintética `legacy:email`; sender preservado no
     metadata (ADR-0012 §VII: parsing de remetente em sources é scope creep)."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         source = _resolve_source(_source_index(db), _SOURCE_EMAIL_CANONICAL)
         transcripts = _transcript_map(neon, "email")
         existing = set(knowledge.item_index(db).keys())
         for row in _iter_rows(neon, "ni_emails", _EMAILS_QUERY):
             report.source_count += 1
             _import_email_row(row, db, report, run, source, transcripts, existing)
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 _LINKEDIN_QUERY = "SELECT id, url, author, body, created_at FROM linkedin_posts ORDER BY id"
@@ -1105,19 +1092,13 @@ def _import_linkedin_row(
 def _import_linkedin(neon: Any, db: Any, report: ReconReport) -> None:
     """linkedin_posts -> item; source sintética `legacy:linkedin`; content por
     prioridade transcript(linkedin, source_ref=url) > body; author no metadata."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         source = _resolve_source(_source_index(db), _SOURCE_LINKEDIN_CANONICAL)
         transcripts = _transcript_map(neon, "linkedin")
         existing = set(knowledge.item_index(db).keys())
         for row in _iter_rows(neon, "ni_linkedin_posts", _LINKEDIN_QUERY):
             report.source_count += 1
             _import_linkedin_row(row, db, report, run, source, transcripts, existing)
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 _DISTILLATIONS_QUERY = "SELECT id, source_key, content, structured FROM distillations ORDER BY id"
@@ -1157,17 +1138,11 @@ def _import_distillations(neon: Any, db: Any, report: ReconReport) -> None:
     não resolve a um item vira órfã (skipped); item já destilado (distilled_for
     não vazio) marca preexisting (idempotência do re-run). Roda POR ÚLTIMO —
     derived_from é ENFORCED (§X)."""
-    run = knowledge.start_run(db, worker="neon_import")
-    try:
+    with _run_context(db, report) as run:
         item_by_external_id = knowledge.item_index(db)
         for row in _iter_rows(neon, "ni_distillations", _DISTILLATIONS_QUERY):
             report.source_count += 1
             _import_distillation_row(row, db, report, run, item_by_external_id)
-        knowledge.finish_run(db, run, stats=_report_stats(report))
-    except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
-        raise
-    print(report.render())
 
 
 def _feed_map(neon: Any, db: Any) -> None:
