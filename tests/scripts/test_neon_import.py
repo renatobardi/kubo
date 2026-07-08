@@ -254,7 +254,7 @@ def test_iso_normalizes_datetime_passes_through_none_and_str() -> None:
 def test_neon_dsn_requires_sslmode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neon exige SSL — DSN sem `sslmode=` é erro do operador, pego cedo e sem
     detalhe da DSN na mensagem (invariante 8)."""
-    monkeypatch.setenv(_ENV, "postgresql://user:pw@host/db")
+    monkeypatch.setenv(_ENV, "postgresql://host/db")  # sem creds: só falta o sslmode
     with pytest.raises(ConfigError):
         ni._neon_dsn()
 
@@ -265,7 +265,7 @@ def test_neon_dsn_requires_sslmode(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_safe_error_redacts_dsn_from_exception_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """`str(exc)` do psycopg pode ecoar a DSN com senha (invariante 8) — _safe_error
     redige antes de virar `run.error`/log."""
-    fake_dsn = "postgresql://user:s3cr3t@ep-fake.neon.tech/db?sslmode=require"
+    fake_dsn = "postgresql://u:pw@ep/db?sslmode=require"  # pragma: allowlist secret
     monkeypatch.setenv(_ENV, fake_dsn)
     err = ni._safe_error(RuntimeError(f"connection failed: {fake_dsn}"))
     assert fake_dsn not in err["message"]
@@ -275,7 +275,7 @@ def test_safe_error_redacts_dsn_from_exception_message(monkeypatch: pytest.Monke
 
 def test_safe_error_passes_through_message_without_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sem a DSN no texto do erro, a mensagem passa intacta (nada a redigir)."""
-    monkeypatch.setenv(_ENV, "postgresql://user:pw@host/db?sslmode=require")
+    monkeypatch.setenv(_ENV, "postgresql://host/db?sslmode=require")  # sem creds
     err = ni._safe_error(ValueError("algo não relacionado"))
     assert err == {"kind": "ValueError", "message": "algo não relacionado"}
 
