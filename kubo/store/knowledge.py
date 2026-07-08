@@ -18,9 +18,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from surrealdb import RecordID
 
 from kubo.store.transaction import run_transaction
+
+_log = structlog.get_logger(__name__)
 
 # Parte estática da busca KNN (sem interpolação — a store resolve chunk -> distilled).
 _KNN_SELECT = "SELECT id, vector::distance::knn() AS dist, ->chunk_of->distilled AS d FROM chunk"
@@ -203,6 +206,52 @@ def provenance(db: Any, distilled: RecordID) -> list[RecordID]:
         {"d": distilled},
     )
     return list(rows[0]["srcs"]) if rows else []
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    """Uma source do grafo (id + chave natural + classificação), para consumidores
+    que LISTAM ou RESOLVEM sources sem regravá-las: o import one-off (resolve a source
+    de um item por canonical) e a UI da fase 1 (lista/agrupa por kind)."""
+
+    id: RecordID
+    canonical: str
+    kind: str
+    title: str | None
+
+
+def list_sources(db: Any) -> list[SourceInfo]:
+    """Lista todas as sources (id, canonical, kind, title) numa leitura.
+
+    Porta única para 'quais sources existem' — o import resolve a source de um item
+    pelo canonical a partir daqui (sem upsert, para não mutar dado vivo) e a fase 1
+    lista por aqui; substitui SELECTs de `source` espalhados fora da store (inv. 2)."""
+    rows = db.query("SELECT id, canonical, kind, title FROM source;")
+    return [
+        SourceInfo(id=r["id"], canonical=r["canonical"], kind=r["kind"], title=r.get("title"))
+        for r in rows
+    ]
+
+
+def item_index(db: Any) -> dict[str, RecordID]:
+    """Mapa `external_id -> item` de todos os itens numa leitura.
+
+    O import resolve `derived_from` (distilled -> item pela chave natural do legado)
+    e detecta itens já presentes por aqui — sem 1 query por linha nem SELECT de `item`
+    espalhado fora da store (invariante 2). Colisão de external_id entre sources não é
+    esperada (é parte da chave natural do item) e ligaria uma destilação ao item
+    errado — então é LOGADA (warning), não descartada em silêncio; a 1ª ocorrência
+    vence (escolha determinística: a query ordena por id)."""
+    index: dict[str, RecordID] = {}
+    for r in db.query("SELECT external_id, id FROM item ORDER BY id;"):
+        ext = r.get("external_id")
+        if not ext:
+            continue
+        if ext in index:
+            _log.warning("store.item_index.external_id_collision", external_id=ext)
+            continue
+        index[ext] = r["id"]
+    return index
 
 
 def distilled_for(db: Any, item: RecordID) -> list[RecordID]:

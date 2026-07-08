@@ -2,7 +2,7 @@
 
 Operação do deploy fundacional (M5.5, ADR-0011). Ambiente: container LXC
 `kubo-test` (`10.173.117.18`) no `oute-server`, Docker aninhado, Tailscale-only.
-Acesso do Mac: `ssh kubo-test` (ProxyJump por `oracle-arm`).
+Acesso do Mac: `ssh kubo-test` (ProxyJump por `oute-server`).
 
 > **Segredos:** o `.env` de `~/kubo/.env` é criado e verificado **pelo dono**,
 > `chmod 600`. Nenhum passo aqui lê ou escreve o `.env`.
@@ -12,7 +12,7 @@ Acesso do Mac: `ssh kubo-test` (ProxyJump por `oracle-arm`).
 ## 1. Setup do container (uma vez — já feito, aqui para reprovisionar)
 
 ```bash
-# no host (oracle-arm):
+# no host (oute-server):
 lxc init ubuntu:24.04 kubo-test
 lxc config set kubo-test raw.lxc "lxc.apparmor.profile=unconfined"   # copia do vizinho
 lxc config set kubo-test limits.memory 3GiB
@@ -187,7 +187,7 @@ O dump vive no host; puxar para o Mac é responsabilidade do dono. Receita launc
   <key>Label</key><string>pro.oute.kubo-backup</string>
   <key>ProgramArguments</key><array>
     <string>/usr/bin/rsync</string><string>-az</string>
-    <string>oracle-arm:backups/kubo/</string>
+    <string>oute-server:backups/kubo/</string>
     <string>/Users/bardi/Backups/kubo/</string>
   </array>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
@@ -195,7 +195,7 @@ O dump vive no host; puxar para o Mac é responsabilidade do dono. Receita launc
 ```
 
 Ativar: `mkdir -p ~/Backups/kubo && launchctl load ~/Library/LaunchAgents/pro.oute.kubo-backup.plist`.
-(Rsync puxa via `oracle-arm`; os dumps são world-readable, o `ubuntu` os alcança.)
+(Rsync puxa via `oute-server`; os dumps são world-readable, o `ubuntu` os alcança.)
 
 ---
 
@@ -208,4 +208,4 @@ Ativar: `mkdir -p ~/Backups/kubo && launchctl load ~/Library/LaunchAgents/pro.ou
 | Logs scheduler | `docker compose logs -f kubo-scheduler` |
 | Reiniciar stack | `docker compose restart` |
 | Parar/subir | `docker compose down` / `docker compose up -d` |
-| Reboot container | `ssh oracle-arm lxc restart kubo-test` (religa tudo sozinho) |
+| Reboot container | `ssh oute-server lxc restart kubo-test` (religa tudo sozinho) |

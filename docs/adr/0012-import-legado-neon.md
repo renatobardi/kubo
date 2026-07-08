@@ -75,6 +75,15 @@ especulativa: o M6 (backfill de embeddings) precisa exatamente dessa leitura.
 Adicionado por TDD, teste de integração, validado linha a linha pela thread
 principal (é código de store).
 
+Pela MESMA razão (invariante 2: nenhuma query de banco espalhada fora da store), as
+outras leituras que o import precisa do grafo também são métodos da store, não
+`db.query` cru no script: **`list_sources(db)`** (id/canonical/kind/title — o import
+resolve a source de um item por canonical a partir daqui, sem regravá-la, e a UI da
+fase 1 lista por aqui) e **`item_index(db)`** (mapa external_id→item — resolve
+`derived_from` e detecta itens já presentes numa leitura; colisão de external_id
+entre sources é LOGADA, não descartada em silêncio — ligaria uma destilação ao item
+errado). Ambos por TDD.
+
 ### IV. Marca de legado = proveniência, não campo de schema (D19a)
 
 O schema é SCHEMAFULL e não tem campo para "isto é legado". Em vez de mudar o
@@ -118,25 +127,39 @@ congeladas) + persistência por bind param na store, como o resto do projeto —
 script NÃO usa pydantic. Sanitização anti-prompt-injection pertence ao consumo
 (destilação/leitura por agente), não ao import, que só preserva o conteúdo bruto.
 
+**Redação de segredo em erro (invariante 8, achado do security-review):** o
+`str(exc)` do psycopg pode ecoar a DSN do Neon (com senha) num erro de
+conexão/parse. Toda mensagem de erro é redigida antes de persistir em `run.error`
+(que fica no grafo, consultável) ou de ir a log/stderr: falha de conexão vira
+`ConfigError` fixo (via `from None`, sem traceback encadeado que carregue a DSN); o
+`error` do `fail_run` passa por um helper que remove a DSN do texto.
+
 ### VII. Modelo de mapeamento legado → grafo
 
 O modelo real (verificado no schema) difere do que o plano assumiu. As regras:
 
-**Sources** (grafo `source`, upsert por canonical):
-- `feed_sources` → kind=rss, canonical=`endpoint`; `podcast_feeds` → kind=podcast,
-  canonical=`feed_url`; `target_channels` → kind=youtube; `playlists` →
-  kind=youtube-playlist.
-- `emails` e `linkedin_posts` não têm fk para uma source de cadastro: cada um
-  pendura numa **source sintética única** de canonical estável — `legacy:email` e
-  `legacy:linkedin` (kind=email/linkedin). O cadastro `email_sources` NÃO é
-  importado como sources vazias (corte registrado, pg_dump cobre). O `sender` do
-  email vai para `metadata.legacy.sender` — se a fase 3 quiser sources por
-  remetente, o dado está lá.
-- Os 6 feeds que a coleta viva já mantém são reconciliados por **mapa manual do
-  dono** (o dono aponta à mão qual `feed_source` legado é qual source existente);
-  match automático por URL é SUGESTÃO, nunca decisão, porque o canonical da source
-  viva é o do schedules.yaml byte a byte e um canonical diferente duplicaria a
-  source e seus itens.
+**Sources** — SÓ o corpus `sources` cria/atualiza source; os handlers de item
+RESOLVEM a source por canonical (via `list_sources`) e NUNCA fazem upsert (advisor:
+upsertar por item reescreveria title/kind das 6 sources vivas — mutação silenciosa
+de dado vivo). Resolver com canonical ausente é **erro fatal** ("rode `--corpus
+sources` primeiro"), o que força mecanicamente a ordem sources→itens.
+- `feed_sources` → **kind = `source_type` do Neon (rss/html/hn)** (não hardcode
+  "rss": kind é a dimensão de consulta/agrupamento, gravar errado é importar mentira);
+  `podcast_feeds` → kind=podcast, canonical=`feed_url`; `target_channels` →
+  kind=youtube, canonical=`youtube.com/channel/<id>`; `playlists` →
+  kind=youtube-playlist, canonical=`youtube.com/playlist?list=<id>`.
+- `emails`, `linkedin_posts` e vídeos sem canal/playlist não têm cadastro de
+  origem: penduram em **sources sintéticas únicas** de canonical estável —
+  `legacy:email`, `legacy:linkedin`, `legacy:youtube` (todas criadas no corpus
+  `sources`). `email_sources` NÃO vira sources vazias (corte, pg_dump cobre); o
+  `sender`/`author` vão para `metadata.legacy`.
+- Mapa manual do dono (checkpoint 2026-07-06): `news_items.source` (nome) → canonical
+  da source. 5 RSS batem exato com as vivas; **SemiAnalysis** dedupe na viva
+  (`www.semianalysis.com/feed`, apesar de o endpoint do Neon diferir); 4 HTML
+  (Anthropic/Cognition/Cursor/Mistral) novas; **Hacker News** ÚNICA — os 12
+  feed_sources HN colapsam nela (news_items só guarda o nome). Match por URL é
+  SUGESTÃO, nunca decisão. feed_source com nome fora do mapa → skipped_invalid
+  (nunca inventa canonical do endpoint sem confirmação).
 
 **Itens** (grafo `item`, external_id = chave natural; prioridade de conteúdo
 `transcript → corpo/descrição/excerpt → ""`):
