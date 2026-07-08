@@ -18,9 +18,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from surrealdb import RecordID
 
 from kubo.store.transaction import run_transaction
+
+_log = structlog.get_logger(__name__)
 
 # Parte estática da busca KNN (sem interpolação — a store resolve chunk -> distilled).
 _KNN_SELECT = "SELECT id, vector::distance::knn() AS dist, ->chunk_of->distilled AS d FROM chunk"
@@ -235,13 +238,19 @@ def item_index(db: Any) -> dict[str, RecordID]:
 
     O import resolve `derived_from` (distilled -> item pela chave natural do legado)
     e detecta itens já presentes por aqui — sem 1 query por linha nem SELECT de `item`
-    espalhado fora da store (invariante 2). Primeira ocorrência vence se um external_id
-    se repetir entre sources (não esperado — é parte da chave natural do item)."""
+    espalhado fora da store (invariante 2). Colisão de external_id entre sources não é
+    esperada (é parte da chave natural do item) e ligaria uma destilação ao item
+    errado — então é LOGADA (warning), não descartada em silêncio; a 1ª ocorrência
+    vence (escolha determinística: a query ordena por id)."""
     index: dict[str, RecordID] = {}
-    for r in db.query("SELECT external_id, id FROM item;"):
+    for r in db.query("SELECT external_id, id FROM item ORDER BY id;"):
         ext = r.get("external_id")
-        if ext and ext not in index:
-            index[ext] = r["id"]
+        if not ext:
+            continue
+        if ext in index:
+            _log.warning("store.item_index.external_id_collision", external_id=ext)
+            continue
+        index[ext] = r["id"]
     return index
 
 

@@ -315,6 +315,21 @@ def test_item_index_maps_external_id_to_item(db: Any) -> None:
     assert knowledge.item_index(db) == {"ext-1": i1, "ext-2": i2}
 
 
+def test_item_index_collapses_external_id_collision_to_one_entry(db: Any) -> None:
+    """external_id colidindo entre duas sources: item_index mantém UMA ocorrência
+    (1ª por id) e loga — não vincula silenciosamente ao item errado (achado do
+    CodeRabbit); external_id é chave natural, colisão não é esperada."""
+    s1 = knowledge.upsert_source(db, kind="rss", canonical="https://a/feed")
+    s2 = knowledge.upsert_source(db, kind="rss", canonical="https://b/feed")
+    i1 = knowledge.upsert_item(db, source=s1, external_id="dup", content="x")
+    i2 = knowledge.upsert_item(db, source=s2, external_id="dup", content="y")
+
+    index = knowledge.item_index(db)
+
+    assert set(index) == {"dup"}  # duas linhas de origem, uma entrada
+    assert index["dup"] in (i1, i2)
+
+
 def test_distilled_for_returns_empty_when_item_has_no_distilled(db: Any) -> None:
     """distilled_for(item) devolve [] quando nenhum destilado deriva do item —
     a leitura que o import one-off usa para pular itens já destilados (insert_distilled

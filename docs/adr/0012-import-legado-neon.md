@@ -80,7 +80,9 @@ outras leituras que o import precisa do grafo também são métodos da store, n�
 `db.query` cru no script: **`list_sources(db)`** (id/canonical/kind/title — o import
 resolve a source de um item por canonical a partir daqui, sem regravá-la, e a UI da
 fase 1 lista por aqui) e **`item_index(db)`** (mapa external_id→item — resolve
-`derived_from` e detecta itens já presentes numa leitura). Ambos por TDD.
+`derived_from` e detecta itens já presentes numa leitura; colisão de external_id
+entre sources é LOGADA, não descartada em silêncio — ligaria uma destilação ao item
+errado). Ambos por TDD.
 
 ### IV. Marca de legado = proveniência, não campo de schema (D19a)
 
