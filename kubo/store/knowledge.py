@@ -408,6 +408,22 @@ def distilled_without_chunks(db: Any) -> list[tuple[RecordID, str]]:
     return [(r["id"], r["summary"]) for r in rows]
 
 
+def items_without_distilled(db: Any, *, limit: int) -> list[tuple[RecordID, str | None, str]]:
+    """Lista `(item_id, title, content)` de todo `item` SEM nenhum `derived_from`
+    incoming — os candidatos à destilação NOVA (ADR-0013 §III.1/§III.7).
+
+    Ordem determinística (por id) e limitada por `limit`: o worker de distilação
+    consome esta lista em lotes previsíveis, sem depender de ordem de inserção do
+    servidor. Par de leitura de `distilled_for` (item -> distilled); aqui a direção
+    é item -> ausência de destilado."""
+    rows = db.query(
+        "SELECT id, title, content FROM item WHERE array::len(<-derived_from) = 0 "
+        "ORDER BY id LIMIT $limit;",
+        {"limit": limit},
+    )
+    return [(r["id"], r.get("title"), r["content"]) for r in rows]
+
+
 def search(db: Any, *, embedding: Sequence[float], k: int) -> list[SearchHit]:
     """Busca vetorial KNN sobre `chunk`, resolvendo cada acerto ao seu `distilled`.
 

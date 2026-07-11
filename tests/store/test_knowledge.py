@@ -494,6 +494,113 @@ def test_distilled_without_chunks_returns_empty_when_no_distilled(db: Any) -> No
     assert knowledge.distilled_without_chunks(db) == []
 
 
+def test_items_without_distilled_filters_and_limits(db: Any) -> None:
+    """items_without_distilled devolve (id, title, content) de cada item SEM
+    nenhum derived_from incoming — candidatos à destilação nova (ADR-0013
+    §III.1/§III.7). Um item já destilado (C) NÃO aparece na lista."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_a = knowledge.upsert_item(
+        db, source=source_id, external_id="a", content="conteúdo A", title="Título A"
+    )
+    item_b = knowledge.upsert_item(
+        db, source=source_id, external_id="b", content="conteúdo B", title="Título B"
+    )
+    item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo C")
+    knowledge.insert_distilled(db, item=item_c, summary="tem destilado", chunks=[])
+
+    pending = knowledge.items_without_distilled(db, limit=10)
+
+    assert len(pending) == 2
+    assert {str(rid) for rid, _, _ in pending} == {str(item_a), str(item_b)}
+    by_id = {str(rid): (title, content) for rid, title, content in pending}
+    assert by_id[str(item_a)] == ("Título A", "conteúdo A")
+    assert by_id[str(item_b)] == ("Título B", "conteúdo B")
+
+
+def test_items_without_distilled_respects_limit(db: Any) -> None:
+    """Com 3 items pendentes e limit=2, devolve exatamente 2 — o worker consome
+    em lotes, não a lista inteira de uma vez."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+    knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
+
+    pending = knowledge.items_without_distilled(db, limit=2)
+
+    assert len(pending) == 2
+
+
+def test_items_without_distilled_is_deterministically_ordered(db: Any) -> None:
+    """Duas chamadas seguidas devolvem a MESMA ordem (por id) — sem isso, um
+    worker que processa em lotes poderia pular ou reprocessar itens entre lotes."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+    knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
+
+    first = knowledge.items_without_distilled(db, limit=10)
+    second = knowledge.items_without_distilled(db, limit=10)
+
+    assert first == second
+
+
+def test_items_without_distilled_returns_empty_when_none_pending(db: Any) -> None:
+    """Banco sem item pendente (nenhum item, ou todo item já destilado) devolve []."""
+    assert knowledge.items_without_distilled(db, limit=10) == []
+
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[])
+
+    assert knowledge.items_without_distilled(db, limit=10) == []
+
+
+def test_items_without_distilled_preserves_none_title_and_exact_content(db: Any) -> None:
+    """Um item criado sem title devolve title is None e o content exato — nenhuma
+    normalização silenciosa do conteúdo bruto coletado."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="a", content="conteúdo exato sem título"
+    )
+
+    pending = knowledge.items_without_distilled(db, limit=10)
+
+    assert len(pending) == 1
+    rid, title, content = pending[0]
+    assert rid == item_id
+    assert title is None
+    assert content == "conteúdo exato sem título"
+
+
+def test_insert_distilled_mentions_are_atomic_no_orphan_on_late_failure(db: Any) -> None:
+    """GUARDA de atomicidade (ADR-0013 §III.8): se o RELATE mentions (statement
+    TARDIO, após CREATE distilled e CREATE chunk) falha porque a entity referenciada
+    não existe (mentions é ENFORCED — a aresta rejeita endpoint inexistente), a
+    transação INTEIRA reverte. Nada sobra: nem o distilled, nem os chunks criados
+    antes do RELATE ruim. Este teste é um PIN contra refactor: hoje já passa verde
+    porque insert_distilled já escreve tudo numa única transação; se um futuro
+    refactor separar mentions numa chamada pós-commit, este teste vira RED."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
+    )
+    run_id = knowledge.start_run(db, worker="scribe")
+    missing_entity = RecordID("entity", "nao-existe")
+
+    with pytest.raises(StoreError):
+        knowledge.insert_distilled(
+            db,
+            item=item_id,
+            summary="não deveria persistir",
+            chunks=[_chunk(0, _vec(1.0))],
+            run=run_id,
+            entities=[missing_entity],
+        )
+
+    assert _count(db, "distilled") == 0
+    assert _count(db, "chunk") == 0
+
+
 def test_run_lifecycle_running_then_ok_or_error(db: Any) -> None:
     """start_run abre em 'running'; finish_run fecha em 'ok' com finished_at
     preenchido; fail_run (em outro run) fecha em 'error' preservando o erro
