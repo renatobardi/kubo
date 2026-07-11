@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import client, knowledge, migrations
@@ -373,6 +374,143 @@ def test_search_returns_the_distilled_for_the_nearest_chunk(db: Any) -> None:
 
     assert len(hits) == 1
     assert hits[0].distilled == distilled_a
+
+
+def test_attach_chunks_creates_chunks_and_makes_distilled_searchable(db: Any) -> None:
+    """Caminho feliz (ADR-0013 §VI): dado um distilled criado com chunks=[],
+    attach_chunks com 2 chunks cria os 2 registros `chunk` (com suas arestas
+    chunk_of) e o distilled passa a ser devolvido por knowledge.search — prova de
+    que os chunks estão de fato LIGADOS e buscáveis, não soltos no grafo."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[])
+
+    knowledge.attach_chunks(
+        db,
+        distilled=distilled_id,
+        chunks=[_chunk(0, _vec(1.0), text="primeiro"), _chunk(1, _vec(0.0, 1.0), text="segundo")],
+    )
+
+    assert _count(db, "chunk") == 2
+    hits = knowledge.search(db, embedding=_vec(1.0), k=1)
+    assert len(hits) == 1
+    assert hits[0].distilled == distilled_id
+
+
+def test_attach_chunks_preserves_existing_provenance(db: Any) -> None:
+    """attach_chunks ANEXA, não deleta+recria (ADR-0013 §VI): o distilled continua
+    sendo o MESMO record (mesmo id) e as arestas produced_by/mentions gravadas por
+    um insert_distilled anterior (com run+entities) sobrevivem intactas depois."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    run_id = knowledge.start_run(db, worker="scribe")
+    entity_id = knowledge.get_or_create_entity(db, name="Python")
+    distilled_id = knowledge.insert_distilled(
+        db, item=item_id, summary="resumo", chunks=[], run=run_id, entities=[entity_id]
+    )
+
+    knowledge.attach_chunks(db, distilled=distilled_id, chunks=[_chunk(0, _vec(1.0))])
+
+    row = db.query(
+        "SELECT ->produced_by->run AS r, ->mentions->entity AS e FROM $d;", {"d": distilled_id}
+    )[0]
+    assert row["r"] == [run_id]
+    assert row["e"] == [entity_id]
+    assert _count(db, "distilled") == 1  # não recriou
+
+
+def test_attach_chunks_is_noop_when_distilled_already_has_chunks(db: Any) -> None:
+    """Guarda de idempotência DENTRO de attach_chunks, não do chamador (ADR-0013 §VI):
+    um distilled que JÁ tem chunk (aqui via insert_distilled com 1 chunk) ignora
+    chunks diferentes numa nova chamada — a contagem não aumenta e nada novo é
+    criado. É isso que torna o backfill retomável sem depender da disciplina de
+    quem chama (script one-off pode re-rodar sem checar antes)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(
+        db, item=item_id, summary="resumo", chunks=[_chunk(0, _vec(1.0), text="original")]
+    )
+
+    knowledge.attach_chunks(
+        db, distilled=distilled_id, chunks=[_chunk(1, _vec(0.0, 1.0), text="novo")]
+    )
+
+    assert _count(db, "chunk") == 1
+
+
+def test_attach_chunks_with_empty_chunks_is_noop(db: Any) -> None:
+    """attach_chunks(chunks=[]) não cria nada e não levanta — chamada seguramente
+    inofensiva quando o backfill não tem nada a anexar para aquele distilled."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[])
+
+    knowledge.attach_chunks(db, distilled=distilled_id, chunks=[])
+
+    assert _count(db, "chunk") == 0
+
+
+def test_attach_chunks_rejects_dim_provenance_mismatch_and_reverts(db: Any) -> None:
+    """Mesma validação de borda de insert_distilled (helper extraído, ADR-0013 §VI):
+    um Chunk cujo `dim` declarado (768) não bate com o tamanho real do embedding
+    levanta ValueError, e a transação reverte — nenhum chunk fica gravado."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[])
+    lying_chunk = Chunk(
+        text="trecho",
+        seq=0,
+        embedding=_vec(1.0, dim=512),  # 512 posições reais
+        model=_MODEL,
+        dim=768,  # mas a proveniência mente: diz 768
+        task_type=_TASK_TYPE,
+    )
+
+    with pytest.raises(ValueError, match="dim"):
+        knowledge.attach_chunks(db, distilled=distilled_id, chunks=[lying_chunk])
+
+    assert _count(db, "chunk") == 0
+
+
+def test_distilled_without_chunks_returns_only_distilled_missing_chunks(db: Any) -> None:
+    """distilled_without_chunks devolve (id, summary) de cada distilled SEM aresta
+    chunk_of incoming — os candidatos ao backfill (ADR-0013 §VI/§VII). Um distilled
+    já embeddado (resumo C, com 1 chunk) NÃO aparece na lista."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+    item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
+    knowledge.insert_distilled(db, item=item_a, summary="resumo A", chunks=[])
+    knowledge.insert_distilled(db, item=item_b, summary="resumo B", chunks=[])
+    knowledge.insert_distilled(db, item=item_c, summary="resumo C", chunks=[_chunk(0, _vec(1.0))])
+
+    pending = knowledge.distilled_without_chunks(db)
+
+    assert {summary for _, summary in pending} == {"resumo A", "resumo B"}
+    for rid, summary in pending:
+        assert isinstance(rid, RecordID)
+        assert isinstance(summary, str)
+
+
+def test_distilled_without_chunks_excludes_after_attach_chunks(db: Any) -> None:
+    """Depois de attach_chunks anexar um chunk a um dos pendentes, ele SAI da
+    lista — prova de retomabilidade: o backfill script pode re-rodar e processar
+    só o restante, sem reprocessar quem já foi resolvido."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
+    distilled_a = knowledge.insert_distilled(db, item=item_a, summary="resumo A", chunks=[])
+    knowledge.insert_distilled(db, item=item_b, summary="resumo B", chunks=[])
+
+    knowledge.attach_chunks(db, distilled=distilled_a, chunks=[_chunk(0, _vec(1.0))])
+
+    pending = knowledge.distilled_without_chunks(db)
+    assert {summary for _, summary in pending} == {"resumo B"}
+
+
+def test_distilled_without_chunks_returns_empty_when_no_distilled(db: Any) -> None:
+    """Banco sem nenhum distilled: distilled_without_chunks devolve []."""
+    assert knowledge.distilled_without_chunks(db) == []
 
 
 def test_run_lifecycle_running_then_ok_or_error(db: Any) -> None:

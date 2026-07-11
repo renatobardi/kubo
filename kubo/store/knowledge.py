@@ -74,6 +74,17 @@ def _fresh(table: str) -> RecordID:
     return RecordID(table, secrets.token_hex(16))
 
 
+def _require_dim_matches(ch: Chunk) -> None:
+    """Rejeita chunk cujo `dim` de proveniência mente sobre o tamanho real do embedding.
+
+    O schema garante embedding==768, mas não que o `dim` registrado seja verdadeiro;
+    um dim mentiroso corromperia a proveniência do re-embed (ADR-0006)."""
+    if len(ch.embedding) != ch.dim:
+        raise ValueError(
+            f"chunk seq={ch.seq}: dim={ch.dim} não bate com len(embedding)={len(ch.embedding)}"
+        )
+
+
 def upsert_source(db: Any, *, kind: str, canonical: str, title: str | None = None) -> RecordID:
     """Cria/atualiza uma source pela chave natural (identificador canônico). Idempotente."""
     rid = _rid("source", canonical)
@@ -170,10 +181,7 @@ def insert_distilled(
         "claims": list(claims) if claims else [],
     }
     for i, ch in enumerate(chunks):
-        if len(ch.embedding) != ch.dim:
-            raise ValueError(
-                f"chunk seq={ch.seq}: dim={ch.dim} não bate com len(embedding)={len(ch.embedding)}"
-            )
+        _require_dim_matches(ch)
         cid = _rid("chunk", f"{distilled}|{ch.seq}")
         stmts.append(
             f"CREATE $c{i} SET text = $ct{i}, seq = $cs{i}, embedding = $ce{i}, "
@@ -263,6 +271,63 @@ def distilled_for(db: Any, item: RecordID) -> list[RecordID]:
     mesma travessia para o backfill de embeddings."""
     rows = db.query("SELECT <-derived_from<-distilled AS d FROM $item;", {"item": item})
     return list(rows[0]["d"]) if rows else []
+
+
+def attach_chunks(db: Any, *, distilled: RecordID, chunks: Sequence[Chunk]) -> None:
+    """Anexa chunks já embeddados a um `distilled` EXISTENTE, sem tocar em nada que
+    já pende dele (ADR-0013 §VI) — o backfill dos 935 destilados legados (import
+    Neon, ADR-0012) usa isto para tornar buscável um `distilled` inserido com
+    `chunks=[]`.
+
+    Anexa, não deleta+recria: delete+recria destruiria `produced_by -> run` e
+    `mentions -> entity` já gravados — a proveniência é o produto. Guarda de
+    idempotência fica DENTRO desta função (não no loop do chamador): um `distilled`
+    que já tem QUALQUER `chunk_of` incoming é no-op explícito, não soma — a
+    retomabilidade do backfill não depende da disciplina do script chamador. Reusa a mesma validação
+    `dim == len(embedding)` de `insert_distilled`; dim mentiroso levanta `ValueError`
+    e reverte a transação inteira (nenhum chunk gravado)."""
+    if not chunks:
+        return
+    # ponytail: guarda por leitura+escrita não-atômica; ok no backfill one-off
+    # single-process, revisar se ganhar concorrência.
+    existing = db.query("SELECT VALUE array::len(<-chunk_of) FROM $d;", {"d": distilled})
+    if existing and existing[0] > 0:
+        _log.info("store.attach_chunks.skip_has_chunks", distilled=str(distilled))
+        return
+    for ch in chunks:
+        _require_dim_matches(ch)
+    stmts: list[str] = []
+    params: dict[str, Any] = {"d": distilled}
+    for i, ch in enumerate(chunks):
+        cid = _rid("chunk", f"{distilled}|{ch.seq}")
+        stmts.append(
+            f"CREATE $c{i} SET text = $ct{i}, seq = $cs{i}, embedding = $ce{i}, "
+            f"model = $cm{i}, dim = $cd{i}, task_type = $ck{i}"
+        )
+        stmts.append(f"RELATE $c{i}->chunk_of->$d")
+        params |= {
+            f"c{i}": cid,
+            f"ct{i}": ch.text,
+            f"cs{i}": ch.seq,
+            f"ce{i}": list(ch.embedding),
+            f"cm{i}": ch.model,
+            f"cd{i}": ch.dim,
+            f"ck{i}": ch.task_type,
+        }
+    run_transaction(db, stmts, params)
+
+
+def distilled_without_chunks(db: Any) -> list[tuple[RecordID, str]]:
+    """Lista `(distilled_id, summary)` de todo `distilled` SEM nenhum `chunk_of`
+    incoming — os candidatos ao backfill de embeddings (ADR-0013 §VI/§VII: os 935
+    destilados legados do import Neon foram inseridos com `chunks=[]`).
+
+    Leitura que torna o backfill script one-off retomável por construção: re-rodar
+    só processa quem ainda não tem chunk (condição transitória do ADR-0012 §IV).
+    Par de leitura de `distilled_for` (item -> distilled); aqui a direção é
+    distilled -> ausência de chunk."""
+    rows = db.query("SELECT id, summary FROM distilled WHERE array::len(<-chunk_of) = 0;")
+    return [(r["id"], r["summary"]) for r in rows]
 
 
 def search(db: Any, *, embedding: Sequence[float], k: int) -> list[SearchHit]:
