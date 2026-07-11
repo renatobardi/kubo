@@ -130,12 +130,25 @@ def test_run_worker_distills_pending_items_into_graph(db: Any) -> None:
     cada distilled ao run, e o run fecha em 'ok'."""
     source = upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
     item_a = upsert_item(
-        db, source=source, external_id="a", content="conteúdo bruto A", title="Item A"
+        db,
+        source=source,
+        external_id="a",
+        content="conteúdo bruto A sobre a Anthropic",
+        title="Item A",
     )
     item_b = upsert_item(
-        db, source=source, external_id="b", content="conteúdo bruto B", title="Item B"
+        db,
+        source=source,
+        external_id="b",
+        content="conteúdo bruto B sobre a Anthropic",
+        title="Item B",
     )
 
+    # Ambos os itens citam "Anthropic" no content: a ordem em que a store devolve
+    # os pendentes não é determinística (hash do record id, ver docstring abaixo),
+    # então qualquer um dos dois pode receber o DistillOutput com a entidade —
+    # o filtro verbatim (ADR-0013 §V emenda) só mantém a entidade se ela estiver
+    # no content do item que efetivamente a recebeu.
     executor = _FakeExecutor(
         [
             DistillOutput(summary="resumo A", entities=[EntityRef(name="Anthropic", kind="org")]),

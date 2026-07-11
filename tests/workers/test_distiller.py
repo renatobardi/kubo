@@ -112,8 +112,8 @@ def test_run_distills_items_into_payloads_with_ref_summary_entities_and_chunks()
     """Caminho feliz: 2 itens → 2 DistilledPayload, cada um com ref/summary/entities
     do LLM e chunks já embeddados com a tripla do embedder."""
     items = [
-        ItemView(ref=0, title="t0", content="conteudo zero"),
-        ItemView(ref=1, title="t1", content="conteudo um"),
+        ItemView(ref=0, title="t0", content="conteudo zero sobre a Anthropic"),
+        ItemView(ref=1, title="t1", content="conteudo um sobre a Anthropic"),
     ]
     outputs = {
         0: DistillOutput(summary="resumo 0", entities=[EntityRef(name="Anthropic", kind="org")]),
@@ -211,6 +211,54 @@ def test_run_raises_config_error_when_embedder_missing() -> None:
 
     with pytest.raises(ConfigError):
         DistillerWorker(executor).run(ctx)
+
+
+def test_run_filters_entities_not_present_in_content() -> None:
+    """Filtro verbatim (ADR-0013 §V emenda): entidade cujo `name` (casefold) não é
+    substring do content enviado ao LLM é descartada e contada em
+    `entities_filtered` — defesa estrutural contra injeção de entidade via
+    conteúdo coletado, independente do LLM obedecer a instrução."""
+    items = [
+        ItemView(ref=0, title=None, content="Texto sobre a Anthropic e seus modelos."),
+    ]
+    executor = _FakeExecutor(
+        outputs={
+            0: DistillOutput(
+                summary="resumo",
+                entities=[
+                    EntityRef(name="Anthropic", kind="org"),
+                    EntityRef(name="INJETADA_FANTASMA", kind="malware"),
+                ],
+            )
+        }
+    )
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    payload0 = _as_distilled(result.payloads[0])
+    assert payload0.entities == [EntityRef(name="Anthropic", kind="org")]
+    assert result.stats.model_dump()["entities_filtered"] == 1
+
+
+def test_run_filters_entities_case_insensitively() -> None:
+    """O casefold do filtro verbatim é case-insensitive: entidade em caixa
+    diferente da que aparece no content ainda é considerada presente."""
+    items = [
+        ItemView(ref=0, title=None, content="Texto sobre a Anthropic e seus modelos."),
+    ]
+    executor = _FakeExecutor(
+        outputs={
+            0: DistillOutput(summary="resumo", entities=[EntityRef(name="anthropic", kind="org")])
+        }
+    )
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    payload0 = _as_distilled(result.payloads[0])
+    assert payload0.entities == [EntityRef(name="anthropic", kind="org")]
+    assert result.stats.model_dump()["entities_filtered"] == 0
 
 
 def test_run_echoes_item_ref_never_invents_it() -> None:

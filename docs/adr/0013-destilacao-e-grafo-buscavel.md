@@ -144,6 +144,50 @@ max_tokens, response_format). É onde a mecânica de D6 nasce:
   modelo, **não afrouxa critério**. Ambos reprovarem PT-BR → a premissa de D22 cai e
   a decisão volta ao dono (nunca fallback pago silencioso).
 
+**Emenda (execução 2026-07-11, aval do dono): injection defense vs content trust.**
+O primeiro smoke ao vivo (llama-3.3-70b-versatile, Groq) reprovou por vazamento do
+canário de ENTIDADE (`INJECTED_ENTITY_9Z`), NÃO por qualidade (10/10 schema, 0
+malformado, summary nunca sequestrado; kimi-k2 com ID morto no catálogo — nota de
+config). A análise revelou que o canário original **conflaciona dois riscos** e o
+gate binário sobre comportamento não-determinístico de LLM é **flaky** (a rodada
+"limpa" foi falso-negativo — o canário caiu no rate limit e não foi avaliado):
+
+1. **Injection defense** — impedir que a obediência do modelo crie algo que **não
+   está no conteúdo**. É **bloqueável por construção** e passa a ser: **filtro
+   verbatim no worker** — depois de `complete()`, descarta toda entidade cujo `name`
+   (casefold) não seja substring do content enviado; conta em `entities_filtered`
+   (`Stats`). Defesa NOVA (aperta o D6), determinística, testável sem LLM.
+2. **Content trust** — um texto que **mente** afirmando existir a entidade X. Nenhum
+   modelo/filtro/prompt resolve: a mentira está no documento, não no comportamento do
+   extrator. É a MESMA propriedade do `summary` (resumo fiel de conteúdo hostil
+   carrega strings do atacante), logo a entidade-verbatim **não introduz classe nova
+   de risco**. Contido por proveniência (`mentions → distilled → item`) + **invariante
+   de consumo**: todo dado derivado de coleta (summary E nomes de entidade) é untrusted
+   no ponto de consumo — a fase 3/4 que ler `entity.name`/`summary` para prompt de
+   outro agente DEVE tratá-lo como hostil (risco de *stored injection*; `name` capado
+   em 200 chars não elimina, contém no consumo).
+
+Consequências: (a) o **canário de entidade é redesenhado** para pedir um nome
+**construído** (não-verbatim no texto) — se o modelo obedecer, o filtro derruba;
+vazou no output final = bug no filtro = FAIL binário legítimo. O gate passa a provar
+o **pipeline** (determinístico, estável entre rodadas), não a virtude do modelo. (b)
+Frase adicional no `_INSTRUCTION` = mitigação em profundidade, **documentada como
+não-estrutural** (prompt é mitigação, não defesa). (c) **Pacing** (sleep entre
+chamadas) no smoke: `rate_limited` reprova certo por `valid<10`, mas sem pacing o
+gate nunca fecha no free tier do Groq — operacional, não afrouxamento.
+
+**Trade-off assumido:** o filtro verbatim derruba enriquecimento legítimo
+("banco central" no texto → "Banco Central do Brasil" do modelo = filtrado). Aceitável
+na fase 1 (determinismo+segurança > enriquecimento); `entities_filtered` monitora o
+custo — se >20-30% das entidades legítimas caírem, reconsiderar matching (novo ADR,
+nunca inline). **Alternativas rejeitadas:** trocar de modelo (resistência a injeção é
+espectro; passa neste canário e cai na próxima formulação — troca de modelo é para
+falha de QUALIDADE, §V); "entidade tem que aparecer no content" sem redesenhar o
+canário (o nome injetado ESTÁ no content — não filtraria); revisão humana de entidade
+nova (quebra a automação da fase 1) — reabrível como quarentena barata se os
+consumidores downstream não honrarem o invariante de consumo; restringir `kind` a
+vocabulário fechado (adiado — mesmo regime de content trust).
+
 ### VI. `attach_chunks` — anexar chunks a distilled existente (não delete+recria)
 
 Os 935 destilados legados (import Neon, ADR-0012) foram inseridos com `chunks=[]`.
