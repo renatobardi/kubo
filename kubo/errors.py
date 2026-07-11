@@ -36,6 +36,16 @@ class StoreError(KuboError):
     """
 
 
+class EmbeddingError(KuboError):
+    """Falha ao gerar embedding (ADR-0006/0013).
+
+    Levantada pelo cliente de embedding quando a API responde erro, devolve
+    quantidade de vetores diferente da de textos, ou honra dimensão distinta
+    da tripla pinada — um vetor com dimensão/tripla errada é incomparável e
+    corromperia o espaço de busca, então a geração falha alto em vez de gravar.
+    """
+
+
 class ContractError(KuboError):
     """Objeto não honra o contrato de worker (ADR-0009).
 
