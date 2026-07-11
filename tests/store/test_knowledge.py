@@ -270,25 +270,6 @@ def test_insert_distilled_rejects_dim_provenance_mismatch(db: Any) -> None:
     assert _count(db, "chunk") == 0
 
 
-def test_provenance_traces_distilled_to_source(db: Any) -> None:
-    """provenance(distilled) devolve uma lista que inclui a source original —
-    o embrião da prova dos 90 dias (distilled -> item -> source)."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
-    item_id = knowledge.upsert_item(
-        db, source=source_id, external_id="ep-1", content="conteúdo bruto"
-    )
-    distilled_id = knowledge.insert_distilled(
-        db,
-        item=item_id,
-        summary="resumo",
-        chunks=[_chunk(0, _vec(1.0))],
-    )
-
-    trail = knowledge.provenance(db, distilled_id)
-
-    assert source_id in trail
-
-
 def test_list_sources_returns_all_with_their_fields(db: Any) -> None:
     """list_sources devolve toda source com id/canonical/kind/title — leitura única
     que o import usa para resolver a source de um item por canonical (sem regravá-la,
@@ -546,3 +527,89 @@ def test_finish_run_persists_stats(db: Any) -> None:
     assert failed["status"] == "error"
     assert failed["error"]["detail"]["status"] == 503
     assert failed["finished_at"] is not None
+
+
+def test_read_distilled_returns_full_provenance_view(db: Any) -> None:
+    """Caminho feliz (ADR-0013 §8.5): read_distilled resolve distilled -> item ->
+    source E distilled -> run numa leitura só, com os campos que o CLI mostra
+    (`kubo query` usa `.summary`, `kubo show --provenance` usa o resto) —
+    substitui a antiga `provenance` (só ids de source, insuficiente para exibir)."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+    item_id = knowledge.upsert_item(
+        db,
+        source=source_id,
+        external_id="ep-1",
+        content="bruto",
+        url="https://x/ep-1",
+        title="Episódio 1",
+    )
+    run_id = knowledge.start_run(db, worker="scribe")
+    distilled_id = knowledge.insert_distilled(
+        db,
+        item=item_id,
+        summary="resumo destilado",
+        chunks=[],
+        claims=["afirmação A", "afirmação B"],
+        run=run_id,
+    )
+
+    view = knowledge.read_distilled(db, distilled_id)
+
+    assert view is not None
+    assert view.id == distilled_id
+    assert view.summary == "resumo destilado"
+    assert view.claims == ["afirmação A", "afirmação B"]
+
+    assert len(view.items) == 1
+    item_view = view.items[0]
+    assert isinstance(item_view, knowledge.ProvenanceItem)
+    assert item_view.external_id == "ep-1"
+    assert item_view.url == "https://x/ep-1"
+    assert item_view.title == "Episódio 1"
+    assert item_view.source_canonical == "https://x/feed"
+    assert item_view.source_title == "Feed X"
+    assert item_view.source_kind == "rss"
+
+    assert len(view.runs) == 1
+    assert view.runs[0] == knowledge.RunRef(worker="scribe", status="running")
+
+
+def test_read_distilled_without_run_has_empty_runs_but_keeps_items(db: Any) -> None:
+    """Um distilled criado SEM run devolve `runs == []` (produced_by não é
+    obrigatório), mas `items` continua com 1 entrada — derived_from é ENFORCED
+    pelo schema, então item->source sempre resolve. claims default a []."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo sem run", chunks=[])
+
+    view = knowledge.read_distilled(db, distilled_id)
+
+    assert view is not None
+    assert view.summary == "resumo sem run"
+    assert view.claims == []
+    assert len(view.items) == 1
+    assert view.runs == []
+
+
+def test_read_distilled_returns_none_for_nonexistent_id(db: Any) -> None:
+    """read_distilled de um id que não existe no grafo devolve None — não levanta
+    e não confunde 'sem proveniência' com 'destilado inexistente'."""
+    assert knowledge.read_distilled(db, RecordID("distilled", "nao-existe")) is None
+
+
+def test_read_distilled_handles_missing_optional_fields(db: Any) -> None:
+    """Robustez a campos opcionais ausentes: source sem `title` devolve
+    `source_title is None`; item sem `url`/`title` devolve esses campos None
+    também — nenhum KeyError por causa de um dado opcional não preenchido."""
+    source_id = knowledge.upsert_source(db, kind="youtube", canonical="https://y/channel")
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="v-1", content="bruto")
+    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo", chunks=[])
+
+    view = knowledge.read_distilled(db, distilled_id)
+
+    assert view is not None
+    item_view = view.items[0]
+    assert item_view.url is None
+    assert item_view.title is None
+    assert item_view.source_title is None
+    assert item_view.source_kind == "youtube"

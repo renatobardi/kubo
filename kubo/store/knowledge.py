@@ -207,13 +207,91 @@ def insert_distilled(
     return distilled
 
 
-def provenance(db: Any, distilled: RecordID) -> list[RecordID]:
-    """Travessia de proveniência distilled -> item -> source (o embrião da prova dos 90 dias)."""
-    rows = db.query(
-        "SELECT ->derived_from->item->from_source->source AS srcs FROM $d;",
-        {"d": distilled},
-    )
-    return list(rows[0]["srcs"]) if rows else []
+@dataclass(frozen=True)
+class ProvenanceItem:
+    """Um item de origem de um distilled, já resolvido até a source (ADR-0013 §8.5):
+    substitui a antiga `provenance` (só ids) — o CLI exibe estes campos direto,
+    sem 2ª consulta."""
+
+    external_id: str
+    url: str | None
+    title: str | None
+    source_canonical: str
+    source_title: str | None
+    source_kind: str
+
+
+@dataclass(frozen=True)
+class RunRef:
+    """Referência enxuta a um run que produziu um distilled (worker + status)."""
+
+    worker: str
+    status: str
+
+
+@dataclass(frozen=True)
+class DistilledView:
+    """Visão completa de proveniência de UM distilled: distilled -> item -> source
+    e distilled -> run, numa leitura. Alimenta tanto `kubo query` (usa `.summary`)
+    quanto `kubo show --provenance` (ADR-0013 §8.5)."""
+
+    id: RecordID
+    summary: str
+    claims: list[str]
+    items: list[ProvenanceItem]
+    runs: list[RunRef]
+
+
+def read_distilled(db: Any, distilled: RecordID) -> DistilledView | None:
+    """Devolve a visão completa de proveniência de um distilled (item(s) + source(s)
+    + run(s)), ou None se o id não existe. Substitui `provenance` (ADR-0013 §8.5).
+
+    # ponytail: poucos round-trips por distilled (1 base + 1 por item + 1 por
+    # source + 1 por run) — escala pessoal, um distilled costuma ter 1 item.
+    # Composição em Python em vez de projeção SurrealQL aninhada (destructure
+    # dentro de destructure é o statement mais frágil/ilegível do repo e o
+    # comportamento de alias aninhado tem quirk no v3.1.5 — decisão do advisor).
+    """
+    base = db.query("SELECT summary, claims FROM $d;", {"d": distilled})
+    if not base:
+        return None
+    summary: str = base[0]["summary"]
+    claims: list[str] = list(base[0].get("claims") or [])
+
+    item_rows = db.query("SELECT VALUE ->derived_from->item FROM $d;", {"d": distilled})
+    item_ids: list[RecordID] = list(item_rows[0]) if item_rows else []
+    items: list[ProvenanceItem] = []
+    for item_id in item_ids:
+        item_row = db.query(
+            "SELECT external_id, url, title, ->from_source->source AS source FROM $item;",
+            {"item": item_id},
+        )[0]
+        source_ids: list[RecordID] = list(item_row.get("source") or [])
+        if not source_ids:
+            raise ValueError(f"item {item_id} sem from_source->source (proveniência incompleta)")
+        source_row = db.query(
+            "SELECT canonical, title, kind FROM $source;", {"source": source_ids[0]}
+        )[0]
+        items.append(
+            ProvenanceItem(
+                external_id=item_row["external_id"],
+                url=item_row.get("url"),
+                title=item_row.get("title"),
+                source_canonical=source_row["canonical"],
+                source_title=source_row.get("title"),
+                source_kind=source_row["kind"],
+            )
+        )
+
+    run_rows = db.query("SELECT VALUE ->produced_by->run FROM $d;", {"d": distilled})
+    run_ids: list[RecordID] = list(run_rows[0]) if run_rows else []
+    runs = [
+        RunRef(worker=r["worker"], status=r["status"])
+        for run_id in run_ids
+        for r in db.query("SELECT worker, status FROM $run;", {"run": run_id})
+    ]
+
+    return DistilledView(id=distilled, summary=summary, claims=claims, items=items, runs=runs)
 
 
 @dataclass(frozen=True)
