@@ -157,20 +157,44 @@ chunks. Nova função de store `attach_chunks(distilled, chunks)`:
 - **Anexa, não deleta+recria:** delete+recria destruiria `produced_by→run` legado e
   `mentions` — a proveniência é o produto.
 
-### VII. Backfill dos 935 = script one-off; corpus vetorial 100% PT-BR
+### VII. Backfill dos 935 = script one-off; corpus vetorial é MULTILÍNGUE (D20 corrigido)
 
 Backfill = **script one-off** (E5, precedente ADR-0012/D19: worker é para
 recorrência), não worker. Retomável por construção (pula distilled que já tem
 chunk — condição transitória do ADR-0012 §IV). Inclui **spot-check de idioma** dos
 summaries legados.
 
-**Embedda-se o `distilled` PT-BR, nunca o `item` bruto** (o schema força via
-`chunk_of: IN chunk OUT distilled ENFORCED`; ADR-0008 §II). Com D20, o corpus
-vetorial é **100% PT-BR** — não existe par cross-lingual no caminho vetorial; o
-conteúdo EN bruto é alcançado por proveniência (`distilled → derived_from → item`),
-não por vetor. Resíduo: summaries legados que estiverem em EN — spot-check no
-backfill; EN em volume = degradação conhecida registrada aqui, **não re-destilar
-legados nesta sessão** (queima quota e timebox).
+**Embedda-se o `distilled`, nunca o `item` bruto** (o schema força via
+`chunk_of: IN chunk OUT distilled ENFORCED`; ADR-0008 §II).
+
+**D20 estava factualmente errado e é corrigido aqui.** D20 previu o corpus vetorial
+como "100% PT-BR" com EN como mero "resíduo". O spot-check de idioma do backfill
+(dry-run em produção, 2026-07-11) **falsificou** isso: dos 935 summaries legados,
+**pt=571, en=355 (38%), incerto=9** (os incertos são transcrições legadas em
+ru/zh/km/id/ms — lixo de legenda multilíngue). Não é resíduo; o corpus é
+**multilíngue**, dominado por PT mas com EN em volume relevante.
+
+Consequência: a prova dos 90 dias sobre o legado passa a depender de **recuperação
+cross-lingual** (pergunta PT → summary EN), assimétrica (pergunta curta → summary
+longo) — o regime mais fraco de `SEMANTIC_SIMILARITY`. A epistemologia da ADR-0006
+("pinado por evidência, não por reputação do modelo") exige provar isso antes de
+confiar. **Gate do backfill vivo:** o smoke de embedding (`scripts/embedding_smoke.py`)
+ganha **trios cross-lingual** — âncora PT em forma de pergunta, paráfrase EN em forma
+de summary, distrator PT que compartilha léxico com a âncora (detecta o *language
+gap*: se o espaço clusteriza por idioma, o distrator mesma-língua vence a paráfrase
+cross-língua). Gate binário como os trios mono: qualquer inversão reprova, e a
+decisão sobe ao dono (aceitar degradação registrada / subir o degrau `RETRIEVAL_*`
+da ADR-0006 com o corpus ainda sem chunks / enfileirar re-destilação EN futura).
+
+**Consequência estrutural do no-op (mão-única) — decisão adiada, não esquecida:** a
+guarda de idempotência do `attach_chunks` (§VI: distilled com chunk é no-op) não tem
+caminho de *replace*. Logo **embedar é irreversível**: trocar a tripla (degrau
+`RETRIEVAL_*`) ou re-destilar os 355 EN para PT-BR (fase futura) exigiria re-embedar
+o corpus, e o no-op bloqueia. Por isso o smoke cross-lingual roda **antes** do
+backfill — enquanto o corpus ainda não tem chunks, todas as alternativas ficam
+abertas. Um futuro caminho de replace de chunks (delete+recria preservando
+proveniência) fica registrado como pré-requisito de qualquer mudança de tripla ou
+re-destilação. **Não re-destilar legados nesta sessão** (timebox/quota) segue de pé.
 
 ### VIII. Operação: destilação agendada diária; logger nunca vaza payload
 

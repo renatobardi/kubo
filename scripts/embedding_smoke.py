@@ -8,6 +8,11 @@ em outro sentido (polissemia PT-BR: banco, fonte, prova, luz, remédio). Um embe
 semântico bom ordena sim(âncora, paráfrase) > sim(âncora, distrator) em todos os
 trios — casamento lexical (BoW) falharia nos distratores.
 
+Os trios #11–13 são CROSS-LINGUAL (âncora PT ↔ paráfrase EN, distrator PT): gate do
+backfill do M6 (ADR-0013 §VII), já que 38% dos summaries legados são EN e `kubo
+query` sobre o legado depende de recuperação cross-lingual. Detectam o *language
+gap* (viés de vizinhança mesma-língua); inversão em qualquer trio reprova o smoke.
+
 Uso (key SÓ por env, invariante 8; NUNCA no CI nem na suite):
     GEMINI_API_KEY=... uv run python scripts/embedding_smoke.py
     EMBED_MODEL=gemini-embedding-001 EMBED_DIM=3072 uv run python scripts/embedding_smoke.py
@@ -79,6 +84,33 @@ TRIOS: list[tuple[str, str, str]] = [
         "O banco fica aberto até as quatro da tarde.",
         "A agência bancária atende até o meio da tarde.",
         "Sentamos no banco da praça para descansar.",
+    ),
+    # ── Trios CROSS-LINGUAL (#11–13, ADR-0013 §VII) ────────────────────────────
+    # Gate do backfill vivo: 38% dos summaries legados são EN, então `kubo query`
+    # sobre o legado depende de pergunta-PT casar summary-EN. Estrutura do trio
+    # detecta o *language gap*: âncora PT em forma de PERGUNTA, paráfrase EN em
+    # forma de SUMMARY (mesmo sentido, outra língua), distrator PT que compartilha
+    # UMA palavra com a âncora em OUTRO sentido (mesma língua da âncora). Se o
+    # espaço clusteriza por idioma, o distrator PT vence a paráfrase EN e o trio
+    # inverte — reprova o smoke. Assimétrico de propósito (pergunta curta × summary
+    # longo), o regime mais duro de SEMANTIC_SIMILARITY.
+    (
+        "O que é uma estratégia de marca e como torna uma marca memorável?",
+        "A brand strategy is a master plan to make a brand memorable and the "
+        "preferred choice for customers by unifying its identity and message.",
+        "A corredora quebrou a marca mundial dos cem metros rasos na final.",
+    ),
+    (
+        "Quais são as capacidades do novo modelo de inteligência artificial da Anthropic?",
+        "Anthropic released a powerful new AI model whose capabilities exceed prior "
+        "systems on reasoning and coding benchmarks.",
+        "A modelo desfilou a nova coleção de inverno na passarela de Milão.",
+    ),
+    (
+        "Sobre o que fala o episódio de podcast gravado na conferência de desenvolvedores?",
+        "A podcast episode recorded live at a developer conference discusses how "
+        "engineers build production software with AI coding agents.",
+        "A conferência de imprensa do prefeito foi cancelada por falta de quórum.",
     ),
 ]
 
