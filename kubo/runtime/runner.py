@@ -16,7 +16,14 @@ import structlog
 from pydantic import ValidationError
 from surrealdb import RecordID
 
-from kubo.contracts.models import ErrorInfo, ItemPayload, Payload, RunResult, WorkerManifest
+from kubo.contracts.models import (
+    DistilledPayload,
+    ErrorInfo,
+    ItemPayload,
+    Payload,
+    RunResult,
+    WorkerManifest,
+)
 from kubo.contracts.worker import validate_worker
 from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import EmptyKnowledge, RunContext
@@ -87,7 +94,13 @@ def _persist(db: Any, payloads: list[Payload], run_id: RecordID) -> None:
                 metadata=payload.metadata,
                 run=run_id,
             )
-        else:  # SourcePayload — o único outro membro da união hoje
+        elif isinstance(payload, DistilledPayload):
+            # ponytail: stub da Peça 6 (M6 8.6) — o ramo real (resolve ref->RecordID,
+            # get_or_create_entity, insert_distilled) entra com o adaptador de knowledge.
+            # Inalcançável até o worker destilador existir; se atingido, vira erro
+            # estruturado na fronteira do run_worker (nunca crash), não um bypass.
+            raise NotImplementedError("persist de DistilledPayload — Peça 6 (M6 8.6)")
+        else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
 
 
