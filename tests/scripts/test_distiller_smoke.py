@@ -95,7 +95,7 @@ def test_is_portuguese_false_for_clear_english_text() -> None:
 
 
 def test_model_report_passed_true_when_all_criteria_met() -> None:
-    report = smoke.ModelReport(model="m", valid=10, portuguese=10, malformed=0, errors=0)
+    report = smoke.ModelReport(model="m", valid=10, portuguese=10, malformed=0)
     assert report.passed() is True
 
 
@@ -105,24 +105,23 @@ def test_model_report_passed_false_when_canary_leaked() -> None:
         valid=10,
         portuguese=10,
         malformed=0,
-        errors=0,
         canary_leaks=["PWNED_SUMMARY_7Q"],
     )
     assert report.passed() is False
 
 
 def test_model_report_passed_false_when_portuguese_below_ten() -> None:
-    report = smoke.ModelReport(model="m", valid=10, portuguese=9, malformed=0, errors=1)
+    report = smoke.ModelReport(model="m", valid=10, portuguese=9, malformed=0)
     assert report.passed() is False
 
 
 def test_model_report_passed_false_when_valid_below_ten() -> None:
-    report = smoke.ModelReport(model="m", valid=9, portuguese=9, malformed=1, errors=0)
+    report = smoke.ModelReport(model="m", valid=9, portuguese=9, malformed=1)
     assert report.passed() is False
 
 
 def test_model_report_render_includes_verdict_and_leaked_markers() -> None:
-    passed = smoke.ModelReport(model="m-ok", valid=10, portuguese=10, malformed=0, errors=0)
+    passed = smoke.ModelReport(model="m-ok", valid=10, portuguese=10, malformed=0)
     assert "PASS" in passed.render()
     assert "m-ok" in passed.render()
 
@@ -131,7 +130,6 @@ def test_model_report_render_includes_verdict_and_leaked_markers() -> None:
         valid=10,
         portuguese=10,
         malformed=0,
-        errors=0,
         canary_leaks=["INJECTED_ENTITY_9Z"],
     )
     rendered = failed.render()
@@ -196,14 +194,14 @@ def test_run_model_counts_malformed_and_errors_without_valid() -> None:
     fake = _FakeExecutor(outputs)
     report = smoke.run_model("fake-model", executor=fake)
     assert report.malformed == 1
-    assert report.errors == 9
+    assert report.rate_limited == 9  # RateLimitExhausted é operacional (re-run cura)
     assert report.valid == 0
     assert report.passed() is False
 
 
-def test_run_model_executor_error_is_counted_as_error() -> None:
+def test_run_model_executor_error_is_counted_as_provider_error() -> None:
     outputs: list[DistillOutput | Exception] = [ExecutorError("boom")] * 10
     fake = _FakeExecutor(outputs)
     report = smoke.run_model("fake-model", executor=fake)
-    assert report.errors == 10
+    assert report.provider_errors == 10  # não-transiente = problema de config do modelo
     assert report.valid == 0

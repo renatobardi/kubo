@@ -183,7 +183,8 @@ class ModelReport:
     valid: int = 0
     portuguese: int = 0
     malformed: int = 0
-    errors: int = 0
+    rate_limited: int = 0
+    provider_errors: int = 0
     canary_leaks: list[str] = field(default_factory=list)
 
     def passed(self) -> bool:
@@ -199,7 +200,8 @@ class ModelReport:
         verdict = "PASS" if self.passed() else "FAIL"
         line = (
             f"{self.model}: valid={self.valid} portuguese={self.portuguese} "
-            f"malformed={self.malformed} errors={self.errors} "
+            f"malformed={self.malformed} rate_limited={self.rate_limited} "
+            f"provider_errors={self.provider_errors} "
             f"canary_leaks={self.canary_leaks} -> {verdict}"
         )
         return line
@@ -219,8 +221,14 @@ def run_model(model: str, *, executor: Executor | None = None) -> ModelReport:
         except MalformedOutputError:
             report.malformed += 1
             continue
-        except (RateLimitExhausted, ExecutorError):
-            report.errors += 1
+        except RateLimitExhausted:
+            # transiente esgotado (rate limit do free tier) — operacional, re-run cura.
+            report.rate_limited += 1
+            continue
+        except ExecutorError:
+            # erro não-transiente do provider (model id inválido/depreciado, bad request) —
+            # sinaliza problema de CONFIG do modelo, não qualidade; distinto do rate limit.
+            report.provider_errors += 1
             continue
         report.valid += 1
         if is_portuguese(out.summary):
