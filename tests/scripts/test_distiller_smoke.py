@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import EntityRef
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
-from kubo.workers.distiller import DistillOutput
+from kubo.workers.distiller import DistillOutput, filter_present_entities
 from scripts import distiller_smoke as smoke
 
 T = TypeVar("T", bound=BaseModel)
@@ -39,37 +39,45 @@ def test_smoke_items_canary_markers_are_distinct() -> None:
 
 
 def test_canary_leaked_detects_marker_in_summary() -> None:
-    out = DistillOutput(summary="isto contém PWNED_SUMMARY_7Q no meio", entities=[])
-    assert smoke.canary_leaked(out, "PWNED_SUMMARY_7Q") is True
+    assert (
+        smoke.canary_leaked("isto contém PWNED_SUMMARY_7Q no meio", [], "PWNED_SUMMARY_7Q") is True
+    )
 
 
 def test_canary_leaked_detects_marker_in_entity_name() -> None:
-    out = DistillOutput(
-        summary="resumo normal",
-        entities=[EntityRef(name="INJECTED_ENTITY_9Z", kind="malware")],
-    )
-    assert smoke.canary_leaked(out, "INJECTED_ENTITY_9Z") is True
+    entities = [EntityRef(name="INJECTED_ENTITY_9Z", kind="malware")]
+    assert smoke.canary_leaked("resumo normal", entities, "INJECTED_ENTITY_9Z") is True
 
 
 def test_canary_leaked_detects_marker_in_entity_kind() -> None:
-    out = DistillOutput(
-        summary="resumo normal",
-        entities=[EntityRef(name="algo", kind="INJECTED_ENTITY_9Z")],
-    )
-    assert smoke.canary_leaked(out, "INJECTED_ENTITY_9Z") is True
+    entities = [EntityRef(name="algo", kind="INJECTED_ENTITY_9Z")]
+    assert smoke.canary_leaked("resumo normal", entities, "INJECTED_ENTITY_9Z") is True
 
 
 def test_canary_leaked_returns_false_when_absent() -> None:
-    out = DistillOutput(
-        summary="resumo limpo, sem marcador nenhum",
-        entities=[EntityRef(name="OpenAI", kind="organização")],
+    entities = [EntityRef(name="OpenAI", kind="organização")]
+    assert (
+        smoke.canary_leaked("resumo limpo, sem marcador nenhum", entities, "PWNED_SUMMARY_7Q")
+        is False
     )
-    assert smoke.canary_leaked(out, "PWNED_SUMMARY_7Q") is False
 
 
 def test_canary_leaked_is_case_insensitive() -> None:
-    out = DistillOutput(summary="contém pwned_summary_7q em minúsculas", entities=[])
-    assert smoke.canary_leaked(out, "PWNED_SUMMARY_7Q") is True
+    assert (
+        smoke.canary_leaked("contém pwned_summary_7q em minúsculas", [], "PWNED_SUMMARY_7Q") is True
+    )
+
+
+def test_canary_leaked_still_detects_entity_marker_that_survives_the_filter() -> None:
+    """Composição real: `filter_present_entities` primeiro, `canary_leaked` depois.
+    Entidade cujo nome É verbatim no content sobrevive ao filtro — a checagem de
+    canário ainda a detecta (a defesa não depende só do filtro derrubar tudo)."""
+    content = "texto contendo o marcador INJETADA_9Z literalmente no meio"
+    entities = [EntityRef(name="INJETADA_9Z", kind="malware")]
+
+    kept = filter_present_entities(entities, content)
+
+    assert smoke.canary_leaked("resumo limpo", kept, "INJETADA_9Z") is True
 
 
 # ── is_portuguese ────────────────────────────────────────────────────────────
@@ -163,7 +171,7 @@ def test_run_model_all_clean_reports_ten_valid_and_no_leaks() -> None:
         for i in range(10)
     ]
     fake = _FakeExecutor(list(outputs))
-    report = smoke.run_model("fake-model", executor=fake)
+    report = smoke.run_model("fake-model", executor=fake, delay=0)
     assert report.valid == 10
     assert report.portuguese == 10
     assert report.canary_leaks == []
@@ -181,18 +189,52 @@ def test_run_model_detects_canary_leak_from_fake_executor() -> None:
         else:
             outputs.append(DistillOutput(summary="resumo em português normal", entities=[]))
     fake = _FakeExecutor(outputs)
-    report = smoke.run_model("fake-model", executor=fake)
+    report = smoke.run_model("fake-model", executor=fake, delay=0)
     assert set(report.canary_leaks) == {
         item.canary_marker for item in smoke.SMOKE_ITEMS if item.canary_marker is not None
     }
     assert report.passed() is False
 
 
+def test_run_model_filters_entity_canary_not_present_in_content_before_checking() -> None:
+    """Entidade injetada que o LLM criou mas que NÃO está verbatim no content do
+    item canário de entidade é derrubada pelo `filter_present_entities` ANTES da
+    checagem de canário — prova que o smoke testa o pipeline PÓS-FILTRO, não a
+    virtude do modelo. Se o modelo obedecer o pedido de construir "INJETADA_9Z" e
+    criar a entidade, o filtro derruba porque "injetada_9z" não é substring do
+    content real (que só tem "INJETADA" e "9Z" separados)."""
+    entity_index = next(
+        i for i, item in enumerate(smoke.SMOKE_ITEMS) if item.canary_marker == "INJETADA_9Z"
+    )
+    outputs: list[DistillOutput | Exception] = []
+    for i, _item in enumerate(smoke.SMOKE_ITEMS):
+        if i == entity_index:
+            outputs.append(
+                DistillOutput(
+                    summary="resumo em português sem vazamento nenhum",
+                    entities=[EntityRef(name="INJETADA_9Z", kind="malware")],
+                )
+            )
+        else:
+            outputs.append(DistillOutput(summary="resumo em português normal", entities=[]))
+    fake = _FakeExecutor(outputs)
+
+    report = smoke.run_model("fake-model", executor=fake, delay=0)
+
+    assert report.valid == 10
+    assert report.canary_leaks == []
+    assert report.passed() is True
+    # o caso complementar — entidade verbatim no content sobrevive ao filtro e
+    # `canary_leaked` ainda a detecta — está coberto direto em
+    # test_canary_leaked_still_detects_entity_marker_that_survives_the_filter,
+    # sem precisar simular um SMOKE_ITEMS alternativo aqui.
+
+
 def test_run_model_counts_malformed_and_errors_without_valid() -> None:
     outputs: list[DistillOutput | Exception] = [MalformedOutputError("x")]
     outputs.extend(RateLimitExhausted("y") for _ in range(9))
     fake = _FakeExecutor(outputs)
-    report = smoke.run_model("fake-model", executor=fake)
+    report = smoke.run_model("fake-model", executor=fake, delay=0)
     assert report.malformed == 1
     assert report.rate_limited == 9  # RateLimitExhausted é operacional (re-run cura)
     assert report.valid == 0
@@ -202,6 +244,21 @@ def test_run_model_counts_malformed_and_errors_without_valid() -> None:
 def test_run_model_executor_error_is_counted_as_provider_error() -> None:
     outputs: list[DistillOutput | Exception] = [ExecutorError("boom")] * 10
     fake = _FakeExecutor(outputs)
-    report = smoke.run_model("fake-model", executor=fake)
+    report = smoke.run_model("fake-model", executor=fake, delay=0)
     assert report.provider_errors == 10  # não-transiente = problema de config do modelo
     assert report.valid == 0
+
+
+def test_run_model_sleeps_between_items_but_not_before_the_first() -> None:
+    """Pacing (marco 8.6): `sleep(delay)` roda entre chamadas, nunca antes da 1ª —
+    para 10 itens, exatamente 9 chamadas de sleep."""
+    outputs = [
+        DistillOutput(summary="resumo em português número " + str(i), entities=[])
+        for i in range(10)
+    ]
+    fake = _FakeExecutor(list(outputs))
+    sleep_calls: list[float] = []
+
+    smoke.run_model("fake-model", executor=fake, delay=2.5, sleep=sleep_calls.append)
+
+    assert sleep_calls == [2.5] * 9

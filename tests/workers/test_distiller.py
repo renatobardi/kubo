@@ -26,7 +26,12 @@ from pydantic import BaseModel
 from kubo.contracts.models import DistilledPayload, EntityRef, Payload
 from kubo.contracts.worker import ItemView
 from kubo.errors import ConfigError, MalformedOutputError, RateLimitExhausted
-from kubo.workers.distiller import DistillerConfig, DistillerWorker, DistillOutput
+from kubo.workers.distiller import (
+    DistillerConfig,
+    DistillerWorker,
+    DistillOutput,
+    filter_present_entities,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -259,6 +264,20 @@ def test_run_filters_entities_case_insensitively() -> None:
     payload0 = _as_distilled(result.payloads[0])
     assert payload0.entities == [EntityRef(name="anthropic", kind="org")]
     assert result.stats.model_dump()["entities_filtered"] == 0
+
+
+def test_filter_present_entities_keeps_present_drops_absent_case_insensitively() -> None:
+    """`filter_present_entities` direto (sem passar pelo worker): entidade presente
+    (mesmo em caixa diferente) é mantida; entidade ausente do content é descartada."""
+    content = "Texto sobre a Anthropic e seus modelos."
+    entities = [
+        EntityRef(name="anthropic", kind="org"),
+        EntityRef(name="INJETADA_FANTASMA", kind="malware"),
+    ]
+
+    kept = filter_present_entities(entities, content)
+
+    assert kept == [EntityRef(name="anthropic", kind="org")]
 
 
 def test_run_echoes_item_ref_never_invents_it() -> None:

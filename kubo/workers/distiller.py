@@ -138,9 +138,10 @@ class DistillerWorker:
             # do modelo obedecer instrução. Descartadas são só CONTADAS; nunca
             # logamos name/content (§VIII). Trade-off aceito: enriquecimento
             # legítimo não-verbatim (ex.: "banco central" → "Banco Central do
-            # Brasil") também cai — monitorado por `entities_filtered`.
-            content_cf = content.casefold()
-            kept_entities = [e for e in out.entities if e.name.casefold() in content_cf]
+            # Brasil") também cai — monitorado por `entities_filtered`. A função é
+            # pública e reutilizada pelo smoke (marco 8.6): mesma seleção, mesmo
+            # pipeline provado.
+            kept_entities = filter_present_entities(out.entities, content)
             entities_filtered += len(out.entities) - len(kept_entities)
 
             texts = chunk_text(out.summary)
@@ -170,6 +171,15 @@ class DistillerWorker:
             payloads=list(payloads),
             stats=_stats(distilled, malformed, truncated, entities_filtered),
         )
+
+
+def filter_present_entities(entities: list[EntityRef], content: str) -> list[EntityRef]:
+    """Mantém só entidades cujo `name` (casefold) é substring do `content` — defesa
+    estrutural de injeção (ADR-0013 §V emenda). O worker e o smoke usam a MESMA
+    função, então o smoke prova o pipeline real, não a virtude do modelo.
+    """
+    content_cf = content.casefold()
+    return [e for e in entities if e.name.casefold() in content_cf]
 
 
 def _stats(distilled: int, malformed: int, truncated: int, entities_filtered: int) -> Stats:
