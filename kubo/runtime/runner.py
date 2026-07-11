@@ -25,8 +25,9 @@ from kubo.contracts.models import (
     WorkerManifest,
 )
 from kubo.contracts.worker import validate_worker
+from kubo.embedding import Embedder
 from kubo.errors import ConfigError, format_validation_error
-from kubo.runtime.context import EmptyKnowledge, RunContext
+from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.store.knowledge import fail_run, finish_run, start_run, upsert_item, upsert_source
 
@@ -109,10 +110,13 @@ def _build_context(
     config: dict[str, Any] | None,
     catalog_dir: Path,
     run_id: RecordID,
+    db: Any,
+    embedder: Embedder | None,
 ) -> RunContext:
     """Monta o ctx read-only: config validada contra o schema do manifest,
     integrações resolvidas (declaradas ∩ existentes; segredo pelo runtime),
-    seam de conhecimento vazio e logger bound com run_id/worker."""
+    o adaptador de conhecimento (`GraphKnowledge`, ADR-0013 §III) e logger
+    bound com run_id/worker."""
     config_model = manifest.config.model_validate(config or {})
     catalog = load_integrations(catalog_dir)
     integrations = resolve_integrations(manifest.integrations, catalog)
@@ -120,8 +124,9 @@ def _build_context(
     return RunContext(
         config=config_model,
         integrations=integrations,
-        knowledge=EmptyKnowledge(),
+        knowledge=GraphKnowledge(db),
         logger=logger,
+        embedder=embedder,
     )
 
 
@@ -131,6 +136,7 @@ def run_worker(
     *,
     config: dict[str, Any] | None = None,
     catalog_dir: Path = _DEFAULT_CATALOG_DIR,
+    embedder: Embedder | None = None,
 ) -> RecordID:
     """Executa um worker sob contrato ponta a ponta e devolve o id do `run`.
 
@@ -141,7 +147,7 @@ def run_worker(
     manifest = validate_worker(worker)
     run_id = start_run(db, worker=manifest.name)
     try:
-        ctx = _build_context(manifest, config, catalog_dir, run_id)
+        ctx = _build_context(manifest, config, catalog_dir, run_id, db, embedder)
         raw_result = worker.run(ctx)  # type: ignore[attr-defined]  # assinatura validada acima
         result = RunResult.model_validate(raw_result)
         # _persist DENTRO do try: uma falha de store não pode deixar o run travado

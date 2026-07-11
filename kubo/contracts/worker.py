@@ -13,22 +13,46 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
 from kubo.contracts.models import RunResult, WorkerManifest
+from kubo.embedding import Embedder
 from kubo.errors import ContractError
 
 _MISSING = object()
 
 
+@dataclass(frozen=True)
+class ItemView:
+    """View read-only de um item pendente, entregue ao worker destilador
+    (ADR-0013 §III.1).
+
+    `ref` é OPACO: o worker não conhece o `RecordID` real, só um inteiro que
+    identifica o item DENTRO do lote da run atual — resolvê-lo a RecordID é
+    tarefa do runtime (`GraphKnowledge.resolve`), fora deste Protocol.
+    `content` é conteúdo coletado (hostil): nunca interpolar, sempre tratar
+    como entrada não-confiável.
+    """
+
+    ref: int
+    title: str | None
+    content: str
+
+
 class KnowledgeReader(Protocol):
-    """Seam de leitura do grafo, vazio na fase 1 (ADR-0009 item VI).
+    """Seam de leitura do grafo entregue ao worker (ADR-0009 item VI, ADR-0013 §III.1).
 
     Métodos entram quando um worker exigir leitura do grafo, com teste que
     justifique — não se especula agora.
     """
+
+    def items_to_distill(self, limit: int) -> list[ItemView]:
+        """Devolve até `limit` itens pendentes de destilação (§III.1), com
+        `ref` opaco atribuído pelo runtime — nunca o RecordID real."""
+        ...
 
 
 class RunContext(Protocol):
@@ -38,7 +62,7 @@ class RunContext(Protocol):
 
     Membros são `@property` (só-leitura) de propósito: atributo mutável de
     Protocol é INVARIANTE, e o ctx concreto (dataclass frozen) usa tipos mais
-    estreitos (`Mapping[str, ResolvedIntegration]`, `EmptyKnowledge`) — sob
+    estreitos (`Mapping[str, ResolvedIntegration]`, `GraphKnowledge`) — sob
     invariância ele não satisfaria este Protocol. Property de leitura é
     covariante, então o concreto o honra, coerente com "somente-leitura".
     """
@@ -51,6 +75,8 @@ class RunContext(Protocol):
     def knowledge(self) -> KnowledgeReader: ...
     @property
     def logger(self) -> Any: ...
+    @property
+    def embedder(self) -> Embedder | None: ...
 
 
 class Worker(Protocol):
