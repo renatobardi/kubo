@@ -46,6 +46,27 @@ class EmbeddingError(KuboError):
     """
 
 
+class ExecutorError(KuboError):
+    """Base das falhas do executor de LLM (ADR-0013 §IV)."""
+
+
+class MalformedOutputError(ExecutorError):
+    """Saída do LLM não valida contra o schema esperado (ADR-0013 §IV).
+
+    A mensagem NUNCA embute a saída crua do LLM nem o conteúdo coletado
+    (ADR-0013 §VIII): saída malformada é rejeitada e contada, jamais aproveitada,
+    e não se propaga o texto que quebrou para log/run.error. Não entra no backoff
+    (retry de malformado queima quota do free tier e é induzível por item hostil)."""
+
+
+class RateLimitExhausted(ExecutorError):
+    """Quota/rate limit do provider estourou após o teto de tentativas (ADR-0013 §V).
+
+    Falha SISTÊMICA (distinta de malformado por-item): o worker para o loop e
+    devolve o parcial. A mensagem não propaga o corpo cru da resposta do provider
+    (que pode embutir conteúdo/segredo — §VIII)."""
+
+
 class ContractError(KuboError):
     """Objeto não honra o contrato de worker (ADR-0009).
 
