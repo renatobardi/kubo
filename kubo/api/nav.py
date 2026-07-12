@@ -26,6 +26,7 @@ class NavItem(TypedDict):
 NAV: list[NavItem] = [
     {"label": "Painel", "route": "/", "group": None},
     {"label": "Destilados", "route": "/distilled", "group": "Conhecimento"},
+    {"label": "Entidades", "route": "/entities", "group": "Conhecimento"},
     {"label": "Fontes", "route": "/sources", "group": "Conhecimento"},
     {"label": "Execuções", "route": "/runs", "group": "Trabalho"},
 ]
