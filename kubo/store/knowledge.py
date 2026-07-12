@@ -28,6 +28,8 @@ _log = structlog.get_logger(__name__)
 # Parte estática da busca KNN (sem interpolação — a store resolve chunk -> distilled).
 _KNN_SELECT = "SELECT id, vector::distance::knn() AS dist, ->chunk_of->distilled AS d FROM chunk"
 _MAX_K = 100  # teto de resultados por busca — clamp anti-DoS na borda (escala pessoal, folgado).
+# teto de itens por página de browse — start/limit vêm de query param (hostis na borda).
+_MAX_PAGE = 100
 
 
 @dataclass(frozen=True)
@@ -292,6 +294,37 @@ def read_distilled(db: Any, distilled: RecordID) -> DistilledView | None:
     ]
 
     return DistilledView(id=distilled, summary=summary, claims=claims, items=items, runs=runs)
+
+
+@dataclass(frozen=True)
+class DistilledListItem:
+    """Linha do browse de destilados (UI fase 2): id (link para o detalhe) + summary.
+    Leitura enxuta — a cadeia de proveniência completa vem de `read_distilled`."""
+
+    id: RecordID
+    summary: str
+
+
+def list_distilled(db: Any, *, limit: int, start: int) -> list[DistilledListItem]:
+    """Página do acervo de destilados, mais recentes primeiro (browse da UI fase 2).
+
+    `limit`/`start` vêm de query param (hostis): o clamp fica aqui, a store é a
+    fronteira em que a spec confia — `limit` em [1, _MAX_PAGE], `start` >= 0. Ordem
+    `created_at DESC, id`: recência para o browse, id como desempate determinístico
+    para paginação estável quando dois destilados têm o mesmo created_at."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    start = max(0, int(start))
+    # LIMIT/START não aceitam bind param nesta versão do SurrealDB (o parser exige
+    # literal, mesmo caso do <|k,ef|> em `search`). limit/start são ints já clampados
+    # pela store — não conteúdo coletado; interpolação é segura aqui.
+    # created_at entra na projeção porque o SurrealDB v3 exige que o campo do
+    # ORDER BY esteja na seleção; a view só usa id + summary.
+    query = (
+        "SELECT id, summary, created_at FROM distilled "  # noqa: S608
+        f"ORDER BY created_at DESC, id LIMIT {limit} START {start};"
+    )
+    rows = db.query(query)
+    return [DistilledListItem(id=r["id"], summary=r["summary"]) for r in rows]
 
 
 @dataclass(frozen=True)
