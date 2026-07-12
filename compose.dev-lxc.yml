@@ -17,6 +17,16 @@
 # só para o dockerd do kubo-test (que já é unconfined no nível LXC). Ver ADR-0011 e
 # o runbook — por isso este compose fica limpo e idêntico ao de PRD fora do backup.
 
+services:
+  # Publish da UI SÓ no DEV (E2): bind no IP Tailscale do oute-server, porta DEV 3900
+  # (PORTS.md). O uvicorn escuta 0.0.0.0 dentro do container; a fronteira de segurança
+  # é este bind no IP Tailscale — nada escuta no 0.0.0.0 do HOST (Tailscale-only,
+  # ADR-0011). Pré-condição de boot: o tailscaled precisa estar de pé ANTES do compose
+  # (o Docker não publica em IP inexistente) — ver runbook-deploy.md.
+  kubo-api:
+    ports:
+      - "100.66.254.24:3900:8000"
+
 volumes:
   surreal-backups:
     driver: local

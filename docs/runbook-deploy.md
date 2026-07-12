@@ -91,7 +91,41 @@ docker compose up -d
 ```
 
 `docker compose config` (uma vez) confirma que o overlay dev mergeou
-(`COMPOSE_FILE` no `.env`): `surreal-backups` com `device: /backups`.
+(`COMPOSE_FILE` no `.env`): `surreal-backups` com `device: /backups` **e**
+`kubo-api` com `ports` publicado em `100.66.254.24:3900`.
+
+---
+
+## 2b. UI da fase 2 (kubo-api) — ADR-0014
+
+**Pré-requisito de segredos no `.env` do servidor** (invariante 8 — o dono preenche,
+o agente nunca lê): `KUBO_PASSWORD_HASH` (gerado por `docker compose run --rm kubo-api
+python -m kubo.api.hashpw` — digita a senha, cola o hash) e `SESSION_SECRET` (token
+aleatório: `python -c "import secrets; print(secrets.token_hex(32))"`). Sem eles a
+`kubo-api` faz fail-fast (não sobe). `GEMINI_API_KEY` é opcional: sem ela a UI serve
+Painel + listas e só a busca degrada (alerta *tinted*).
+
+**Ordem de boot — tailscaled ANTES do compose (E2):** o publish é `100.66.254.24:3900`
+(IP Tailscale). O Docker NÃO publica em IP inexistente — se o `tailscaled` não estiver
+de pé quando o compose subir, a `kubo-api` falha ao criar o bind. No boot do LXC,
+garanta o tailscaled primeiro; num reboot manual, `docker compose up -d` depois que
+`tailscale ip -4` responder o `100.66.254.24`. A fronteira de segurança é ESTE bind no
+IP Tailscale (a faixa DEV 3000-3999 é pública no firewall) — nada escuta no `0.0.0.0`
+do host.
+
+**Arquitetura do binário Tailwind:** o Dockerfile pina `tailwindcss-linux-arm64`
+(oute-server = aarch64). **Confirme `uname -m` no `kubo-test` antes do primeiro build**
+— se for `x86_64`, buildar com `--build-arg TAILWIND_ARCH=linux-x64 --build-arg
+TAILWIND_SHA256=5036c4fb4328e0bcdbb6065c70d8ac9452e0d4c947113a788a8f94fd390425c1`.
+
+**Smoke (da tailnet):**
+```bash
+curl http://100.66.254.24:3900/healthz          # -> ok (sem auth)
+ss -ltnp | grep 3900                             # bind SÓ em 100.66.254.24, nunca 0.0.0.0
+```
+No browser (tailnet): login → Destilados → busca em PT-BR → detalhe com proveniência
+→ logout. Reboot do container (`ssh oute-server lxc restart kubo-test`) deve religar
+tudo sozinho (tailscaled → compose via `boot.autostart` + `restart: unless-stopped`).
 
 ---
 
@@ -101,8 +135,9 @@ Fase 1 = logs, não dashboard. Scheduler sem porta não tem healthcheck honesto;
 `restart: unless-stopped` é o mecanismo.
 
 ```bash
-docker compose ps                          # estado + health do surrealdb
+docker compose ps                          # estado + health do surrealdb e kubo-api
 docker compose logs -f kubo-scheduler      # jobs, coletas (feed_collected), erros
+docker compose logs -f kubo-api            # requests, api.login.failed, api.search.unavailable
 docker compose logs backup                 # dump diario
 ```
 

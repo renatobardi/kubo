@@ -1,0 +1,9 @@
+# Contexto de build enxuto. O app.css é GERADO no stage tailwind (a cópia do host
+# nunca é autoritativa); .venv e caches são ruído. .git fica: o hatchling usa o VCS
+# para selecionar os arquivos do wheel (mesmo comportamento provado do scheduler).
+kubo/api/static/app.css
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
