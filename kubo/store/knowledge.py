@@ -409,15 +409,23 @@ def distilled_without_chunks(db: Any) -> list[tuple[RecordID, str]]:
 
 
 def items_without_distilled(db: Any, *, limit: int) -> list[tuple[RecordID, str | None, str]]:
-    """Lista `(item_id, title, content)` de todo `item` SEM nenhum `derived_from`
-    incoming — os candidatos à destilação NOVA (ADR-0013 §III.1/§III.7).
+    """Lista `(item_id, title, content)` dos candidatos à destilação NOVA: todo `item`
+    SEM nenhum `derived_from` incoming E com `content` não-vazio (ADR-0013 §III.1/§III.7).
 
-    Ordem determinística (por id) e limitada por `limit`: o worker de distilação
-    consome esta lista em lotes previsíveis, sem depender de ordem de inserção do
-    servidor. Par de leitura de `distilled_for` (item -> distilled); aqui a direção
-    é item -> ausência de destilado."""
+    O filtro de conteúdo vazio/só-whitespace é precondição do run vivo (§III): mandar o
+    vazio ao LLM alucinaria um summary que persistiria COM proveniência, e o item sairia
+    do funil para sempre — conhecimento fabricado com carimbo de origem. Os ~536 link-posts
+    do Hacker News (só URL, `content=""`) ficam de fora deliberadamente. Propriedade: se o
+    content for preenchido depois (harvest futuro), o item REENTRA no funil automaticamente
+    — o filtro é sobre o estado atual do item, não uma marca permanente.
+
+    Ordem determinística (por id) e limitada por `limit`: o worker de distilação consome
+    esta lista em lotes previsíveis, sem depender de ordem de inserção do servidor. Par de
+    leitura de `distilled_for` (item -> distilled); aqui a direção é item -> ausência de
+    destilado."""
     rows = db.query(
-        "SELECT id, title, content FROM item WHERE array::len(<-derived_from) = 0 "
+        "SELECT id, title, content FROM item "
+        'WHERE array::len(<-derived_from) = 0 AND string::trim(content) != "" '
         "ORDER BY id LIMIT $limit;",
         {"limit": limit},
     )
