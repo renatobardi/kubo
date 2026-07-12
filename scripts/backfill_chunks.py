@@ -218,7 +218,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _log.info("backfill.done", ok=ok, empty=vazio, failed=falhou, total=len(pending))
         print(f"backfill concluído: ok={ok} vazio={vazio} falhou={falhou} total={len(pending)}")
 
-    return 0
+    # Exit code reflete o resultado: 1 se algum embed falhou (re-run cura o resto),
+    # 0 se tudo ok (ou dry-run). Script que sempre retorna 0 esconderia a falha do shell.
+    return 1 if falhou else 0
 
 
 if __name__ == "__main__":

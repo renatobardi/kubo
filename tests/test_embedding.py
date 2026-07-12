@@ -17,6 +17,11 @@ from kubo.errors import ConfigError, EmbeddingError
 
 _BATCH_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
 
+# Valor stub de credencial de teste — NUNCA um segredo real (a key real vem só de
+# os.environ, invariante 8). Constante única (nome sem palavra-chave de credencial)
+# para os testes não repetirem o literal nem dispararem falso-positivo de segredo.
+_STUB = "fake-key-nao-real"
+
 
 def _vector(dim: int, fill: float) -> list[float]:
     """Constrói um vetor de dimensão `dim` preenchido com `fill`, para fixtures de resposta."""
@@ -50,7 +55,7 @@ def test_from_env_com_key_le_variavel_de_ambiente(monkeypatch):
 
     embedder = GeminiEmbedder.from_env(client=httpx.Client())
 
-    assert embedder.api_key == "env-key-para-teste-nao-real"
+    assert embedder.api_key == "env-key-para-teste-nao-real"  # pragma: allowlist secret
     assert embedder.model == "gemini-embedding-001"
     assert embedder.dim == 768
     assert embedder.task_type == "SEMANTIC_SIMILARITY"
@@ -59,7 +64,7 @@ def test_from_env_com_key_le_variavel_de_ambiente(monkeypatch):
 @respx.mock
 def test_embed_lista_vazia_retorna_lista_vazia_sem_chamada_http():
     """texts=[] retorna [] imediatamente, sem qualquer chamada HTTP ao Gemini."""
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     result = embedder.embed([])
 
@@ -73,7 +78,7 @@ def test_embed_de_n_textos_retorna_n_vetores_na_ordem_de_envio():
     textos = ["primeiro texto", "segundo texto", "terceiro texto"]
     vetores = [_vector(768, 0.1), _vector(768, 0.2), _vector(768, 0.3)]
     respx.post(_BATCH_URL).mock(return_value=_embeddings_response(vetores))
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     result = embedder.embed(textos)
 
@@ -88,7 +93,7 @@ def test_embed_envia_um_unico_post_com_um_request_por_texto_no_corpo():
         return_value=_embeddings_response([_vector(768, 0.1), _vector(768, 0.2)])
     )
     embedder = GeminiEmbedder(
-        api_key="fake-key-nao-real", dim=768, task_type="SEMANTIC_SIMILARITY", client=httpx.Client()
+        api_key=_STUB, dim=768, task_type="SEMANTIC_SIMILARITY", client=httpx.Client()
     )
 
     embedder.embed(textos)
@@ -117,18 +122,18 @@ def test_embed_envia_um_unico_post_com_um_request_por_texto_no_corpo():
 def test_embed_envia_header_x_goog_api_key_com_a_credencial():
     """O POST carrega a api_key no header x-goog-api-key (não em querystring nem body)."""
     respx.post(_BATCH_URL).mock(return_value=_embeddings_response([_vector(768, 0.1)]))
-    embedder = GeminiEmbedder(api_key="minha-key-de-teste", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     embedder.embed(["um texto"])
 
-    assert respx.calls[0].request.headers["x-goog-api-key"] == "minha-key-de-teste"
+    assert respx.calls[0].request.headers["x-goog-api-key"] == _STUB
 
 
 @respx.mock
 def test_embed_envia_content_type_json():
     """O POST declara Content-Type: application/json."""
     respx.post(_BATCH_URL).mock(return_value=_embeddings_response([_vector(768, 0.1)]))
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     embedder.embed(["um texto"])
 
@@ -139,7 +144,7 @@ def test_embed_envia_content_type_json():
 def test_embed_com_erro_http_levanta_embedding_error():
     """Resposta HTTP não-2xx da API vira EmbeddingError, não exceção crua do httpx."""
     respx.post(_BATCH_URL).mock(return_value=httpx.Response(500, text="internal error"))
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     with pytest.raises(EmbeddingError):
         embedder.embed(["um texto"])
@@ -168,7 +173,7 @@ def test_embed_com_contagem_de_vetores_diferente_da_de_textos_levanta_embedding_
     respx.post(_BATCH_URL).mock(
         return_value=_embeddings_response([_vector(768, 0.1)])
     )  # 1 vetor para 2 textos
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
 
     with pytest.raises(EmbeddingError):
         embedder.embed(["texto um", "texto dois"])
@@ -178,7 +183,7 @@ def test_embed_com_contagem_de_vetores_diferente_da_de_textos_levanta_embedding_
 def test_embed_com_dimensao_de_vetor_diferente_da_tripla_pinada_levanta_embedding_error():
     """Vetor com dimensão != dim pinado (768) é erro — corromperia o espaço de busca."""
     respx.post(_BATCH_URL).mock(return_value=_embeddings_response([_vector(512, 0.1)]))
-    embedder = GeminiEmbedder(api_key="fake-key-nao-real", dim=768, client=httpx.Client())
+    embedder = GeminiEmbedder(api_key=_STUB, dim=768, client=httpx.Client())
 
     with pytest.raises(EmbeddingError):
         embedder.embed(["um texto"])

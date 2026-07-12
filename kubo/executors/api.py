@@ -34,6 +34,11 @@ _TRANSIENT = (
     litellm_exceptions.APIConnectionError,
 )
 
+# Mensagem genérica de saída malformada — FIXA de propósito: nunca embute a saída crua
+# do LLM nem o input do ValidationError (§VIII). Constante única (os 3 caminhos de
+# malformado usam a mesma, sem vazar qual falhou).
+_MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
+
 
 class ApiExecutorConfig(BaseModel):
     """Configuração do `ApiExecutor`: modelo LiteLLM e parâmetros de geração.
@@ -155,10 +160,10 @@ class ApiExecutor:
         except (IndexError, AttributeError, KeyError, TypeError):
             # Resposta com shape inesperado (choices vazio, message None) é malformada —
             # descarta o item, não derruba o run com IndexError cru (achado de review).
-            raise MalformedOutputError("saída do LLM não valida contra o schema esperado") from None
+            raise MalformedOutputError(_MALFORMED_MSG) from None
         if not isinstance(content, str):
-            raise MalformedOutputError("saída do LLM não valida contra o schema esperado")
+            raise MalformedOutputError(_MALFORMED_MSG)
         try:
             return response_model.model_validate_json(content)
         except ValidationError:
-            raise MalformedOutputError("saída do LLM não valida contra o schema esperado") from None
+            raise MalformedOutputError(_MALFORMED_MSG) from None
