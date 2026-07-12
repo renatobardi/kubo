@@ -31,7 +31,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Desacopla as rotas de página do banco real: connect falso + leituras vazias
     por padrão. Testes com dados específicos (test_distilled, test_dashboard)
     sobrescrevem estas leituras no corpo do teste."""
-    for mod in ("dashboard", "distilled", "runs"):
+    for mod in ("dashboard", "distilled", "runs", "sources"):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
@@ -40,6 +40,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db: [])
 
 
 @pytest.fixture(autouse=True)

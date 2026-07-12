@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Fontes · Kubo{% endblock %}
+{% block heading %}Fontes{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-4">
+  <p class="text-sm text-muted-foreground">De onde vem o que você sabe — canais, feeds e sites, com a recência de cada coleta.</p>
+
+  <section class="space-y-2.5">
+    {% for source in sources %}
+      {% set days = source.last_collected_at | days_since %}
+      <div class="flex items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          {% if source.kind == "youtube" %}
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><path d="m10 15 5-3-5-3z"/></svg>
+          {% else %}
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+          {% endif %}
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="truncate text-sm font-medium">{{ source.title or source.canonical }}</span>
+            <span class="shrink-0 rounded-4xl px-2 py-0.5 text-2xs text-muted-foreground ring-1 ring-foreground/10">{{ source.kind }}</span>
+          </div>
+          <p class="mt-0.5 truncate text-xs text-muted-foreground">
+            {% if source.title %}{{ source.canonical }} · {% endif %}{{ source.items }} itens acumulados
+          </p>
+        </div>
+        {% if days is none %}
+          <span class="shrink-0 rounded-4xl px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">sem coleta</span>
+        {% else %}
+          <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+            {% if days == 0 %}coletou hoje{% else %}última coleta há {{ days }}d{% endif %}
+          </span>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+        Nenhuma fonte no acervo ainda.
+      </div>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}
