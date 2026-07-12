@@ -1,0 +1,24 @@
+{# Partial HTMX da busca semântica (E6: k=20, sem paginação). Summaries em texto
+   plano escapado (E1). Degradação: alerta tinted quando o embedder falta/erra (E-f). #}
+{% if error %}
+  <div class="rounded-2xl bg-destructive/10 p-4 text-sm text-destructive ring-1 ring-destructive/20">
+    {{ error }}
+    <span class="text-muted-foreground">A navegação do acervo segue disponível abaixo.</span>
+  </div>
+{% elif query and not results %}
+  <div class="rounded-2xl bg-card p-4 text-sm text-muted-foreground ring-1 ring-foreground/10">
+    Nada encontrado para “{{ query }}”.
+  </div>
+{% elif results %}
+  <div class="space-y-3">
+    <p class="text-xs text-muted-foreground">Resultados para “{{ query }}”</p>
+    {% for result in results %}
+      <a
+        href="/distilled/{{ result.id.id }}"
+        class="block rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20"
+      >
+        <p class="line-clamp-3 whitespace-pre-wrap text-sm">{{ result.summary }}</p>
+      </a>
+    {% endfor %}
+  </div>
+{% endif %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Destilado · Kubo{% endblock %}
+{% block header %}
+  <div class="flex flex-col justify-center">
+    <a href="/distilled" class="text-xs text-muted-foreground transition-colors hover:text-foreground">← Destilados</a>
+    <h1 class="text-xl font-semibold tracking-tight">Destilado</h1>
+  </div>
+{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-6">
+  <div class="rounded-2xl bg-card p-6 ring-1 ring-foreground/10">
+    <p class="whitespace-pre-wrap text-sm">{{ view.summary }}</p>
+    {% if view.claims %}
+      <ul class="mt-4 space-y-1.5 border-t border-border/60 pt-4">
+        {% for claim in view.claims %}
+          <li class="flex gap-2 text-sm">
+            <span class="text-muted-foreground">•</span>
+            <span class="whitespace-pre-wrap">{{ claim }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+
+  <section>
+    <h2 class="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Proveniência</h2>
+    <div class="space-y-3">
+      {% for item in view.items %}
+        <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+          <div class="text-sm font-medium">{{ item.title or item.external_id }}</div>
+          <div class="mt-0.5 text-xs text-muted-foreground">
+            {{ item.source_title or item.source_canonical }} · {{ item.source_kind }}
+          </div>
+          {# item.url é conteúdo coletado (hostil): só vira link se for http(s).
+             Sem o guard de esquema, um `javascript:`/`data:` no href seria XSS ao
+             clicar — o autoescape do Jinja não filtra esquema de URL (E1/§XSS). #}
+          {% if item.url and item.url.startswith(("https://", "http://")) %}
+            <a
+              href="{{ item.url }}"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="mt-1 inline-block break-all text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+            >{{ item.url }}</a>
+          {% elif item.url %}
+            <div class="mt-1 break-all text-xs text-muted-foreground">{{ item.url }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+      {% for run in view.runs %}
+        <div class="text-xs text-muted-foreground">
+          Produzido por <span class="font-medium text-foreground">{{ run.worker }}</span> · {{ run.status }}
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}
