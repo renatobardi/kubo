@@ -210,6 +210,20 @@ def test_detail_renders_provenance_chain(
     assert "feed" in html  # worker do run
 
 
+def test_no_template_uses_safe_filter() -> None:
+    """Proibição executável (ADR-0014): NENHUM template usa `|safe`. Conteúdo coletado
+    (summary/claim/título/url) é hostil; `|safe` desligaria o autoescape e armaria XSS."""
+    from pathlib import Path
+
+    templates_dir = Path(__file__).resolve().parents[2] / "kubo" / "api" / "templates"
+    offenders = [
+        p.relative_to(templates_dir)
+        for p in templates_dir.rglob("*.html")
+        if "|safe" in p.read_text(encoding="utf-8").replace(" ", "")
+    ]
+    assert offenders == [], f"templates com |safe (proibido): {offenders}"
+
+
 def test_distilled_routes_require_auth(client: TestClient) -> None:
     """Sem sessão, as rotas de Destilados redirecionam pro login (guard)."""
     assert client.get("/distilled", follow_redirects=False).status_code == 303

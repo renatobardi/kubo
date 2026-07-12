@@ -17,7 +17,7 @@ from kubo.api.app import create_app
 from kubo.api.auth import hash_password
 from kubo.store.knowledge import DashboardCounts
 
-UI_PASSWORD = "test-ui-password"
+UI_PASSWORD = "test-ui-password"  # pragma: allowlist secret
 
 
 @contextmanager
@@ -45,7 +45,10 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
 def ui_env(monkeypatch: pytest.MonkeyPatch) -> str:
     """Env mínimo para a fábrica subir; devolve a senha em claro para os testes de login."""
     monkeypatch.setenv("KUBO_PASSWORD_HASH", hash_password(UI_PASSWORD))
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-0123456789abcdef")
+    monkeypatch.setenv(
+        "SESSION_SECRET",
+        "test-session-secret-0123456789abcdef",  # pragma: allowlist secret
+    )
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
     return UI_PASSWORD
 

@@ -18,7 +18,7 @@ Contexto adicional: kubo-api compartilha credencial root do SurrealDB (padrão h
 
 ### 1. Bearer estático escopado (emenda ADR-0003)
 
-O token bearer do ADR-0003 fica **reservado a futuras rotas `/api/*`** (orquestrador externo, máquina-a-máquina). **Nenhum middleware bearer nasce agora** — YAGNI (Yet Another You Aren't Gonna Need It; a decisão arquitetural está no ADR, não no código). A UI de browser usa mecanismo distinto.
+O token bearer do ADR-0003 fica **reservado a futuras rotas `/api/*`** (orquestrador externo, máquina-a-máquina). **Nenhum middleware bearer nasce agora** — YAGNI (You Aren't Gonna Need It; a decisão arquitetural está no ADR, não no código). A UI de browser usa mecanismo distinto.
 
 ### 2. Login de senha única, dono único
 
@@ -26,7 +26,7 @@ Tela `/login` (form POST, método POST, sem AJAX) com campo senha única. Senha 
 
 ### 3. Hash de senha: `hashlib.scrypt` (stdlib), zero dependência de hash
 
-Usa `hashlib.scrypt` da stdlib (Python 3.12+). **Parâmetros: n=2^14, r=8, p=1** (n=2^15 estoura o limite de memória do OpenSSL — footgun confirmado em spike). Formato do hash embute os parâmetros: `scrypt$14$8$1$<salt_hex>$<hash_hex>`, permitindo ajustes de custo futuro sem invalidar senhas antigas silenciosamente. Verificação com `hmac.compare_digest` (timing-safe).
+Usa `hashlib.scrypt` da stdlib (Python 3.12+). **Parâmetros: n=2^14, r=8, p=1** (n=2^15 estoura o limite de memória do OpenSSL — footgun confirmado em spike). Formato do hash embute os parâmetros: `scrypt$14$8$1$<salt_hex>$<hash_hex>`, permitindo ajustes de custo futuro sem invalidar senhas antigas silenciosamente. Verificação com `hmac.compare_digest` (timing-safe). A derivação do `verify` fica dentro do `try/except ValueError`: um hash com parâmetro de custo fora de faixa (corrupção/misconfig) **falha fechado** (retorna False), nunca um 500 revelador.
 
 **Helper:** `python -m kubo.api.hashpw` (sem argumentos de senha — entrada via stdin/getpass, nunca em argumento). Output é a string de hash completa, que o dono cola diretamente em `.env` como `KUBO_PASSWORD_HASH=...`. A senha **nunca toca código, chat, log ou commit**.
 
@@ -50,16 +50,17 @@ Toda rota da UI (exceto `/login` e `/healthz`) é GET até data de decisão dest
 
 ### 8. `TrustedHostMiddleware` contra rebinding de DNS
 
-Middleware de uma linha, parâmetros em env: `KUBO_ALLOWED_HOSTS` (lista separada por vírgula, ex. `"100.66.254.24,kubo.tailnet-..."` — MagicDNS da Tailscale). Fecha ataque de rebinding de DNS (confusion entre browser na tailnet navegando internet pública e quem quer enganá-lo a falar com um localhost falso da máquina host). Comparação ignora porta. Se requerimento vier com Host não-permitido, retorna 400. **Custo operacional:** dono insere a lista em env na primeira subida; mudança de topologia exige atualizar.
+Middleware de uma linha, parâmetros em env: `KUBO_ALLOWED_HOSTS` (lista separada por vírgula, ex. `"100.66.254.24,kubo.tailnet-..."` — MagicDNS da Tailscale). Fecha ataque de rebinding de DNS (confusion entre browser na tailnet navegando internet pública e quem quer enganá-lo a falar com um localhost falso da máquina host). Comparação ignora porta. Se requerimento vier com Host não-permitido, retorna 400. **Default seguro:** sem `KUBO_ALLOWED_HOSTS`, cai numa lista de dev (`localhost`/`127.0.0.1`/`testserver`) — prod fica trancado ao IP Tailscale que o compose seta; um IP não configurado dá 400 (fail-closed), não passa. **`localhost`/`127.0.0.1` são SEMPRE anexados** à lista: o healthcheck do compose bate em `http://localhost:8000/healthz` de dentro do container, e sem isso um allowlist restrito ao IP Tailscale deixaria o container unhealthy. **Custo operacional:** dono insere a lista em env na primeira subida; mudança de topologia exige atualizar.
 
 ### 9. Rate-limit mínimo, sem dependência
 
-~15 linhas de código na rota `/login`:
+Sem dep, na rota `/login`:
 - Scrypt já custa ~100ms/tentativa.
-- Falta de senha = `time.sleep(1)` antes de redirecionar.
-- Log estruturado (structlog) com `attempt=failed`, `ip`, `timestamp` (subsídio para monitorar brute force).
+- **Gate de concorrência `threading.Semaphore(1)` não-bloqueante:** no máximo UMA tentativa de login processando por vez. Uma segunda tentativa em voo é recusada na hora (429), sem gastar scrypt/sleep nem prender uma thread do pool. Sem ele, o `time.sleep(1)` só serializaria por-requisição — N conexões paralelas davam N chutes/segundo e prendiam N threads (self-DoS das outras rotas síncronas, que compartilham o threadpool). Com o gate, o brute-force é serial (~1/s) e o self-DoS some.
+- Falha de senha = `time.sleep(1)` antes de responder 401 (dentro do gate).
+- Log estruturado (structlog) da tentativa (`api.login.failed`/`api.login.busy` com o IP do cliente — nunca a senha).
 
-Proporcional à ameaça: alguém já dentro da Tailscale tentando quebrar a senha do dono. Sem limite por IP (thread é só uma, bloqueio via sleep é suficiente para uso pessoal).
+Proporcional à ameaça: alguém já dentro da Tailscale tentando quebrar a senha do dono. (Achado do security-review incorporado: o gate torna o rate-limit real em vez de teatro de sleep sequencial.)
 
 ### 10. Dívida consciente: kubo-api compartilha credencial root
 
@@ -72,6 +73,8 @@ Conteúdo coletado (HTML de feeds, transcrições) é dado não-confiável. Summ
 Teste deve renderizar via rota real (TestClient do FastAPI, não mock de template) um distilled com summary contendo payload `<script>alert('xss')</script>` e afirmar que a resposta HTML o escapa para `&lt;script&gt;...&lt;/script&gt;`. Asserção de config ("autoescape=True") não é suficiente — testa-se comportamento real.
 
 Guard barato complementar: grep ou hook de linting procura por `|safe` em templates — **proibição executável:** `|safe` NUNCA em campo que tocou coleta (summaries, títulos de distilled, qualquer dado de fora).
+
+**Esquema de URL de conteúdo coletado (achado do próprio 9.4):** `item.url` (de feeds) só vira `href` se começar com `http(s)://`; caso contrário é renderizado como texto. O autoescape do Jinja **não filtra esquema de URL** — um `javascript:`/`data:` num `href` seria XSS ao clicar, mesmo com autoescape ligado. Testado via rota real com uma URL `javascript:` hostil.
 
 **Escopo negativo:** Markdown→HTML em summaries é escopo negativo explícito (E1 no plano). `pre-wrap` em CSS resolve presentação; renderizar markdown exigiria `bleach` + decisão de tags permitidas — sessão separada com sanitizador se um dia necessário.
 
@@ -99,11 +102,12 @@ Usuário read-only do Surreal é achado de segurança (R4 do plano 0009). Impede
 
 ### Entregas de código + helpers
 
-- `kubo/api/app.py` — factory FastAPI com middlewares (CORS permissiva na tailnet, TrustedHost, Session, exception handlers).
-- `kubo/api/routes/auth.py` — `/login` GET/POST, `/logout`, guarda de autenticação.
-- `kubo/api/hashpw.py` — módulo `__main__` com helper, rodado como `python -m kubo.api.hashpw`.
+- `kubo/api/app.py` — factory FastAPI. Ordem dos middlewares (do mais externo ao interno): `TrustedHostMiddleware` → `SessionMiddleware` → `RequireLoginMiddleware` (guard). Sem CORS (UI same-origin, YAGNI). `/healthz` e `/static/` ficam fora do guard.
+- `kubo/api/auth.py` — hash/verify scrypt; `kubo/api/routes/auth.py` — `/login` GET/POST + gate de concorrência, `/logout`.
+- `kubo/api/hashpw.py` — helper `python -m kubo.api.hashpw` (getpass, nunca argv).
 - `kubo/api/templates/login.html` — form simples, sem JavaScript.
-- `tests/api/test_auth.py` — testes de login (falta de senha, senha correta, sessão válida, logout), autoescape via rota real.
+- `kubo/api/routes/distilled.py` + `dashboard.py` — a fatia Destilados (lista/busca/detalhe) e o Painel; rotas síncronas, uma conexão de store por request.
+- `tests/api/` — auth (guard, login, logout, gate 429, fail-fast) e autoescape via rota real em TODA rota que renderiza summary (lista, partial de busca, detalhe) + URL `javascript:` neutralizada.
 
 ### Impacto operacional
 
