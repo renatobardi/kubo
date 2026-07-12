@@ -153,7 +153,7 @@ def test_load_schedules_reads_real_repo_config() -> None:
     schedules = load_schedules()
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 7
+    assert len(schedules.schedules) == 6
     feed_entries = [e for e in schedules.schedules if e.worker == "feed"]
     assert len(feed_entries) == 6
     for entry in feed_entries:
@@ -162,9 +162,26 @@ def test_load_schedules_reads_real_repo_config() -> None:
         assert feed_url != ""
         assert urlsplit(feed_url).scheme in ("http", "https")
 
+    # O destilador está DORMENTE (entry comentado no schedules.yaml, gate mecânico
+    # do marco 8.8): nenhum job de destilação é registrado até o dono reativar. Ver
+    # test_dormant_distiller_entry_would_validate_when_activated para a prova de que
+    # o entry é válido quando descomentado.
     distiller_entries = [e for e in schedules.schedules if e.worker == "distiller"]
-    assert len(distiller_entries) == 1
-    assert distiller_entries[0].config == {"max_items": 20}
+    assert len(distiller_entries) == 0
+
+
+def test_dormant_distiller_entry_would_validate_when_activated() -> None:
+    """O entry do destilador está comentado no schedules.yaml (gate mecânico, 8.8),
+    mas o maquinário está pronto: quando o dono descomentar, a config esperada
+    (`max_items: 20`) valida contra o schema do DistillerWorker — reativar é seguro,
+    não reabre trabalho. Este teste guarda essa prontidão sem ativar o gatilho."""
+    from kubo.scheduler import ScheduleEntry
+    from kubo.workers.distiller import DistillerConfig, DistillerWorker
+
+    entry = ScheduleEntry(worker="distiller", cron="0 9 * * *", config={"max_items": 20})
+
+    assert DistillerWorker.manifest.config is DistillerConfig
+    DistillerWorker.manifest.config.model_validate(entry.config)  # não levanta = válido
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +190,15 @@ def test_load_schedules_reads_real_repo_config() -> None:
 
 
 def test_build_scheduler_creates_one_job_per_entry() -> None:
-    """Um job por entry do `schedules.yaml` real — 6 feeds + 1 destilador, 7
-    jobs (marco 8.7). Não inicia o scheduler (`.start()` bloquearia o teste)."""
+    """Um job por entry ATIVO do `schedules.yaml` real — 6 feeds (o destilador está
+    dormente/comentado, gate mecânico do 8.8). Não inicia o scheduler (`.start()`
+    bloquearia o teste)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 7
+    assert len(scheduler.get_jobs()) == 6
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:

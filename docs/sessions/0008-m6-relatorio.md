@@ -93,8 +93,11 @@ Gate binário n=10 (8 reais + 2 canários de injection), pós-filtro verbatim de
 
 ## Gate pendente do dono
 
-O **primeiro run de destilação em produção** (o job das 09:00, ou um disparo manual) está **GATED**
-no "pode executar" do dono (plano 0008, tarefas do dono). O código está deployável; a destilação
-viva não roda sem autorização explícita. **O "pode executar" pressupõe o follow-up (2)
-implementado** (filtro de `content=""`): sem ele, o run vivo pode fabricar destilados a partir de
-itens vazios — precondição sequenciada, não preferência.
+O **primeiro run de destilação em produção** (o job das 09:00) está **GATED por trava MECÂNICA**,
+não por combinação: o entry do destilador no `schedules.yaml` está **comentado (dormente)** — o
+scheduler não registra o job enquanto assim estiver, e **nenhum redeploy o ativa por acidente**.
+O maquinário (worker, executor, embedder, `_instantiate`) está pronto e testado; só o gatilho
+fica desligado. **Reativar (descomentar + PR + redeploy) É o "pode executar" do dono, e PRESSUPÕE
+o follow-up (2) implementado** (filtro de `content=""`): sem ele, o run vivo fabricaria destilados
+a partir de itens vazios (conhecimento com proveniência falsa). Precondição sequenciada e travada
+no código, não preferência.
