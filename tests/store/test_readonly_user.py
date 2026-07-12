@@ -40,7 +40,13 @@ def ro_env() -> Iterator[tuple[Any, Any]]:
         root.query(f"REMOVE DATABASE IF EXISTS {_RO_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
-        knowledge.start_run(root, worker="feed")  # algo para o viewer LER
+        # Grafo completo (source -> item -> distilled -> entity) para o viewer LER as
+        # MESMAS projeções 2-hop das telas, não só um SELECT simples.
+        knowledge.start_run(root, worker="feed")
+        src = knowledge.upsert_source(root, kind="rss", canonical="https://x/feed", title="Feed")
+        item = knowledge.upsert_item(root, source=src, external_id="e1", content="c", title="Post")
+        ent = knowledge.get_or_create_entity(root, name="Python", kind="tecnologia")
+        knowledge.insert_distilled(root, item=item, summary="resumo", chunks=[], entities=[ent])
         # ROOT-level VIEWER: mesma forma de signin do root (sem ns/db) — Path A.
         root.query(f"DEFINE USER {_RO_USER} ON ROOT PASSWORD '{_RO_PASS}' ROLES VIEWER;")
         try:
@@ -56,6 +62,28 @@ def test_readonly_user_can_read(ro_env: tuple[Any, Any]) -> None:
     _root, viewer = ro_env
     rows = viewer.query("SELECT worker, status FROM run;")
     assert rows and rows[0]["worker"] == "feed"
+
+
+def test_readonly_user_can_do_graph_projections(ro_env: tuple[Any, Any]) -> None:
+    """O viewer executa as MESMAS projeções 2-hop das telas (fecha a fresta entre
+    'provado por teste' e 'provado no browser'): card de destilado (título 1-hop +
+    fonte 2-hop), entidades com contagem, fontes com stats. Se o VIEWER não tivesse
+    permissão de travessia de aresta, isto explodiria — não explode."""
+    _root, viewer = ro_env
+    cards = knowledge.list_distilled(viewer, limit=20, start=0)
+    assert cards and cards[0].title == "Post" and cards[0].source_canonical == "https://x/feed"
+
+    entities = knowledge.list_entities(viewer, limit=20, start=0)
+    assert entities and entities[0].name == "Python" and entities[0].mentions == 1
+
+    view = knowledge.read_entity(viewer, entities[0].id)
+    assert view is not None and len(view.distilled) == 1
+
+    sources = knowledge.sources_with_stats(viewer)
+    assert sources and sources[0].items == 1 and sources[0].last_collected_at is not None
+
+    runs = knowledge.list_runs(viewer, limit=20, start=0)
+    assert runs and runs[0].worker == "feed"
 
 
 def test_readonly_user_cannot_write(ro_env: tuple[Any, Any]) -> None:

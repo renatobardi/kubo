@@ -184,6 +184,13 @@ argon2 do root via `INFO FOR ROOT` — por isso `SURREAL_PASS` DEVE ser longa e
 aleatória (argon2 + aleatória = crack offline irrelevante). Vale enquanto a instância
 for single-tenant.
 
+> **⚠️ Rotacione a senha root ATUAL antes/junto do §2c.** A `SURREAL_PASS` do
+> kubo-test foi definida ANTES desta decisão — se não for 32+ aleatória, a mitigação
+> acima fica vazia na única instância que existe. Gere `python -c "import secrets;
+> print(secrets.token_urlsafe(32))"`, grave em `SURREAL_PASS` no `.env` e recrie o
+> SurrealDB com a nova senha (`--pass` do serviço). A credencial de escrita muda para
+> scheduler/backup/migrations no mesmo `.env` — reinicie a stack inteira.
+
 **Rotação:** repita o `DEFINE USER kubo_ro ON ROOT PASSWORD "…" ROLES VIEWER;` (o
 `DEFINE` sobrescreve) + atualize o `.env` + `docker compose up -d kubo-api`.
 **Revogação:** `REMOVE USER kubo_ro ON ROOT;` (a UI cai no fail-fast até nova senha).
