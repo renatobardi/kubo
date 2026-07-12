@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Destilados · Kubo{% endblock %}
+{% block heading %}Destilados{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-6">
+  <form
+    hx-get="/distilled/search"
+    hx-target="#search-panel"
+    hx-trigger="submit, input changed delay:400ms"
+    hx-swap="innerHTML"
+    class="flex gap-2"
+    onsubmit="return false"
+  >
+    <label for="q" class="sr-only">Buscar no acervo</label>
+    <input
+      id="q"
+      type="search"
+      name="q"
+      placeholder="Buscar no acervo…"
+      autocomplete="off"
+      class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    />
+    <button
+      type="submit"
+      class="h-9 rounded-4xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px"
+    >
+      Buscar
+    </button>
+  </form>
+
+  <div id="search-panel"></div>
+
+  <section class="space-y-3">
+    {% for item in items %}
+      <a
+        href="/distilled/{{ item.id.id | urlencode }}"
+        class="block rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20"
+      >
+        <p class="line-clamp-3 whitespace-pre-wrap text-sm">{{ item.summary }}</p>
+      </a>
+    {% else %}
+      <div class="rounded-2xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+        Nenhum destilado no acervo ainda.
+      </div>
+    {% endfor %}
+
+    {% if has_prev or has_next %}
+      <div class="flex items-center justify-between pt-2 text-sm">
+        {% if has_prev %}
+          <a href="/distilled?start={{ prev_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
+        {% else %}<span></span>{% endif %}
+        {% if has_next %}
+          <a href="/distilled?start={{ next_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximos →</a>
+        {% else %}<span></span>{% endif %}
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

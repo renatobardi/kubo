@@ -286,6 +286,106 @@ def test_list_sources_returns_all_with_their_fields(db: Any) -> None:
     assert by_canonical["https://b"].title is None
 
 
+def _seed_distilled(db: Any, n: int) -> list[RecordID]:
+    """Cria `n` destilados (cada um a partir de um item próprio) e devolve seus ids."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://feed")
+    ids: list[RecordID] = []
+    for i in range(n):
+        item = knowledge.upsert_item(db, source=src, external_id=f"ext-{i}", content=f"c{i}")
+        ids.append(knowledge.insert_distilled(db, item=item, summary=f"resumo {i}", chunks=[]))
+    return ids
+
+
+def test_list_distilled_paginates_without_overlap_or_gap(db: Any) -> None:
+    """Duas páginas (limit=2) particionam o acervo: união = todos os ids, sem repetição
+    nem buraco. É a garantia que o browse da UI precisa; não depende da resolução do
+    created_at para o teste ser determinístico. (RecordID é unhashable no SDK 2.0.0 —
+    conjuntos comparam a forma string do id.)"""
+    all_ids = {str(rid) for rid in _seed_distilled(db, 5)}
+
+    page1 = knowledge.list_distilled(db, limit=2, start=0)
+    page2 = knowledge.list_distilled(db, limit=2, start=2)
+    page3 = knowledge.list_distilled(db, limit=2, start=4)
+
+    assert len(page1) == 2
+    assert len(page2) == 2
+    assert len(page3) == 1
+    seen = [str(d.id) for d in page1 + page2 + page3]
+    assert len(seen) == len(set(seen))  # sem sobreposição entre páginas
+    assert set(seen) == all_ids  # sem buraco
+    # cada item carrega o summary (texto plano escapado na view)
+    assert all(d.summary.startswith("resumo ") for d in page1)
+
+
+def test_list_distilled_ordering_is_stable(db: Any) -> None:
+    """A mesma consulta devolve a mesma ordem — paginação estável (ORDER BY determinístico)."""
+    _seed_distilled(db, 4)
+    first = [d.id for d in knowledge.list_distilled(db, limit=10, start=0)]
+    second = [d.id for d in knowledge.list_distilled(db, limit=10, start=0)]
+    assert first == second
+
+
+def test_list_distilled_empty_acervo_returns_empty(db: Any) -> None:
+    """Sem destilados, a lista é vazia (não None, não erro)."""
+    assert knowledge.list_distilled(db, limit=10, start=0) == []
+
+
+def test_list_distilled_clamps_hostile_bounds(db: Any) -> None:
+    """limit/start vêm de query param (hostis na borda): limit<=0 vira >=1, start<0 vira 0.
+    A store é a fronteira em que a spec confia — clamp aqui, não na view."""
+    all_ids = {str(rid) for rid in _seed_distilled(db, 3)}
+    # start negativo é tratado como 0 (primeira página)
+    assert {str(d.id) for d in knowledge.list_distilled(db, limit=10, start=-5)} == all_ids
+    # limit <= 0 ainda devolve ao menos 1 (não devolve a tabela inteira nem quebra)
+    assert len(knowledge.list_distilled(db, limit=0, start=0)) == 1
+
+
+def test_dashboard_counts_reflects_acervo(db: Any) -> None:
+    """dashboard_counts conta destilados, itens e fontes do acervo (Painel)."""
+    _seed_distilled(db, 3)  # cria 1 source + 3 items + 3 distilled
+    counts = knowledge.dashboard_counts(db)
+    assert counts.distilled == 3
+    assert counts.items == 3
+    assert counts.sources == 1
+
+
+def test_dashboard_counts_empty_acervo_is_zero(db: Any) -> None:
+    """Acervo vazio: todas as contagens são 0, não erro."""
+    counts = knowledge.dashboard_counts(db)
+    assert (counts.distilled, counts.items, counts.sources) == (0, 0, 0)
+
+
+def test_recent_runs_newest_first_with_error_kind(db: Any) -> None:
+    """recent_runs devolve as execuções mais recentes com o error.kind extraído:
+    run ok -> error_kind None; run falha -> o kind estruturado (discriminação do Painel)."""
+    ok = knowledge.start_run(db, worker="feed")
+    knowledge.finish_run(db, ok)
+    bad = knowledge.start_run(db, worker="distiller")
+    knowledge.fail_run(db, bad, error={"kind": "rate_limit", "message": "quota"})
+
+    runs = knowledge.recent_runs(db, limit=10)
+
+    assert len(runs) == 2
+    # newest first: `bad` (distiller) foi criado depois de `ok` (feed), com um
+    # round-trip de finish_run entre eles — started_at estritamente maior.
+    assert runs[0].worker == "distiller"
+    assert runs[1].worker == "feed"
+    # o run de falha carrega o error.kind estruturado; o ok não tem erro
+    assert runs[0].status == "error"
+    assert runs[0].error_kind == "rate_limit"
+    assert runs[0].finished_at is not None
+    assert runs[1].status == "ok"
+    assert runs[1].error_kind is None
+
+
+def test_recent_runs_respects_limit(db: Any) -> None:
+    """limit trunca o resultado às N MAIS RECENTES (não N quaisquer)."""
+    for i in range(4):
+        knowledge.finish_run(db, knowledge.start_run(db, worker=f"w{i}"))  # w3 é o mais novo
+    runs = knowledge.recent_runs(db, limit=2)
+    assert [r.worker for r in runs] == ["w3", "w2"]
+
+
 def test_item_index_maps_external_id_to_item(db: Any) -> None:
     """item_index devolve o mapa external_id -> item de todos os itens numa leitura —
     o import resolve derived_from (distilled -> item pela chave natural) e detecta

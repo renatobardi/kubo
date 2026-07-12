@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Kubo{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <script>
+    // Aplica o tema salvo antes do paint (sem flash de tema errado).
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.classList.add("dark");
+      }
+    })();
+  </script>
+  <script src="/static/htmx-2.0.4.min.js" defer></script>
+</head>
+<body class="h-full">
+  <div class="flex h-full min-h-screen">
+    <aside class="flex w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar">
+      <a href="/" class="flex h-[72px] items-center gap-2.5 px-4">
+        <img src="/static/favicon.svg" alt="" class="size-8 rounded-lg" />
+        <span class="flex flex-col leading-tight">
+          <span class="text-base font-semibold tracking-tight text-sidebar-foreground">Kubo</span>
+          <span class="text-2xs text-muted-foreground">The art of getting things done</span>
+        </span>
+      </a>
+
+      <nav class="flex-1 px-3 py-2">
+        <ul class="space-y-1">
+          {% for item in nav %}
+            {% if item.group and (loop.first or item.group != loop.previtem.group) %}
+              <li class="px-2 pt-3 pb-1 text-2xs font-medium tracking-wide uppercase text-muted-foreground">{{ item.group }}</li>
+            {% endif %}
+            {% set active = current_path == item.route or (item.route != "/" and current_path.startswith(item.route)) %}
+            <li>
+              <a href="{{ item.route }}"
+                 class="flex items-center rounded-lg px-2 py-1.5 text-sm transition-colors
+                        {% if active %}bg-sidebar-accent font-medium text-sidebar-accent-foreground{% else %}text-sidebar-foreground hover:bg-sidebar-accent/60{% endif %}">
+                {{ item.label }}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </nav>
+
+      <div class="flex items-center justify-between border-t border-border/60 px-4 py-3 text-xs text-muted-foreground">
+        <span>Renato Bardi</span>
+        <button type="button" onclick="toggleTheme()"
+                class="rounded-4xl px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground">
+          tema
+        </button>
+      </div>
+    </aside>
+
+    <div class="flex min-w-0 flex-1 flex-col">
+      <header class="flex h-[72px] items-center gap-3 border-b border-border/60 px-6">
+        {% block header %}
+          <h1 class="text-xl font-semibold tracking-tight">{% block heading %}{% endblock %}</h1>
+        {% endblock %}
+      </header>
+      <main class="flex-1 p-6">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <script>
+    function toggleTheme() {
+      var dark = document.documentElement.classList.toggle("dark");
+      localStorage.setItem("theme", dark ? "dark" : "light");
+    }
+  </script>
+</body>
+</html>

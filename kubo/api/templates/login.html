@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Entrar · Kubo</title>
+  <link rel="icon" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.classList.add("dark");
+      }
+    })();
+  </script>
+</head>
+<body class="h-full">
+  <main class="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+    <div class="w-full max-w-sm rounded-2xl bg-card p-6 ring-1 ring-foreground/10">
+      <div class="mb-5 flex items-center gap-2.5">
+        <img src="/static/favicon.svg" alt="" class="size-8 rounded-lg" />
+        <div class="leading-tight">
+          <div class="text-base font-semibold tracking-tight">Kubo</div>
+          <div class="text-2xs text-muted-foreground">The art of getting things done</div>
+        </div>
+      </div>
+
+      <h1 class="text-xl font-semibold tracking-tight">Entrar</h1>
+      <p class="mt-1 text-sm text-muted-foreground">Informe a senha para acessar o ateliê.</p>
+
+      {% if error %}
+        <div class="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {{ error }}
+        </div>
+      {% endif %}
+
+      <form method="post" action="/login" class="mt-4 space-y-3">
+        <label for="password" class="sr-only">Senha</label>
+        <input
+          id="password"
+          type="password"
+          name="password"
+          autofocus
+          autocomplete="current-password"
+          placeholder="Senha"
+          class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        />
+        <button
+          type="submit"
+          class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px"
+        >
+          Entrar
+        </button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

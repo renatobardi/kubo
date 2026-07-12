@@ -229,3 +229,8 @@ planning/
 # Kubo — staging e segredos
 .env.*
 !.env.example
+
+# CSS gerado pelo Tailwind standalone (build artifact — regenerado no Docker
+# build e no dev local; input.css é a fonte versionada). htmx vendorizado, font
+# e favicon SÃO versionados (o dir static existe no repo por causa deles).
+kubo/api/static/app.css

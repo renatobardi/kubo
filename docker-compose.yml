@@ -77,6 +77,65 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # UI da fase 2 (ADR-0014): FastAPI + HTMX servindo Destilados e Painel atrás de
+  # login. MESMA imagem do scheduler; só o command muda. O publish NÃO fica aqui
+  # (base = PRD/OCI): o overlay compose.dev-lxc.yml publica no IP Tailscale
+  # (100.66.254.24:3900, E2); o publish de PRD/OCI é decisão futura (como o backup).
+  kubo-api:
+    build: .
+    image: kubo:latest
+    restart: unless-stopped
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    # Fábrica create_app (fail-fast sem os segredos da UI); 1 worker (um usuário —
+    # mais workers = memória + estado escondido). Escuta 0.0.0.0 DENTRO do namespace
+    # do container: inofensivo — quem publica a porta é o compose, no IP Tailscale (E2).
+    command:
+      - uvicorn
+      - kubo.api.app:create_app
+      - --factory
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment:
+      SURREAL_URL: ws://surrealdb:8000/rpc
+      SURREAL_USER: ${SURREAL_USER:-root}
+      SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
+      SURREAL_NS: ${SURREAL_NS:-kubo}
+      SURREAL_DB: ${SURREAL_DB:-kubo}
+      # Segredos da UI (invariante 8), fail-fast como o SURREAL_PASS. O hash sai do
+      # helper `python -m kubo.api.hashpw`; o secret de sessão é um token aleatório.
+      KUBO_PASSWORD_HASH: ${KUBO_PASSWORD_HASH:?defina KUBO_PASSWORD_HASH — gere com python -m kubo.api.hashpw}
+      SESSION_SECRET: ${SESSION_SECRET:?defina SESSION_SECRET — token aleatório de 32+ bytes}
+      # Hosts confiáveis (TrustedHost, anti-DNS-rebinding). Default = IP Tailscale do
+      # publish; localhost é sempre permitido no código (healthcheck). Vírgula separa.
+      KUBO_ALLOWED_HOSTS: ${KUBO_ALLOWED_HOSTS:-100.66.254.24}
+      # Busca: SEM fail-fast (E-f) — a UI sobe sem a key e serve Painel + listas; só a
+      # busca degrada (alerta tinted). GEMINI = embedding da busca semântica.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TZ: ${TZ:-America/Sao_Paulo}
+    # Imagem slim não tem curl: healthcheck via python/urllib no /healthz (sem auth,
+    # sem banco). localhost é sempre permitido no TrustedHost (append no código).
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   # Backup diário. A imagem oficial do SurrealDB é distroless (sem shell/cron),
   # então o dump não roda dentro dela: um sidecar alpine consome o endpoint HTTP
   # de export do SurrealDB (equivalente ao `surreal export` — D2) via busybox wget.

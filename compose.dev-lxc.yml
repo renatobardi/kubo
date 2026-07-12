@@ -17,6 +17,20 @@
 # só para o dockerd do kubo-test (que já é unconfined no nível LXC). Ver ADR-0011 e
 # o runbook — por isso este compose fica limpo e idêntico ao de PRD fora do backup.
 
+services:
+  # Publish da UI SÓ no DEV. CORREÇÃO da E2 (sessão 0009, validada pelo advisor): o
+  # `100.66.254.24` é o `tailscale0` do HOST oute-server, NÃO existe dentro do LXC —
+  # o compose não consegue bindá-lo aqui. Quem faz a fronteira Tailscale-only é um
+  # LXD PROXY DEVICE no host (`listen=tcp:100.66.254.24:3900 connect=tcp:10.173.117.18:3900
+  # nat=true`), que encaminha o IP Tailscale do host para este publish no IP de bridge
+  # do LXC. Aqui a API publica em `10.173.117.18` (eth0 do LXC na lxdbr0, RFC1918,
+  # interno ao host — NUNCA `0.0.0.0`). Com `nat=true` o encaminhamento é DNAT de
+  # kernel: sem listener no host, sem corrida de boot com o tailscaled. Setup do device,
+  # smoke e risco aceito (vizinhos da bridge alcançam este bind) em runbook-deploy.md.
+  kubo-api:
+    ports:
+      - "10.173.117.18:3900:8000"
+
 volumes:
   surreal-backups:
     driver: local

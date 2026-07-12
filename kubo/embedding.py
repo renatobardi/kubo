@@ -64,12 +64,17 @@ class GeminiEmbedder:
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls, *, client: httpx.Client | None = None) -> "GeminiEmbedder":
-        """Constrói a partir de `GEMINI_API_KEY`; levanta `ConfigError` se ausente/vazia."""
+    def from_env(
+        cls, *, client: httpx.Client | None = None, timeout: float = 60.0
+    ) -> "GeminiEmbedder":
+        """Constrói a partir de `GEMINI_API_KEY`; levanta `ConfigError` se ausente/vazia.
+
+        `timeout` é passado adiante: a UI (fase 2) usa ~10s para degradar rápido numa
+        busca interativa, em vez dos 60s default do backfill/scheduler."""
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise ConfigError("GEMINI_API_KEY ausente no ambiente (invariante 8: key só por env).")
-        return cls(api_key=api_key, client=client)
+        return cls(api_key=api_key, client=client, timeout=timeout)
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Chama `batchEmbedContents` e devolve um vetor por texto, na ordem de envio."""
