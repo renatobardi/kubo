@@ -17,16 +17,18 @@ def test_hash_verify_roundtrip() -> None:
 
 
 def test_hash_embeds_params_and_is_salted() -> None:
-    """O hash carrega os params no formato scrypt$14$8$1$... e usa salt aleatório
-    (dois hashes da mesma senha diferem)."""
+    """O hash carrega os params no formato scrypt:14:8:1:... e usa salt aleatório
+    (dois hashes da mesma senha diferem). Separador `:` (não `$`) para colar no .env
+    sem escape — o docker compose interpolaria `$14`."""
     stored = hash_password(_PW)
-    assert stored.startswith("scrypt$14$8$1$")
+    assert stored.startswith("scrypt:14:8:1:")
+    assert "$" not in stored  # `$` no .env do compose viraria interpolação
     assert stored != hash_password(_PW)
 
 
 def test_verify_rejects_malformed_hash() -> None:
     """Hash malformado (não é o formato esperado) é rejeitado, não explode."""
-    for bad in ["", "garbage", "scrypt$14$8", "scrypt$14$8$1$nothex$nothex", "bcrypt$x$y"]:
+    for bad in ["", "garbage", "scrypt:14:8", "scrypt:14:8:1:nothex:nothex", "bcrypt:x:y"]:
         assert verify_password(_PW, bad) is False
 
 
@@ -37,7 +39,7 @@ def test_verify_reads_params_from_hash_not_constants() -> None:
 
     salt = b"\x00" * 16
     dk = hashlib.scrypt(_PW.encode(), salt=salt, n=2**13, r=8, p=1)
-    stored = f"scrypt$13$8$1${salt.hex()}${dk.hex()}"
+    stored = f"scrypt:13:8:1:{salt.hex()}:{dk.hex()}"
     assert verify_password(_PW, stored) is True
     assert verify_password("wrong", stored) is False
 

@@ -101,7 +101,7 @@ docker compose up -d
 **Pré-requisito de segredos no `.env` do servidor** (invariante 8 — o dono preenche,
 o agente nunca lê): `KUBO_PASSWORD_HASH` e `SESSION_SECRET`. O `hashpw` mora na imagem
 nova, cujo build o `:?` do compose bloqueia sem o segredo (ovo-galinha) — então gere o
-hash no Mac (`uv run python -m kubo.api.hashpw`, digita a senha, copia o `scrypt$…`) e
+hash no Mac (`uv run python -m kubo.api.hashpw`, digita a senha, copia o `scrypt:…`) e
 cole os dois no `.env` do servidor: `KUBO_PASSWORD_HASH=…` e
 `SESSION_SECRET=$(python -c "import secrets; print(secrets.token_hex(32))")`. Sem eles a
 `kubo-api` faz fail-fast (não sobe). `GEMINI_API_KEY` é opcional: sem ela a UI serve
