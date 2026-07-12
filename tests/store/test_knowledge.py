@@ -340,6 +340,47 @@ def test_list_distilled_clamps_hostile_bounds(db: Any) -> None:
     assert len(knowledge.list_distilled(db, limit=0, start=0)) == 1
 
 
+def test_dashboard_counts_reflects_acervo(db: Any) -> None:
+    """dashboard_counts conta destilados, itens e fontes do acervo (Painel)."""
+    _seed_distilled(db, 3)  # cria 1 source + 3 items + 3 distilled
+    counts = knowledge.dashboard_counts(db)
+    assert counts.distilled == 3
+    assert counts.items == 3
+    assert counts.sources == 1
+
+
+def test_dashboard_counts_empty_acervo_is_zero(db: Any) -> None:
+    """Acervo vazio: todas as contagens são 0, não erro."""
+    counts = knowledge.dashboard_counts(db)
+    assert (counts.distilled, counts.items, counts.sources) == (0, 0, 0)
+
+
+def test_recent_runs_newest_first_with_error_kind(db: Any) -> None:
+    """recent_runs devolve as execuções mais recentes com o error.kind extraído:
+    run ok -> error_kind None; run falha -> o kind estruturado (discriminação do Painel)."""
+    ok = knowledge.start_run(db, worker="feed")
+    knowledge.finish_run(db, ok)
+    bad = knowledge.start_run(db, worker="distiller")
+    knowledge.fail_run(db, bad, error={"kind": "rate_limit", "message": "quota"})
+
+    runs = knowledge.recent_runs(db, limit=10)
+
+    assert len(runs) == 2
+    by_worker = {r.worker: r for r in runs}
+    assert by_worker["feed"].status == "ok"
+    assert by_worker["feed"].error_kind is None
+    assert by_worker["distiller"].status == "error"
+    assert by_worker["distiller"].error_kind == "rate_limit"
+    assert by_worker["distiller"].finished_at is not None
+
+
+def test_recent_runs_respects_limit(db: Any) -> None:
+    """limit trunca o resultado (as N mais recentes)."""
+    for _ in range(4):
+        knowledge.finish_run(db, knowledge.start_run(db, worker="feed"))
+    assert len(knowledge.recent_runs(db, limit=2)) == 2
+
+
 def test_item_index_maps_external_id_to_item(db: Any) -> None:
     """item_index devolve o mapa external_id -> item de todos os itens numa leitura —
     o import resolve derived_from (distilled -> item pela chave natural) e detecta

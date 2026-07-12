@@ -328,6 +328,68 @@ def list_distilled(db: Any, *, limit: int, start: int) -> list[DistilledListItem
 
 
 @dataclass(frozen=True)
+class DashboardCounts:
+    """Contagens do acervo para o Painel (UI fase 2): quantos destilados, itens e fontes."""
+
+    distilled: int
+    items: int
+    sources: int
+
+
+def _count(db: Any, table: str) -> int:
+    """Contagem de registros de uma tabela. `table` é literal interno da store, nunca
+    entrada externa — a UI não escolhe tabela."""
+    rows = db.query(f"SELECT count() FROM {table} GROUP ALL;")  # noqa: S608
+    return int(rows[0]["count"]) if rows else 0
+
+
+def dashboard_counts(db: Any) -> DashboardCounts:
+    """Contagens do acervo (distilled/item/source) para o Painel."""
+    return DashboardCounts(
+        distilled=_count(db, "distilled"),
+        items=_count(db, "item"),
+        sources=_count(db, "source"),
+    )
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """Linha de 'últimas execuções' do Painel: worker, status e o `error.kind` que
+    discrimina a falha (rate_limit, malformed_output…), com os carimbos de tempo."""
+
+    worker: str
+    status: str
+    error_kind: str | None
+    started_at: str
+    finished_at: str | None
+
+
+def recent_runs(db: Any, *, limit: int) -> list[RunSummary]:
+    """Últimas `limit` execuções, mais recentes primeiro (Painel).
+
+    `error.kind` é projetado como `error_kind` (None quando `error` é NONE); os
+    carimbos viram string para a view exibir sem lidar com o tipo de datetime do SDK.
+    `limit` é clampado (mesma borda de `list_distilled`) e interpolado como literal
+    (LIMIT não aceita bind; started_at precisa estar na projeção — quirk do v3)."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    query = (
+        "SELECT worker, status, error.kind AS error_kind, started_at, finished_at "  # noqa: S608
+        f"FROM run ORDER BY started_at DESC LIMIT {limit};"
+    )
+    rows = db.query(query)
+    return [
+        RunSummary(
+            worker=r["worker"],
+            status=r["status"],
+            error_kind=r.get("error_kind"),
+            started_at=str(r["started_at"]),
+            finished_at=str(r["finished_at"]) if r.get("finished_at") is not None else None,
+        )
+        for r in rows
+    ]
+
+
+@dataclass(frozen=True)
 class SourceInfo:
     """Uma source do grafo (id + chave natural + classificação), para consumidores
     que LISTAM ou RESOLVEM sources sem regravá-las: o import one-off (resolve a source

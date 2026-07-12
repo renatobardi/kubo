@@ -7,13 +7,38 @@ env mínimo. `KUBO_ALLOWED_HOSTS` fica sem setar de propósito: o default inclui
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from typing import Any
+
 import pytest
 from starlette.testclient import TestClient
 
 from kubo.api.app import create_app
 from kubo.api.auth import hash_password
+from kubo.store.knowledge import DashboardCounts
 
 UI_PASSWORD = "test-ui-password"
+
+
+@contextmanager
+def _fake_connect(cfg: Any = None) -> Any:
+    """Conexão falsa: as leituras da store estão stubadas, o db é ignorado."""
+    yield object()
+
+
+@pytest.fixture(autouse=True)
+def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Desacopla as rotas de página do banco real: connect falso + leituras vazias
+    por padrão. Testes com dados específicos (test_distilled, test_dashboard)
+    sobrescrevem estas leituras no corpo do teste."""
+    for mod in ("dashboard", "distilled"):
+        monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.knowledge.dashboard_counts",
+        lambda db: DashboardCounts(distilled=0, items=0, sources=0),
+    )
+    monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
 
 
 @pytest.fixture(autouse=True)

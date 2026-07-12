@@ -1,21 +1,29 @@
-"""Painel (home) — contagens + últimas runs (marco 9.7).
+"""Painel (home) — contagens do acervo + últimas execuções (ADR-0014 UI).
 
-Stub nesta fase do scaffold: renderiza o shell com a nav para validar base.html.
-O conteúdo real (dashboard_counts + últimas runs por error.kind) entra no 9.7;
-se o timebox cortar o Painel, este stub "em construção" é o que fica de pé.
+Rota síncrona (a store é bloqueante); uma conexão por request. As últimas runs
+discriminam a falha por `error.kind` (insumo da mini-sessão pós-M6: as runs diárias
+terminam error/rate_limit no free-tier).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from starlette.responses import Response
 
 from kubo.api.rendering import templates
+from kubo.store import client, knowledge
 
 router = APIRouter()
 
+_RECENT_RUNS = 10
 
-@router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request) -> HTMLResponse:
-    """Página inicial (Painel). Rota síncrona (ADR-0014): a store é bloqueante."""
-    return templates.TemplateResponse(request, "dashboard/index.html")
+
+@router.get("/")
+def dashboard(request: Request) -> Response:
+    """Página inicial (Painel): contagens do acervo e as últimas execuções."""
+    with client.connect() as db:
+        counts = knowledge.dashboard_counts(db)
+        runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
+    return templates.TemplateResponse(
+        request, "dashboard/index.html", {"counts": counts, "runs": runs}
+    )
