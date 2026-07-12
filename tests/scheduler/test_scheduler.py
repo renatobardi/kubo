@@ -145,15 +145,15 @@ def test_unknown_timezone_is_rejected() -> None:
 
 def test_load_schedules_reads_real_repo_config() -> None:
     """`load_schedules()` sobre o `schedules.yaml` real da raiz: 6 feeds reais
-    (critério de aceite do plano 0005) + 1 entry do destilador diário (marco
-    8.7, ADR-0013 §VIII) — 7 entries no total, timezone explícita, cada feed
-    aponta pro worker `feed` com uma URL http(s) não-vazia."""
+    (critério de aceite do plano 0005) + 1 entry do destilador diário ATIVO (marco
+    8.7, ADR-0013 §VIII) — 7 entries no total, timezone explícita, cada feed aponta
+    pro worker `feed` com uma URL http(s) não-vazia, e o destilador roda 1x/dia."""
     from kubo.scheduler import load_schedules
 
     schedules = load_schedules()
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 6
+    assert len(schedules.schedules) == 7
     feed_entries = [e for e in schedules.schedules if e.worker == "feed"]
     assert len(feed_entries) == 6
     for entry in feed_entries:
@@ -162,19 +162,17 @@ def test_load_schedules_reads_real_repo_config() -> None:
         assert feed_url != ""
         assert urlsplit(feed_url).scheme in ("http", "https")
 
-    # O destilador está DORMENTE (entry comentado no schedules.yaml, gate mecânico
-    # do marco 8.8): nenhum job de destilação é registrado até o dono reativar. Ver
-    # test_dormant_distiller_entry_would_validate_when_activated para a prova de que
-    # o entry é válido quando descomentado.
+    # O destilador foi REATIVADO (entry descomentado, mini-sessão 0008 pós-filtro de
+    # content vazio): um único job diário às 09:00 com max_items conservador.
     distiller_entries = [e for e in schedules.schedules if e.worker == "distiller"]
-    assert len(distiller_entries) == 0
+    assert len(distiller_entries) == 1
+    assert distiller_entries[0].config == {"max_items": 20}
 
 
-def test_dormant_distiller_entry_would_validate_when_activated() -> None:
-    """O entry do destilador está comentado no schedules.yaml (gate mecânico, 8.8),
-    mas o maquinário está pronto: quando o dono descomentar, a config esperada
-    (`max_items: 20`) valida contra o schema do DistillerWorker — reativar é seguro,
-    não reabre trabalho. Este teste guarda essa prontidão sem ativar o gatilho."""
+def test_distiller_entry_config_validates() -> None:
+    """O entry ATIVO do destilador (`max_items: 20`) valida contra o schema do
+    DistillerWorker — o config declarado no schedules.yaml casa com o contrato do
+    worker, então o scheduler o instancia sem surpresa em runtime."""
     from kubo.scheduler import ScheduleEntry
     from kubo.workers.distiller import DistillerConfig, DistillerWorker
 
@@ -190,15 +188,15 @@ def test_dormant_distiller_entry_would_validate_when_activated() -> None:
 
 
 def test_build_scheduler_creates_one_job_per_entry() -> None:
-    """Um job por entry ATIVO do `schedules.yaml` real — 6 feeds (o destilador está
-    dormente/comentado, gate mecânico do 8.8). Não inicia o scheduler (`.start()`
+    """Um job por entry do `schedules.yaml` real — 6 feeds + 1 destilador diário
+    (reativado na mini-sessão 0008) = 7 jobs. Não inicia o scheduler (`.start()`
     bloquearia o teste)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 6
+    assert len(scheduler.get_jobs()) == 7
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:

@@ -572,6 +572,25 @@ def test_items_without_distilled_preserves_none_title_and_exact_content(db: Any)
     assert content == "conteúdo exato sem título"
 
 
+def test_items_without_distilled_excludes_empty_and_whitespace_content(db: Any) -> None:
+    """Item com content vazio ("") ou só-whitespace NUNCA é candidato à destilação
+    (ADR-0013 §III: precondição do run vivo) — mandar o vazio ao LLM alucinaria um
+    summary que persistiria com proveniência, item saindo do funil para sempre. Só o
+    item com conteúdo real (C) aparece; os link-posts sem corpo (A vazio, B whitespace)
+    ficam de fora."""
+    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="")
+    knowledge.upsert_item(db, source=source_id, external_id="b", content="   \n\t  ")
+    item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo real")
+
+    pending = knowledge.items_without_distilled(db, limit=10)
+
+    assert len(pending) == 1
+    rid, _, content = pending[0]
+    assert rid == item_c
+    assert content == "conteúdo real"
+
+
 def test_insert_distilled_mentions_are_atomic_no_orphan_on_late_failure(db: Any) -> None:
     """GUARDA de atomicidade (ADR-0013 §III.8): se o RELATE mentions (statement
     TARDIO, após CREATE distilled e CREATE chunk) falha porque a entity referenciada

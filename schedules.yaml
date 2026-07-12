@@ -53,17 +53,13 @@ schedules:
       feed_url: https://www.semianalysis.com/feed
       title: SemiAnalysis
       tags: [ai, hardware, semianalysis]
-  # ── DESTILADOR DIÁRIO — DORMENTE (gate mecânico, marco 8.7/8.8) ───────────────
-  # Entry COMENTADO de propósito: o scheduler não registra o job das 09:00
-  # enquanto estas linhas estiverem comentadas — nenhum redeploy o ativa por
-  # acidente. Reativar (descomentar) é o "pode executar" do dono, e PRESSUPÕE o
-  # filtro de itens `content=""` implementado (senão o LLM alucina summary do
-  # vazio e persiste conhecimento fabricado com proveniência — ver
-  # docs/sessions/0008-m6-relatorio.md, "Gate pendente do dono"). O maquinário
-  # (worker, executor, embedder, _instantiate) está pronto e testado; só o
-  # gatilho fica desligado. 09:00 = após a coleta dos feeds (08:00-08:50);
-  # ADR-0013 §VIII: itens que chegam depois esperam o dia seguinte, idempotente.
-  # - worker: distiller
-  #   cron: "0 9 * * *"
-  #   config:
-  #     max_items: 20
+  # ── DESTILADOR DIÁRIO — ATIVO (reativado na mini-sessão 0008) ─────────────────
+  # Precondição cumprida: o filtro de itens `content=""` está em
+  # kubo.store.knowledge.items_without_distilled (link-posts sem corpo nunca vão
+  # ao LLM). 09:00 = após a coleta dos feeds (08:00-08:50); ADR-0013 §VIII: itens
+  # que chegam depois esperam o dia seguinte, idempotente. `max_items` conservador
+  # (20/dia) por ora — o ritmo do backlog é decisão da fase 2.
+  - worker: distiller
+    cron: "0 9 * * *"
+    config:
+      max_items: 20
