@@ -75,6 +75,20 @@ def test_trusted_host_rejects_unknown_host(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_login_rejects_concurrent_attempt_fast(client: TestClient) -> None:
+    """Com uma tentativa de login já em voo (gate tomado), a próxima é recusada na hora
+    (429) — sem gastar scrypt/sleep nem prender uma thread do pool. Fecha o self-DoS e
+    torna o rate-limit real (uma tentativa por vez), não teatro de sleep sequencial."""
+    from kubo.api.routes.auth import _LOGIN_GATE
+
+    assert _LOGIN_GATE.acquire(blocking=False) is True
+    try:
+        resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
+        assert resp.status_code == 429
+    finally:
+        _LOGIN_GATE.release()
+
+
 def test_create_app_fails_fast_without_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sem KUBO_PASSWORD_HASH / SESSION_SECRET a fábrica recusa subir (invariante 8)."""
     monkeypatch.delenv("KUBO_PASSWORD_HASH", raising=False)

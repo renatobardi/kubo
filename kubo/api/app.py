@@ -42,7 +42,9 @@ _SESSION_COOKIE = "kubo_session"
 # Sem sessão exigida: a tela de login, o liveness e os estáticos (a tela de login
 # precisa carregar CSS/JS). Tudo mais passa pelo guard.
 _PUBLIC_PATHS = frozenset({"/login", "/healthz"})
-_PUBLIC_PREFIXES = ("/static",)
+# Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
+# futura chamada, digamos, /statics passaria pelo guard sem sessão.
+_PUBLIC_PREFIXES = ("/static/",)
 
 # Dev/CI default quando KUBO_ALLOWED_HOSTS não é setado; prod seta o IP Tailscale
 # (+ MagicDNS). `testserver` é o Host do TestClient do Starlette.

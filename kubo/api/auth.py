@@ -47,7 +47,10 @@ def verify_password(password: str, stored: str) -> bool:
         n_log2, r, p = int(n_log2_s), int(r_s), int(p_s)
         salt = bytes.fromhex(salt_hex)
         expected = bytes.fromhex(hash_hex)
+        # _derive fica DENTRO do try: um n fora de faixa (hash corrompido/misconfig)
+        # faz scrypt levantar ValueError ("memory limit exceeded") — falha fechada
+        # (False), nunca 500 revelador. `stored` é de confiança, mas a robustez importa.
+        dk = _derive(password, salt, n_log2, r, p)
     except ValueError:
         return False
-    dk = _derive(password, salt, n_log2, r, p)
     return hmac.compare_digest(dk, expected)

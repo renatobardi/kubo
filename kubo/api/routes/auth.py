@@ -7,6 +7,7 @@ do rate-limit rodariam no threadpool do Starlette, sem congelar o event loop de
 
 from __future__ import annotations
 
+import threading
 import time
 
 import structlog
@@ -22,6 +23,13 @@ router = APIRouter()
 
 _FAIL_DELAY_SECONDS = 1
 
+# Gate de concorrência: no máximo UMA tentativa de login processando por vez. Sem
+# ele, o time.sleep(1) da falha só serializa por requisição — N conexões paralelas
+# davam N chutes/segundo e prendiam N threads do pool (self-DoS das outras rotas
+# síncronas). Aquisição não-bloqueante: se já há uma em voo, recusa rápido (429),
+# sem gastar scrypt/sleep nem segurar thread. Rate-limit real, proporcional (ADR-0014).
+_LOGIN_GATE = threading.Semaphore(1)
+
 
 @router.get("/login")
 def login_form(request: Request) -> Response:
@@ -34,16 +42,28 @@ def login_form(request: Request) -> Response:
 @router.post("/login")
 def login_submit(request: Request, password: str = Form("")) -> Response:
     """Verifica a senha. Certa: abre a sessão e redireciona ao Painel. Errada:
-    dorme 1s (rate-limit), loga a tentativa e devolve 401 com o form + alerta."""
-    if verify_password(password, request.app.state.password_hash):
-        request.session["auth"] = True
-        return RedirectResponse("/", status_code=303)
-    time.sleep(_FAIL_DELAY_SECONDS)
-    client = request.client.host if request.client else "unknown"
-    _log.warning("api.login.failed", client=client)
-    return templates.TemplateResponse(
-        request, "login.html", {"error": "Senha incorreta."}, status_code=401
-    )
+    dorme 1s (rate-limit), loga a tentativa e devolve 401 com o form + alerta.
+
+    Uma tentativa por vez (gate não-bloqueante): se já há login em voo, recusa na
+    hora (429) sem gastar scrypt/sleep nem prender thread do pool."""
+    if not _LOGIN_GATE.acquire(blocking=False):
+        client = request.client.host if request.client else "unknown"
+        _log.warning("api.login.busy", client=client)
+        return templates.TemplateResponse(
+            request, "login.html", {"error": "Tente novamente em instantes."}, status_code=429
+        )
+    try:
+        if verify_password(password, request.app.state.password_hash):
+            request.session["auth"] = True
+            return RedirectResponse("/", status_code=303)
+        time.sleep(_FAIL_DELAY_SECONDS)
+        client = request.client.host if request.client else "unknown"
+        _log.warning("api.login.failed", client=client)
+        return templates.TemplateResponse(
+            request, "login.html", {"error": "Senha incorreta."}, status_code=401
+        )
+    finally:
+        _LOGIN_GATE.release()
 
 
 @router.post("/logout")
