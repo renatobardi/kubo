@@ -152,6 +152,44 @@ tudo sozinho (proxy device do LXD + `restart: unless-stopped` do compose).
 
 ---
 
+## 2c. Usuário read-only da UI (ADR-0014 amendment 0010) — passo one-time
+
+A `kubo-api` roda com um usuário **ROOT-level VIEWER** (só lê, nunca escreve): a UI é
+toda GET e essa credencial é a defesa em profundidade (mesmo um bug não escreve no
+grafo). **Fail-fast:** sem `KUBO_RO_SURREAL_PASS` no `.env` a `kubo-api` não sobe — de
+propósito, para nunca rodar com a credencial de escrita.
+
+**Criar o viewer (uma vez, direto no SurrealDB — NUNCA migration: senha em `.surql`
+versionado fura o invariante 8).** Rode pelo CLI `surreal sql` dentro do container (a
+store da app logaria a query com structlog — não use a app para isto):
+
+```bash
+# no servidor, no diretório do compose, com o .env já carregado no shell:
+set -a; . ./.env; set +a                 # exporta SURREAL_PASS (credencial de escrita)
+read -rsp 'Senha do viewer (kubo_ro), 32+ chars aleatórios: ' RO_PASS; echo
+printf 'DEFINE USER kubo_ro ON ROOT PASSWORD "%s" ROLES VIEWER;\n' "$RO_PASS" \
+  | docker exec -i "$(docker compose ps -q surrealdb)" /surreal sql \
+      --endpoint http://localhost:8000 \
+      --username "$SURREAL_USER" --password "$SURREAL_PASS" \
+      --namespace kubo --database kubo
+unset RO_PASS                            # não deixa a senha no ambiente do shell
+```
+
+Depois grave no `.env` do servidor `KUBO_RO_SURREAL_USER=kubo_ro` e
+`KUBO_RO_SURREAL_PASS=<a mesma senha>` e suba a UI: `docker compose up -d kubo-api`.
+Prova fail-closed (opcional, dentro do LXC): assine como `kubo_ro` e confirme que um
+`UPDATE`/`CREATE` **não muda dado** (o teste `tests/store/test_readonly_user.py` já
+prova isto no CI). **Risco residual aceito:** o viewer de nível ROOT lê o `PASSHASH`
+argon2 do root via `INFO FOR ROOT` — por isso `SURREAL_PASS` DEVE ser longa e
+aleatória (argon2 + aleatória = crack offline irrelevante). Vale enquanto a instância
+for single-tenant.
+
+**Rotação:** repita o `DEFINE USER kubo_ro ON ROOT PASSWORD "…" ROLES VIEWER;` (o
+`DEFINE` sobrescreve) + atualize o `.env` + `docker compose up -d kubo-api`.
+**Revogação:** `REMOVE USER kubo_ro ON ROOT;` (a UI cai no fail-fast até nova senha).
+
+---
+
 ## 3. Observabilidade
 
 Fase 1 = logs, não dashboard. Scheduler sem porta não tem healthcheck honesto; a
@@ -231,6 +269,11 @@ docker rm -f restore-test; find ~/restore-tmp -type f -delete; rmdir ~/restore-t
 Para restaurar no banco VIVO: mesma sequência de import, mas apontando o
 `--endpoint`/creds para o SurrealDB de produção (com a stack parada e o volume
 `surreal-data` limpo, se for substituição total).
+
+> **Após restore em volume `surreal-data` NOVO/limpo:** o `/export` carrega só as
+> tabelas do db, **não** os usuários `ON ROOT`. O viewer da UI (`kubo_ro`) some com o
+> volume antigo — **recrie-o** (passo 2c) antes de subir a `kubo-api`, senão ela cai
+> no fail-fast.
 
 ### Rsync do dump para o Mac (tarefa do dono — launchd)
 

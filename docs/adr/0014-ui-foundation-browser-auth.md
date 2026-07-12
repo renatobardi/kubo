@@ -127,3 +127,29 @@ Usuário read-only do Surreal é achado de segurança (R4 do plano 0009). Impede
 - **(d) Renderizar Markdown em summaries** — VULNerável a XSS se sanitizador for negligente. `bleach` é nova dependência + decisão de tags. `pre-wrap` em CSS + texto plano resolve apresentação — sessão futura com risco-benefício revisado.
 
 - **(e) Multiusuário/SAML/OIDC** — manutenção de identidade central para dono solo é anti-premissa. Bearer+password-grant para outro app futuro é cenário coberto por item (c).
+
+---
+
+## Emenda (sessão 0010, 2026-07-12) — usuário read-only da UI: dívida R4 quitada
+
+Valida pelo advisor (Fable 5). **Supersede o §10 e o esboço do §"Dívida registrada" (`CREATE USER read_only ON DB PERMISSIONS GRANT SELECT …`): aquele nunca foi implementado e a forma real é outra.**
+
+### O que foi decidido
+
+A `kubo-api` deixa de compartilhar a credencial root: passa a autenticar com um usuário **ROOT-level VIEWER** dedicado (`kubo_ro`), read-only, **fail-closed** (não escreve nada). Credencial DISTINTA da de escrita — scheduler, backup e migrations seguem com `SURREAL_USER/PASS` root. `kubo-api` faz **fail-fast** sem `KUBO_RO_SURREAL_PASS`: nunca sobe com credencial de escrita.
+
+**Path A (ROOT-level VIEWER), não Path B (DATABASE-scoped VIEWER).** Sonda empírica (M7a, v3.1.5 + SDK 2.0.0): um DB-user precisa de `namespace`/`database` no payload de signin (e o signin root QUEBRA se recebe ns/db) — isso forçaria um **ramo permanente no caminho de auth do `client.py`** (módulo strict, mais sensível). O VIEWER de nível ROOT assina com a MESMA forma do root (sem ns/db) → **zero mudança no `client.py`**. O ganho de least-privilege do Path B (escopo restrito ao db kubo) é **escopo vazio numa instância single-tenant** (um ns, um db) — não paga o branch perpétuo. Path B fica registrado como alternativa rejeitada, reabrível se surgir 2º namespace com dado de outra sensibilidade.
+
+### Fatos empíricos pinados (companheiros do ADR-0005, par SDK 2.0.0 ↔ server v3.1.5)
+
+- Negação de escrita do VIEWER é **SILENCIOSA**: `UPDATE`/`CREATE` retornam vazio **sem levantar exceção**; o dado não muda (read-back prova). Logo o teste fail-closed (`tests/store/test_readonly_user.py`) asserta **estado inalterado**, não *raises*, e tolera vazio OU exceção — um bump futuro que passe a levantar não quebra o teste por razão errada.
+- **Risco residual aceito:** o VIEWER de nível ROOT LÊ `INFO FOR ROOT`, que expõe o `PASSHASH` argon2 do root (`INFO FOR DB` NÃO expõe). Mitigação obrigatória: **`SURREAL_PASS` (root) longa e aleatória (32+)** — argon2 + aleatória torna o crack offline irrelevante. **Condição de validade da decisão:** vale enquanto single-tenant; 2º namespace com dado de outra sensibilidade reabre (migra pra Path B).
+
+### Operação (invariante 8: segredo nunca em migration/código/log)
+
+- Criação do `kubo_ro` = **passo one-time do runbook** (`docs/runbook-deploy.md` §2c), via `surreal sql` CLI (NUNCA pela store — structlog logaria a senha), senha via `read -s`. **Nunca migration** (senha em `.surql` versionado furaria o invariante 8).
+- **Rotação:** `DEFINE USER kubo_ro … OVERWRITE` + atualizar `.env` + `up -d kubo-api`. **Revogação:** `REMOVE USER kubo_ro ON ROOT`. **Restore em volume novo:** o `/export` não carrega usuários `ON ROOT` — recriar o `kubo_ro` antes de subir a UI (runbook §2c/§4).
+
+### Tripwire de escrita (paralelo ao tripwire de CSRF do §7)
+
+A primeira rota de kubo-api que **mutar dado do domínio** NÃO pode reusar a credencial viewer — e aqui o silêncio da negação é **footgun de primeira classe**: uma escrita via viewer seria no-op silencioso, bug invisível. Checklist: **1ª rota de escrita → revisitar a credencial ANTES do merge** (credencial de escrita separada ou path dedicado). Nesta sessão 0010 toda a UI é GET — o tripwire de CSRF também não dispara.

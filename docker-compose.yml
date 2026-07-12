@@ -103,8 +103,15 @@ services:
       - "1"
     environment:
       SURREAL_URL: ws://surrealdb:8000/rpc
-      SURREAL_USER: ${SURREAL_USER:-root}
-      SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
+      # A UI usa o usuário READ-ONLY (ROOT-level VIEWER, ADR-0014 amendment 0010):
+      # só GET/leituras, nunca escreve. Credencial DISTINTA da de escrita (scheduler/
+      # backup seguem com SURREAL_USER/PASS root). Fail-fast como os outros segredos —
+      # a UI NUNCA sobe com credencial de escrita (fail-closed é o ponto da decisão).
+      # Criação do viewer = passo one-time do runbook (senha via env/getpass, nunca
+      # migration — invariante 8). Signin do viewer é IGUAL ao do root (sem ns/db):
+      # nível ROOT evita ramo no caminho strict client.py (sonda 0010).
+      SURREAL_USER: ${KUBO_RO_SURREAL_USER:-kubo_ro}
+      SURREAL_PASS: ${KUBO_RO_SURREAL_PASS:?defina KUBO_RO_SURREAL_PASS — senha do usuário read-only da UI (runbook); a UI nunca roda com credencial de escrita}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
       # Segredos da UI (invariante 8), fail-fast como o SURREAL_PASS. O hash sai do
