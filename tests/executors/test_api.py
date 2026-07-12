@@ -233,7 +233,7 @@ def test_complete_passa_timeout_default_da_config_para_litellm(monkeypatch):
 
     executor.complete("instrução", "conteúdo", _Out)
 
-    assert mock_completion.call_args.kwargs["timeout"] == 60.0
+    assert mock_completion.call_args.kwargs["timeout"] == pytest.approx(60.0)
 
 
 def test_complete_passa_timeout_customizado_da_config_para_litellm(monkeypatch):
@@ -244,4 +244,4 @@ def test_complete_passa_timeout_customizado_da_config_para_litellm(monkeypatch):
 
     executor.complete("instrução", "conteúdo", _Out)
 
-    assert mock_completion.call_args.kwargs["timeout"] == 12.5
+    assert mock_completion.call_args.kwargs["timeout"] == pytest.approx(12.5)
