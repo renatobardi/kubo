@@ -27,6 +27,18 @@ from kubo.store.knowledge import (
 _XSS = "<script>alert('xss')</script>"
 
 
+def _card(rid: str, summary: str, *, title: str = "t") -> DistilledListItem:
+    """Card de destilado para os mocks de rota — só os campos que a lista renderiza."""
+    return DistilledListItem(
+        id=RecordID("distilled", rid),
+        summary=summary,
+        title=title,
+        source_canonical="https://x/feed",
+        source_kind="rss",
+        created_at="2026-07-12T00:00:00Z",
+    )
+
+
 @contextmanager
 def _fake_connect(cfg: Any = None) -> Any:
     """connect() falso: as funções da store estão mockadas e ignoram o db."""
@@ -70,7 +82,7 @@ def test_list_escapes_summary(
     """A lista renderiza summary hostil escapado (não injeta <script>)."""
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.list_distilled",
-        lambda db, **kw: [DistilledListItem(id=RecordID("distilled", "x1"), summary=_XSS)],
+        lambda db, **kw: [_card("x1", _XSS)],
     )
     html = authed_client.get("/distilled").text
     assert "&lt;script&gt;alert(&#39;xss&#39;)" in html
@@ -168,9 +180,7 @@ def test_list_pagination_next_when_full_page(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Página cheia (recebe PAGE_SIZE+1) mostra 'Próximos' e trunca ao tamanho da página."""
-    rows = [
-        DistilledListItem(id=RecordID("distilled", f"x{i}"), summary=f"s{i}") for i in range(21)
-    ]
+    rows = [_card(f"x{i}", f"s{i}") for i in range(21)]
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: rows)
     html = authed_client.get("/distilled").text
     assert "Próximos" in html
