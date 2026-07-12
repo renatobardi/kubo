@@ -84,9 +84,14 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
     O destilador ganha executor (Groq, modelo pinado por evidência) + embedder
     (Gemini, via env); os demais workers não precisam de nenhum dos dois.
     `GeminiEmbedder.from_env()` roda AQUI, no disparo do job — não no boot do
-    scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`, e o job de
-    destilação falha gracioso (`ConfigError` → `run.error`) se a key faltar
-    na hora do disparo, em vez de derrubar o processo inteiro às 09:00.
+    scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`. Se a key faltar
+    na hora do disparo, o `ConfigError` sobe a `execute_job` e é registrado como
+    `scheduler_job_failed` (o mesmo tratamento de qualquer falha de SETUP que
+    ocorre ANTES de `run_worker` abrir a run — não vira `run.error` estruturado,
+    porque a run ainda não existe), em vez de derrubar o processo inteiro às
+    09:00. Trocar isso por um `run.error` exigiria abrir a run antes das deps
+    (factory de embedder avaliada pós-`start_run`) — adiado: a fase 1 tem um
+    scheduler único e o log já dá visibilidade.
     """
     if worker_name == "distiller":
         executor = ApiExecutor(

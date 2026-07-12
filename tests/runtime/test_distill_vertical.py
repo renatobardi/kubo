@@ -7,11 +7,11 @@ banco real: prova o encanamento `items_to_distill` -> executor -> chunk/embed ->
 `_FakeExecutor`/`_FakeEmbedder` nunca chamam LiteLLM/Gemini (CLAUDE.md: "LLMs em
 testes sempre mockados").
 
-O ramo `DistilledPayload` de `kubo.runtime.runner._persist` é HOJE
-`raise NotImplementedError` (stub da Peça 6) — estes testes DEVEM falhar por
-isso agora (nada persistido, run fecha em erro `worker_exception`); ficam
-verdes quando a implementação (GREEN, resolve ref->RecordID + insert_distilled)
-entrar.
+O ramo `DistilledPayload` de `kubo.runtime.runner._persist` (resolve ref->RecordID
++ get_or_create_entity + insert_distilled com `mentions`) está implementado (Peça 6
+GREEN); estes testes descrevem e guardam esse fluxo — o feliz persiste 2 destilados
+com chunks/mentions/produced_by, e os de borda cobrem malformado (pula), rate limit
+(parcial + erro) e ref não-resolvível (`unresolvable_ref`).
 """
 
 from __future__ import annotations
