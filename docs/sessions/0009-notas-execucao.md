@@ -34,7 +34,7 @@ O timebox segurou — o Painel (1º da fila de sacrifício) foi entregue inteiro
 
 ## Pendências para a sessão 0010
 
-- **9.6 (deploy + smoke), em andamento:** `uname -m = aarch64` confirmado (pin OK); branch rsyncada; compose corrigido (bridge IP) + proxy device documentado. Bloqueios abertos com o dono: (a) `KUBO_PASSWORD_HASH`/`SESSION_SECRET` ainda não estão no `.env` do servidor (o `:?` barrou o build); (b) o dono roda o `lxc config device add … kubo-ui proxy nat=true` no host. Depois: build → up → smoke (login → Destilados → busca PT-BR → proveniência → logout; curl da tailnet OK, curl do IP público FALHA, `ss` sem 0.0.0.0; reboot religando via proxy device + `restart: unless-stopped`).
+- **9.6 (deploy + smoke) CONCLUÍDO** (dono setou segredos + criou o proxy device). Validado no `kubo-test`: build da imagem em aarch64 (stage Tailwind OK), `kubo-api` UP healthy; publish Tailscale-only correto — `curl 100.66.254.24:3900/healthz` da tailnet = ok, IP público = inalcançável, host sem listener em 3900 (DNAT de kernel), LXC bindando `10.173.117.18` (nunca 0.0.0.0); tela de login renderiza no browser com o design v2 (sakura, Inter, mono near-black, pílula/ring); `GET /` → 303 `/login`; contra o acervo real (942 destilados, 5732 itens, 129 fontes) o Painel e a lista renderam, runs com `error.kind` (rate_limit_exhausted). Reboot do LXC religou tudo sozinho (4 serviços + proxy device persistido). **Único passo restante é do dono (invariante 8):** o walkthrough autenticado no browser (login → busca → proveniência → logout) exige a senha, que o agente nunca vê. Busca semântica depende de `GEMINI_API_KEY` no `.env` (a mesma do scheduler) — sem ela, degrada com alerta tinted.
 - **Telas restantes do D13:** Entidades, Fontes, Execuções (a nav só renderiza o implementado — sem link morto).
 - **View toggle D13b** (Lista / Duas colunas / Quadrados).
 - **Total na paginação** (hoje prev/next sem total).
@@ -50,5 +50,6 @@ O timebox segurou — o Painel (1º da fila de sacrifício) foi entregue inteiro
 - [x] Degradação da busca (sem GEMINI_API_KEY → alerta tinted, browse navegável) testada.
 - [x] CSS Tailwind standalone pinado + SHA256, stage buildado nativamente em arm64; tokens v2 (stone, pílula, ring, Inter self-hosted, sakura no header).
 - [x] ADR-0014 final validado pelo advisor; cobertura ≥85% mantida.
-- [ ] **Smoke de browser via tailnet + `curl /healthz` de fora + `ss` do bind** — no 9.6 (gated).
-- [ ] Reboot do container religando — no 9.6 (gated).
+- [x] **Publish Tailscale-only:** `curl /healthz` da tailnet OK, IP público inalcançável, host sem listener (DNAT), LXC binda 10.173.117.18 (nunca 0.0.0.0). Tela de login renderiza no browser (design v2). Acervo real (942 destilados) renderiza.
+- [x] Reboot do LXC religando tudo sozinho (4 serviços + proxy device persistido).
+- [ ] Walkthrough autenticado no browser (login → busca → proveniência → logout) — **passo do dono** (exige a senha; invariante 8).
