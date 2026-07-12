@@ -438,11 +438,13 @@ def read_entity(db: Any, entity: RecordID) -> EntityView | None:
 
 @dataclass(frozen=True)
 class DashboardCounts:
-    """Contagens do acervo para o Painel (UI fase 2): quantos destilados, itens e fontes."""
+    """Contagens do acervo para o Painel (UI fase 2): destilados, itens, fontes e
+    entidades (4º StatTile adicionado no retrofit de fidelidade M5)."""
 
     distilled: int
     items: int
     sources: int
+    entities: int
 
 
 def _count(db: Any, table: str) -> int:
@@ -458,6 +460,7 @@ def dashboard_counts(db: Any) -> DashboardCounts:
         distilled=_count(db, "distilled"),
         items=_count(db, "item"),
         sources=_count(db, "source"),
+        entities=_count(db, "entity"),
     )
 
 

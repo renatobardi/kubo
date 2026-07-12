@@ -2,42 +2,72 @@
 {% block title %}Painel · Kubo{% endblock %}
 {% block heading %}Painel{% endblock %}
 {% block content %}
-<div class="max-w-3xl space-y-6">
-  <section class="grid grid-cols-3 gap-3">
-    <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-      <div class="text-2xl font-semibold tracking-tight">{{ counts.distilled }}</div>
-      <div class="mt-0.5 text-xs text-muted-foreground">Destilados</div>
-    </div>
-    <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-      <div class="text-2xl font-semibold tracking-tight">{{ counts.items }}</div>
-      <div class="mt-0.5 text-xs text-muted-foreground">Itens</div>
-    </div>
-    <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-      <div class="text-2xl font-semibold tracking-tight">{{ counts.sources }}</div>
-      <div class="mt-0.5 text-xs text-muted-foreground">Fontes</div>
-    </div>
+{# Retrofit de fidelidade M5 (paridade HomeScreen.jsx): 4 StatTiles clicáveis +
+   card 'Últimas execuções' com header/descrição/ação. Gate alert e 'Fluxos ativos'
+   ficam FORA (desvios declarados: backend inexistente). #}
+<div class="space-y-6">
+  <p class="text-sm text-muted-foreground">Seu ateliê de agentes — coleta, conhecimento e distribuição num relance.</p>
+
+  {# StatTiles inline (sem macro e sem filtro safe: a proibição vale em toda tela — E1). #}
+  <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <a href="/sources" class="flex flex-col gap-2 rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+      <span class="text-2xl font-semibold tracking-tight">{{ counts.sources }}</span>
+      <span class="text-xs text-muted-foreground">Fontes</span>
+    </a>
+    <a href="/runs" class="flex flex-col gap-2 rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/></svg>
+      <span class="text-2xl font-semibold tracking-tight">{{ counts.items }}</span>
+      <span class="text-xs text-muted-foreground">Itens</span>
+    </a>
+    <a href="/distilled" class="flex flex-col gap-2 rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+      <span class="text-2xl font-semibold tracking-tight">{{ counts.distilled }}</span>
+      <span class="text-xs text-muted-foreground">Destilados</span>
+    </a>
+    <a href="/entities" class="flex flex-col gap-2 rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="m6.5 6.5 4 4M17.5 6.5l-4 4M6.5 17.5l4-4M17.5 17.5l-4-4"/></svg>
+      <span class="text-2xl font-semibold tracking-tight">{{ counts.entities }}</span>
+      <span class="text-xs text-muted-foreground">Entidades</span>
+    </a>
   </section>
 
-  <section>
-    <h2 class="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Últimas execuções</h2>
-    <div class="rounded-2xl bg-card ring-1 ring-foreground/10">
-      {% for run in runs %}
-        <div class="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3 last:border-b-0">
-          <div class="min-w-0">
-            <div class="text-sm font-medium">{{ run.worker }}</div>
-            <div class="truncate text-xs text-muted-foreground">{{ run.started_at }}</div>
-          </div>
-          {% if run.status == "ok" %}
-            <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">ok</span>
-          {% else %}
-            <span class="shrink-0 rounded-4xl bg-destructive/10 px-2.5 py-0.5 text-xs text-destructive">
-              {{ run.error_kind or run.status }}
-            </span>
-          {% endif %}
+  <section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+    {# 'Fluxos ativos' fica fora (desvio declarado) → o card de execuções ocupa a linha. #}
+    <div class="rounded-2xl bg-card ring-1 ring-foreground/10 lg:col-span-2">
+      <div class="flex items-start justify-between gap-3 border-b border-border/60 px-5 py-4">
+        <div>
+          <h2 class="text-sm font-semibold">Últimas execuções</h2>
+          <p class="mt-0.5 text-xs text-muted-foreground">Runs recentes dos seus workers.</p>
         </div>
-      {% else %}
-        <div class="px-4 py-3 text-sm text-muted-foreground">Nenhuma execução registrada ainda.</div>
-      {% endfor %}
+        <a href="/runs" class="shrink-0 rounded-4xl px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Ver todas</a>
+      </div>
+      <ul class="divide-y divide-border/60">
+        {% for run in runs[:5] %}
+          <li class="flex items-center gap-3 px-5 py-3">
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium">{{ run.worker }}</span>
+                {% if run.status == "ok" %}
+                  <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">ok</span>
+                {% elif run.status == "running" %}
+                  <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">rodando</span>
+                {% elif run.error_kind in ("rate_limit", "rate_limit_exhausted") %}
+                  <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">quota</span>
+                {% else %}
+                  <span class="rounded-4xl bg-destructive/10 px-2.5 py-0.5 text-xs text-destructive">{{ run.error_kind or "falhou" }}</span>
+                {% endif %}
+              </div>
+              <p class="mt-0.5 truncate text-xs text-muted-foreground">{{ run.started_at | short_datetime }} · {{ run.started_at | duration(run.finished_at) }}</p>
+            </div>
+          </li>
+        {% else %}
+          <li class="px-5 py-3 text-sm text-muted-foreground">Nenhuma execução registrada ainda.</li>
+        {% endfor %}
+      </ul>
     </div>
   </section>
 </div>

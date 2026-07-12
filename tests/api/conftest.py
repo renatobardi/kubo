@@ -35,7 +35,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
-        lambda db: DashboardCounts(distilled=0, items=0, sources=0),
+        lambda db: DashboardCounts(distilled=0, items=0, sources=0, entities=0),
     )
     monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])

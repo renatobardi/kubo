@@ -341,18 +341,22 @@ def test_list_distilled_clamps_hostile_bounds(db: Any) -> None:
 
 
 def test_dashboard_counts_reflects_acervo(db: Any) -> None:
-    """dashboard_counts conta destilados, itens e fontes do acervo (Painel)."""
+    """dashboard_counts conta destilados, itens, fontes e entidades do acervo (Painel,
+    4º StatTile de Entidades adicionado no retrofit M5)."""
     _seed_distilled(db, 3)  # cria 1 source + 3 items + 3 distilled
+    knowledge.get_or_create_entity(db, name="Python")
+    knowledge.get_or_create_entity(db, name="Rust")
     counts = knowledge.dashboard_counts(db)
     assert counts.distilled == 3
     assert counts.items == 3
     assert counts.sources == 1
+    assert counts.entities == 2
 
 
 def test_dashboard_counts_empty_acervo_is_zero(db: Any) -> None:
     """Acervo vazio: todas as contagens são 0, não erro."""
     counts = knowledge.dashboard_counts(db)
-    assert (counts.distilled, counts.items, counts.sources) == (0, 0, 0)
+    assert (counts.distilled, counts.items, counts.sources, counts.entities) == (0, 0, 0, 0)
 
 
 def test_recent_runs_newest_first_with_error_kind(db: Any) -> None:

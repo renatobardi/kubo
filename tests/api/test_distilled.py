@@ -89,6 +89,32 @@ def test_list_escapes_summary(
     assert _XSS not in html
 
 
+def test_list_card_shows_title_source_and_date(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retrofit M5/E3: o card do browse mostra título do item, fonte e data (não só summary)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.list_distilled",
+        lambda db, **kw: [_card("x1", "resumo", title="Título do Post")],
+    )
+    html = authed_client.get("/distilled").text
+    assert "Título do Post" in html
+    assert "https://x/feed" in html  # fonte (canonical)
+
+
+def test_list_escapes_title(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O título vem de item.title (conteúdo coletado, hostil): renderizado escapado."""
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.list_distilled",
+        lambda db, **kw: [_card("x1", "resumo", title=_XSS)],
+    )
+    html = authed_client.get("/distilled").text
+    assert _XSS not in html
+    assert "&lt;script&gt;" in html
+
+
 def test_search_partial_escapes_summary(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
