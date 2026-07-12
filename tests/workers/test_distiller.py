@@ -280,6 +280,32 @@ def test_filter_present_entities_keeps_present_drops_absent_case_insensitively()
     assert kept == [EntityRef(name="anthropic", kind="org")]
 
 
+def test_run_skips_item_with_whitespace_only_summary_and_counts_empty_summary() -> None:
+    """summary só-whitespace (passa min_length=1, mas chunk_text devolve []) não vira
+    DistilledPayload não-buscável: é pulado, contado em `empty_summary`, e o run segue
+    destilando os outros itens (Minor, qualidade — achado de code review)."""
+    items = [
+        ItemView(ref=0, title=None, content="c0"),
+        ItemView(ref=1, title=None, content="c1"),
+    ]
+    executor = _FakeExecutor(
+        outputs={
+            0: DistillOutput(summary="   ", entities=[]),
+            1: DistillOutput(summary="resumo 1", entities=[]),
+        }
+    )
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    assert result.error is None
+    assert len(result.payloads) == 1
+    assert _as_distilled(result.payloads[0]).ref == 1
+    stats = result.stats.model_dump()
+    assert stats["empty_summary"] >= 1
+    assert stats["distilled"] == 1
+
+
 def test_run_echoes_item_ref_never_invents_it() -> None:
     """ref do payload é o MESMO do ItemView de origem (42, não 0/índice de loop) —
     o pareamento é programático, o LLM nunca escolhe/ecoa ref (§III.3)."""

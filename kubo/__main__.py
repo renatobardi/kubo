@@ -7,6 +7,7 @@ pyproject, que aponta para `main` abaixo.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -19,6 +20,20 @@ from kubo.store import client, knowledge
 from kubo.store.knowledge import DistilledView, SearchHit
 
 _DISTILLED_TABLE = "distilled"
+
+
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _sanitize(text: str) -> str:
+    """Remove caracteres de controle (ESC/OSC etc.), preservando `\\n` e `\\t`.
+
+    `text` vem de summaries/claims/títulos derivados de conteúdo coletado
+    HOSTIL (§VIII) — sem isto, um item malicioso poderia injetar sequências
+    de escape de terminal (ESC/OSC) na saída de `kubo query`/`kubo show`.
+    Não use para as mensagens de erro da própria CLI (essas são nossas).
+    """
+    return _CONTROL_CHARS_RE.sub("", text)
 
 
 def parse_distilled_id(raw: str) -> RecordID:
@@ -166,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not out.strip():
                     print("nenhum resultado.")
                 else:
-                    print(out)
+                    print(_sanitize(out))
                 return 0
 
             try:
@@ -177,7 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if out_show is None:
                 print(f"distilled não encontrado: {args.id}", file=sys.stderr)
                 return 1
-            print(out_show)
+            print(_sanitize(out_show))
             return 0
     except ConfigError as exc:
         print(f"erro de configuração: {exc}", file=sys.stderr)

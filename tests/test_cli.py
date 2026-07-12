@@ -17,6 +17,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.__main__ import (
+    _sanitize,
     dedupe_hits,
     format_distilled,
     format_query_results,
@@ -103,6 +104,23 @@ def test_parse_distilled_id_rejects_other_tables_and_empty_input(raw: str) -> No
     ou entrada vazia/whitespace levanta ValueError, não silenciosamente aceita."""
     with pytest.raises(ValueError):
         parse_distilled_id(raw)
+
+
+# ---------------------------------------------------------------------------
+# Camada pura: _sanitize
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_remove_control_chars_mas_preserva_texto_e_newline_tab() -> None:
+    """`_sanitize` remove caracteres de controle (ESC, BEL) mas preserva o texto
+    normal, `\\n` e `\\t` — defesa contra terminal injection em conteúdo coletado
+    hostil que vira summary/claim/título impresso pela CLI (Major, segurança)."""
+    result = _sanitize("a\x1b[31mb\x07c\nd\t")
+
+    assert "\x1b" not in result
+    assert "\x07" not in result
+    for kept in ("a", "b", "c", "\n", "d", "\t"):
+        assert kept in result
 
 
 # ---------------------------------------------------------------------------

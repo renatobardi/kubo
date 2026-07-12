@@ -109,6 +109,7 @@ class DistillerWorker:
         malformed = 0
         truncated = 0
         entities_filtered = 0
+        empty_summary = 0
         payloads: list[DistilledPayload] = []
 
         for item in items:
@@ -125,7 +126,7 @@ class DistillerWorker:
             except RateLimitExhausted:
                 return RunResult(
                     payloads=list(payloads),
-                    stats=_stats(distilled, malformed, truncated, entities_filtered),
+                    stats=_stats(distilled, malformed, truncated, entities_filtered, empty_summary),
                     error=ErrorInfo(
                         kind="rate_limit_exhausted",
                         message="quota do provider esgotada; parcial persistido",
@@ -145,6 +146,13 @@ class DistillerWorker:
             entities_filtered += len(out.entities) - len(kept_entities)
 
             texts = chunk_text(out.summary)
+            if not texts:
+                # summary só-whitespace (min_length=1 do schema deixa passar " ") não
+                # gera nenhum chunk — persistir um DistilledPayload sem chunks seria
+                # não-buscável (achado de review). Conta e pula, o run segue.
+                empty_summary += 1
+                ctx.logger.warning("distiller.empty_summary", ref=item.ref)
+                continue
             vectors = embedder.embed(texts)
             chunks = [
                 ChunkPayload(
@@ -169,7 +177,7 @@ class DistillerWorker:
 
         return RunResult(
             payloads=list(payloads),
-            stats=_stats(distilled, malformed, truncated, entities_filtered),
+            stats=_stats(distilled, malformed, truncated, entities_filtered, empty_summary),
         )
 
 
@@ -182,7 +190,13 @@ def filter_present_entities(entities: list[EntityRef], content: str) -> list[Ent
     return [e for e in entities if e.name.casefold() in content_cf]
 
 
-def _stats(distilled: int, malformed: int, truncated: int, entities_filtered: int) -> Stats:
+def _stats(
+    distilled: int,
+    malformed: int,
+    truncated: int,
+    entities_filtered: int,
+    empty_summary: int,
+) -> Stats:
     """Monta o envelope `Stats` (extra="allow") com os contadores do run."""
     return Stats.model_validate(
         {
@@ -190,5 +204,6 @@ def _stats(distilled: int, malformed: int, truncated: int, entities_filtered: in
             "malformed": malformed,
             "truncated": truncated,
             "entities_filtered": entities_filtered,
+            "empty_summary": empty_summary,
         }
     )

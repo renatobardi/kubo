@@ -187,3 +187,66 @@ def test_embed_com_dimensao_de_vetor_diferente_da_tripla_pinada_levanta_embeddin
 
     with pytest.raises(EmbeddingError):
         embedder.embed(["um texto"])
+
+
+@respx.mock
+def test_embed_com_timeout_httpx_vira_embedding_error_sem_vazar_sentinela():
+    """httpx.TimeoutException (falha de rede, não status HTTP) vira EmbeddingError com
+    mensagem própria — hoje escapa como traceback cru ao CLI (Major, achado de review)."""
+    sentinela = "SENTINEL_TIMEOUT_BODY_NAO_VAZAR"
+    respx.post(_BATCH_URL).mock(side_effect=httpx.TimeoutException(sentinela))
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
+
+    with pytest.raises(EmbeddingError) as exc_info:
+        embedder.embed(["um texto"])
+
+    assert sentinela not in str(exc_info.value)
+
+
+@respx.mock
+def test_embed_com_connect_error_vira_embedding_error():
+    """httpx.ConnectError (subclasse de httpx.HTTPError) também vira EmbeddingError,
+    não exceção crua do httpx."""
+    respx.post(_BATCH_URL).mock(side_effect=httpx.ConnectError("conexão recusada"))
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
+
+    with pytest.raises(EmbeddingError):
+        embedder.embed(["um texto"])
+
+
+@respx.mock
+def test_embed_com_json_invalido_na_resposta_200_vira_embedding_error():
+    """Resposta 200 com corpo não-JSON (parse quebra) vira EmbeddingError, não a
+    exceção crua de `response.json()` (Major, achado de review)."""
+    respx.post(_BATCH_URL).mock(return_value=httpx.Response(200, text="isto não é json"))
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
+
+    with pytest.raises(EmbeddingError):
+        embedder.embed(["um texto"])
+
+
+@respx.mock
+def test_embed_com_shape_de_embedding_errado_vira_embedding_error():
+    """Resposta 200 com JSON válido mas shape errado (embeddings sem 'values') vira
+    EmbeddingError, não KeyError cru."""
+    respx.post(_BATCH_URL).mock(
+        return_value=httpx.Response(200, json={"embeddings": [{"nao_e_values": [0.1]}]})
+    )
+    embedder = GeminiEmbedder(api_key=_STUB, client=httpx.Client())
+
+    with pytest.raises(EmbeddingError):
+        embedder.embed(["um texto"])
+
+
+@respx.mock
+def test_embed_sem_client_injetado_cria_e_fecha_client_temporario():
+    """Sem `client` injetado (caso de produção — scheduler cria um embedder por run),
+    `embed` cria um client temporário por chamada e funciona normalmente sob respx —
+    o client não injetado nunca fica aberto pendurado (Major, achado de review: leak
+    no scheduler de vida longa)."""
+    respx.post(_BATCH_URL).mock(return_value=_embeddings_response([_vector(768, 0.1)]))
+    embedder = GeminiEmbedder(api_key=_STUB)
+
+    result = embedder.embed(["um texto"])
+
+    assert result == [_vector(768, 0.1)]

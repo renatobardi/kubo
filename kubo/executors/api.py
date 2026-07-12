@@ -53,6 +53,7 @@ class ApiExecutorConfig(BaseModel):
     model: str
     temperature: float = 0.0
     max_tokens: int = 1024
+    timeout: float = 60.0
 
 
 class ApiExecutor:
@@ -131,6 +132,7 @@ class ApiExecutor:
                     max_tokens=self._config.max_tokens,
                     response_format={"type": "json_object"},
                     num_retries=0,
+                    timeout=self._config.timeout,
                 )
             except _TRANSIENT:
                 if attempt == self._max_attempts - 1:

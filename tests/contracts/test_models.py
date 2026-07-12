@@ -90,6 +90,22 @@ def test_chunk_payload_valido_espelha_chunk_da_store() -> None:
     assert chunk.task_type == "RETRIEVAL_DOCUMENT"
 
 
+def test_chunk_payload_rejeita_dim_diferente_do_tamanho_do_embedding() -> None:
+    """`dim` deve bater com `len(embedding)` — a store já valida, mas o contrato é a
+    fronteira de segurança: falha mais rápido, mais perto do worker que montou o
+    chunk (Trivial, achado de review). Mensagem clara, sem embutir o embedding."""
+    with pytest.raises(ValidationError):
+        ChunkPayload(text="x", seq=0, embedding=[0.1, 0.2], model="m", dim=3, task_type="t")
+
+
+def test_chunk_payload_aceita_dim_igual_ao_tamanho_do_embedding() -> None:
+    """`dim` batendo com `len(embedding)` instancia normalmente."""
+    chunk = ChunkPayload(text="x", seq=0, embedding=[0.1, 0.2], model="m", dim=2, task_type="t")
+
+    assert chunk.dim == 2
+    assert len(chunk.embedding) == 2
+
+
 def test_chunk_payload_rejeita_campo_extra() -> None:
     """extra="forbid" no ChunkPayload — mesma disciplina dos outros payloads."""
     with pytest.raises(ValidationError):

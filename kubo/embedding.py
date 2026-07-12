@@ -13,7 +13,7 @@ unitários usam fake, nunca o `GeminiEmbedder` concreto contra rede real.
 from __future__ import annotations
 
 import os
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 import httpx
 
@@ -49,12 +49,18 @@ class GeminiEmbedder:
         client: httpx.Client | None = None,
         timeout: float = 60.0,
     ) -> None:
-        """Guarda a tripla pinada e a credencial; não faz chamada de rede aqui."""
+        """Guarda a tripla pinada e a credencial; não faz chamada de rede aqui.
+
+        `client=None` (caso de produção) NÃO cria um `httpx.Client` aqui: `embed`
+        cria e fecha um client TEMPORÁRIO por chamada via context manager, evitando
+        leak no scheduler de vida longa (que constrói um embedder por run). Um
+        client injetado (testes/respx) é usado como está, sem ser fechado por nós.
+        """
         self.api_key = api_key
         self.model = model
         self.dim = dim
         self.task_type = task_type
-        self.client = client if client is not None else httpx.Client()
+        self._client = client
         self.timeout = timeout
 
     @classmethod
@@ -86,30 +92,57 @@ class GeminiEmbedder:
             f"{self.model}:batchEmbedContents"
         )
 
-        response = self.client.post(
-            url,
-            json=body,
-            headers={
-                "x-goog-api-key": self.api_key,
-                "Content-Type": "application/json",
-            },
-            timeout=self.timeout,
-        )
+        if self._client is not None:
+            response = self._post(self._client, url, body)
+        else:
+            with httpx.Client() as client:
+                response = self._post(client, url, body)
 
+        return self._to_vectors(response, len(texts))
+
+    def _post(self, client: httpx.Client, url: str, body: dict[str, Any]) -> httpx.Response:
+        """POST a `url`; falha de rede/timeout (subclasses de `httpx.HTTPError`) vira
+        `EmbeddingError` com mensagem própria — nunca propaga a exceção crua do httpx
+        (que pode embutir corpo/URL) ao chamador (§VIII)."""
+        try:
+            return client.post(
+                url,
+                json=body,
+                headers={
+                    "x-goog-api-key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                timeout=self.timeout,
+            )
+        except httpx.HTTPError:
+            raise EmbeddingError("falha de rede ao chamar a API de embedding") from None
+
+    def _to_vectors(self, response: httpx.Response, expected_count: int) -> list[list[float]]:
+        """Valida a resposta HTTP e extrai os vetores, um por texto enviado.
+
+        JSON inválido ou shape inesperado (`embeddings`/`values` ausentes) vira
+        `EmbeddingError` genérica em vez de `ValueError`/`KeyError`/`TypeError` crus
+        (§VIII); os guards de contagem e dimensão mantêm mensagem específica.
+        """
         if not response.is_success:
             raise EmbeddingError(f"Gemini batchEmbedContents falhou: HTTP {response.status_code}")
 
-        data = response.json()
-        if "embeddings" not in data:
-            raise EmbeddingError("resposta da API sem campo 'embeddings'.")
-        embeddings = data["embeddings"]
+        try:
+            data = response.json()
+            embeddings = data["embeddings"]
+        except (ValueError, KeyError, TypeError):
+            raise EmbeddingError("resposta da API de embedding malformada") from None
 
-        if len(embeddings) != len(texts):
+        if len(embeddings) != expected_count:
             raise EmbeddingError(
-                f"API devolveu {len(embeddings)} embeddings para {len(texts)} textos."
+                f"API devolveu {len(embeddings)} embeddings para {expected_count} textos."
             )
 
-        vectors = [emb["values"] for emb in embeddings]
+        try:
+            vectors = [emb["values"] for emb in embeddings]
+        except (KeyError, TypeError):
+            raise EmbeddingError("resposta da API de embedding malformada") from None
+
         if any(len(v) != self.dim for v in vectors):
             raise EmbeddingError(
                 f"API honrou dimensão diferente da tripla pinada (esperado {self.dim})."

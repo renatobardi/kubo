@@ -221,3 +221,27 @@ def test_complete_resposta_com_shape_inesperado_vira_malformed(monkeypatch):
 
     with pytest.raises(MalformedOutputError):
         executor.complete("instrução", "conteúdo", _Out)
+
+
+def test_complete_passa_timeout_default_da_config_para_litellm(monkeypatch):
+    """Sem override, `ApiExecutorConfig.timeout` default 60.0 chega em `litellm.completion`
+    como kwarg `timeout` — sem teto, uma chamada pendurada travaria o job diário (Major,
+    achado de code review: o backoff só cobre exceções, não travamento silencioso)."""
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["timeout"] == 60.0
+
+
+def test_complete_passa_timeout_customizado_da_config_para_litellm(monkeypatch):
+    """Override de `timeout` na config chega em `litellm.completion` com o valor exato."""
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config(timeout=12.5))
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["timeout"] == 12.5

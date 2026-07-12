@@ -98,6 +98,18 @@ class ChunkPayload(BaseModel):
     dim: int
     task_type: str
 
+    @model_validator(mode="after")
+    def _dim_matches_embedding_length(self) -> Self:
+        """`dim` deve bater com `len(embedding)` — fronteira de segurança mais perto
+        do worker que montou o chunk; a store já valida de novo, mas falhar aqui é
+        mais rápido e não depende do caminho de escrita. Mensagem clara, sem embutir
+        o embedding (poderia carregar volume grande de floats)."""
+        if self.dim != len(self.embedding):
+            raise ValueError(
+                f"dim ({self.dim}) não bate com o tamanho do embedding ({len(self.embedding)})"
+            )
+        return self
+
 
 class DistilledPayload(BaseModel):
     """Resultado da destilação de um item (ADR-0013 §III.2).
