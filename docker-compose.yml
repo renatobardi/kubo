@@ -167,7 +167,10 @@ services:
       - -c
       - |
         set -u   # sem -e: uma falha transitória de rede não pode matar o loop diário
-        AUTH=$$(printf '%s:%s' "$$SURREAL_USER" "$$SURREAL_PASS" | base64)
+        # tr -d '\n': o base64 do busybox quebra linha a cada 76 chars — com uma
+        # senha longa (32+ aleatória, ADR-0014 amendment) o header Authorization
+        # ganharia um \n no meio e o /export responde 400. Achado no deploy 0010.
+        AUTH=$$(printf '%s:%s' "$$SURREAL_USER" "$$SURREAL_PASS" | base64 | tr -d '\n')
         while true; do
           TS=$$(date -u +%Y%m%dT%H%M%SZ)
           OUT="/backups/kubo-$$TS.surql"

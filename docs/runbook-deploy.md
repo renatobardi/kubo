@@ -165,6 +165,15 @@ propósito, para nunca rodar com a credencial de escrita.
 > de usuário são **sempre por SQL** (`DEFINE USER OVERWRITE …`), nunca pelo flag do
 > compose. E `DEFINE USER` puro (sem `OVERWRITE`) ERRA se o usuário já existe — use
 > **sempre `OVERWRITE`** (idempotente, seguro para repetir).
+>
+> **⚠️ Não deixe segredo exportado no shell antes de `docker compose`.** O compose lê
+> o `.env` do arquivo SOZINHO, mas uma variável **exportada no shell** (ex.: um
+> `set -a; . ./.env` rodado ANTES de você editar o `.env`) **tem prioridade** sobre o
+> arquivo na interpolação `${VAR}` — o `up`/`--force-recreate` grava o valor VELHO do
+> shell nos containers, ignorando o `.env` novo. Só exporte o `.env` num **subshell**
+> `( … )` na hora do `docker exec … /surreal sql`, ou abra um shell limpo (`exec bash
+> -l`) antes de rodar `docker compose`. Sintoma clássico: sha da senha no container ≠
+> sha no `.env`.
 
 **Criar o viewer (uma vez, direto no SurrealDB — NUNCA migration: senha em `.surql`
 versionado fura o invariante 8).** Rode pelo CLI `surreal sql` dentro do container (a
