@@ -53,3 +53,9 @@ schedules:
       feed_url: https://www.semianalysis.com/feed
       title: SemiAnalysis
       tags: [ai, hardware, semianalysis]
+  - worker: distiller
+    cron: "0 9 * * *"   # 09:00, após a coleta dos feeds (08:00-08:50); ADR-0013 §VIII:
+                        # itens que chegam depois esperam o dia seguinte, idempotente,
+                        # não é bug.
+    config:
+      max_items: 20
