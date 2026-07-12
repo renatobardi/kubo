@@ -21,8 +21,10 @@ class NavItem(TypedDict):
     group: str | None
 
 
-# Ordem = ordem de exibição. Só o implementado nesta sessão (D27).
+# Ordem = ordem de exibição; itens do mesmo grupo ficam CONSECUTIVOS (o header do
+# grupo é renderizado na 1ª ocorrência). Só o implementado (D27: zero link morto).
 NAV: list[NavItem] = [
     {"label": "Painel", "route": "/", "group": None},
     {"label": "Destilados", "route": "/distilled", "group": "Conhecimento"},
+    {"label": "Execuções", "route": "/runs", "group": "Trabalho"},
 ]

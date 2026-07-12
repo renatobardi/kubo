@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Execuções · Kubo{% endblock %}
+{% block heading %}Execuções{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-4">
+  <p class="text-sm text-muted-foreground">Runs dos seus workers — status, duração, itens produzidos e erros.</p>
+
+  <section class="space-y-2.5">
+    {% for run in runs %}
+      {% set is_quota = run.status == "error" and run.error_kind in quota_kinds %}
+      <div class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+        {% if run.error %}
+        <details class="group">
+          <summary class="flex cursor-pointer list-none items-center gap-3 p-4">
+        {% else %}
+          <div class="flex items-center gap-3 p-4">
+        {% endif %}
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium">{{ run.worker }}</span>
+                {% if run.status == "ok" %}
+                  <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">ok</span>
+                {% elif run.status == "running" %}
+                  <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">rodando</span>
+                {% elif is_quota %}
+                  <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">quota</span>
+                {% else %}
+                  <span class="rounded-4xl bg-destructive/10 px-2.5 py-0.5 text-xs text-destructive">{{ run.error_kind or "falhou" }}</span>
+                {% endif %}
+              </div>
+              <p class="mt-0.5 truncate text-xs text-muted-foreground">
+                {{ run.started_at | short_datetime }} · {{ run.started_at | duration(run.finished_at) }}{% if run.items is not none %} · {{ run.items }} itens{% endif %}
+              </p>
+            </div>
+            {% if run.error %}
+            <svg class="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+            <div class="px-4 pb-4">
+              <div class="rounded-lg bg-destructive/10 p-3 font-mono text-xs text-destructive">
+                <div class="font-semibold">{{ run.error.kind }}</div>
+                {% if run.error.message %}<div class="mt-1 whitespace-pre-wrap break-words">{{ run.error.message }}</div>{% endif %}
+                {% if run.error.detail %}<div class="mt-1 whitespace-pre-wrap break-words text-destructive/80">{{ run.error.detail }}</div>{% endif %}
+              </div>
+            </div>
+        </details>
+            {% else %}
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+        Nenhuma execução registrada ainda.
+      </div>
+    {% endfor %}
+
+    {% if has_prev or has_next %}
+      <div class="flex items-center justify-between pt-2 text-sm">
+        {% if has_prev %}
+          <a href="/runs?start={{ prev_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
+        {% else %}<span></span>{% endif %}
+        {% if has_next %}
+          <a href="/runs?start={{ next_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximos →</a>
+        {% else %}<span></span>{% endif %}
+      </div>
+    {% endif %}
+  </section>
+
+  <p class="text-xs text-muted-foreground">Clique numa run com falha para ver a mensagem de erro estruturada.</p>
+</div>
+{% endblock %}
