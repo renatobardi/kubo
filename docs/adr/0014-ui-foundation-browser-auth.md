@@ -1,6 +1,6 @@
 # ADR-0014 — Fundação da UI: autenticação de browser da fase 2
 
-> Status: **proposto** · Data: 2026-07-11
+> Status: **aceito** · Data: 2026-07-11 (validado pelo advisor Fable 5 na sessão 0009)
 >
 > (Emenda ao ADR-0003: bearer estático fica escopado a futuras rotas `/api/*`; UI de browser usa autenticação própria.)
 
@@ -22,7 +22,7 @@ O token bearer do ADR-0003 fica **reservado a futuras rotas `/api/*`** (orquestr
 
 ### 2. Login de senha única, dono único
 
-Tela `/login` (form POST, método POST, sem AJAX) com campo senha única. Senha verificada contra hash em env `KUBO_PASSWORD_HASH` (invariante 8: nunca valor em código/YAML/commit/log). Sem suporte a múltiplos usuários, sem convidados. Se credencial falhar, redireção de volta a `/login` com alerta. Rate-limit mínimo sem dependência (ver item 9).
+Tela `/login` (form POST, método POST, sem AJAX) com campo senha única. Senha verificada contra hash em env `KUBO_PASSWORD_HASH` (invariante 8: nunca valor em código/YAML/commit/log). Sem suporte a múltiplos usuários, sem convidados. Se a credencial falhar, re-renderiza o form com 401 e alerta (sem round-trip de redirect, preserva a mensagem). Rate-limit mínimo sem dependência (ver item 9).
 
 ### 3. Hash de senha: `hashlib.scrypt` (stdlib), zero dependência de hash
 
@@ -36,7 +36,7 @@ SDK SurrealDB 2.0.0 é bloqueante; store é 100% síncrona. Hash scrypt custa ~5
 
 ### 5. Sessão stateless via cookie assinado
 
-Cookie de sessão vazio (dados vazios) assinado com `itsdangerous` (lib minúscula, já usada no Starlette `SessionMiddleware`). Não há estado no banco; sessão é válida enquanto o signature é válido. `SessionMiddleware` do Starlette gerencia compressão, assinatura e expiração. `SESSION_SECRET` em env (invariante 8). `max_age` explícito: 7–30 dias (dono escolhe). Revogação = rotacionar `SESSION_SECRET` (desloga o único usuário — aceitável por definição). Cookie `HttpOnly=True` + `SameSite=Lax` (ver item 6).
+Cookie de sessão assinado com `itsdangerous` (lib minúscula, já usada no Starlette `SessionMiddleware`) carregando só a flag `auth` — nenhum dado de usuário. Não há estado no banco; a sessão é válida enquanto a assinatura é válida (o `SessionMiddleware` não emite cookie para sessão vazia — por isso a flag). `SESSION_SECRET` em env (invariante 8). `max_age` fixo em **14 dias** (constante `_SESSION_MAX_AGE`; um usuário só, expiry curto seria fricção sem ganho). Revogação = rotacionar `SESSION_SECRET` (desloga o único usuário — aceitável por definição). Cookie `HttpOnly=True` + `SameSite=Lax` (ver item 6).
 
 ### 6. Cookie SEM flag `Secure`, com pré-condição registrada
 
@@ -46,7 +46,7 @@ O cookie não leva flag `Secure` porque o transporte já é cifrado pelo WireGua
 
 Toda rota da UI (exceto `/login` e `/healthz`) é GET até data de decisão desta sessão. GET nunca muda estado (invariante: `idempotent by definition`). CSRF token é defensável quando forma POST existe; agora é especulativo. Defesa atual: `SameSite=Lax` (protege contra attacker-controlled form POST) + `HttpOnly` (protege contra JavaScript) + **regra de código: nenhum GET altera estado**. `Lax` (não `Strict`) porque dono navega em sites da internet pública via Tailscale — quebrar link externo→UI seria UX ruim.
 
-**Tripwire:** a primeira rota POST além de `/login` que tocar estado (mudar, deletar, etc.) **exige token CSRF no formulário** antes do PR ser mergeado. Registrado como checklist no marco 9.8.
+**Tripwire:** a primeira rota POST além de `/login` que mutar **dados do domínio** (destilado, flow, etc.) **exige token CSRF no formulário** antes do PR ser mergeado. **`/logout` fica isento:** é POST mas coberto por `SameSite=Lax` (não envia o cookie em POST cross-site) e o pior caso é um logout forçado — aborrecimento, não dano. O tripwire mira mutação de dados, não a sessão. Registrado como checklist no marco 9.8.
 
 ### 8. `TrustedHostMiddleware` contra rebinding de DNS
 
@@ -84,7 +84,7 @@ Guard barato complementar: grep ou hook de linting procura por `|safe` em templa
 
 - `KUBO_PASSWORD_HASH` — saída do helper `python -m kubo.api.hashpw`, dono roda uma vez.
 - `SESSION_SECRET` — string de 32+ bytes (gerado: `python -c "import secrets; print(secrets.token_hex(32))"`), dono escolhe ou gera.
-- `KUBO_ALLOWED_HOSTS` (opcional, default vazio = sem validação) — lista de hosts permitidos, ex. `"100.66.254.24,kubo.localdomain"`.
+- `KUBO_ALLOWED_HOSTS` (opcional) — lista de hosts permitidos, ex. `"100.66.254.24,kubo.localdomain"`. Sem valor, cai na lista de dev (`localhost`/`127.0.0.1`/`testserver`) — **fail-closed, nunca "sem validação"**; `localhost`/`127.0.0.1` são sempre anexados (healthcheck). Prod seta o IP Tailscale.
 
 Todos salvos via rito existente em `.env` do servidor (Tailscale-only, não commitado, gerenciado pela OCI).
 

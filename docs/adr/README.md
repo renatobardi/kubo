@@ -20,4 +20,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0010](0010-agendamento-fase-1.md) | Agendamento na fase 1 (`schedules.yaml` + APScheduler) | aceito |
 | [0011](0011-topologia-deploy-oute-server.md) | Topologia de deploy no oute-server (LXD + Docker aninhado) | aceito |
 | [0012](0012-import-legado-neon.md) | Import do legado NeonDB (script one-off via store) | aceito |
-| [0014](0014-ui-foundation-browser-auth.md) | Fundação da UI: autenticação de browser da fase 2 | proposto |
+| [0014](0014-ui-foundation-browser-auth.md) | Fundação da UI: autenticação de browser da fase 2 | aceito |
