@@ -39,6 +39,10 @@ A inconsistência de emoji apontada na v1 foi **resolvida no export v2** ("nunca
 | D14 | **Gate nunca é decisão de um clique**: botões do card abrem painel com contexto (o que as personas produziram, PR, review, budget); rejeitar exige motivo; decisão registrada no grafo | fase 3 (boards) |
 | D15 | Tela **Configurações** (notificações de gate/falha, resumo diário, senha, tema) — adição consciente fora da IA original | fase 2+ |
 
+## Regra de fidelidade ao mockup (norma permanente, 2026-07-11)
+
+Toda tela implementada no produto tem como critério de aceite uma **tabela de paridade** com a tela correspondente do mockup (`mvp/ui_kits/kubo-app/`): cada elemento estrutural (seções, campos por card, ações, estados vazios, navegação) recebe status *igual* / *desvio declarado + motivo* (backend inexistente | dado inexistente | limitação técnica | sacrifício de timebox registrado) / *fora de escopo*. A tabela nasce **no plano da sessão** — desvios são pré-declarados, nunca descobertos no PR. A regra corta nos dois sentidos: adicionar o que o mockup não tem também é desvio. Equivalência é estrutural/de token — nunca pixel, spacing ou inline-style do React. Aceite final: screenshot lado a lado no smoke. Origem: dívida de fidelidade da sessão 0009 (Painel/Destilados entregues empobrecidos com tokens corretos — "usar tokens" não substitui "seguir a tela").
+
 ## Arrumações
 
 - `mvp/uploads/kobo-design-system.md` é cópia com nome antigo do doc canônico — **remover** (vai divergir; o canônico é `docs/kubo-design-system.md` após a sessão 0001).
