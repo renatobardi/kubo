@@ -9,6 +9,9 @@ from kubo.api.app import create_app
 from kubo.errors import ConfigError
 from tests.api.conftest import UI_PASSWORD
 
+# Valor incorreto para o teste de rejeição — não é credencial, só "senha errada".
+_WRONG_LOGIN = "nope"
+
 
 def test_login_page_is_public(client: TestClient) -> None:
     """GET /login não exige sessão (200, mostra o form)."""
@@ -45,7 +48,7 @@ def test_login_success_opens_session(client: TestClient) -> None:
 def test_login_wrong_password_denied(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Senha errada: não abre sessão e devolve 401 (sleep-on-fail neutralizado no teste)."""
     monkeypatch.setattr("kubo.api.routes.auth.time.sleep", lambda _s: None)
-    resp = client.post("/login", data={"password": "nope"}, follow_redirects=False)
+    resp = client.post("/login", data={"password": _WRONG_LOGIN}, follow_redirects=False)
     assert resp.status_code == 401
     assert client.get("/", follow_redirects=False).status_code == 303
 

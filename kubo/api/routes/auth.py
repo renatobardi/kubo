@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Form, Request
@@ -22,6 +23,7 @@ _log = structlog.get_logger(__name__)
 router = APIRouter()
 
 _FAIL_DELAY_SECONDS = 1
+_LOGIN_TEMPLATE = "login.html"
 
 # Gate de concorrência: no máximo UMA tentativa de login processando por vez. Sem
 # ele, o time.sleep(1) da falha só serializa por requisição — N conexões paralelas
@@ -36,11 +38,11 @@ def login_form(request: Request) -> Response:
     """Mostra o form de login. Já autenticado? Vai direto pro Painel."""
     if request.session.get("auth"):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {"error": None})
+    return templates.TemplateResponse(request, _LOGIN_TEMPLATE, {"error": None})
 
 
 @router.post("/login")
-def login_submit(request: Request, password: str = Form("")) -> Response:
+def login_submit(request: Request, password: Annotated[str, Form()] = "") -> Response:
     """Verifica a senha. Certa: abre a sessão e redireciona ao Painel. Errada:
     dorme 1s (rate-limit), loga a tentativa e devolve 401 com o form + alerta.
 
@@ -50,7 +52,7 @@ def login_submit(request: Request, password: str = Form("")) -> Response:
         client = request.client.host if request.client else "unknown"
         _log.warning("api.login.busy", client=client)
         return templates.TemplateResponse(
-            request, "login.html", {"error": "Tente novamente em instantes."}, status_code=429
+            request, _LOGIN_TEMPLATE, {"error": "Tente novamente em instantes."}, status_code=429
         )
     try:
         if verify_password(password, request.app.state.password_hash):
@@ -60,7 +62,7 @@ def login_submit(request: Request, password: str = Form("")) -> Response:
         client = request.client.host if request.client else "unknown"
         _log.warning("api.login.failed", client=client)
         return templates.TemplateResponse(
-            request, "login.html", {"error": "Senha incorreta."}, status_code=401
+            request, _LOGIN_TEMPLATE, {"error": "Senha incorreta."}, status_code=401
         )
     finally:
         _LOGIN_GATE.release()

@@ -10,6 +10,8 @@ quando o embedder falta/erra (E-f), mantendo o browse navegável.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import structlog
 from fastapi import APIRouter, Query, Request
 from starlette.responses import Response
@@ -28,6 +30,7 @@ _PAGE_SIZE = 20
 _SEARCH_K = 20
 _UI_EMBED_TIMEOUT = 10.0  # UI degrada rápido; não os 60s do backfill (E-f)
 _DISTILLED_TABLE = "distilled"
+_RESULTS_TEMPLATE = "distilled/_results.html"
 
 
 def _dedupe_by_distilled(hits: list[SearchHit]) -> list[SearchHit]:
@@ -45,7 +48,7 @@ def _dedupe_by_distilled(hits: list[SearchHit]) -> list[SearchHit]:
 
 
 @router.get("")
-def list_page(request: Request, start: int = Query(0)) -> Response:
+def list_page(request: Request, start: Annotated[int, Query()] = 0) -> Response:
     """Página do acervo, mais recentes primeiro. prev/next sem total (o total é luxo
     cortável): pede uma linha a mais para saber se há próxima sem uma contagem."""
     start = max(0, start)
@@ -67,13 +70,13 @@ def list_page(request: Request, start: int = Query(0)) -> Response:
 
 
 @router.get("/search")
-def search(request: Request, q: str = Query("")) -> Response:
+def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
     """Busca semântica (partial HTMX, k=20, sem paginação — E6). Query vazia = partial
     vazio. Falha/ausência do embedder = alerta *tinted*, browse segue navegável (E-f)."""
     query = q.strip()
     if not query:
         return templates.TemplateResponse(
-            request, "distilled/_results.html", {"results": [], "query": "", "error": None}
+            request, _RESULTS_TEMPLATE, {"results": [], "query": "", "error": None}
         )
     try:
         embedder = GeminiEmbedder.from_env(timeout=_UI_EMBED_TIMEOUT)
@@ -83,7 +86,7 @@ def search(request: Request, q: str = Query("")) -> Response:
         _log.warning("api.search.unavailable", error=type(exc).__name__)
         return templates.TemplateResponse(
             request,
-            "distilled/_results.html",
+            _RESULTS_TEMPLATE,
             {"results": [], "query": query, "error": "Busca indisponível no momento."},
         )
     with client.connect() as db:
@@ -94,7 +97,7 @@ def search(request: Request, q: str = Query("")) -> Response:
             if (view := knowledge.read_distilled(db, hit.distilled)) is not None
         ]
     return templates.TemplateResponse(
-        request, "distilled/_results.html", {"results": results, "query": query, "error": None}
+        request, _RESULTS_TEMPLATE, {"results": results, "query": query, "error": None}
     )
 
 
