@@ -16,9 +16,12 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
+from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
 from kubo.store import client
+from kubo.workers.distiller import DistillerWorker
 from kubo.workers.feed import FeedWorker
 
 _SCHEDULES_PATH = Path(__file__).parents[2] / "schedules.yaml"
@@ -26,7 +29,15 @@ _log = structlog.get_logger()
 
 # Mapa nome→classe HARDCODED (ADR-0010): sem registry/plugin/entry-point dinâmico
 # (seria DSL disfarçada). Ativar um worker novo = editar este dict + PR (gate humano).
-WORKER_REGISTRY: dict[str, type[Any]] = {"feed": FeedWorker}
+WORKER_REGISTRY: dict[str, type[Any]] = {"feed": FeedWorker, "distiller": DistillerWorker}
+
+# Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
+# 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
+# ADR-0010) — nunca fica configurável em schedules.yaml (evitaria o gate).
+_DISTILLER_MODEL = "groq/llama-3.3-70b-versatile"
+# summary até 8000 chars + entidades no JSON precisa de folga; o default 1024 do
+# ApiExecutorConfig truncaria a resposta antes do fim do JSON.
+_DISTILLER_MAX_TOKENS = 4096
 
 
 class ScheduleEntry(BaseModel):
@@ -67,14 +78,37 @@ def load_schedules(path: Path = _SCHEDULES_PATH) -> Schedules:
         raise ConfigError(f"schedules inválido: {format_validation_error(exc)}") from exc
 
 
+def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
+    """Constrói o worker com suas dependências (marco 8.7, ADR-0013 §VIII).
+
+    O destilador ganha executor (Groq, modelo pinado por evidência) + embedder
+    (Gemini, via env); os demais workers não precisam de nenhum dos dois.
+    `GeminiEmbedder.from_env()` roda AQUI, no disparo do job — não no boot do
+    scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`. Se a key faltar
+    na hora do disparo, o `ConfigError` sobe a `execute_job` e é registrado como
+    `scheduler_job_failed` (o mesmo tratamento de qualquer falha de SETUP que
+    ocorre ANTES de `run_worker` abrir a run — não vira `run.error` estruturado,
+    porque a run ainda não existe), em vez de derrubar o processo inteiro às
+    09:00. Trocar isso por um `run.error` exigiria abrir a run antes das deps
+    (factory de embedder avaliada pós-`start_run`) — adiado: a fase 1 tem um
+    scheduler único e o log já dá visibilidade.
+    """
+    if worker_name == "distiller":
+        executor = ApiExecutor(
+            ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
+        )
+        return DistillerWorker(executor), GeminiEmbedder.from_env()
+    return WORKER_REGISTRY[worker_name](), None
+
+
 def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     """Executa um worker agendado com conexão POR execução (ADR-0010): abre a
     conexão, roda sob contrato (run_worker persiste), fecha. Sem handle global de
     DB (um ws de vida longa apodrece num processo que roda dias)."""
-    worker_cls = WORKER_REGISTRY[worker_name]
     try:
+        worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
-            run_worker(db, worker_cls(), config=config)
+            run_worker(db, worker, config=config, embedder=embedder)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga; APScheduler não perde o traço
         # Falha de conexão/setup ocorre ANTES de run_worker abrir o run, então não vira
         # run.error estruturado — este log garante visibilidade no formato do resto do módulo.

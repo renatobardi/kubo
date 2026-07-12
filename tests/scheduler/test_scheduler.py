@@ -144,21 +144,44 @@ def test_unknown_timezone_is_rejected() -> None:
 
 
 def test_load_schedules_reads_real_repo_config() -> None:
-    """`load_schedules()` sobre o `schedules.yaml` real da raiz: 6 feeds reais,
-    timezone explícita e cada entry aponta pro worker `feed` com uma URL
-    http(s) não-vazia (critério de aceite do plano 0005)."""
+    """`load_schedules()` sobre o `schedules.yaml` real da raiz: 6 feeds reais
+    (critério de aceite do plano 0005) + 1 entry do destilador diário (marco
+    8.7, ADR-0013 §VIII) — 7 entries no total, timezone explícita, cada feed
+    aponta pro worker `feed` com uma URL http(s) não-vazia."""
     from kubo.scheduler import load_schedules
 
     schedules = load_schedules()
 
     assert schedules.timezone == "America/Sao_Paulo"
     assert len(schedules.schedules) == 6
-    for entry in schedules.schedules:
-        assert entry.worker == "feed"
+    feed_entries = [e for e in schedules.schedules if e.worker == "feed"]
+    assert len(feed_entries) == 6
+    for entry in feed_entries:
         feed_url = entry.config["feed_url"]
         assert isinstance(feed_url, str)
         assert feed_url != ""
         assert urlsplit(feed_url).scheme in ("http", "https")
+
+    # O destilador está DORMENTE (entry comentado no schedules.yaml, gate mecânico
+    # do marco 8.8): nenhum job de destilação é registrado até o dono reativar. Ver
+    # test_dormant_distiller_entry_would_validate_when_activated para a prova de que
+    # o entry é válido quando descomentado.
+    distiller_entries = [e for e in schedules.schedules if e.worker == "distiller"]
+    assert len(distiller_entries) == 0
+
+
+def test_dormant_distiller_entry_would_validate_when_activated() -> None:
+    """O entry do destilador está comentado no schedules.yaml (gate mecânico, 8.8),
+    mas o maquinário está pronto: quando o dono descomentar, a config esperada
+    (`max_items: 20`) valida contra o schema do DistillerWorker — reativar é seguro,
+    não reabre trabalho. Este teste guarda essa prontidão sem ativar o gatilho."""
+    from kubo.scheduler import ScheduleEntry
+    from kubo.workers.distiller import DistillerConfig, DistillerWorker
+
+    entry = ScheduleEntry(worker="distiller", cron="0 9 * * *", config={"max_items": 20})
+
+    assert DistillerWorker.manifest.config is DistillerConfig
+    DistillerWorker.manifest.config.model_validate(entry.config)  # não levanta = válido
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +190,9 @@ def test_load_schedules_reads_real_repo_config() -> None:
 
 
 def test_build_scheduler_creates_one_job_per_entry() -> None:
-    """Um job por entry do `schedules.yaml` real — 6 feeds, 6 jobs. Não inicia
-    o scheduler (`.start()` bloquearia o teste)."""
+    """Um job por entry ATIVO do `schedules.yaml` real — 6 feeds (o destilador está
+    dormente/comentado, gate mecânico do 8.8). Não inicia o scheduler (`.start()`
+    bloquearia o teste)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules())
@@ -219,6 +243,41 @@ def test_build_scheduler_rejects_invalid_worker_config() -> None:
 
     with pytest.raises(ConfigError, match="config"):
         build_scheduler(schedules)
+
+
+# ---------------------------------------------------------------------------
+# _instantiate: constrói worker + dependências por nome (marco 8.7, ADR-0013 §VIII)
+# ---------------------------------------------------------------------------
+
+
+def test_instantiate_distiller_builds_worker_with_executor_and_embedder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_instantiate("distiller")` monta o `DistillerWorker` com executor (Groq,
+    modelo pinado) + `GeminiEmbedder` lido da env — `from_env` só LÊ a env
+    (não valida a key), então uma key fake já constrói."""
+    from kubo.embedding import GeminiEmbedder
+    from kubo.scheduler import _instantiate
+    from kubo.workers.distiller import DistillerWorker
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key-teste")
+
+    worker, embedder = _instantiate("distiller")
+
+    assert isinstance(worker, DistillerWorker)
+    assert isinstance(embedder, GeminiEmbedder)
+
+
+def test_instantiate_feed_builds_worker_without_embedder() -> None:
+    """`_instantiate("feed")` devolve o `FeedWorker` sem embedder (só o
+    destilador precisa de um)."""
+    from kubo.scheduler import _instantiate
+    from kubo.workers.feed import FeedWorker
+
+    worker, embedder = _instantiate("feed")
+
+    assert isinstance(worker, FeedWorker)
+    assert embedder is None
 
 
 # ---------------------------------------------------------------------------

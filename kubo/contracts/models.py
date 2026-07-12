@@ -66,7 +66,74 @@ class ItemPayload(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-Payload: TypeAlias = Annotated[SourcePayload | ItemPayload, Field(discriminator="type")]
+class EntityRef(BaseModel):
+    """Entidade citada num distilled, referenciada por NOME (ADR-0013 §III.4).
+
+    O runner resolve nome→RecordID via `get_or_create_entity` (UPSERT idempotente
+    por chave natural) — o worker nunca vê RecordID, só declara o nome. Cercas
+    de volume porque `mentions` é permanente: um nome degenerado (10 KB, ou em
+    volume) viraria aresta permanente no grafo, não uma linha descartável.
+    """
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    name: str = Field(min_length=1, max_length=200)
+    kind: str | None = Field(default=None, max_length=50)
+
+
+class ChunkPayload(BaseModel):
+    """Espelha 1:1 o dataclass `Chunk` de `kubo/store/knowledge.py` (ADR-0013 §III.5).
+
+    Chunk já embeddado que o worker monta e devolve dentro do `DistilledPayload`
+    — o runner grava via `insert_distilled`, que já cobre chunks na mesma
+    transação.
+    """
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    text: str
+    seq: int
+    embedding: list[float]
+    model: str
+    dim: int
+    task_type: str
+
+    @model_validator(mode="after")
+    def _dim_matches_embedding_length(self) -> Self:
+        """`dim` deve bater com `len(embedding)` — fronteira de segurança mais perto
+        do worker que montou o chunk; a store já valida de novo, mas falhar aqui é
+        mais rápido e não depende do caminho de escrita. Mensagem clara, sem embutir
+        o embedding (poderia carregar volume grande de floats)."""
+        if self.dim != len(self.embedding):
+            raise ValueError(
+                f"dim ({self.dim}) não bate com o tamanho do embedding ({len(self.embedding)})"
+            )
+        return self
+
+
+class DistilledPayload(BaseModel):
+    """Resultado da destilação de um item (ADR-0013 §III.2).
+
+    `ref` é o ref OPACO que `items_to_distill` devolveu — o runner resolve
+    ref→RecordID e chama `insert_distilled`; o worker nunca vê RecordID (item 2/3).
+    Cercas de volume em `summary`/`entities` por tipo (advisor); `claims` fica
+    de fora por design — sem consumidor ainda (D23). `chunks` não tem teto:
+    o volume de chunks é função do texto de origem, já limitado na origem.
+    """
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["distilled"] = "distilled"
+    schema_version: Literal[1] = 1
+    ref: int
+    summary: str = Field(min_length=1, max_length=8000)
+    entities: list[EntityRef] = Field(default_factory=lambda: [], max_length=20)
+    chunks: list[ChunkPayload] = Field(default_factory=lambda: [])
+
+
+Payload: TypeAlias = Annotated[
+    SourcePayload | ItemPayload | DistilledPayload, Field(discriminator="type")
+]
 
 
 class Stats(BaseModel):

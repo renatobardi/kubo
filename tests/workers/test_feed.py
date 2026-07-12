@@ -30,7 +30,7 @@ import structlog
 from pydantic import ValidationError
 
 from kubo.contracts.models import ItemPayload
-from kubo.runtime.context import EmptyKnowledge, RunContext
+from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import ResolvedIntegration
 from kubo.workers import feed as feed_mod
 from kubo.workers.feed import FeedConfig, FeedWorker
@@ -176,7 +176,7 @@ def _ctx(config: FeedConfig) -> RunContext:
                 base_url=None,
             )
         },
-        knowledge=EmptyKnowledge(),
+        knowledge=GraphKnowledge(None),
         logger=structlog.get_logger(),
     )
 
