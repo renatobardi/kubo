@@ -366,19 +366,24 @@ def test_recent_runs_newest_first_with_error_kind(db: Any) -> None:
     runs = knowledge.recent_runs(db, limit=10)
 
     assert len(runs) == 2
-    by_worker = {r.worker: r for r in runs}
-    assert by_worker["feed"].status == "ok"
-    assert by_worker["feed"].error_kind is None
-    assert by_worker["distiller"].status == "error"
-    assert by_worker["distiller"].error_kind == "rate_limit"
-    assert by_worker["distiller"].finished_at is not None
+    # newest first: `bad` (distiller) foi criado depois de `ok` (feed), com um
+    # round-trip de finish_run entre eles — started_at estritamente maior.
+    assert runs[0].worker == "distiller"
+    assert runs[1].worker == "feed"
+    # o run de falha carrega o error.kind estruturado; o ok não tem erro
+    assert runs[0].status == "error"
+    assert runs[0].error_kind == "rate_limit"
+    assert runs[0].finished_at is not None
+    assert runs[1].status == "ok"
+    assert runs[1].error_kind is None
 
 
 def test_recent_runs_respects_limit(db: Any) -> None:
-    """limit trunca o resultado (as N mais recentes)."""
-    for _ in range(4):
-        knowledge.finish_run(db, knowledge.start_run(db, worker="feed"))
-    assert len(knowledge.recent_runs(db, limit=2)) == 2
+    """limit trunca o resultado às N MAIS RECENTES (não N quaisquer)."""
+    for i in range(4):
+        knowledge.finish_run(db, knowledge.start_run(db, worker=f"w{i}"))  # w3 é o mais novo
+    runs = knowledge.recent_runs(db, limit=2)
+    assert [r.worker for r in runs] == ["w3", "w2"]
 
 
 def test_item_index_maps_external_id_to_item(db: Any) -> None:

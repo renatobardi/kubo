@@ -119,10 +119,12 @@ do host.
 TAILWIND_SHA256=5036c4fb4328e0bcdbb6065c70d8ac9452e0d4c947113a788a8f94fd390425c1`.
 
 **Smoke (da tailnet):**
+
 ```bash
 curl http://100.66.254.24:3900/healthz          # -> ok (sem auth)
 ss -ltnp | grep 3900                             # bind SÓ em 100.66.254.24, nunca 0.0.0.0
 ```
+
 No browser (tailnet): login → Destilados → busca em PT-BR → detalhe com proveniência
 → logout. Reboot do container (`ssh oute-server lxc restart kubo-test`) deve religar
 tudo sozinho (tailscaled → compose via `boot.autostart` + `restart: unless-stopped`).

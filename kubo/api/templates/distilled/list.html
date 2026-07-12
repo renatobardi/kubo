@@ -33,7 +33,7 @@
   <section class="space-y-3">
     {% for item in items %}
       <a
-        href="/distilled/{{ item.id.id }}"
+        href="/distilled/{{ item.id.id | urlencode }}"
         class="block rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20"
       >
         <p class="line-clamp-3 whitespace-pre-wrap text-sm">{{ item.summary }}</p>
