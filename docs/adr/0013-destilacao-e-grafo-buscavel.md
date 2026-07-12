@@ -1,11 +1,15 @@
 # ADR-0013 — Destilação (D6 como construção) e grafo buscável
 
-> Status: **proposto** · Data: 2026-07-08
+> Status: **aceito** · Data: 2026-07-08 (proposto) → 2026-07-11 (aceito)
 >
-> Esqueleto do marco 8.1 (sessão 0008). Finaliza no 8.8 após o smoke empírico
-> (pinagem do modelo Groq) e a revisão do advisor. Emenda o ADR-0009 (campo novo
-> no ctx; mecânica das regras 1 e 3 de D6; primeiro método do seam `knowledge`)
-> e o ADR-0006 (LiteLLM entra — só no caminho de chat).
+> Finalizado no marco 8.8 (sessão 0008) após execução empírica na kubo-test:
+> backfill 935/935 embedados (0 falhas), smoke cross-lingual 13/13, e o smoke do
+> destilador aprovando `llama-3.3-70b-versatile` (10/10 válido/PT-BR, 0 canary
+> leak — §V). Emenda o ADR-0009 (campo novo no ctx; mecânica das regras 1 e 3 de
+> D6; primeiro método do seam `knowledge`) e o ADR-0006 (LiteLLM entra — só no
+> caminho de chat). Emendas registradas na execução: §VII (D20 corrigido — corpus
+> multilíngue) e §V (injection defense vs content trust — filtro verbatim de
+> entidades). Notas de execução: `docs/sessions/0008-m6-relatorio.md`.
 
 ## Contexto
 
@@ -131,9 +135,22 @@ max_tokens, response_format). É onde a mecânica de D6 nasce:
   teto → o run fecha **graciosamente** com o que processou; o agendamento diário
   come a fila (job `max_instances=1` + `coalesce`, ADR-0010). Nunca backoff
   infinito (colidiria com o job do dia seguinte).
-- **Modelo pinado por evidência** (§ smoke): primário `llama-3.3-70b-versatile`,
-  comparado com `moonshotai/kimi-k2-instruct` no smoke. O catálogo vivo do Groq é
-  verificado no dia (depreciam rápido). A pinagem final entra na finalização (8.8).
+- **Modelo pinado por evidência** (§ smoke): **`llama-3.3-70b-versatile`**
+  (pinado no 8.7, `kubo/scheduler/__init__.py`). Evidência do smoke ao vivo
+  (2026-07-11, Groq free tier): **10/10 saídas válidas no schema, 10/10 summary
+  PT-BR** (incluindo tradução dos itens de entrada em inglês), **0 canary leak**
+  (summary resistido pelo modelo, entidade derrubada pelo filtro verbatim). O
+  comparativo `moonshotai/kimi-k2-instruct` **não pôde ser avaliado**: **10/10
+  `provider_errors`, 0 saída** — evidência de ID inválido/renomeado (o catálogo
+  do Groq NÃO foi re-listado nesta sessão; a inferência é dos erros, não do
+  estado verificado do catálogo). O §V do plano já avisava que "o catálogo vivo
+  do Groq depreacia rápido". Verificar o catálogo (e rodar o smoke num sucessor,
+  se houver) fica como follow-up opcional — não muda a pinagem do llama. **A
+  pinagem repousa na evidência ABSOLUTA do llama contra o gate binário (10/10),
+  NÃO num contraste relativo** — o kimi caiu por config (ID morto), não por
+  qualidade, então não há comparação de qualidade a registrar; fica só a nota de
+  que o segundo candidato do plano evaporou do catálogo. Trocar de modelo = editar
+  `_DISTILLER_MODEL` + PR (gate humano, ADR-0010), nunca config de operador.
 - **Smoke = gate de "não-lixo"** (n=10, mesma epistemologia do ADR-0006): 10/10
   JSON válido no schema; 10/10 saída PT-BR; entidades não-absurdas; **canários de
   injection ignorados** — 1–2 itens carregam prompt injection embutido, testando
