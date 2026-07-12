@@ -341,18 +341,22 @@ def test_list_distilled_clamps_hostile_bounds(db: Any) -> None:
 
 
 def test_dashboard_counts_reflects_acervo(db: Any) -> None:
-    """dashboard_counts conta destilados, itens e fontes do acervo (Painel)."""
+    """dashboard_counts conta destilados, itens, fontes e entidades do acervo (Painel,
+    4º StatTile de Entidades adicionado no retrofit M5)."""
     _seed_distilled(db, 3)  # cria 1 source + 3 items + 3 distilled
+    knowledge.get_or_create_entity(db, name="Python")
+    knowledge.get_or_create_entity(db, name="Rust")
     counts = knowledge.dashboard_counts(db)
     assert counts.distilled == 3
     assert counts.items == 3
     assert counts.sources == 1
+    assert counts.entities == 2
 
 
 def test_dashboard_counts_empty_acervo_is_zero(db: Any) -> None:
     """Acervo vazio: todas as contagens são 0, não erro."""
     counts = knowledge.dashboard_counts(db)
-    assert (counts.distilled, counts.items, counts.sources) == (0, 0, 0)
+    assert (counts.distilled, counts.items, counts.sources, counts.entities) == (0, 0, 0, 0)
 
 
 def test_recent_runs_newest_first_with_error_kind(db: Any) -> None:
@@ -839,3 +843,139 @@ def test_read_distilled_handles_missing_optional_fields(db: Any) -> None:
     assert item_view.title is None
     assert item_view.source_title is None
     assert item_view.source_kind == "youtube"
+
+
+# ---------------------------------------------------------------------------
+# M1 (sessão 0010): leituras da UI de Conhecimento + Execuções.
+# Projeção 1-nível provada pelo probe (title 1-hop, source 2-hop encadeado);
+# time::max para datetime (math::max explode); travessia volta array (unwrap).
+# ---------------------------------------------------------------------------
+
+
+def test_list_distilled_card_carries_title_source_and_date(db: Any) -> None:
+    """O card do browse (E3) leva o título do item (via derived_from), a fonte
+    (canonical + kind a 2 hops) e a data — não só id+summary."""
+    src = knowledge.upsert_source(db, kind="youtube", canonical="https://y/@canal", title="Canal")
+    item = knowledge.upsert_item(
+        db, source=src, external_id="v1", content="c", title="Título do Item"
+    )
+    knowledge.insert_distilled(db, item=item, summary="resumo curto", chunks=[])
+
+    cards = knowledge.list_distilled(db, limit=20, start=0)
+
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.title == "Título do Item"
+    assert card.source_canonical == "https://y/@canal"
+    assert card.source_kind == "youtube"
+    assert card.summary == "resumo curto"
+    assert card.created_at  # carimbo presente (string)
+
+
+def test_list_distilled_title_falls_back_to_summary_first_line(db: Any) -> None:
+    """Item sem title (NULL): o card usa a 1ª linha não-vazia do summary como título
+    (E3) — nunca fica sem rótulo. Travessia sem título volta [None], vira None, cai no fallback."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c")  # sem title
+    knowledge.insert_distilled(
+        db, item=item, summary="Primeira linha do resumo.\nSegunda.", chunks=[]
+    )
+
+    card = knowledge.list_distilled(db, limit=20, start=0)[0]
+
+    assert card.title == "Primeira linha do resumo."
+
+
+def test_list_entities_counts_mentions_ordered_desc(db: Any) -> None:
+    """list_entities conta menções por entidade (array::len(<-mentions)) e ordena
+    do mais mencionado ao menos (E2) — sem sparkline, sem relações."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c")
+    popular = knowledge.get_or_create_entity(db, name="Python", kind="tecnologia")
+    rare = knowledge.get_or_create_entity(db, name="Rust", kind="tecnologia")
+    knowledge.insert_distilled(db, item=item, summary="d1", chunks=[], entities=[popular, rare])
+    knowledge.insert_distilled(db, item=item, summary="d2", chunks=[], entities=[popular])
+
+    entities = knowledge.list_entities(db, limit=20, start=0)
+
+    assert [e.name for e in entities] == ["Python", "Rust"]
+    assert entities[0].mentions == 2
+    assert entities[0].kind == "tecnologia"
+    assert entities[1].mentions == 1
+
+
+def test_read_entity_returns_mentioning_distilled_cards(db: Any) -> None:
+    """read_entity devolve a entidade + os destilados que a mencionam como cards
+    (título/fonte/data, mesma resolução do browse). None quando o id não existe."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c", title="Post A")
+    ent = knowledge.get_or_create_entity(db, name="Python", kind="tecnologia")
+    knowledge.insert_distilled(db, item=item, summary="fala de python", chunks=[], entities=[ent])
+
+    view = knowledge.read_entity(db, ent)
+
+    assert view is not None
+    assert view.name == "Python"
+    assert view.kind == "tecnologia"
+    assert view.mentions == 1
+    assert len(view.distilled) == 1
+    assert view.distilled[0].title == "Post A"
+    assert view.distilled[0].source_canonical == "https://x/feed"
+
+    assert knowledge.read_entity(db, RecordID("entity", "nao-existe")) is None
+
+
+def test_sources_with_stats_counts_items_and_last_collection(db: Any) -> None:
+    """sources_with_stats: por fonte, quantos itens acumulados e o carimbo da última
+    coleta (time::max, E4). Fonte sem item nenhum → last_collected_at None (badge trata)."""
+    active = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Ativa")
+    knowledge.upsert_item(db, source=active, external_id="e1", content="c")
+    knowledge.upsert_item(db, source=active, external_id="e2", content="c")
+    knowledge.upsert_source(db, kind="site", canonical="https://empty/site")
+
+    stats = {s.canonical: s for s in knowledge.sources_with_stats(db)}
+
+    assert stats["https://x/feed"].items == 2
+    assert stats["https://x/feed"].kind == "rss"
+    assert stats["https://x/feed"].title == "Ativa"
+    assert stats["https://x/feed"].last_collected_at is not None
+    assert stats["https://empty/site"].items == 0
+    assert stats["https://empty/site"].last_collected_at is None
+
+
+def test_list_runs_paginated_with_error_and_derived_items(db: Any) -> None:
+    """list_runs pagina as execuções (mais recentes primeiro) com o erro estruturado
+    completo (kind + objeto p/ o painel expansível) e o nº de itens derivado de stats
+    (E6: `items` do feed, `distilled` do distiller; senão None)."""
+    feed = knowledge.start_run(db, worker="feed")
+    knowledge.finish_run(db, feed, stats={"entries_seen": 12, "items": 5})
+    distiller = knowledge.start_run(db, worker="distiller")
+    knowledge.fail_run(db, distiller, error={"kind": "rate_limit", "message": "quota estourada"})
+
+    runs = knowledge.list_runs(db, limit=20, start=0)
+
+    assert [r.worker for r in runs] == ["distiller", "feed"]  # newest first
+    failed, ok = runs
+    assert failed.status == "error"
+    assert failed.error_kind == "rate_limit"
+    assert failed.error == {"kind": "rate_limit", "message": "quota estourada"}
+    assert failed.items is None  # distiller sem distilled>0 neste run
+    assert ok.status == "ok"
+    assert ok.error is None
+    assert ok.items == 5  # derivado de stats["items"]
+
+
+def test_list_runs_derives_items_from_distiller_stats(db: Any) -> None:
+    """Quando o worker é o distiller, o nº de itens vem de stats['distilled'] (E6)."""
+    run = knowledge.start_run(db, worker="distiller")
+    knowledge.finish_run(db, run, stats={"distilled": 7, "malformed": 1})
+
+    assert knowledge.list_runs(db, limit=20, start=0)[0].items == 7
+
+
+def test_list_runs_pagination_start_skips(db: Any) -> None:
+    """start pula as N execuções mais recentes — paginação estável."""
+    for i in range(3):
+        knowledge.finish_run(db, knowledge.start_run(db, worker=f"w{i}"))
+    page2 = knowledge.list_runs(db, limit=2, start=2)
+    assert [r.worker for r in page2] == ["w0"]

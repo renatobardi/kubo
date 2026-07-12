@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ view.name }} · Entidades · Kubo{% endblock %}
+{% block heading %}Entidades{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-6">
+  <a href="/entities" class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+    <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+    Voltar às entidades
+  </a>
+
+  <div class="flex items-center gap-3">
+    <span class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+      <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="m6.5 6.5 4 4M17.5 6.5l-4 4M6.5 17.5l4-4M17.5 17.5l-4-4"/></svg>
+    </span>
+    <div>
+      <h2 class="text-xl font-semibold tracking-tight">{{ view.name }}</h2>
+      <div class="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+        {% if view.kind %}<span class="rounded-4xl px-2 py-0.5 ring-1 ring-foreground/10">{{ view.kind }}</span>{% endif %}
+        <span>{{ view.mentions }} menções · {{ view.distilled | length }} destilados</span>
+      </div>
+    </div>
+  </div>
+
+  <section class="space-y-2.5">
+    <h3 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Destilados que mencionam</h3>
+    {% for card in view.distilled %}
+      {{ macros.distilled_card(card) }}
+    {% else %}
+      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+        Nenhum destilado menciona esta entidade.
+      </div>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}

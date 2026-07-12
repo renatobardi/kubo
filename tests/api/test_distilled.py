@@ -27,6 +27,18 @@ from kubo.store.knowledge import (
 _XSS = "<script>alert('xss')</script>"
 
 
+def _card(rid: str, summary: str, *, title: str = "t") -> DistilledListItem:
+    """Card de destilado para os mocks de rota — só os campos que a lista renderiza."""
+    return DistilledListItem(
+        id=RecordID("distilled", rid),
+        summary=summary,
+        title=title,
+        source_canonical="https://x/feed",
+        source_kind="rss",
+        created_at="2026-07-12T00:00:00Z",
+    )
+
+
 @contextmanager
 def _fake_connect(cfg: Any = None) -> Any:
     """connect() falso: as funções da store estão mockadas e ignoram o db."""
@@ -70,11 +82,37 @@ def test_list_escapes_summary(
     """A lista renderiza summary hostil escapado (não injeta <script>)."""
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.list_distilled",
-        lambda db, **kw: [DistilledListItem(id=RecordID("distilled", "x1"), summary=_XSS)],
+        lambda db, **kw: [_card("x1", _XSS)],
     )
     html = authed_client.get("/distilled").text
     assert "&lt;script&gt;alert(&#39;xss&#39;)" in html
     assert _XSS not in html
+
+
+def test_list_card_shows_title_source_and_date(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retrofit M5/E3: o card do browse mostra título do item, fonte e data (não só summary)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.list_distilled",
+        lambda db, **kw: [_card("x1", "resumo", title="Título do Post")],
+    )
+    html = authed_client.get("/distilled").text
+    assert "Título do Post" in html
+    assert "https://x/feed" in html  # fonte (canonical)
+
+
+def test_list_escapes_title(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O título vem de item.title (conteúdo coletado, hostil): renderizado escapado."""
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.list_distilled",
+        lambda db, **kw: [_card("x1", "resumo", title=_XSS)],
+    )
+    html = authed_client.get("/distilled").text
+    assert _XSS not in html
+    assert "&lt;script&gt;" in html
 
 
 def test_search_partial_escapes_summary(
@@ -168,9 +206,7 @@ def test_list_pagination_next_when_full_page(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Página cheia (recebe PAGE_SIZE+1) mostra 'Próximos' e trunca ao tamanho da página."""
-    rows = [
-        DistilledListItem(id=RecordID("distilled", f"x{i}"), summary=f"s{i}") for i in range(21)
-    ]
+    rows = [_card(f"x{i}", f"s{i}") for i in range(21)]
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: rows)
     html = authed_client.get("/distilled").text
     assert "Próximos" in html

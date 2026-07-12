@@ -1,0 +1,29 @@
+{# Card de destilado (paridade `ConhecimentoScreen.jsx`): título do item (E3),
+   data, preview do summary e a fonte. Um só lugar para os Destilados (lista),
+   o detalhe de Entidade e o Painel renderizarem o mesmo card. Título, summary e
+   canonical são conteúdo derivado de LLM/coletado (hostil) — autoescapados. #}
+{% macro distilled_card(card) %}
+  <a href="/distilled/{{ card.id.id | urlencode }}"
+     class="flex gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+    <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+      {% if card.source_kind == "youtube" %}
+        <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><path d="m10 15 5-3-5-3z"/></svg>
+      {% else %}
+        <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+      {% endif %}
+    </span>
+    <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div class="flex items-baseline gap-2">
+        <span class="flex-1 truncate text-sm font-semibold">{{ card.title }}</span>
+        <span class="shrink-0 text-xs text-muted-foreground">{{ card.created_at | short_datetime }}</span>
+      </div>
+      <p class="line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">{{ card.summary }}</p>
+      {% if card.source_canonical %}
+        <span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+          <span class="truncate">{{ card.source_canonical }}</span>
+        </span>
+      {% endif %}
+    </div>
+  </a>
+{% endmacro %}

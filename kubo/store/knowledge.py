@@ -298,11 +298,58 @@ def read_distilled(db: Any, distilled: RecordID) -> DistilledView | None:
 
 @dataclass(frozen=True)
 class DistilledListItem:
-    """Linha do browse de destilados (UI fase 2): id (link para o detalhe) + summary.
-    Leitura enxuta — a cadeia de proveniência completa vem de `read_distilled`."""
+    """Card do browse de destilados (UI fase 2): id, summary e — desde a sessão 0010
+    (E3) — o título do item (via `derived_from`, com fallback na 1ª linha do summary
+    quando o item não tem título), a fonte (a 2 hops) e a data. A cadeia de
+    proveniência completa continua vindo de `read_distilled`."""
 
     id: RecordID
     summary: str
+    title: str
+    source_canonical: str | None
+    source_kind: str | None
+    created_at: str
+
+
+# Colunas do card resolvidas numa projeção (probe 0010: 1-hop p/ título, 2-hop
+# encadeado p/ fonte — funciona no v3.1.5; travessia volta ARRAY mesmo p/ 1:1, daí
+# o `_unwrap`). created_at entra porque o ORDER BY do v3 exige o campo na seleção.
+_CARD_COLS = (
+    "id, summary, created_at, "
+    "->derived_from->item.title AS item_title, "
+    "->derived_from->item->from_source->source.canonical AS src_canonical, "
+    "->derived_from->item->from_source->source.kind AS src_kind"
+)
+
+
+def _first_line(text: str) -> str:
+    """1ª linha não-vazia de um texto — fallback de título quando o item não tem `title` (E3)."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return text.strip()
+
+
+def _unwrap(values: Any) -> Any | None:
+    """1º valor de uma travessia de grafo, que volta array mesmo para relação 1:1
+    (`->edge->node.field` = lista); None se vazia ou `[None]` (campo opcional NULL)."""
+    if not values:
+        return None
+    return values[0]
+
+
+def _card(row: dict[str, Any]) -> DistilledListItem:
+    """Monta um `DistilledListItem` a partir de uma linha projetada com `_CARD_COLS`."""
+    item_title = _unwrap(row.get("item_title"))
+    return DistilledListItem(
+        id=row["id"],
+        summary=row["summary"],
+        title=item_title if item_title else _first_line(row["summary"]),
+        source_canonical=_unwrap(row.get("src_canonical")),
+        source_kind=_unwrap(row.get("src_kind")),
+        created_at=str(row["created_at"]),
+    )
 
 
 def list_distilled(db: Any, *, limit: int, start: int) -> list[DistilledListItem]:
@@ -317,23 +364,87 @@ def list_distilled(db: Any, *, limit: int, start: int) -> list[DistilledListItem
     # LIMIT/START não aceitam bind param nesta versão do SurrealDB (o parser exige
     # literal, mesmo caso do <|k,ef|> em `search`). limit/start são ints já clampados
     # pela store — não conteúdo coletado; interpolação é segura aqui.
-    # created_at entra na projeção porque o SurrealDB v3 exige que o campo do
-    # ORDER BY esteja na seleção; a view só usa id + summary.
     query = (
-        "SELECT id, summary, created_at FROM distilled "  # noqa: S608
+        f"SELECT {_CARD_COLS} FROM distilled "  # noqa: S608
         f"ORDER BY created_at DESC, id LIMIT {limit} START {start};"
     )
-    rows = db.query(query)
-    return [DistilledListItem(id=r["id"], summary=r["summary"]) for r in rows]
+    return [_card(r) for r in db.query(query)]
+
+
+@dataclass(frozen=True)
+class EntityListItem:
+    """Linha da lista de entidades (UI fase 2, E2): glifo por `kind`, nome, badge de
+    tipo e contagem de menções. SEM sparkline e SEM relações — corte por dado
+    inexistente (E2): `relates_to` não tem produtor na fase 1 e `mentions` não tem
+    timestamp, então tendência/relação seriam inventadas."""
+
+    id: RecordID
+    name: str
+    kind: str | None
+    mentions: int
+
+
+def list_entities(db: Any, *, limit: int, start: int) -> list[EntityListItem]:
+    """Página de entidades, mais mencionadas primeiro (E2).
+
+    Menções = `array::len(<-mentions)` — conta as arestas incoming sem materializar
+    os destilados (uma aresta por menção; `insert_distilled` não deduplica o par, mas
+    a contagem de arestas é a verdade do grafo). `limit`/`start` clampados na borda
+    como nas outras listas; ORDER BY sobre o alias computado é provado pelo probe 0010."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    start = max(0, int(start))
+    query = (
+        "SELECT id, name, kind, array::len(<-mentions) AS mentions FROM entity "  # noqa: S608
+        f"ORDER BY mentions DESC, name LIMIT {limit} START {start};"
+    )
+    return [
+        EntityListItem(id=r["id"], name=r["name"], kind=r.get("kind"), mentions=int(r["mentions"]))
+        for r in db.query(query)
+    ]
+
+
+@dataclass(frozen=True)
+class EntityView:
+    """Detalhe de uma entidade (E2): a entidade + os destilados que a mencionam, como
+    cards (mesma resolução título/fonte/data do browse). Sem relações (E2)."""
+
+    id: RecordID
+    name: str
+    kind: str | None
+    mentions: int
+    distilled: list[DistilledListItem]
+
+
+def read_entity(db: Any, entity: RecordID) -> EntityView | None:
+    """Devolve a entidade + os destilados que a mencionam (cards), ou None se o id não
+    existe. Os destilados vêm por `<-mentions<-distilled` projetado com `_CARD_COLS`
+    numa leitura (probe 0010), mais recentes primeiro."""
+    base = db.query("SELECT name, kind, array::len(<-mentions) AS mentions FROM $e;", {"e": entity})
+    if not base:
+        return None
+    cards = db.query(
+        f"SELECT {_CARD_COLS} FROM $e<-mentions<-distilled "  # noqa: S608
+        "ORDER BY created_at DESC, id;",
+        {"e": entity},
+    )
+    return EntityView(
+        id=entity,
+        name=base[0]["name"],
+        kind=base[0].get("kind"),
+        mentions=int(base[0]["mentions"]),
+        distilled=[_card(r) for r in cards],
+    )
 
 
 @dataclass(frozen=True)
 class DashboardCounts:
-    """Contagens do acervo para o Painel (UI fase 2): quantos destilados, itens e fontes."""
+    """Contagens do acervo para o Painel (UI fase 2): destilados, itens, fontes e
+    entidades (4º StatTile adicionado no retrofit de fidelidade M5)."""
 
     distilled: int
     items: int
     sources: int
+    entities: int
 
 
 def _count(db: Any, table: str) -> int:
@@ -349,6 +460,7 @@ def dashboard_counts(db: Any) -> DashboardCounts:
         distilled=_count(db, "distilled"),
         items=_count(db, "item"),
         sources=_count(db, "source"),
+        entities=_count(db, "entity"),
     )
 
 
@@ -389,6 +501,67 @@ def recent_runs(db: Any, *, limit: int) -> list[RunSummary]:
     ]
 
 
+# Chaves de `run.stats` que significam "unidades produzidas", por worker (E6): o feed
+# grava `items`, o distiller grava `distilled`. Ordem = precedência na derivação.
+_STATS_ITEM_KEYS = ("items", "distilled")
+
+
+def _run_items(stats: dict[str, Any]) -> int | None:
+    """Nº de itens produzidos por um run, derivado do `stats` de shape variável (E6):
+    a 1ª chave de `_STATS_ITEM_KEYS` com valor > 0. None = fallback gracioso (worker
+    sem contador conhecido ou run que não produziu nada) — a view simplesmente omite."""
+    for key in _STATS_ITEM_KEYS:
+        value = stats.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+@dataclass(frozen=True)
+class RunListItem:
+    """Linha da tela de Execuções (E6): worker, status e — quando falha — o erro
+    ESTRUTURADO completo (kind + objeto para o painel expansível). `error_kind` é o
+    atalho para o badge que discrimina `quota` de falha real, SEM reclassificar o
+    `status` armazenado. `items` vem de `stats` (fallback gracioso). Sem coluna de
+    fluxo (desvio E6: `flow` não existe na fase 1)."""
+
+    worker: str
+    status: str
+    error_kind: str | None
+    error: dict[str, Any] | None
+    items: int | None
+    started_at: str
+    finished_at: str | None
+
+
+def list_runs(db: Any, *, limit: int, start: int) -> list[RunListItem]:
+    """Página de execuções, mais recentes primeiro (tela de Execuções, fase 2).
+
+    Projeta o `error` inteiro (não só o kind) para o painel expansível — o objeto é
+    contratualmente seguro (ErrorInfo: `extra=forbid`, `message`<=500 sem conteúdo
+    coletado). `items` é derivado de `stats` (E6). `limit`/`start` clampados na borda;
+    LIMIT/START interpolados como literal (não aceitam bind, quirk do v3)."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    start = max(0, int(start))
+    query = (
+        "SELECT worker, status, error, error.kind AS error_kind, stats, "  # noqa: S608
+        f"started_at, finished_at FROM run ORDER BY started_at DESC LIMIT {limit} START {start};"
+    )
+    rows = db.query(query)
+    return [
+        RunListItem(
+            worker=r["worker"],
+            status=r["status"],
+            error_kind=r.get("error_kind"),
+            error=r.get("error"),
+            items=_run_items(r.get("stats") or {}),
+            started_at=str(r["started_at"]),
+            finished_at=str(r["finished_at"]) if r.get("finished_at") is not None else None,
+        )
+        for r in rows
+    ]
+
+
 @dataclass(frozen=True)
 class SourceInfo:
     """Uma source do grafo (id + chave natural + classificação), para consumidores
@@ -410,6 +583,45 @@ def list_sources(db: Any) -> list[SourceInfo]:
     rows = db.query("SELECT id, canonical, kind, title FROM source;")
     return [
         SourceInfo(id=r["id"], canonical=r["canonical"], kind=r["kind"], title=r.get("title"))
+        for r in rows
+    ]
+
+
+@dataclass(frozen=True)
+class SourceStat:
+    """Uma fonte com os fatos da coleta (UI Fontes, fase 2): quantos itens acumulou e
+    o carimbo da ÚLTIMA coleta. `last_collected_at` alimenta o badge de recência (E4:
+    mostra o FATO 'última coleta há Nd', não julga 'saúde'); None quando a fonte ainda
+    não coletou nada."""
+
+    id: RecordID
+    canonical: str
+    kind: str
+    title: str | None
+    items: int
+    last_collected_at: str | None
+
+
+def sources_with_stats(db: Any) -> list[SourceStat]:
+    """Lista as fontes com contagem de itens e o carimbo da última coleta (E4).
+
+    `array::len(<-from_source<-item)` conta os itens da fonte; `time::max(...)` pega o
+    `collected_at` mais recente (math::max explode em datetime — probe 0010). Fonte sem
+    item nenhum → agregação NONE → `last_collected_at` None (o badge trata o estado)."""
+    rows = db.query(
+        "SELECT id, canonical, kind, title, "
+        "array::len(<-from_source<-item) AS items, "
+        "time::max(<-from_source<-item.collected_at) AS last FROM source;"
+    )
+    return [
+        SourceStat(
+            id=r["id"],
+            canonical=r["canonical"],
+            kind=r["kind"],
+            title=r.get("title"),
+            items=int(r["items"]),
+            last_collected_at=str(r["last"]) if r.get("last") is not None else None,
+        )
         for r in rows
     ]
 
