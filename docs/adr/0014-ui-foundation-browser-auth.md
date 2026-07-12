@@ -148,7 +148,7 @@ A `kubo-api` deixa de compartilhar a credencial root: passa a autenticar com um 
 ### Operação (invariante 8: segredo nunca em migration/código/log)
 
 - Criação do `kubo_ro` = **passo one-time do runbook** (`docs/runbook-deploy.md` §2c), via `surreal sql` CLI (NUNCA pela store — structlog logaria a senha), senha via `read -s`. **Nunca migration** (senha em `.surql` versionado furaria o invariante 8).
-- **Rotação:** `DEFINE USER kubo_ro … OVERWRITE` + atualizar `.env` + `up -d kubo-api`. **Revogação:** `REMOVE USER kubo_ro ON ROOT`. **Restore em volume novo:** o `/export` não carrega usuários `ON ROOT` — recriar o `kubo_ro` antes de subir a UI (runbook §2c/§4).
+- **Rotação:** `DEFINE USER OVERWRITE kubo_ro ON ROOT PASSWORD "…" ROLES VIEWER` + atualizar `.env` + `up -d kubo-api`. **Revogação:** `REMOVE USER kubo_ro ON ROOT`. **Restore em volume novo:** o `/export` não carrega usuários `ON ROOT` — recriar o `kubo_ro` antes de subir a UI (runbook §2c/§4). **Nota v3.1.5 (sonda 0010):** rotação/criação são SEMPRE por SQL `DEFINE USER OVERWRITE` — o flag `--pass` do `start` é IGNORADO num store persistente (não rotaciona), e `DEFINE USER` sem `OVERWRITE` erra em usuário existente.
 
 ### Tripwire de escrita (paralelo ao tripwire de CSRF do §7)
 

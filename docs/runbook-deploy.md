@@ -159,15 +159,22 @@ toda GET e essa credencial é a defesa em profundidade (mesmo um bug não escrev
 grafo). **Fail-fast:** sem `KUBO_RO_SURREAL_PASS` no `.env` a `kubo-api` não sobe — de
 propósito, para nunca rodar com a credencial de escrita.
 
+> **⚠️ Verificado na sessão 0010 (v3.1.5 + RocksDB):** num store PERSISTENTE, o
+> `--user/--pass` do `start` **NÃO rotaciona** a senha root — o flag é IGNORADO se o
+> usuário já existe (a senha ANTIGA continua valendo, a nova falha). Rotação e criação
+> de usuário são **sempre por SQL** (`DEFINE USER OVERWRITE …`), nunca pelo flag do
+> compose. E `DEFINE USER` puro (sem `OVERWRITE`) ERRA se o usuário já existe — use
+> **sempre `OVERWRITE`** (idempotente, seguro para repetir).
+
 **Criar o viewer (uma vez, direto no SurrealDB — NUNCA migration: senha em `.surql`
 versionado fura o invariante 8).** Rode pelo CLI `surreal sql` dentro do container (a
 store da app logaria a query com structlog — não use a app para isto):
 
 ```bash
 # no servidor, no diretório do compose, com o .env já carregado no shell:
-set -a; . ./.env; set +a                 # exporta SURREAL_PASS (credencial de escrita)
-read -rsp 'Senha do viewer (kubo_ro), 32+ chars aleatórios: ' RO_PASS; echo
-printf 'DEFINE USER kubo_ro ON ROOT PASSWORD "%s" ROLES VIEWER;\n' "$RO_PASS" \
+set -a; . ./.env; set +a                 # exporta SURREAL_USER/SURREAL_PASS (escrita)
+read -rsp 'Senha do viewer (kubo_ro), 32+ chars aleatorios: ' RO_PASS; echo
+printf 'DEFINE USER OVERWRITE kubo_ro ON ROOT PASSWORD "%s" ROLES VIEWER;\n' "$RO_PASS" \
   | docker exec -i "$(docker compose ps -q surrealdb)" /surreal sql \
       --endpoint http://localhost:8000 \
       --username "$SURREAL_USER" --password "$SURREAL_PASS" \
@@ -186,14 +193,19 @@ for single-tenant.
 
 > **⚠️ Rotacione a senha root ATUAL antes/junto do §2c.** A `SURREAL_PASS` do
 > kubo-test foi definida ANTES desta decisão — se não for 32+ aleatória, a mitigação
-> acima fica vazia na única instância que existe. Gere `python -c "import secrets;
-> print(secrets.token_urlsafe(32))"`, grave em `SURREAL_PASS` no `.env` e recrie o
-> SurrealDB com a nova senha (`--pass` do serviço). A credencial de escrita muda para
-> scheduler/backup/migrations no mesmo `.env` — reinicie a stack inteira.
+> acima fica vazia na única instância que existe. **Rotação correta (SQL, não flag):**
+> conecte como root com a senha ANTIGA e rode `DEFINE USER OVERWRITE root ON ROOT
+> PASSWORD "<nova>" ROLES OWNER;` (mesma invocação `docker exec … /surreal sql` acima);
+> DEPOIS atualize `SURREAL_PASS=<nova>` no `.env` e `docker compose up -d` (o dado no
+> RocksDB fica intacto — só a credencial muda). Gere a nova com
+> `python -c "import secrets; print(secrets.token_urlsafe(32))"`. **NÃO** troque só o
+> `--pass`/`.env` e reinicie sem o SQL: o flag é ignorado no store existente e você
+> trava scheduler/backup/api com senha errada.
 
-**Rotação:** repita o `DEFINE USER kubo_ro ON ROOT PASSWORD "…" ROLES VIEWER;` (o
-`DEFINE` sobrescreve) + atualize o `.env` + `docker compose up -d kubo-api`.
-**Revogação:** `REMOVE USER kubo_ro ON ROOT;` (a UI cai no fail-fast até nova senha).
+**Rotação do viewer:** repita `DEFINE USER OVERWRITE kubo_ro ON ROOT PASSWORD "…"
+ROLES VIEWER;` (o `OVERWRITE` sobrescreve) + atualize o `.env` + `docker compose up -d
+kubo-api`. **Revogação:** `REMOVE USER kubo_ro ON ROOT;` (a UI cai no fail-fast até
+nova senha).
 
 ---
 
