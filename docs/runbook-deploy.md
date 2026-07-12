@@ -99,35 +99,56 @@ docker compose up -d
 ## 2b. UI da fase 2 (kubo-api) — ADR-0014
 
 **Pré-requisito de segredos no `.env` do servidor** (invariante 8 — o dono preenche,
-o agente nunca lê): `KUBO_PASSWORD_HASH` (gerado por `docker compose run --rm kubo-api
-python -m kubo.api.hashpw` — digita a senha, cola o hash) e `SESSION_SECRET` (token
-aleatório: `python -c "import secrets; print(secrets.token_hex(32))"`). Sem eles a
+o agente nunca lê): `KUBO_PASSWORD_HASH` e `SESSION_SECRET`. O `hashpw` mora na imagem
+nova, cujo build o `:?` do compose bloqueia sem o segredo (ovo-galinha) — então gere o
+hash no Mac (`uv run python -m kubo.api.hashpw`, digita a senha, copia o `scrypt$…`) e
+cole os dois no `.env` do servidor: `KUBO_PASSWORD_HASH=…` e
+`SESSION_SECRET=$(python -c "import secrets; print(secrets.token_hex(32))")`. Sem eles a
 `kubo-api` faz fail-fast (não sobe). `GEMINI_API_KEY` é opcional: sem ela a UI serve
 Painel + listas e só a busca degrada (alerta *tinted*).
 
-**Ordem de boot — tailscaled ANTES do compose (E2):** o publish é `100.66.254.24:3900`
-(IP Tailscale). O Docker NÃO publica em IP inexistente — se o `tailscaled` não estiver
-de pé quando o compose subir, a `kubo-api` falha ao criar o bind. No boot do LXC,
-garanta o tailscaled primeiro; num reboot manual, `docker compose up -d` depois que
-`tailscale ip -4` responder o `100.66.254.24`. A fronteira de segurança é ESTE bind no
-IP Tailscale (a faixa DEV 3000-3999 é pública no firewall) — nada escuta no `0.0.0.0`
-do host.
-
-**Arquitetura do binário Tailwind:** o Dockerfile pina `tailwindcss-linux-arm64`
-(oute-server = aarch64). **Confirme `uname -m` no `kubo-test` antes do primeiro build**
-— se for `x86_64`, buildar com `--build-arg TAILWIND_ARCH=linux-x64 --build-arg
-TAILWIND_SHA256=5036c4fb4328e0bcdbb6065c70d8ac9452e0d4c947113a788a8f94fd390425c1`.
-
-**Smoke (da tailnet):**
+**Publish Tailscale-only via LXD proxy device (correção da E2 — sessão 0009).** O
+`100.66.254.24` é o `tailscale0` do HOST, não existe dentro do LXC; o compose publica
+no IP de bridge do LXC (`10.173.117.18:3900`, interno ao host, nunca `0.0.0.0`), e um
+**proxy device do LXD no host** encaminha o IP Tailscale para lá. Setup uma vez (no
+host, precisa de `lxc`):
 
 ```bash
-curl http://100.66.254.24:3900/healthz          # -> ok (sem auth)
-ss -ltnp | grep 3900                             # bind SÓ em 100.66.254.24, nunca 0.0.0.0
+lxc config device add kubo-test kubo-ui proxy \
+  listen=tcp:100.66.254.24:3900 connect=tcp:10.173.117.18:3900 nat=true
+lxc config device show kubo-test          # confirma o device kubo-ui
+# reverter: lxc config device remove kubo-test kubo-ui
+```
+
+Com `nat=true` o encaminhamento é DNAT de kernel: **não há listener no host** (`ss`
+não mostra 3900), o device persiste na base do LXD (religa em reboot do host e do
+container) e **não há corrida de boot** com o tailscaled (a regra DNAT referencia o IP
+sem precisar que ele exista no momento). Se `nat=true` não fluir (interação com o
+firewall do LXD), o fallback é o mesmo comando SEM `nat=true` (forkproxy userland — aí
+o tailscaled precisa estar de pé antes do device). **Risco aceito e registrado:** o
+publish em `10.173.117.18` é alcançável pelos outros LXCs da `lxdbr0` (Valmis etc.); o
+login de browser (ADR-0014) é a defesa em DEV.
+
+**Arquitetura do binário Tailwind:** o Dockerfile pina `tailwindcss-linux-arm64`.
+Confirmado `uname -m = aarch64` no `kubo-test` (sessão 0009). Se um dia mudar para
+`x86_64`, buildar com `--build-arg TAILWIND_ARCH=linux-x64 --build-arg
+TAILWIND_SHA256=5036c4fb4328e0bcdbb6065c70d8ac9452e0d4c947113a788a8f94fd390425c1`.
+
+**Smoke:**
+
+```bash
+# de dentro do LXC (ou do host, mesmo caminho do proxy device):
+curl http://10.173.117.18:3900/healthz          # -> ok (sem auth)
+# da tailnet (Mac):
+curl http://100.66.254.24:3900/healthz          # -> ok (via proxy device)
+# NEGATIVO — do IP público do host, DEVE falhar (nada exposto ao mundo):
+curl --max-time 5 http://<IP_PUBLICO_HOST>:3900/healthz   # -> timeout/refused
+ss -ltnp | grep 3900   # no HOST: nada (DNAT de kernel); no LXC: bind em 10.173.117.18
 ```
 
 No browser (tailnet): login → Destilados → busca em PT-BR → detalhe com proveniência
 → logout. Reboot do container (`ssh oute-server lxc restart kubo-test`) deve religar
-tudo sozinho (tailscaled → compose via `boot.autostart` + `restart: unless-stopped`).
+tudo sozinho (proxy device do LXD + `restart: unless-stopped` do compose).
 
 ---
 

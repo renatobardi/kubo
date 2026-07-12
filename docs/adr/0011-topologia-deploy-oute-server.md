@@ -68,6 +68,20 @@ device em `0.0.0.0`. Nesta fase a API não existe (fase 2) — a 3900 fica só
 escuta. SurrealDB nunca é exposto (sem `ports:` no compose — invariante de rede do
 CLAUDE.md).
 
+> **Emenda (sessão 0009, fase 2 — validada pelo advisor):** a API da fase 2 existe.
+> Descoberta empírica: o `100.66.254.24` é o `tailscale0` do **host**, NÃO existe
+> dentro do LXC — o publish do compose (que roda no LXC) não consegue bindá-lo. O
+> *executor* do bind Tailscale-only passa a ser um **LXD proxy device no host**:
+> `lxc config device add kubo-test kubo-ui proxy listen=tcp:100.66.254.24:3900
+> connect=tcp:10.173.117.18:3900 nat=true`. O compose (overlay dev) publica no IP de
+> **bridge** do LXC (`10.173.117.18:3900`, RFC1918, interno ao host — coerente com a
+> proibição de `0.0.0.0`), e o device encaminha o IP Tailscale para lá. `nat=true` =
+> DNAT de kernel (sem listener no host, persiste em reboot, sem corrida de boot com o
+> tailscaled). O princípio de §III fica intacto — muda só o instrumento do bind, do
+> `ports:` do compose para o device do LXD. **Risco aceito:** o bind na bridge é
+> alcançável por outros LXCs da `lxdbr0`; o login de browser (ADR-0014) é a defesa em
+> DEV. Setup, smoke e reversão em `runbook-deploy.md` §2b.
+
 ### IV. AppArmor userspace desabilitado no kubo-test (efeito: o dockerd deixa de aplicar perfis) — decisão de segurança explícita
 
 **AppArmor userspace é desabilitado no kubo-test** via `dpkg-divert` do

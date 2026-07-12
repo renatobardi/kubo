@@ -29,11 +29,12 @@ O timebox segurou — o Painel (1º da fila de sacrifício) foi entregue inteiro
 3. **Guard de esquema de URL** em `item.url` coletado — achado do próprio 9.4: `javascript:` num href é XSS que o autoescape não pega.
 4. **`verify_password` fail-closed** — derive dentro do try/except (param de custo fora de faixa → False, não 500).
 5. **`list_distilled`/`recent_runs`: LIMIT/START e ORDER BY** — SurrealDB v3 não aceita bind em LIMIT (interpola int clampado) e exige o campo do ORDER BY na projeção.
-6. **Publish do compose** — `kubo-api` sem `ports` na base (PRD/OCI); o overlay `compose.dev-lxc.yml` publica no IP Tailscale (E2).
+6. **Publish do compose** — `kubo-api` sem `ports` na base (PRD/OCI); o overlay `compose.dev-lxc.yml` publica no IP de bridge do LXC.
+7. **Correção da E2 (achado empírico do 9.6, validado pelo advisor):** o `100.66.254.24` é o `tailscale0` do HOST, não existe dentro do LXC — o publish direto do compose (E2 original) é impossível. O bind Tailscale-only passa a ser um **LXD proxy device no host** (`listen=100.66.254.24 connect=10.173.117.18 nat=true`); o compose publica em `10.173.117.18:3900` (bridge, interno). Emenda no ADR-0011 §III + runbook §2b. Critério de aceite do `ss` atualizado: com `nat=true` o host **não** tem listener em 3900 (DNAT de kernel) — o smoke vira "curl da tailnet OK + curl do IP público FALHA + nada em 0.0.0.0". Decisão do dono: proxy device, dono roda o comando no host.
 
 ## Pendências para a sessão 0010
 
-- **9.6 (deploy + smoke), GATED:** rodar no `kubo-test` após o "pode executar". Antes: `uname -m` no LXC para confirmar `linux-arm64` do binário Tailwind (SHA de fallback x86_64 já no runbook). Smoke: login → Destilados → busca PT-BR → proveniência → logout; reboot do container religando (tailscaled → compose).
+- **9.6 (deploy + smoke), em andamento:** `uname -m = aarch64` confirmado (pin OK); branch rsyncada; compose corrigido (bridge IP) + proxy device documentado. Bloqueios abertos com o dono: (a) `KUBO_PASSWORD_HASH`/`SESSION_SECRET` ainda não estão no `.env` do servidor (o `:?` barrou o build); (b) o dono roda o `lxc config device add … kubo-ui proxy nat=true` no host. Depois: build → up → smoke (login → Destilados → busca PT-BR → proveniência → logout; curl da tailnet OK, curl do IP público FALHA, `ss` sem 0.0.0.0; reboot religando via proxy device + `restart: unless-stopped`).
 - **Telas restantes do D13:** Entidades, Fontes, Execuções (a nav só renderiza o implementado — sem link morto).
 - **View toggle D13b** (Lista / Duas colunas / Quadrados).
 - **Total na paginação** (hoje prev/next sem total).
