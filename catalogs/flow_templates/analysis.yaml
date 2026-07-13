@@ -1,0 +1,15 @@
+# Template analysis — análise sob demanda sobre o acervo (D32, ADR-0016 §I).
+# DADO, não DSL: declara só a FORMA (board, elenco, deliverable, gatilho). O que
+# acontece em cada estado é código keyed por `name` no FLOW_REGISTRY (E4).
+# Instanciar um flow congela uma cópia disto em flow.snapshot (invariante 4).
+name: analysis
+version: 1
+board:
+  states: [created, analyzing, delivered, failed]
+  transitions:
+    - [created, analyzing]
+    - [analyzing, delivered]
+    - [analyzing, failed]
+cast: [analista, humano]
+deliverable: report
+triggers: [manual]
