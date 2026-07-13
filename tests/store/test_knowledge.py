@@ -979,3 +979,72 @@ def test_list_runs_pagination_start_skips(db: Any) -> None:
         knowledge.finish_run(db, knowledge.start_run(db, worker=f"w{i}"))
     page2 = knowledge.list_runs(db, limit=2, start=2)
     assert [r.worker for r in page2] == ["w0"]
+
+
+# ---------------------------------------------------------------------------
+# Round 0011: busca + contagens (paginação), entidades do destilado, relacionados.
+# ---------------------------------------------------------------------------
+
+
+def _graph(db: Any) -> tuple[RecordID, RecordID]:
+    """Grafo mínimo: 1 source + 1 item + 3 entidades + 2 destilados. Devolve (d1, d2)."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c", title="Post A")
+    py = knowledge.get_or_create_entity(db, name="Python", kind="tecnologia")
+    rust = knowledge.get_or_create_entity(db, name="Rust", kind="tecnologia")
+    guido = knowledge.get_or_create_entity(db, name="Guido van Rossum", kind="pessoa")
+    d1 = knowledge.insert_distilled(db, item=item, summary="py", chunks=[], entities=[py, guido])
+    d2 = knowledge.insert_distilled(
+        db, item=item, summary="py e rust", chunks=[], entities=[py, rust]
+    )
+    return d1, d2
+
+
+def test_count_distilled_and_entities(db: Any) -> None:
+    """count_distilled/count_entities dão o total do acervo (paginação sem busca)."""
+    _graph(db)
+    assert knowledge.count_distilled(db) == 2
+    assert knowledge.count_entities(db) == 3
+
+
+def test_list_entities_search_by_name_and_kind(db: Any) -> None:
+    """list_entities(query=…) filtra por nome OU kind (busca de Entidades), e
+    count_entities usa o MESMO filtro — o 'X de Y' não mente durante a busca."""
+    _graph(db)
+    by_name = knowledge.list_entities(db, limit=20, start=0, query="pyth")
+    assert [e.name for e in by_name] == ["Python"]
+    by_kind = {e.name for e in knowledge.list_entities(db, limit=20, start=0, query="pessoa")}
+    assert by_kind == {"Guido van Rossum"}
+    assert knowledge.count_entities(db, query="tecnologia") == 2  # Python + Rust
+    assert knowledge.count_entities(db, query="pyth") == 1
+
+
+def test_list_runs_search_by_worker_and_status(db: Any) -> None:
+    """list_runs(query=…) filtra por worker OU status; count_runs usa o mesmo filtro."""
+    knowledge.finish_run(db, knowledge.start_run(db, worker="feed"))  # status ok
+    knowledge.fail_run(db, knowledge.start_run(db, worker="distiller"), error={"kind": "x"})
+    assert [r.worker for r in knowledge.list_runs(db, limit=20, start=0, query="dist")] == [
+        "distiller"
+    ]
+    assert knowledge.count_runs(db, query="error") == 1
+    assert knowledge.count_runs(db) == 2
+
+
+def test_read_distilled_includes_mentioned_entities(db: Any) -> None:
+    """read_distilled passa a trazer as entidades mencionadas (chips do detalhe)."""
+    d1, _ = _graph(db)
+    view = knowledge.read_distilled(db, d1)
+    assert view is not None
+    names = {e.name for e in view.entities}
+    assert names == {"Python", "Guido van Rossum"}
+    kinds = {e.name: e.kind for e in view.entities}
+    assert kinds["Guido van Rossum"] == "pessoa"
+
+
+def test_related_distilled_shares_entity_excludes_self(db: Any) -> None:
+    """related_distilled devolve destilados que compartilham entidade, SEM o próprio."""
+    d1, d2 = _graph(db)  # d1 e d2 compartilham Python
+    related = knowledge.related_distilled(db, d1, limit=10)
+    ids = {str(c.id) for c in related}
+    assert str(d2) in ids
+    assert str(d1) not in ids  # nunca ele mesmo

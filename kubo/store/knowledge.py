@@ -232,16 +232,26 @@ class RunRef:
 
 
 @dataclass(frozen=True)
+class EntityRef:
+    """Entidade mencionada por um distilled (chip do detalhe, → `/entities/{id}`)."""
+
+    id: RecordID
+    name: str
+    kind: str | None
+
+
+@dataclass(frozen=True)
 class DistilledView:
-    """Visão completa de proveniência de UM distilled: distilled -> item -> source
-    e distilled -> run, numa leitura. Alimenta tanto `kubo query` (usa `.summary`)
-    quanto `kubo show --provenance` (ADR-0013 §8.5)."""
+    """Visão completa de proveniência de UM distilled: distilled -> item -> source,
+    distilled -> run e distilled -> entity (menções), numa leitura. Alimenta `kubo
+    query`/`show` (ADR-0013 §8.5) e o detalhe da UI (chips de entidade)."""
 
     id: RecordID
     summary: str
     claims: list[str]
     items: list[ProvenanceItem]
     runs: list[RunRef]
+    entities: list[EntityRef]
 
 
 def read_distilled(db: Any, distilled: RecordID) -> DistilledView | None:
@@ -293,7 +303,15 @@ def read_distilled(db: Any, distilled: RecordID) -> DistilledView | None:
         for r in db.query("SELECT worker, status FROM $run;", {"run": run_id})
     ]
 
-    return DistilledView(id=distilled, summary=summary, claims=claims, items=items, runs=runs)
+    ent_rows = db.query(
+        "SELECT VALUE ->mentions->entity.{id, name, kind} FROM $d;", {"d": distilled}
+    )
+    ent_list: list[dict[str, Any]] = list(ent_rows[0]) if ent_rows else []
+    entities = [EntityRef(id=e["id"], name=e["name"], kind=e.get("kind")) for e in ent_list]
+
+    return DistilledView(
+        id=distilled, summary=summary, claims=claims, items=items, runs=runs, entities=entities
+    )
 
 
 @dataclass(frozen=True)
@@ -384,8 +402,24 @@ class EntityListItem:
     mentions: int
 
 
-def list_entities(db: Any, *, limit: int, start: int) -> list[EntityListItem]:
-    """Página de entidades, mais mencionadas primeiro (E2).
+def _entity_filter(query: str | None) -> tuple[str, dict[str, Any]]:
+    """Cláusula WHERE + bind para a busca de entidade por nome/kind (substring,
+    case-insensitive). Vazia = sem filtro. O termo é conteúdo do usuário → bind param,
+    normalizado (NFC+casefold+colapso) para casar com `entity.normalized`."""
+    if not query or not query.strip():
+        return "", {}
+    return (
+        " WHERE string::contains(normalized, $q) "
+        "OR string::contains(string::lowercase(kind ?? ''), $q)",
+        {"q": normalize_entity(query)},
+    )
+
+
+def list_entities(
+    db: Any, *, limit: int, start: int, query: str | None = None
+) -> list[EntityListItem]:
+    """Página de entidades, mais mencionadas primeiro (E2), opcionalmente filtrada por
+    `query` (nome ou kind, busca da UI 0011).
 
     Menções = `array::len(<-mentions)` — conta as arestas incoming sem materializar
     os destilados (uma aresta por menção; `insert_distilled` não deduplica o par, mas
@@ -393,14 +427,23 @@ def list_entities(db: Any, *, limit: int, start: int) -> list[EntityListItem]:
     como nas outras listas; ORDER BY sobre o alias computado é provado pelo probe 0010."""
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
-    query = (
-        "SELECT id, name, kind, array::len(<-mentions) AS mentions FROM entity "  # noqa: S608
-        f"ORDER BY mentions DESC, name LIMIT {limit} START {start};"
+    where, params = _entity_filter(query)
+    q = (
+        "SELECT id, name, kind, array::len(<-mentions) AS mentions "  # noqa: S608
+        f"FROM entity{where} ORDER BY mentions DESC, name LIMIT {limit} START {start};"
     )
     return [
         EntityListItem(id=r["id"], name=r["name"], kind=r.get("kind"), mentions=int(r["mentions"]))
-        for r in db.query(query)
+        for r in db.query(q, params)
     ]
+
+
+def count_entities(db: Any, *, query: str | None = None) -> int:
+    """Total de entidades sob o MESMO filtro de `list_entities` (para o 'X de Y' da
+    paginação com busca ativa)."""
+    where, params = _entity_filter(query)
+    rows = db.query(f"SELECT count() FROM entity{where} GROUP ALL;", params)  # noqa: S608
+    return int(rows[0]["count"]) if rows else 0
 
 
 @dataclass(frozen=True)
@@ -534,8 +577,21 @@ class RunListItem:
     finished_at: str | None
 
 
-def list_runs(db: Any, *, limit: int, start: int) -> list[RunListItem]:
-    """Página de execuções, mais recentes primeiro (tela de Execuções, fase 2).
+def _run_filter(query: str | None) -> tuple[str, dict[str, Any]]:
+    """Cláusula WHERE + bind para a busca de run por worker/status (substring,
+    case-insensitive). Vazia = sem filtro. Sem 'fluxo' (E6: não existe na fase 1)."""
+    if not query or not query.strip():
+        return "", {}
+    return (
+        " WHERE string::contains(string::lowercase(worker), $q) "
+        "OR string::contains(string::lowercase(status), $q)",
+        {"q": query.strip().lower()},
+    )
+
+
+def list_runs(db: Any, *, limit: int, start: int, query: str | None = None) -> list[RunListItem]:
+    """Página de execuções, mais recentes primeiro (tela de Execuções, fase 2),
+    opcionalmente filtrada por `query` (worker ou status).
 
     Projeta o `error` inteiro (não só o kind) para o painel expansível — o objeto é
     contratualmente seguro (ErrorInfo: `extra=forbid`, `message`<=500 sem conteúdo
@@ -543,11 +599,13 @@ def list_runs(db: Any, *, limit: int, start: int) -> list[RunListItem]:
     LIMIT/START interpolados como literal (não aceitam bind, quirk do v3)."""
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
-    query = (
+    where, params = _run_filter(query)
+    q = (
         "SELECT worker, status, error, error.kind AS error_kind, stats, "  # noqa: S608
-        f"started_at, finished_at FROM run ORDER BY started_at DESC LIMIT {limit} START {start};"
+        f"started_at, finished_at FROM run{where} "
+        f"ORDER BY started_at DESC LIMIT {limit} START {start};"
     )
-    rows = db.query(query)
+    rows = db.query(q, params)
     return [
         RunListItem(
             worker=r["worker"],
@@ -560,6 +618,41 @@ def list_runs(db: Any, *, limit: int, start: int) -> list[RunListItem]:
         )
         for r in rows
     ]
+
+
+def count_runs(db: Any, *, query: str | None = None) -> int:
+    """Total de execuções sob o MESMO filtro de `list_runs` (para o 'X de Y')."""
+    where, params = _run_filter(query)
+    rows = db.query(f"SELECT count() FROM run{where} GROUP ALL;", params)  # noqa: S608
+    return int(rows[0]["count"]) if rows else 0
+
+
+def count_distilled(db: Any) -> int:
+    """Total de destilados no acervo (paginação da lista de Destilados)."""
+    return _count(db, "distilled")
+
+
+def related_distilled(db: Any, distilled: RecordID, *, limit: int) -> list[DistilledListItem]:
+    """Destilados que compartilham ao menos uma entidade com `distilled` (bloco
+    'Relacionados' do detalhe), como cards, mais recentes primeiro. Exclui o próprio.
+
+    Travessia `->mentions->entity<-mentions<-distilled` (dedup) inclui o próprio id —
+    filtrado em Python. `limit` clampado; resolve os cards numa leitura via `FROM $ids`."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    rows = db.query(
+        "SELECT VALUE array::distinct(->mentions->entity<-mentions<-distilled) FROM $d;",
+        {"d": distilled},
+    )
+    self_key = str(distilled)
+    all_ids: list[RecordID] = list(rows[0]) if rows else []
+    ids = [rid for rid in all_ids if str(rid) != self_key][:limit]
+    if not ids:
+        return []
+    cards = db.query(
+        f"SELECT {_CARD_COLS} FROM $ids ORDER BY created_at DESC, id;",  # noqa: S608
+        {"ids": ids},
+    )
+    return [_card(r) for r in cards]
 
 
 @dataclass(frozen=True)

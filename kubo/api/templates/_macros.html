@@ -20,7 +20,8 @@
 {% macro logo_mark(px) %}
   <svg width="{{ px }}" height="{{ px }}" viewBox="0 0 100 100" fill="none" aria-hidden="true">
     <g transform="translate(16 16) scale(0.68)">
-      <g fill="none" style="stroke: var(--sakura-ink)" stroke-width="6" stroke-linejoin="round">
+      {# Pétalas: preenchidas com --sakura-petal (rosa no claro), traço --sakura-ink (Logo.jsx). #}
+      <g style="fill: var(--sakura-petal); stroke: var(--sakura-ink)" stroke-width="6" stroke-linejoin="round">
         {% for r in [0, 72, 144, 216, 288] %}
           <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate({{ r }} 50 50)"/>
         {% endfor %}
@@ -30,7 +31,8 @@
           <line x1="50" y1="50" x2="50" y2="34" transform="rotate({{ r }} 50 50)"/>
         {% endfor %}
       </g>
-      <g style="fill: var(--sakura-petal)">
+      {# Pontos + miolo: --sakura-ink (Logo.jsx: fill=ink), não o petal. #}
+      <g style="fill: var(--sakura-ink)">
         {% for r in [36, 108, 180, 252, 324] %}
           <circle cx="50" cy="33" r="3" transform="rotate({{ r }} 50 50)"/>
         {% endfor %}

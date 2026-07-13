@@ -70,6 +70,7 @@ def _view(summary: str, items: list[ProvenanceItem] | None = None) -> DistilledV
         claims=[],
         items=items or [],
         runs=[RunRef(worker="feed", status="ok")],
+        entities=[],
     )
 
 
