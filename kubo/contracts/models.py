@@ -14,6 +14,7 @@ design, mas com um validador que rejeita valor extra não-numérico.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -131,8 +132,42 @@ class DistilledPayload(BaseModel):
     chunks: list[ChunkPayload] = Field(default_factory=lambda: [])
 
 
+class DispatchPayload(BaseModel):
+    """Fato de entrega de um digest (ADR-0015 §IV) — espelha `insert_dispatch` da store.
+
+    `items` são ids de distilled em forma STRING (`distilled:<hex>`) validados por
+    pattern na borda; a store os converte para RecordID. Exceção NOMEADA à disciplina
+    de ref opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão
+    do ref opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
+    `watermark` = `max(created_at)` do conjunto selecionado (o worker computa; ADR-0015
+    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["dispatch"] = "dispatch"
+    destination: str = Field(min_length=1, max_length=200)
+    channel: Literal["telegram", "email"]
+    status: Literal["ok", "error"]
+    watermark: datetime
+    item_count: int = Field(ge=0)
+    # Cada item é um id de distilled em forma string; pattern fecha a borda contra
+    # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
+    items: list[str] = Field(default_factory=lambda: [], max_length=1000)
+    error: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _items_are_distilled_ids(self) -> Self:
+        """Todo item deve ter a forma `distilled:<alfanumérico>` — borda contra id forjado."""
+        for item in self.items:
+            head, sep, key = item.partition(":")
+            if head != "distilled" or not sep or not key.isalnum():
+                raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
+        return self
+
+
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload, Field(discriminator="type")
+    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload,
+    Field(discriminator="type"),
 ]
 
 

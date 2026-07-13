@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 
 _KNOWLEDGE_DB = "test_knowledge_migrations"
 
-_TABLES = {"source", "item", "distilled", "chunk", "entity", "run"}
+_TABLES = {"source", "item", "distilled", "chunk", "entity", "run", "dispatch"}
 _EDGES = {
     "from_source",
     "derived_from",
@@ -51,6 +51,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0001_knowledge_schema.surql",
         "0002_hnsw_index.surql",
         "0003_collected_by_edge.surql",
+        "0004_dispatch.surql",
     }
 
 

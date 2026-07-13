@@ -16,7 +16,7 @@ import secrets
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from surrealdb import RecordID
@@ -883,3 +883,132 @@ def fail_run(db: Any, run: RecordID, *, error: dict[str, Any]) -> None:
         "UPDATE $r SET status = 'error', finished_at = time::now(), error = $error;",
         {"r": run, "error": dict(error)},
     )
+
+
+# ── dispatch: fato de entrega de digest (ADR-0015) ─────────────────────────────
+# Janela de bootstrap do 1º digest de um destino: sem dispatch anterior, seleciona
+# só o que nasceu nas últimas 24h — evita despejar o legado (935 destilados do
+# import Neon) na 1ª mensagem. Relógio do SERVIDOR (time::now()), não do cliente.
+_BOOTSTRAP_WINDOW = "24h"
+# O watermark faz round-trip pelo SDK (surrealdb 2.0.0), que trunca datetime a
+# MICROSSEGUNDOS — mas `distilled.created_at` é gravado por `time::now()` com
+# precisão de NANOSSEGUNDOS. Comparar o created_at ns cru com o watermark μs
+# re-selecionaria o último item enviado (created_at > watermark pela cauda de ns,
+# bola de neve). Piso a μs nos DOIS lados reconcilia a precisão. Empate na fronteira
+# de μs é teoricamente perdido — desprezível por construção (ADR-0015 §III).
+_FLOOR_CREATED = "time::floor(created_at, 1us)"
+
+
+@dataclass(frozen=True)
+class DigestRow:
+    """Linha de seleção para o digest (ADR-0015 §IV): o distilled + o que o
+    template precisa (título via `derived_from`→item, entidades via `mentions`).
+
+    `created_at` é `datetime` (não string de exibição): alimenta o `max()` do
+    watermark no worker e volta ao banco como bind. `id` é `RecordID`; o seam
+    (`GraphKnowledge`) o converte à forma string opaca antes de entregar ao worker."""
+
+    id: RecordID
+    title: str | None
+    summary: str
+    created_at: Any  # datetime do SDK (surrealdb 2.0.0) — round-trip validado por integração
+    entities: list[str]
+
+
+def insert_dispatch(
+    db: Any,
+    *,
+    destination: str,
+    channel: str,
+    status: str,
+    watermark: Any,
+    item_count: int,
+    items: Sequence[RecordID],
+    error: dict[str, Any] | None = None,
+) -> RecordID:
+    """Grava um fato de entrega de digest (ADR-0015 §II). `sent_at` é DEFAULT do
+    schema (relógio do servidor). `items` são record<distilled> para AUDITORIA —
+    não é aresta (sem consumidor de drill-down). `destination` é o id do
+    destinations.yaml (string): o destino é YAML+env, não tabela (E1)."""
+    rid = _fresh("dispatch")
+    db.query(
+        "CREATE $r SET destination = $dest, channel = $ch, status = $st, "
+        "watermark = $wm, item_count = $ic, items = $items, error = $err;",
+        {
+            "r": rid,
+            "dest": destination,
+            "ch": channel,
+            "st": status,
+            "wm": watermark,
+            "ic": item_count,
+            "items": list(items),
+            "err": dict(error) if error else None,
+        },
+    )
+    return rid
+
+
+def last_dispatch_watermark(db: Any, destination: str) -> Any | None:
+    """Watermark do último dispatch `ok` daquele destino, ou None se não há nenhum
+    (sinal de bootstrap, ADR-0015 §III.2/§III.3). SÓ `ok` avança: um error posterior
+    com watermark maior é ignorado — é assim que o retry-de-graça funciona (o perdido
+    reentra amanhã). `watermark` na projeção (quirk do ORDER BY no v3); LIMIT literal."""
+    rows = db.query(
+        "SELECT watermark FROM dispatch "
+        "WHERE destination = $d AND status = 'ok' ORDER BY watermark DESC LIMIT 1;",
+        {"d": destination},
+    )
+    return rows[0]["watermark"] if rows else None
+
+
+def distilled_for_digest(db: Any, *, destination: str, limit: int) -> list[DigestRow]:
+    """Seleciona os destilados NOVOS para o digest de um destino (ADR-0015 §IV).
+
+    Encapsula a mecânica inteira do watermark num lugar (testável por integração):
+    lê o watermark do último dispatch `ok` daquele destino e devolve os distilled com
+    `created_at > watermark`; sem dispatch anterior, cai no bootstrap `now - 24h`
+    (relógio do servidor). O worker fica burro — recebe a lista e computa
+    `watermark = max(created_at)` das linhas; nunca conhece o watermark anterior.
+
+    Ordena por `created_at` ascendente (o mais antigo primeiro — leitura cronológica
+    do digest) e limita por `limit` (int interpolado como literal: LIMIT não aceita
+    bind nesta versão; o valor vem da config do worker, não de conteúdo coletado).
+    Título via `derived_from`→item; entidades via `mentions`→entity.name."""
+    watermark = last_dispatch_watermark(db, destination)
+    projection = (
+        "SELECT id, summary, created_at, "
+        "->derived_from->item.title AS titles, "
+        "->mentions->entity.name AS entity_names FROM distilled"
+    )
+    order = f"ORDER BY created_at LIMIT {int(limit)};"  # noqa: S608 — limit é int, não conteúdo
+    if watermark is None:
+        rows = db.query(
+            f"{projection} WHERE {_FLOOR_CREATED} > time::now() - {_BOOTSTRAP_WINDOW} {order}"
+        )
+    else:
+        rows = db.query(
+            f"{projection} WHERE {_FLOOR_CREATED} > $since {order}", {"since": watermark}
+        )
+    return [
+        DigestRow(
+            id=r["id"],
+            title=_first_title(r.get("titles")),
+            summary=r["summary"],
+            created_at=r["created_at"],
+            entities=[str(name) for name in _as_list(r.get("entity_names"))],
+        )
+        for r in rows
+    ]
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coage o valor de um campo de projeção (Any do SDK) a lista — [] se ausente."""
+    return cast("list[Any]", value) if isinstance(value, list) else []
+
+
+def _first_title(titles: Any) -> str | None:
+    """Primeiro título não-nulo da lista de itens de origem (um distilled costuma ter 1)."""
+    for title in _as_list(titles):
+        if title:
+            return str(title)
+    return None

@@ -80,6 +80,10 @@ class _FakeKnowledge:
     def items_to_distill(self, limit: int) -> list[ItemView]:
         return list(self._items)
 
+    def distilled_for_digest(self, destination: str, limit: int) -> list[Any]:
+        """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
+        return []
+
 
 @dataclass
 class _FakeCtx:
