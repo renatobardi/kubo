@@ -212,6 +212,42 @@ def test_complete_erro_nao_transiente_vira_executor_error_sem_vazar(monkeypatch)
     assert mock_completion.call_count == 1  # não-transiente NÃO faz retry
 
 
+def test_complete_aceita_json_em_cerca_markdown(monkeypatch):
+    """JSON embrulhado em cerca markdown (```json … ```) valida normalmente — alguns
+    provedores (llama via OpenRouter, 0014) cercam a saída mesmo com response_format;
+    a cerca é descascada antes do schema. O corpo interno é o JSON real (§IV)."""
+    fenced = "```json\n" + json.dumps({"summary": "resumo cercado"}) + "\n```"
+    mock_completion = MagicMock(return_value=_fake_response(fenced))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    result = executor.complete("instrução", "conteúdo", _Out)
+
+    assert result.summary == "resumo cercado"
+
+
+def test_complete_json_limpo_sem_cerca_continua_valido(monkeypatch):
+    """Provedor que devolve JSON limpo (sem cerca, ex.: Groq) passa intacto — o strip
+    de cerca é no-op quando não há cerca (regressão: não corromper o caso comum)."""
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "limpo"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    assert executor.complete("instrução", "conteúdo", _Out).summary == "limpo"
+
+
+def test_complete_cerca_com_json_fora_do_schema_ainda_malformed(monkeypatch):
+    """Descascar a cerca não afrouxa a validação: JSON cercado mas fora do schema
+    continua `MalformedOutputError` (a cerca só remove o invólucro, não valida menos)."""
+    fenced = "```json\n" + json.dumps({"campo_errado": 1}) + "\n```"
+    mock_completion = MagicMock(return_value=_fake_response(fenced))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    with pytest.raises(MalformedOutputError):
+        executor.complete("instrução", "conteúdo", _Out)
+
+
 def test_complete_resposta_com_shape_inesperado_vira_malformed(monkeypatch):
     """Resposta com `choices` vazio (shape hostil/inesperado) vira MalformedOutputError,
     não IndexError cru que derrubaria o run inteiro. Regressão do achado ALTO do review."""

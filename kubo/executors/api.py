@@ -40,6 +40,21 @@ _TRANSIENT = (
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
 
+# Cerca markdown que alguns provedores embrulham no JSON mesmo com response_format
+# (llama via OpenRouter, 0014): ```json … ``` ou ``` … ```. O corpo interno é o JSON real.
+_CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_code_fence(content: str) -> str:
+    """Descasca uma cerca markdown externa do `content`, devolvendo o JSON interno.
+
+    Só remove o invólucro quando a resposta INTEIRA é uma cerca (`^…$`); JSON já limpo
+    (Groq) passa intacto (no-op), e prosa+cerca no meio não casa (segue malformado). Não
+    afrouxa validação alguma — o resultado ainda é validado contra o schema (§IV)."""
+    match = _CODE_FENCE.match(content)
+    return match.group(1) if match else content
+
+
 # Teto de espera do retry-after (0014 A1): acima disso é janela longa (TPD/RPD do Groq),
 # em que retentar dentro do run não adianta — desiste imediato com scope='day'. Abaixo,
 # é janela de minuto (TPM 60s), recuperável: espera o header e retenta.
@@ -238,6 +253,6 @@ class ApiExecutor:
         if not isinstance(content, str):
             raise MalformedOutputError(_MALFORMED_MSG)
         try:
-            return response_model.model_validate_json(content)
+            return response_model.model_validate_json(_strip_code_fence(content))
         except ValidationError:
             raise MalformedOutputError(_MALFORMED_MSG) from None
