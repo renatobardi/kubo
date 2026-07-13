@@ -110,15 +110,35 @@ def test_runs_escapes_error_message(
     assert "&lt;script&gt;" in html
 
 
-def test_runs_pagination_next_when_full_page(
+def test_runs_pagination_total_and_next(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Página cheia (PAGE_SIZE+1) mostra 'Próximos' e trunca ao tamanho da página."""
-    rows = [_run(worker=f"w{i}") for i in range(21)]
+    """Paginação 0011 com total: 'página 1 de 2 · 80 no total' + 'Próximos', sem
+    'Anteriores' na 1ª página."""
+    rows = [_run(worker=f"w{i}") for i in range(50)]
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: rows)
+    monkeypatch.setattr("kubo.api.routes.runs.knowledge.count_runs", lambda db, **kw: 80)
     html = authed_client.get("/runs").text
+    assert "página 1 de 2" in html and "80 no total" in html
     assert "Próximos" in html
     assert "Anteriores" not in html
+
+
+def test_runs_search_filters_via_store(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A busca passa `q` pra store (worker/status, server-side)."""
+    seen: dict[str, object] = {}
+
+    def _list(db: object, **kw: object) -> list[object]:
+        seen.update(kw)
+        return [_run(worker="distiller")]
+
+    monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", _list)
+    monkeypatch.setattr("kubo.api.routes.runs.knowledge.count_runs", lambda db, **kw: 1)
+    html = authed_client.get("/runs", params={"q": "dist"}).text
+    assert seen.get("query") == "dist"
+    assert 'value="dist"' in html
 
 
 if __name__ == "__main__":
