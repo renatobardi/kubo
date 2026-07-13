@@ -5,6 +5,15 @@
 <div class="max-w-3xl space-y-4">
   {{ macros.page_header("Execuções", "Runs dos seus workers — status, duração, itens produzidos e erros.") }}
 
+  <div class="flex items-center gap-3">
+    {{ macros.search_bar("/runs", "Buscar runs por worker ou status…", query) }}
+  </div>
+
+  {% if not runs %}
+    <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+      {% if query %}Nada casa com “{{ query }}”. Tente outro termo.{% else %}Nenhuma execução registrada ainda.{% endif %}
+    </div>
+  {% else %}
   <section class="space-y-2.5">
     {% for run in runs %}
       {% set is_quota = run.status == "error" and run.error_kind in quota_kinds %}
@@ -50,23 +59,10 @@
           </div>
         {% endif %}
       </div>
-    {% else %}
-      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
-        Nenhuma execução registrada ainda.
-      </div>
     {% endfor %}
-
-    {% if has_prev or has_next %}
-      <div class="flex items-center justify-between pt-2 text-sm">
-        {% if has_prev %}
-          <a href="/runs?start={{ prev_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
-        {% else %}<span></span>{% endif %}
-        {% if has_next %}
-          <a href="/runs?start={{ next_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximos →</a>
-        {% else %}<span></span>{% endif %}
-      </div>
-    {% endif %}
   </section>
+  {% if total > 0 %}{{ macros.pagination("/runs", start, size, total, query) }}{% endif %}
+  {% endif %}
 
   <p class="text-xs text-muted-foreground">Clique numa run com falha para ver a mensagem de erro estruturada.</p>
 </div>

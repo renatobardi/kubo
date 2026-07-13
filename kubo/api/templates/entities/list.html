@@ -5,20 +5,22 @@
 <div class="max-w-3xl space-y-4">
   {{ macros.page_header("Entidades", "Entidades tipadas extraídas dos destilados, com a contagem de menções.") }}
 
-  <section class="space-y-2.5">
+  <div class="flex items-center justify-between gap-3">
+    {{ macros.search_bar("/entities", "Buscar entidades por nome ou tipo…", query) }}
+    {{ macros.view_toggle("entities", ["list", "grid2"]) }}
+  </div>
+
+  {% if not entities %}
+    <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+      {% if query %}Nada casa com “{{ query }}”. Tente outro termo.{% else %}Nenhuma entidade no grafo ainda.{% endif %}
+    </div>
+  {% else %}
+  <div class="viewbox" data-view-group="entities" data-mode="list">
     {% for entity in entities %}
       <a href="/entities/{{ entity.id.id | urlencode }}"
          class="flex items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
         <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          {% if entity.kind == "pessoa" %}
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          {% elif entity.kind == "tecnologia" %}
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
-          {% elif entity.kind == "organização" %}
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4"/></svg>
-          {% else %}
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="m6.5 6.5 4 4M17.5 6.5l-4 4M6.5 17.5l4-4M17.5 17.5l-4-4"/></svg>
-          {% endif %}
+          {{ macros.entity_glyph(entity.kind) }}
         </span>
         <span class="flex-1 truncate text-sm font-medium">{{ entity.name }}</span>
         {% if entity.kind %}
@@ -26,22 +28,9 @@
         {% endif %}
         <span class="shrink-0 text-xs text-muted-foreground">{{ entity.mentions }} menções</span>
       </a>
-    {% else %}
-      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
-        Nenhuma entidade no grafo ainda.
-      </div>
     {% endfor %}
-
-    {% if has_prev or has_next %}
-      <div class="flex items-center justify-between pt-2 text-sm">
-        {% if has_prev %}
-          <a href="/entities?start={{ prev_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
-        {% else %}<span></span>{% endif %}
-        {% if has_next %}
-          <a href="/entities?start={{ next_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximas →</a>
-        {% else %}<span></span>{% endif %}
-      </div>
-    {% endif %}
-  </section>
+  </div>
+  {% if total > 0 %}{{ macros.pagination("/entities", start, size, total, query) }}{% endif %}
+  {% endif %}
 </div>
 {% endblock %}

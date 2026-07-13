@@ -1,57 +1,80 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}Destilado · Kubo{% endblock %}
-{% block header %}
-  <div class="flex flex-col justify-center">
-    <a href="/distilled" class="text-xs text-muted-foreground transition-colors hover:text-foreground">← Destilados</a>
-    <h1 class="text-xl font-semibold tracking-tight">Destilado</h1>
-  </div>
-{% endblock %}
 {% block content %}
-<div class="max-w-3xl space-y-6">
-  <div class="rounded-2xl bg-card p-6 ring-1 ring-foreground/10">
-    <p class="whitespace-pre-wrap text-sm">{{ view.summary }}</p>
-    {% if view.claims %}
-      <ul class="mt-4 space-y-1.5 border-t border-border/60 pt-4">
-        {% for claim in view.claims %}
-          <li class="flex gap-2 text-sm">
-            <span class="text-muted-foreground">•</span>
-            <span class="whitespace-pre-wrap">{{ claim }}</span>
-          </li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-  </div>
+{# Título: item.title (via derived_from) ou 1ª linha do summary (E3). Conteúdo
+   derivado de LLM/coletado (título, summary, claims, nome de entidade, url) é hostil
+   → autoescape do Jinja, sem filtro de escape desligado. #}
+{% set item0 = view.items[0] if view.items else none %}
+{% set run0 = view.runs[0] if view.runs else none %}
+{% set title = (item0.title if (item0 and item0.title) else (view.summary.splitlines()[0] if view.summary else "Destilado")) %}
+<div class="space-y-6">
+  <a href="/distilled" class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+    <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+    Voltar aos destilados
+  </a>
 
-  <section>
-    <h2 class="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Proveniência</h2>
-    <div class="space-y-3">
-      {% for item in view.items %}
-        <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-          <div class="text-sm font-medium">{{ item.title or item.external_id }}</div>
-          <div class="mt-0.5 text-xs text-muted-foreground">
-            {{ item.source_title or item.source_canonical }} · {{ item.source_kind }}
-          </div>
-          {# item.url é conteúdo coletado (hostil): só vira link se for http(s).
-             Sem o guard de esquema, um `javascript:`/`data:` no href seria XSS ao
-             clicar — o autoescape do Jinja não filtra esquema de URL (E1/§XSS). #}
-          {% if item.url and item.url.startswith(("https://", "http://")) %}
-            <a
-              href="{{ item.url }}"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="mt-1 inline-block break-all text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
-            >{{ item.url }}</a>
-          {% elif item.url %}
-            <div class="mt-1 break-all text-xs text-muted-foreground">{{ item.url }}</div>
-          {% endif %}
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr] lg:items-start">
+    {# ---- Coluna esquerda ---- #}
+    <div class="space-y-4">
+      <div>
+        <h2 class="text-xl font-semibold tracking-tight">{{ title }}</h2>
+        <p class="mt-1.5 whitespace-pre-wrap text-sm text-muted-foreground">{{ view.summary }}</p>
+      </div>
+
+      {% if view.claims %}
+      <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+        <span class="text-xs font-semibold text-muted-foreground">Claims extraídas</span>
+        <div class="mt-2 space-y-2">
+          {% for claim in view.claims %}
+            <div class="flex gap-2 text-sm">
+              <svg class="mt-0.5 size-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              <span class="whitespace-pre-wrap">{{ claim }}</span>
+            </div>
+          {% endfor %}
         </div>
-      {% endfor %}
-      {% for run in view.runs %}
-        <div class="text-xs text-muted-foreground">
-          Produzido por <span class="font-medium text-foreground">{{ run.worker }}</span> · {{ run.status }}
+      </div>
+      {% endif %}
+
+      {% if view.entities %}
+      <div>
+        <span class="text-xs font-semibold text-muted-foreground">Entidades mencionadas</span>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {% for e in view.entities %}
+            <a href="/entities/{{ e.id.id | urlencode }}"
+               class="inline-flex items-center gap-1.5 rounded-4xl px-2.5 py-1 text-xs text-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+              <span class="text-muted-foreground">{{ macros.entity_glyph(e.kind, "size-3") }}</span>{{ e.name }}
+            </a>
+          {% endfor %}
         </div>
-      {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if related %}
+      <div>
+        <span class="text-xs font-semibold text-muted-foreground">Relacionados</span>
+        <div class="mt-2 space-y-2.5">
+          {% for card in related %}{{ macros.distilled_card(card) }}{% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
-  </section>
+
+    {# ---- Coluna direita: cadeia de proveniência ---- #}
+    <div class="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+      <div class="mb-4 flex items-center gap-2">
+        <svg class="size-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="text-sm font-semibold">Cadeia de proveniência</span>
+      </div>
+      {{ macros.prov_step("book-open", "Destilado", title) }}
+      {% if item0 %}
+        {{ macros.prov_step("file", "Item bruto", item0.title or item0.external_id, url=item0.url or "") }}
+        {{ macros.prov_step("rss", "Fonte", item0.source_title or item0.source_canonical, item0.source_kind, last=(run0 is none)) }}
+      {% endif %}
+      {% if run0 %}
+        {{ macros.prov_step("activity", "Execução", run0.worker, run0.status, last=true) }}
+      {% endif %}
+    </div>
+  </div>
 </div>
 {% endblock %}

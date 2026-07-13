@@ -76,6 +76,7 @@ def _view(
         claims=["afirmação A", "afirmação B"],
         items=items if items is not None else [],
         runs=runs if runs is not None else [],
+        entities=[],
     )
 
 

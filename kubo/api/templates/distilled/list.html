@@ -40,16 +40,8 @@
       </div>
     {% endfor %}
 
-    {% if has_prev or has_next %}
-      <div class="flex items-center justify-between pt-2 text-sm">
-        {% if has_prev %}
-          <a href="/distilled?start={{ prev_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
-        {% else %}<span></span>{% endif %}
-        {% if has_next %}
-          <a href="/distilled?start={{ next_start }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximos →</a>
-        {% else %}<span></span>{% endif %}
-      </div>
-    {% endif %}
   </section>
+
+  {% if total > 0 %}{{ macros.pagination("/distilled", start, size, total) }}{% endif %}
 </div>
 {% endblock %}

@@ -15,32 +15,34 @@ from fastapi import APIRouter, Query, Request
 from starlette.responses import Response
 from surrealdb import RecordID
 
+from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
 from kubo.store import client, knowledge
 
 router = APIRouter()
 
-_PAGE_SIZE = 40  # entidades são leves (nome+kind+contagem); página folgada, escala pessoal
 _ENTITY_TABLE = "entity"
 
 
 @router.get("")
-def list_page(request: Request, start: Annotated[int, Query()] = 0) -> Response:
-    """Lista de entidades, mais mencionadas primeiro (E2). Paginação peek+1."""
-    start = max(0, start)
+def list_page(
+    request: Request,
+    start: Annotated[int, Query()] = 0,
+    size: Annotated[int, Query()] = 50,
+    q: Annotated[str, Query()] = "",
+) -> Response:
+    """Lista de entidades, mais mencionadas primeiro (E2), com busca por nome/kind e
+    paginação completa (0011). `size`/`start` clampados; `q` filtra na store."""
+    size = clamp_size(size)
+    start = clamp_start(start)
+    query = q.strip()
     with client.connect() as db:
-        rows = knowledge.list_entities(db, limit=_PAGE_SIZE + 1, start=start)
-    has_next = len(rows) > _PAGE_SIZE
+        entities = knowledge.list_entities(db, limit=size, start=start, query=query)
+        total = knowledge.count_entities(db, query=query)
     return templates.TemplateResponse(
         request,
         "entities/list.html",
-        {
-            "entities": rows[:_PAGE_SIZE],
-            "has_prev": start > 0,
-            "has_next": has_next,
-            "prev_start": max(0, start - _PAGE_SIZE),
-            "next_start": start + _PAGE_SIZE,
-        },
+        {"entities": entities, "start": start, "size": size, "total": total, "query": query},
     )
 
 

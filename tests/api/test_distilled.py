@@ -17,6 +17,7 @@ from kubo.errors import ConfigError, EmbeddingError
 from kubo.store.knowledge import (
     DistilledListItem,
     DistilledView,
+    EntityRef,
     ProvenanceItem,
     RunRef,
     SearchHit,
@@ -61,6 +62,9 @@ def patch_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutraliza a conexão real e o embedder; cada teste mocka a leitura que usa."""
     monkeypatch.setattr("kubo.api.routes.distilled.client.connect", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.distilled.GeminiEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.related_distilled", lambda db, rid, **kw: []
+    )
 
 
 def _view(summary: str, items: list[ProvenanceItem] | None = None) -> DistilledView:
@@ -70,6 +74,7 @@ def _view(summary: str, items: list[ProvenanceItem] | None = None) -> DistilledV
         claims=[],
         items=items or [],
         runs=[RunRef(worker="feed", status="ok")],
+        entities=[],
     )
 
 
@@ -202,13 +207,18 @@ def test_search_empty_query_is_empty_partial(authed_client: TestClient, patch_st
 # ---- paginação / detalhe / 404 ----
 
 
-def test_list_pagination_next_when_full_page(
+def test_list_pagination_total_and_next(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Página cheia (recebe PAGE_SIZE+1) mostra 'Próximos' e trunca ao tamanho da página."""
-    rows = [_card(f"x{i}", f"s{i}") for i in range(21)]
+    """Paginação 0011: 'página X de Y · N no total' + seletor 50/100 + 'Próximos' quando
+    há mais que uma página; sem 'Anteriores' na 1ª. Total = 120 → 3 páginas de 50."""
+    rows = [_card(f"x{i}", f"s{i}") for i in range(50)]
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: rows)
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 120)
     html = authed_client.get("/distilled").text
+    assert "página 1 de 3" in html
+    assert "120 no total" in html
+    assert "por página" in html and ">100<" in html  # seletor de tamanho
     assert "Próximos" in html
     assert "Anteriores" not in html  # start=0 não tem página anterior
 
@@ -244,6 +254,32 @@ def test_detail_renders_provenance_chain(
     assert "Meu Feed" in html
     assert 'href="https://example.com/post"' in html
     assert "feed" in html  # worker do run
+
+
+def test_detail_shows_entity_chips_and_related(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O detalhe (reescrita 0011) mostra os chips de entidade (→ /entities) e o bloco
+    'Relacionados'. Nome de entidade é hostil → escapado."""
+    view = DistilledView(
+        id=RecordID("distilled", "x1"),
+        summary="resumo",
+        claims=["afirmação"],
+        items=[],
+        runs=[],
+        entities=[EntityRef(id=RecordID("entity", "e1"), name="Python", kind="tecnologia")],
+    )
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid: view)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.related_distilled",
+        lambda db, rid, **kw: [_card("r1", "resumo relacionado", title="Relacionado A")],
+    )
+    html = authed_client.get("/distilled/x1").text
+    assert "Entidades mencionadas" in html
+    assert "Python" in html
+    assert 'href="/entities/e1"' in html
+    assert "Claims extraídas" in html and "afirmação" in html
+    assert "Relacionados" in html and "Relacionado A" in html
 
 
 def test_no_template_uses_safe_filter() -> None:

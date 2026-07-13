@@ -85,6 +85,21 @@ def test_sources_no_add_button(authed_client: TestClient, monkeypatch: pytest.Mo
     assert "Adicionar fonte" not in authed_client.get("/sources").text
 
 
+def test_sources_has_client_search_and_view_toggle(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fontes tem busca client-side (filterList + data-search por linha) e view toggle
+    de 3 modos (lista/grid2/squares)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.sources_with_stats",
+        lambda db: [_src(canonical="https://x/feed", kind="rss", title="Feed X", items=3)],
+    )
+    html = authed_client.get("/sources").text
+    assert "filterList(" in html  # busca client-side ligada
+    assert "data-search=" in html  # texto buscável por fonte
+    assert 'data-view-btn="sources:squares"' in html  # 3º modo (referência)
+
+
 def test_sources_orders_collected_before_never(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
