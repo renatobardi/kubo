@@ -234,3 +234,6 @@ planning/
 # build e no dev local; input.css é a fonte versionada). htmx vendorizado, font
 # e favicon SÃO versionados (o dir static existe no repo por causa deles).
 kubo/api/static/app.css
+
+# Docs efêmeros de auditoria (conteúdo coletado, nunca commitar) — sessão 0014
+*.local.md

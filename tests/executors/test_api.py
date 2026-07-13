@@ -245,3 +245,95 @@ def test_complete_passa_timeout_customizado_da_config_para_litellm(monkeypatch):
     executor.complete("instrução", "conteúdo", _Out)
 
     assert mock_completion.call_args.kwargs["timeout"] == pytest.approx(12.5)
+
+
+# ---------------------------------------------------------------------------
+# Sessão 0014 (A1/A2): honrar `retry-after` do provider + `scope` da quota.
+# retry-after curto (janela de minuto do Groq, TPM 60s) → espera o header e
+# retenta; retry-after longo (TPD/RPD) → desiste imediato; ausente/não-numérico
+# → backoff exponencial. `scope` discrimina minute/day/unknown para o distiller.
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited(retry_after: str | None = None):
+    """RateLimitError com `retry-after` opcional no header (como o Groq manda no 429)."""
+    headers = {"retry-after": retry_after} if retry_after is not None else None
+    return RateLimitError(message="quota", llm_provider="groq", model="m", headers=headers)
+
+
+def test_retry_after_curto_e_honrado_e_retenta(monkeypatch):
+    """Header `retry-after` numérico dentro do teto: o executor DORME esse valor
+    (não o exponencial) e retenta — a janela de minuto do Groq é recuperável."""
+    sucesso = _fake_response(json.dumps({"summary": "ok"}))
+    mock_completion = MagicMock(side_effect=[_rate_limited("5"), sucesso])
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    sleeps: list[float] = []
+    executor = ApiExecutor(_config(), max_attempts=3, sleep=sleeps.append)
+
+    result = executor.complete("instrução", "conteúdo", _Out)
+
+    assert result.summary == "ok"
+    assert sleeps == [pytest.approx(5.0)]  # dormiu o header, não o 0.5 exponencial
+
+
+def test_retry_after_acima_do_teto_desiste_imediato_scope_day(monkeypatch):
+    """retry-after longo (TPD/RPD): desiste NA HORA (sem retry, sem sleep) com
+    scope='day' — retentar dentro do run não adianta contra janela de dia."""
+    mock_completion = MagicMock(side_effect=_rate_limited("3600"))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    sleeps: list[float] = []
+    executor = ApiExecutor(_config(), max_attempts=3, sleep=sleeps.append)
+
+    with pytest.raises(RateLimitExhausted) as exc_info:
+        executor.complete("instrução", "conteúdo", _Out)
+
+    assert exc_info.value.scope == "day"
+    assert mock_completion.call_count == 1  # não retentou
+    assert sleeps == []  # não dormiu
+
+
+def test_retry_after_curto_esgota_tentativas_scope_minute(monkeypatch):
+    """retry-after curto em TODAS as tentativas: esgota o teto e vira
+    RateLimitExhausted(scope='minute') — havia header numérico, é janela de minuto."""
+    mock_completion = MagicMock(side_effect=_rate_limited("5"))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    sleeps: list[float] = []
+    executor = ApiExecutor(_config(), max_attempts=3, sleep=sleeps.append)
+
+    with pytest.raises(RateLimitExhausted) as exc_info:
+        executor.complete("instrução", "conteúdo", _Out)
+
+    assert exc_info.value.scope == "minute"
+    assert mock_completion.call_count == 3
+    assert sleeps == [pytest.approx(5.0), pytest.approx(5.0)]
+
+
+def test_sem_retry_after_usa_backoff_exponencial_scope_unknown(monkeypatch):
+    """Sem header retry-after: mantém o backoff exponencial 0.5/1.0 e o scope é
+    'unknown' (header ausente) — comportamento legado preservado."""
+    mock_completion = MagicMock(side_effect=_rate_limited(None))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    sleeps: list[float] = []
+    executor = ApiExecutor(_config(), max_attempts=3, sleep=sleeps.append)
+
+    with pytest.raises(RateLimitExhausted) as exc_info:
+        executor.complete("instrução", "conteúdo", _Out)
+
+    assert exc_info.value.scope == "unknown"
+    assert sleeps == [pytest.approx(0.5), pytest.approx(1.0)]
+
+
+def test_retry_after_nao_numerico_cai_no_backoff_exponencial(monkeypatch):
+    """retry-after em HTTP-date (não-numérico) não é parseado — cai no exponencial e
+    scope='unknown'. Só valores numéricos atravessam a fronteira (§VIII)."""
+    http_date = "Wed, 21 Oct 2025 07:28:00 GMT"
+    mock_completion = MagicMock(side_effect=_rate_limited(http_date))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    sleeps: list[float] = []
+    executor = ApiExecutor(_config(), max_attempts=2, sleep=sleeps.append)
+
+    with pytest.raises(RateLimitExhausted) as exc_info:
+        executor.complete("instrução", "conteúdo", _Out)
+
+    assert exc_info.value.scope == "unknown"
+    assert sleeps == [pytest.approx(0.5)]  # exponencial, não o http-date

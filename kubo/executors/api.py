@@ -40,6 +40,50 @@ _TRANSIENT = (
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
 
+# Teto de espera do retry-after (0014 A1): acima disso é janela longa (TPD/RPD do Groq),
+# em que retentar dentro do run não adianta — desiste imediato com scope='day'. Abaixo,
+# é janela de minuto (TPM 60s), recuperável: espera o header e retenta.
+_RETRY_AFTER_CAP = 120.0
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Extrai o `retry-after` (em segundos) do erro do provider, ou None.
+
+    Só valores NUMÉRICOS atravessam a fronteira (§VIII) — nunca o corpo cru da
+    resposta. Header ausente, em HTTP-date (não-numérico) ou `<= 0` devolve None e o
+    chamador cai no backoff exponencial. Sobrevive a exceções transientes sem
+    `headers`/`response` (Timeout, APIConnectionError...): lê `exc.headers` (dict do
+    LiteLLM) e `exc.response.headers` (httpx, case-insensitive), defensivo em ambos."""
+    raw = _header_value(exc, "retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _header_value(exc: BaseException, name: str) -> str | None:
+    """1º valor do header `name` (case-insensitive) em `exc.headers` ou
+    `exc.response.headers`; None se ausente. Nunca toca o corpo da resposta."""
+    name_cf = name.casefold()
+    sources = (
+        getattr(exc, "headers", None),
+        getattr(getattr(exc, "response", None), "headers", None),
+    )
+    for source in sources:
+        if not source:
+            continue
+        try:
+            items = source.items()
+        except AttributeError:
+            continue
+        for key, value in items:
+            if str(key).casefold() == name_cf:
+                return value
+    return None
+
 
 class ApiExecutorConfig(BaseModel):
     """Configuração do `ApiExecutor`: modelo LiteLLM e parâmetros de geração.
@@ -142,12 +186,10 @@ class ApiExecutor:
                     num_retries=0,
                     timeout=self._config.timeout,
                 )
-            except _TRANSIENT:
-                if attempt == self._max_attempts - 1:
-                    raise RateLimitExhausted(
-                        f"provider transiente após {self._max_attempts} tentativas"
-                    ) from None
-                self._sleep(0.5 * (2**attempt))
+            except _TRANSIENT as exc:
+                # A decisão do transiente (honrar retry-after, desistir ou dormir) mora em
+                # _next_backoff para manter a complexidade cognitiva do loop baixa (S3776).
+                self._sleep(self._next_backoff(exc, attempt))
             except Exception:  # noqa: BLE001
                 # Fronteira ao provider hostil: os erros não-transientes do litellm
                 # (auth, bad request, context window...) herdam de classes do `openai`,
@@ -157,6 +199,28 @@ class ApiExecutor:
                 # genérico, `from None` (sem encadear o corpo), sem retry.
                 raise ExecutorError("falha do provider de LLM") from None
         raise ExecutorError("falha do provider de LLM")  # pragma: no cover — inalcançável
+
+    def _next_backoff(self, exc: Exception, attempt: int) -> float:
+        """Segundos a dormir antes de retentar um erro transiente — ou levanta
+        `RateLimitExhausted` quando não há retry a fazer (0014 A1/A2).
+
+        `retry-after` acima do teto = janela longa (TPD/RPD): desiste imediato
+        (`scope="day"`) — retentar no run não recupera a quota. Esgotado o teto de
+        tentativas: `scope="minute"` se havia header numérico (janela de minuto),
+        senão `"unknown"`. Caso contrário: honra o `retry-after` curto, ou cai no
+        backoff exponencial quando o header está ausente."""
+        wait = _retry_after_seconds(exc)
+        if wait is not None and wait > _RETRY_AFTER_CAP:
+            raise RateLimitExhausted(
+                "quota de janela longa do provider (retry-after acima do teto)",
+                scope="day",
+            ) from None
+        if attempt == self._max_attempts - 1:
+            raise RateLimitExhausted(
+                f"provider transiente após {self._max_attempts} tentativas",
+                scope="minute" if wait is not None else "unknown",
+            ) from None
+        return wait if wait is not None else 0.5 * (2**attempt)
 
     def _parse_response(self, response: Any, response_model: type[T]) -> T:
         """Extrai `content` da resposta e valida contra `response_model` (§IV).

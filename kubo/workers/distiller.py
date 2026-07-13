@@ -24,7 +24,13 @@ from kubo.contracts.models import (
     WorkerManifest,
 )
 from kubo.contracts.worker import RunContext
-from kubo.errors import ConfigError, ContractError, MalformedOutputError, RateLimitExhausted
+from kubo.errors import (
+    ConfigError,
+    ContractError,
+    EmbeddingError,
+    MalformedOutputError,
+    RateLimitExhausted,
+)
 from kubo.executors.base import Executor
 
 _INSTRUCTION = (
@@ -123,12 +129,12 @@ class DistillerWorker:
                 malformed += 1
                 ctx.logger.warning("distiller.malformed", ref=item.ref)
                 continue
-            except RateLimitExhausted:
+            except RateLimitExhausted as exc:
                 return RunResult(
                     payloads=list(payloads),
                     stats=_stats(distilled, malformed, truncated, entities_filtered, empty_summary),
                     error=ErrorInfo(
-                        kind="rate_limit_exhausted",
+                        kind=_rate_limit_kind(exc.scope),
                         message="quota do provider esgotada; parcial persistido",
                     ),
                 )
@@ -153,7 +159,21 @@ class DistillerWorker:
                 empty_summary += 1
                 ctx.logger.warning("distiller.empty_summary", ref=item.ref)
                 continue
-            vectors = embedder.embed(texts)
+            try:
+                vectors = embedder.embed(texts)
+            except EmbeddingError:
+                # Falha SISTÊMICA (E2, análoga a RateLimitExhausted): a API de embedding
+                # caiu/estourou quota no meio do lote. PARA o loop e persiste o parcial já
+                # destilado — no dreno pago (0014) perder o parcial é dinheiro re-gasto a
+                # cada re-run. Não vaza o texto que falhou (§VIII): só o kind estruturado.
+                return RunResult(
+                    payloads=list(payloads),
+                    stats=_stats(distilled, malformed, truncated, entities_filtered, empty_summary),
+                    error=ErrorInfo(
+                        kind="embedding_failed",
+                        message="falha ao gerar embedding; parcial persistido",
+                    ),
+                )
             chunks = [
                 ChunkPayload(
                     text=text,
@@ -179,6 +199,16 @@ class DistillerWorker:
             payloads=list(payloads),
             stats=_stats(distilled, malformed, truncated, entities_filtered, empty_summary),
         )
+
+
+_RATE_LIMIT_KINDS = {"minute": "rate_limit_minute", "day": "rate_limit_day"}
+
+
+def _rate_limit_kind(scope: str) -> str:
+    """Mapeia o `scope` do RateLimitExhausted para o `error.kind` visível em Execuções
+    (0014 A2): `minute`/`day` discriminam a janela da quota; `unknown` (header
+    ausente/mentiroso) mantém o kind histórico `rate_limit_exhausted` (retrocompat)."""
+    return _RATE_LIMIT_KINDS.get(scope, "rate_limit_exhausted")
 
 
 def filter_present_entities(entities: list[EntityRef], content: str) -> list[EntityRef]:

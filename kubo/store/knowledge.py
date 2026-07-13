@@ -833,6 +833,74 @@ def items_without_distilled(db: Any, *, limit: int) -> list[tuple[RecordID, str 
     return [(r["id"], r.get("title"), r["content"]) for r in rows]
 
 
+def count_items_without_distilled(db: Any) -> int:
+    """Conta os candidatos à destilação nova (mesmo filtro de `items_without_distilled`:
+    sem `derived_from` incoming + content não-vazio) — métrica de progresso e
+    reconciliação do dreno (0014), server-side (COUNT, sem puxar o content de milhares
+    de itens só para len())."""
+    rows = db.query(
+        "SELECT count() FROM item "
+        'WHERE array::len(<-derived_from) = 0 AND string::trim(content) != "" '
+        "GROUP ALL;"
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
+# Teto do scan de auditoria (0014 A4): a auditoria do dreno varre o corpus INTEIRO
+# de destilados (escala pessoal, ~1k) para estratificar recente/legado — não é uma
+# página de UI, então o clamp é folgado, não _MAX_PAGE.
+_MAX_AUDIT_SCAN = 10000
+
+
+def items_by_ids(db: Any, ids: Sequence[RecordID]) -> list[tuple[RecordID, str | None, str]]:
+    """Lê `(item_id, title, content)` dos itens em `ids` — read-only (invariante 2).
+
+    Serve o piloto do dreno (0014 B2): reenviar os MESMOS itens da amostra ao modelo
+    candidato exige o content bruto por id, que os reads de proveniência não expõem.
+    `ids` vazio devolve [] sem tocar o banco; id inexistente simplesmente não volta
+    (sem erro). Ordem por id (determinística); o chamador correlaciona por id."""
+    if not ids:
+        return []
+    rows = db.query(
+        "SELECT id, title, content FROM item WHERE id IN $ids ORDER BY id;",
+        {"ids": list(ids)},
+    )
+    return [(r["id"], r.get("title"), r["content"]) for r in rows]
+
+
+def list_distilled_with_items(
+    db: Any, *, limit: int
+) -> list[tuple[RecordID, str, RecordID | None, str, str | None]]:
+    """Lê `(distilled_id, summary, item_id, created_at, run_worker)` do acervo, mais
+    recentes primeiro — read-only (invariante 2), alimenta a auditoria do dreno (0014 B1).
+
+    `run_worker` é o worker do `produced_by->run` (o 1º, se houver) — `None` para
+    destilados legados sem run (import Neon). É o DISCRIMINADOR recente-vs-legado: o
+    script classifica `run_worker == "distiller"` como recente e faz a estratificação
+    e a heurística de idioma em Python (a store não sabe o que é 'auditoria'). `item_id`
+    é o 1º item de `derived_from` (um destilado deriva de um item). Sem query aninhada
+    de content: o par vem casado por id via `items_by_ids`."""
+    limit = max(1, min(int(limit), _MAX_AUDIT_SCAN))
+    # LIMIT não aceita bind param nesta versão do SurrealDB (parser exige literal, mesmo
+    # caso de list_distilled); `limit` é int já clampado pela store, não conteúdo coletado.
+    query = (
+        "SELECT id, summary, created_at, "  # noqa: S608  # limit é int clampado, não conteúdo
+        "->derived_from->item AS item_id, "
+        "->produced_by->run.worker AS run_worker "
+        f"FROM distilled ORDER BY created_at DESC, id LIMIT {limit};"
+    )
+    return [
+        (
+            r["id"],
+            r["summary"],
+            _unwrap(r.get("item_id")),
+            str(r["created_at"]),
+            _unwrap(r.get("run_worker")),
+        )
+        for r in db.query(query)
+    ]
+
+
 def search(db: Any, *, embedding: Sequence[float], k: int) -> list[SearchHit]:
     """Busca vetorial KNN sobre `chunk`, resolvendo cada acerto ao seu `distilled`.
 
