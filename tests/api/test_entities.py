@@ -105,6 +105,38 @@ def test_entity_detail_shows_mentioning_distilled(
     assert "/distilled/d1" in html  # card linka pro destilado
 
 
+def test_entities_search_filters_via_store(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A busca passa `q` pra store (server-side); a barra reflete o termo ativo."""
+    seen: dict[str, object] = {}
+
+    def _list(db: object, **kw: object) -> list[EntityListItem]:
+        seen.update(kw)
+        return [_entity(name="Python")]
+
+    monkeypatch.setattr("kubo.api.routes.entities.knowledge.list_entities", _list)
+    monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 1)
+    html = authed_client.get("/entities", params={"q": "pyth"}).text
+    assert seen.get("query") == "pyth"  # q chegou na store
+    assert 'value="pyth"' in html  # barra reflete o termo
+
+
+def test_entities_has_view_toggle_and_pagination(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lista tem o view toggle (lista/grid2) e a paginação com total."""
+    monkeypatch.setattr(
+        "kubo.api.routes.entities.knowledge.list_entities",
+        lambda db, **kw: [_entity(name=f"E{i}") for i in range(50)],
+    )
+    monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 90)
+    html = authed_client.get("/entities").text
+    assert 'data-view-group="entities"' in html  # container do view toggle
+    assert 'data-view-btn="entities:grid2"' in html  # botão grid2
+    assert "página 1 de 2" in html and "90 no total" in html
+
+
 def test_entity_detail_404_for_unknown_id(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
