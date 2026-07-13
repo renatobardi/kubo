@@ -119,10 +119,9 @@ def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) 
     current = rows[0]["state"]
     if current != from_state:
         raise StateError(f"task em estado '{current}', from_state esperado era '{from_state}'")
-    flow_ids: list[RecordID] = list(rows[0].get("flow") or [])
-    if not flow_ids:
+    flow_id: RecordID | None = next(iter(rows[0].get("flow") or []), None)
+    if flow_id is None:
         raise StateError(f"task {task} sem flow (belongs_to ausente)")
-    flow_id = flow_ids[0]
     transitions = db.query("SELECT VALUE snapshot.board.transitions FROM $f;", {"f": flow_id})
     raw: list[list[str]] = cast("list[list[str]]", transitions[0]) if transitions else []
     # `len(t) == 2` guarda o índice duplo: o snapshot vem de um FlowTemplate validado (pares
