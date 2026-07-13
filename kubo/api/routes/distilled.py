@@ -17,6 +17,7 @@ from fastapi import APIRouter, Query, Request
 from starlette.responses import Response
 from surrealdb import RecordID
 
+from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
 from kubo.embedding import GeminiEmbedder
 from kubo.errors import ConfigError, EmbeddingError
@@ -48,24 +49,22 @@ def _dedupe_by_distilled(hits: list[SearchHit]) -> list[SearchHit]:
 
 
 @router.get("")
-def list_page(request: Request, start: Annotated[int, Query()] = 0) -> Response:
-    """Página do acervo, mais recentes primeiro. prev/next sem total (o total é luxo
-    cortável): pede uma linha a mais para saber se há próxima sem uma contagem."""
-    start = max(0, start)
+def list_page(
+    request: Request,
+    start: Annotated[int, Query()] = 0,
+    size: Annotated[int, Query()] = 50,
+) -> Response:
+    """Página do acervo, mais recentes primeiro, com paginação completa (0011): total
+    + seletor 50/100. `size`/`start` clampados na borda."""
+    size = clamp_size(size)
+    start = clamp_start(start)
     with client.connect() as db:
-        rows = knowledge.list_distilled(db, limit=_PAGE_SIZE + 1, start=start)
-    has_next = len(rows) > _PAGE_SIZE
-    items = rows[:_PAGE_SIZE]
+        items = knowledge.list_distilled(db, limit=size, start=start)
+        total = knowledge.count_distilled(db)
     return templates.TemplateResponse(
         request,
         "distilled/list.html",
-        {
-            "items": items,
-            "has_prev": start > 0,
-            "has_next": has_next,
-            "prev_start": max(0, start - _PAGE_SIZE),
-            "next_start": start + _PAGE_SIZE,
-        },
+        {"items": items, "start": start, "size": size, "total": total},
     )
 
 

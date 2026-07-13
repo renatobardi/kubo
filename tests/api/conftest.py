@@ -39,9 +39,12 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 0)
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.runs.knowledge.count_runs", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.list_entities", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 0)
 
 
 @pytest.fixture(autouse=True)

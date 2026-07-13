@@ -42,6 +42,37 @@
   </svg>
 {% endmacro %}
 
+{# Paginação (0011): "página X de Y · N no total" + seletor 50/100 + prev/next.
+   Preserva a busca ativa (`query`) nos links. Tamanhos 50/100 (D-d). Trocar o
+   tamanho volta pra página 1 (start=0). `path` é a rota base (ex.: "/entities"). #}
+{% macro pagination(path, start, size, total, query="") %}
+  {% set page = (start // size) + 1 %}
+  {% set pages = ((total + size - 1) // size) if total > 0 else 1 %}
+  {% set qpref = ("q=" ~ (query | urlencode) ~ "&") if query else "" %}
+  <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+    <div class="flex items-center gap-2 text-xs text-muted-foreground">
+      <span>página {{ page }} de {{ pages }} · {{ total }} no total</span>
+      <span aria-hidden="true">·</span>
+      <span>por página:</span>
+      {% for s in [50, 100] %}
+        {% if s == size %}
+          <span class="font-medium text-foreground">{{ s }}</span>
+        {% else %}
+          <a href="{{ path }}?{{ qpref }}size={{ s }}&start=0" class="transition-colors hover:text-foreground">{{ s }}</a>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <div class="flex items-center gap-1 text-sm">
+      {% if start > 0 %}
+        <a href="{{ path }}?{{ qpref }}size={{ size }}&start={{ [start - size, 0] | max }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">← Anteriores</a>
+      {% endif %}
+      {% if page < pages %}
+        <a href="{{ path }}?{{ qpref }}size={{ size }}&start={{ start + size }}" class="rounded-4xl px-3 py-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">Próximos →</a>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
 {# PageHeader (paridade com o mockup): título grande + descrição + divisória, no topo
    do conteúdo — não na barra de topo (que carrega o breadcrumb). #}
 {% macro page_header(title, description) %}

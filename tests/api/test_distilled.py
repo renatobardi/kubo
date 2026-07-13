@@ -203,13 +203,18 @@ def test_search_empty_query_is_empty_partial(authed_client: TestClient, patch_st
 # ---- paginação / detalhe / 404 ----
 
 
-def test_list_pagination_next_when_full_page(
+def test_list_pagination_total_and_next(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Página cheia (recebe PAGE_SIZE+1) mostra 'Próximos' e trunca ao tamanho da página."""
-    rows = [_card(f"x{i}", f"s{i}") for i in range(21)]
+    """Paginação 0011: 'página X de Y · N no total' + seletor 50/100 + 'Próximos' quando
+    há mais que uma página; sem 'Anteriores' na 1ª. Total = 120 → 3 páginas de 50."""
+    rows = [_card(f"x{i}", f"s{i}") for i in range(50)]
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: rows)
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 120)
     html = authed_client.get("/distilled").text
+    assert "página 1 de 3" in html
+    assert "120 no total" in html
+    assert "por página" in html and ">100<" in html  # seletor de tamanho
     assert "Próximos" in html
     assert "Anteriores" not in html  # start=0 não tem página anterior
 
