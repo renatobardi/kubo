@@ -20,6 +20,17 @@ from typing import Annotated, Any, Literal, Self, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _is_distilled_id(item: str) -> bool:
+    """True se `item` é um id de distilled em forma string (`distilled:<alfanum ASCII>`).
+
+    Borda contra id forjado, compartilhada por `DispatchPayload.items` e
+    `ReportPayload.consulted` — os dois só aceitam referências a distilled em forma
+    string (ADR-0015 §IV / ADR-0016 §VI). ASCII (não Unicode): os ids reais são
+    hex/base-alfanumérica ASCII."""
+    head, sep, key = item.partition(":")
+    return head == "distilled" and bool(sep) and key.isascii() and key.isalnum()
+
+
 class WorkerManifest(BaseModel):
     """Identidade e config declarada de um worker (ADR-0009 item II).
 
@@ -185,11 +196,9 @@ class DispatchPayload(BaseModel):
 
     @model_validator(mode="after")
     def _items_are_distilled_ids(self) -> Self:
-        """Todo item deve ter a forma `distilled:<alfanumérico ASCII>` — borda contra id
-        forjado. ASCII (não Unicode): os ids reais são hex/base-alfanumérica ASCII."""
+        """Todo item deve ser um id de distilled em forma string — borda contra id forjado."""
         for item in self.items:
-            head, sep, key = item.partition(":")
-            if head != "distilled" or not sep or not (key.isascii() and key.isalnum()):
+            if not _is_distilled_id(item):
                 raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
         return self
 
@@ -204,8 +213,35 @@ class DispatchPayload(BaseModel):
         return self
 
 
+class ReportPayload(BaseModel):
+    """Relatório de análise produzido pela analista (ADR-0016 §III).
+
+    `content` é o markdown do relatório (derivado de summaries hostis → untrusted no
+    consumo, ADR-0013 §V.2). `consulted` são ids de distilled em forma STRING vindos do
+    RETRIEVAL — NUNCA da saída do LLM (regra das citações, §VI): injeção num documento não
+    forja proveniência. O runner grava via `insert_deliverable` usando o `FlowCtx`
+    (flow/task); o worker NÃO conhece RecordIDs de flow/task (disciplina de ref opaco — a
+    analista tem LLM no circuito, ao contrário do digest). Cerca de volume em `content`
+    (o relatório é output de LLM, limitado por max_tokens, mas o teto fecha por tipo)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["report"] = "report"
+    content: str = Field(min_length=1, max_length=40000)
+    consulted: list[str] = Field(default_factory=lambda: [], max_length=100)
+
+    @model_validator(mode="after")
+    def _consulted_are_distilled_ids(self) -> Self:
+        """Toda fonte consultada é um id de distilled em forma string — a proveniência
+        vem do retrieval, e a borda rejeita qualquer coisa que não seja distilled."""
+        for item in self.consulted:
+            if not _is_distilled_id(item):
+                raise ValueError("consulted deve conter ids de distilled (distilled:<id>)")
+        return self
+
+
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload,
+    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload | ReportPayload,
     Field(discriminator="type"),
 ]
 

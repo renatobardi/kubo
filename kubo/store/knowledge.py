@@ -854,6 +854,50 @@ def search(db: Any, *, embedding: Sequence[float], k: int) -> list[SearchHit]:
     ]
 
 
+@dataclass(frozen=True)
+class RetrievedDoc:
+    """Um distilled recuperado por busca semântica, com o que a analista precisa para
+    citar (ADR-0016 §III): id, título (via `derived_from`→item, fallback na 1ª linha do
+    summary), summary (vai como `untrusted_content` ao LLM) e a distância (score)."""
+
+    id: RecordID
+    title: str | None
+    summary: str
+    score: float
+
+
+def search_distilled(db: Any, *, embedding: Sequence[float], k: int) -> list[RetrievedDoc]:
+    """Busca semântica no acervo para a analista (seam, ADR-0016 §III): KNN sobre chunks,
+    dedup por `distilled` (melhor score), e resolve título+summary de cada um.
+
+    Reusa `search` — a função ÚNICA de KNN (ADR-0005), não abre 2º caminho de busca. O
+    dedup é por-distilled (dois chunks do mesmo distilled não viram duas citações), mantendo
+    o menor `score` (mais perto); o resultado sai ordenado por proximidade. Título via
+    `derived_from`→item (mesma projeção do browse); summary alimenta o prompt e a citação."""
+    best: dict[str, SearchHit] = {}
+    for hit in search(db, embedding=embedding, k=k):
+        key = str(hit.distilled)
+        current = best.get(key)
+        if current is None or hit.score < current.score:
+            best[key] = hit
+    docs: list[RetrievedDoc] = []
+    for hit in sorted(best.values(), key=lambda h: h.score):
+        rows = db.query(
+            "SELECT summary, ->derived_from->item.title AS titles FROM $d;", {"d": hit.distilled}
+        )
+        if not rows:
+            continue  # defensivo: distilled sumiu entre a busca e a leitura
+        docs.append(
+            RetrievedDoc(
+                id=hit.distilled,
+                title=_first_title(rows[0].get("titles")),
+                summary=rows[0]["summary"],
+                score=hit.score,
+            )
+        )
+    return docs
+
+
 def start_run(db: Any, *, worker: str) -> RecordID:
     """Abre um `run` (status 'running', started_at). Retorna o id para finish/fail.
 

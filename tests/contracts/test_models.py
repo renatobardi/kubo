@@ -20,6 +20,7 @@ from kubo.contracts.models import (
     ErrorInfo,
     ItemPayload,
     Payload,
+    ReportPayload,
     SourcePayload,
 )
 
@@ -312,3 +313,38 @@ def test_dispatch_digest_requires_watermark() -> None:
     """Um digest SEM watermark é rejeitado (o watermark é a semântica do digest)."""
     with pytest.raises(ValidationError):
         DispatchPayload.model_validate(_dispatch(artifact="digest", watermark=None))
+
+
+# ---------------------------------------------------------------------------
+# ReportPayload (ADR-0016 §III/§VI)
+# ---------------------------------------------------------------------------
+
+
+def test_report_payload_accepts_valid() -> None:
+    """Um report bem formado valida: markdown + consulted em forma `distilled:<id>`."""
+    r = ReportPayload.model_validate(
+        {"type": "report", "content": "# Relatório\n...", "consulted": ["distilled:abc123"]}
+    )
+    assert r.content.startswith("# Relatório")
+    assert r.consulted == ["distilled:abc123"]
+
+
+def test_report_payload_rejects_non_distilled_consulted() -> None:
+    """Fonte consultada que não é id de distilled é rejeitada (a proveniência é do
+    retrieval, a borda a fecha)."""
+    with pytest.raises(ValidationError):
+        ReportPayload.model_validate({"type": "report", "content": "x", "consulted": ["item:abc"]})
+
+
+def test_report_payload_rejects_empty_content() -> None:
+    """content vazio é rejeitado (min_length=1) — um relatório sem corpo não é entrega."""
+    with pytest.raises(ValidationError):
+        ReportPayload.model_validate({"type": "report", "content": "", "consulted": []})
+
+
+def test_report_payload_is_discriminated_in_union() -> None:
+    """O `type="report"` roteia para ReportPayload na união discriminada Payload."""
+    parsed = TypeAdapter(Payload).validate_python(
+        {"type": "report", "content": "corpo", "consulted": []}
+    )
+    assert isinstance(parsed, ReportPayload)
