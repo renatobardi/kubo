@@ -1,12 +1,12 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}Painel · Kubo{% endblock %}
-{% block heading %}Painel{% endblock %}
 {% block content %}
 {# Retrofit de fidelidade M5 (paridade HomeScreen.jsx): 4 StatTiles clicáveis +
    card 'Últimas execuções' com header/descrição/ação. Gate alert e 'Fluxos ativos'
    ficam FORA (desvios declarados: backend inexistente). #}
 <div class="space-y-6">
-  <p class="text-sm text-muted-foreground">Seu ateliê de agentes — coleta, conhecimento e distribuição num relance.</p>
+  {{ macros.page_header("Painel", "Seu ateliê de agentes — coleta, conhecimento e distribuição num relance.") }}
 
   {# StatTiles inline (sem macro e sem filtro safe: a proibição vale em toda tela — E1). #}
   <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">

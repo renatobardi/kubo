@@ -1,9 +1,9 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}Fontes · Kubo{% endblock %}
-{% block heading %}Fontes{% endblock %}
 {% block content %}
 <div class="max-w-3xl space-y-4">
-  <p class="text-sm text-muted-foreground">De onde vem o que você sabe — canais, feeds e sites, com a recência de cada coleta.</p>
+  {{ macros.page_header("Fontes", "De onde vem o que você sabe — canais, feeds e sites, com a recência de cada coleta.") }}
 
   <section class="space-y-2.5">
     {% for source in sources %}

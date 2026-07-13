@@ -1,9 +1,9 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}Execuções · Kubo{% endblock %}
-{% block heading %}Execuções{% endblock %}
 {% block content %}
 <div class="max-w-3xl space-y-4">
-  <p class="text-sm text-muted-foreground">Runs dos seus workers — status, duração, itens produzidos e erros.</p>
+  {{ macros.page_header("Execuções", "Runs dos seus workers — status, duração, itens produzidos e erros.") }}
 
   <section class="space-y-2.5">
     {% for run in runs %}
