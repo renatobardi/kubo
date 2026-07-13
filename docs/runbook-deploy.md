@@ -69,30 +69,54 @@ Verificação do setup: `docker run --rm hello-world` e
 
 ## 2. Deploy / atualização
 
-Do **Mac**, na raiz do repo:
+**Use o script.** Do **Mac**, na raiz do repo:
 
 ```bash
+./scripts/deploy.sh
+```
+
+Ele faz, nesta ordem, e **falha (exit != 0) em qualquer erro**: (1) rsync do repo pro
+`kubo-test:~/kubo` (exclui o arquivo de ambiente do servidor — segredo intacto); (2) no
+servidor, `docker compose build` → `up -d surrealdb` (espera healthy) → migrations
+(idempotentes) → `up -d`; (3) smoke `GET /healthz` na tailnet, exigindo `ok`. Overrides:
+`KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`. Pré-requisito: env do servidor com
+`KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
+
+> **Não repita os passos manuais numa sessão de agente** — o CLAUDE.md (§Comandos) aponta
+> o script como o único caminho de deploy. A sequência manual abaixo fica só como
+> referência do que o script executa / para depuração.
+
+<details><summary>Sequência manual (referência)</summary>
+
+```bash
+# do Mac:
 rsync -az --delete \
   --exclude='.git' --exclude='.venv' --exclude='__pycache__' \
   --exclude='.pytest_cache' --exclude='.ruff_cache' --exclude='.coverage' \
   --exclude='.env' \
   ./ kubo-test:~/kubo/
-```
-
-No `kubo-test` (`cd ~/kubo`), na ordem — SurrealDB saudável ANTES das migrations:
-
-```bash
+# no kubo-test (cd ~/kubo) — SurrealDB saudável ANTES das migrations:
 docker compose build
 docker compose up -d surrealdb
-# esperar healthy:
-until [ "$(docker inspect -f '{{.State.Health.Status}}' kubo-surrealdb-1)" = healthy ]; do sleep 3; done
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)")" = healthy ]; do sleep 3; done
 docker compose run --rm kubo-scheduler python -m kubo.store.migrations   # idempotente
 docker compose up -d
 ```
+`docker compose config` (uma vez) confirma que o overlay dev mergeou (`COMPOSE_FILE` no
+env): `surreal-backups` com `device: /backups` **e** `kubo-api` publicado em `100.66.254.24:3900`.
+</details>
 
-`docker compose config` (uma vez) confirma que o overlay dev mergeou
-(`COMPOSE_FILE` no `.env`): `surreal-backups` com `device: /backups` **e**
-`kubo-api` com `ports` publicado em `100.66.254.24:3900`.
+### Decisão futura registrada — deploy automático no merge
+
+Hoje o deploy é **manual** (`scripts/deploy.sh`, rodado pelo dono). Automatizá-lo no merge
+para `main` é uma decisão futura, **não implementada agora**, com dois caminhos a pesar num
+ADR próprio quando for a hora:
+- **Pull-based** (kubo-test observa o `main` e se atualiza — ex.: cron que faz `git fetch` +
+  `deploy.sh`, ou um watchtower-like): não expõe segredo de deploy ao GitHub; a caixa
+  Tailscale-only puxa. Alinha com a postura de rede do ADR-0011.
+- **Push-based** (GitHub Actions faz SSH/rsync pro kubo-test no merge): exige credencial de
+  deploy + acesso de rede do runner à caixa Tailscale-only (fura a fronteira) — mais superfície.
+Preferência preliminar: **pull-based** (coerente com "a fronteira é o Tailscale"). Cravar só no ADR.
 
 ---
 

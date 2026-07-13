@@ -61,11 +61,18 @@ def test_theme_toggle_present(authed_client: TestClient) -> None:
 
 
 def test_nav_items_have_icons(authed_client: TestClient) -> None:
-    """[S1] Cada item de nav tem um glifo. Sanidade por dois paths lucide conhecidos:
-    home (Painel) e activity (Execuções)."""
+    """[S1] CADA item de nav tem um glifo. Escopo à sidebar (não confunde com os ícones
+    dos StatTiles no conteúdo) e cobre os 5 — regressão em qualquer um é pega."""
     html = authed_client.get("/").text
-    assert "M9 22V12h6v10" in html  # home (Painel)
-    assert "M22 12h-4l-3 9L9 3l-3 9H2" in html  # activity (Execuções)
+    aside = html[html.find("<aside") : html.find("</aside>") + 8]
+    for path in (
+        "M9 22V12h6v10",  # home / Painel
+        "M12 7v14",  # book-open / Destilados
+        "m6.5 6.5 4 4",  # network / Entidades
+        "M4 11a9 9 0 0 1 9 9",  # rss / Fontes
+        "M22 12h-4l-3 9L9 3l-3 9H2",  # activity / Execuções
+    ):
+        assert path in aside, f"ícone faltando na sidebar: {path}"
 
 
 def test_logo_is_floating_sakura_not_black_box(authed_client: TestClient) -> None:
@@ -85,9 +92,12 @@ def test_sidebar_collapse_wired(authed_client: TestClient) -> None:
 
 
 def test_login_logo_is_floating_sakura(client: TestClient) -> None:
-    """[S3] A tela de login também usa a sakura solta, não o favicon com fundo."""
+    """[S3] A tela de login também usa a sakura solta (ambos os tokens theme-aware),
+    não o favicon com fundo. Prova theme-aware = tokens presentes; a alternância real
+    de tema é do smoke de browser (fora do teste de template)."""
     html = client.get("/login").text
     assert "var(--sakura-ink)" in html
+    assert "var(--sakura-petal)" in html
     assert '<img src="/static/favicon.svg"' not in html
 
 

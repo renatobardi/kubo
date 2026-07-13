@@ -1,4 +1,5 @@
-{% import "_macros.html" as macros %}<!doctype html>
+<!doctype html>
+{% import "_macros.html" as macros %}
 <html lang="pt-BR" class="h-full">
 <head>
   <meta charset="utf-8" />
@@ -30,7 +31,7 @@
 </head>
 <body class="h-full">
   <div class="flex h-full min-h-screen">
-    <aside class="flex w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar">
+    <aside id="sidebar" class="flex w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar">
       <a href="/" class="nav-brand flex h-[72px] items-center gap-2.5 px-4">
         {{ macros.logo_mark(32) }}
         <span class="nav-collapsible flex flex-col leading-tight">
@@ -70,7 +71,8 @@
     <div class="flex min-w-0 flex-1 flex-col">
       <header class="flex h-[72px] items-center gap-3 border-b border-border/60 px-6">
         {# Recolher a sidebar (só ícones) [S2] — paridade com o ▢ do topo do mockup. #}
-        <button type="button" onclick="toggleNav()" title="Recolher menu"
+        <button type="button" id="nav-toggle" onclick="toggleNav()" aria-controls="sidebar"
+                aria-expanded="true" aria-label="Recolher menu" title="Recolher menu"
                 class="flex size-9 shrink-0 items-center justify-center rounded-4xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
           <svg class="size-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
         </button>
@@ -104,10 +106,21 @@
       var dark = document.documentElement.classList.toggle("dark");
       localStorage.setItem("theme", dark ? "dark" : "light");
     }
+    function syncNavToggle() {
+      var collapsed = document.documentElement.classList.contains("nav-collapsed");
+      var b = document.getElementById("nav-toggle");
+      if (!b) return;
+      b.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      var label = collapsed ? "Expandir menu" : "Recolher menu";
+      b.setAttribute("aria-label", label);
+      b.title = label;
+    }
     function toggleNav() {
       var c = document.documentElement.classList.toggle("nav-collapsed");
       localStorage.setItem("navCollapsed", c ? "1" : "0");
+      syncNavToggle();
     }
+    document.addEventListener("DOMContentLoaded", syncNavToggle);
   </script>
 </body>
 </html>

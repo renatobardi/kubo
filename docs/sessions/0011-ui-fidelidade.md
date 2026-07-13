@@ -105,15 +105,29 @@ fatia funcionando.
 - Busca global do topo = visual, leva a Destilados (fase 1).
 - Sem markdown em summary; sem `|safe`; toda sessão continua GET até EPIC-B (aí CSRF entra).
 
+## Delegações previstas (subagent / modelo)
+Roteamento conforme CLAUDE.md §orquestração. Caminho strict (`kubo/store/`) é escrito por Sonnet mas
+validado **linha a linha pela thread principal** (Opus), e mudança estrutural passa pelo advisor.
+| Marco | Delegação |
+|---|---|
+| M1 shell (templates/CSS/JS) | `implementer` (Sonnet) / `scaffolder` (Haiku) p/ SVG; thread valida paridade. **Feito.** |
+| M2 [P-pag]/[P-busca] — leituras de store (count/search, strict) | `test-writer` (RED) → `implementer` (GREEN); **thread valida linha a linha**; `security-reviewer` no toque de store |
+| M2 [P-view]/macros/JS + M3 aplicação por tela | `implementer` (Sonnet); thread valida paridade contra o mockup |
+| M4 placeholders | `implementer`/`scaffolder`; thread valida "sem dado fabricado" |
+| ADRs dos EPIC-A/B | **thread principal + advisor (Fable 5)**; draft por `doc-writer` |
+| Docs/plano/notas | `doc-writer` (Haiku); advisor valida antes de cravar |
+
 ## Pontos de consulta ao advisor
-1. **Este plano** (abordagem: 3 componentes reutilizáveis vs por-tela; ordem M1→M4; épicos adiados).
-2. **D-a / D-b**: placeholder-agora + épico-depois é o certo, ou o dono quer o épico já?
+1. **Este plano** (abordagem por fatias verticais; ordem M1→M4; épicos adiados) — **feito**.
+2. **D-a / D-b**: placeholder-agora + épico-depois — **decidido pelo dono** (D-b virou ausência).
 3. **EPIC-A e EPIC-B** ganham ADR próprio quando atacados (extração de relações; escrita/CSRF/credencial).
-4. Subir `_MAX_PAGE` (se D-d pedir >100).
+4. Subir `_MAX_PAGE` — **decidido: não** (D-d, 50/100).
 
 ## Critérios de aceite
 - [ ] Shell: ícones na nav, recolher funcional, logo solto theme-aware (sem quadrado) — base + login.
-- [ ] 3 componentes reutilizáveis (paginação/view/busca) com teste, aplicados às telas certas.
+- [ ] **Paginação e view** como componentes reutilizáveis (macro + teste); **busca** = macro do INPUT
+  compartilhado + os dois mecanismos (server-side em telas paginadas, client-side em lista curta) —
+  **nunca um "search framework"** (coerente com [P-busca]). Todos aplicados às telas certas.
 - [ ] Placeholders honestos onde falta dado (nada fabricado).
 - [ ] Cada tela confere com o mockup (tabela de paridade atualizada; screenshots lado a lado).
 - [ ] Épicos A e B registrados como trabalho de backend com ADR próprio pendente.

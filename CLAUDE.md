@@ -68,6 +68,11 @@ Conexão vem só de env (invariante 8): `SURREAL_URL` (default `ws://127.0.0.1:8
 
 O par **SDK `surrealdb==2.0.0` ↔ server `v3.1.5`** é pinado por evidência (ADR-0005) e sobe junto: bump de um exige revalidar o outro.
 
+**Deploy DEV** (kubo-test, ADR-0011): use SEMPRE o script — nunca dite os passos manuais de rsync/build/up numa sessão.
+```bash
+./scripts/deploy.sh   # deploy DEV no kubo-test: rsync + build + migrations + up + smoke /healthz (falha se não-ok)
+```
+
 ## Estrutura do repositório
 
 ```
