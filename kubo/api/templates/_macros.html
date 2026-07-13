@@ -91,12 +91,14 @@
 {# View toggle [P-view]: controle (lista/cards/quadrados). `group` identifica o
    container `.viewbox[data-view-group=group]`; `modes` = subconjunto permitido. #}
 {% macro view_toggle(group, modes) %}
-  <div class="flex items-center gap-0.5 rounded-4xl border border-input p-0.5" role="group" aria-label="Visualização">
+  <fieldset class="flex items-center gap-0.5 rounded-4xl border border-input p-0.5">
+    <legend class="sr-only">Visualização</legend>
     {% for m in modes %}
       {% set label = "Lista" if m == "list" else ("Cards" if m == "grid2" else "Quadrados") %}
       <button type="button" onclick="setView('{{ group }}','{{ m }}')" data-view-btn="{{ group }}:{{ m }}"
-        title="{{ label }}" aria-label="{{ label }}"
+        title="{{ label }}"
         class="flex size-7 items-center justify-center rounded-4xl text-muted-foreground transition-colors hover:text-foreground">
+        <span class="sr-only">{{ label }}</span>
         {% if m == "list" %}
           <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
         {% elif m == "grid2" %}
@@ -106,7 +108,7 @@
         {% endif %}
       </button>
     {% endfor %}
-  </div>
+  </fieldset>
 {% endmacro %}
 
 {# Busca SERVER-SIDE (telas paginadas): form GET que recarrega a rota com ?q=…, start
@@ -116,7 +118,7 @@
     <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
       <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
     </span>
-    <input type="search" name="q" value="{{ query }}" placeholder="{{ placeholder }}" autocomplete="off"
+    <input type="search" name="q" value="{{ query }}" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}" autocomplete="off"
       class="h-9 w-full rounded-4xl border border-input bg-input/30 pl-9 pr-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" />
   </form>
 {% endmacro %}
@@ -128,7 +130,7 @@
     <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
       <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
     </span>
-    <input type="search" oninput="filterList('{{ target }}', this.value)" placeholder="{{ placeholder }}" autocomplete="off"
+    <input type="search" oninput="filterList('{{ target }}', this.value)" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}" autocomplete="off"
       class="h-9 w-full rounded-4xl border border-input bg-input/30 pl-9 pr-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" />
   </div>
 {% endmacro %}

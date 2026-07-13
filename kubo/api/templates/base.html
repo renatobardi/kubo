@@ -131,16 +131,15 @@
       if (!box) return;
       var term = q.trim().toLowerCase();
       box.querySelectorAll("[data-search]").forEach(function (el) {
-        var hit = el.getAttribute("data-search").toLowerCase().indexOf(term) !== -1;
-        el.style.display = hit ? "" : "none";
+        el.style.display = el.dataset.search.toLowerCase().includes(term) ? "" : "none";
       });
     }
     // View toggle [P-view]: aplica o modo no container + marca o botão + persiste.
     function setView(group, mode) {
       var box = document.querySelector('.viewbox[data-view-group="' + group + '"]');
-      if (box) box.setAttribute("data-mode", mode);
+      if (box) box.dataset.mode = mode;
       document.querySelectorAll('[data-view-btn^="' + group + ':"]').forEach(function (b) {
-        var active = b.getAttribute("data-view-btn") === group + ":" + mode;
+        var active = b.dataset.viewBtn === group + ":" + mode;
         b.classList.toggle("bg-muted", active);
         b.classList.toggle("text-foreground", active);
         b.classList.toggle("text-muted-foreground", !active);
@@ -149,8 +148,7 @@
     }
     function initViews() {
       document.querySelectorAll(".viewbox[data-view-group]").forEach(function (box) {
-        var group = box.getAttribute("data-view-group");
-        setView(group, localStorage.getItem("view:" + group) || box.getAttribute("data-mode") || "list");
+        setView(box.dataset.viewGroup, localStorage.getItem("view:" + box.dataset.viewGroup) || box.dataset.mode || "list");
       });
     }
     document.addEventListener("DOMContentLoaded", function () { syncNavToggle(); initViews(); });
