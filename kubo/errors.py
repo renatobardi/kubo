@@ -74,7 +74,18 @@ class RateLimitExhausted(ExecutorError):
 
     Falha SISTÊMICA (distinta de malformado por-item): o worker para o loop e
     devolve o parcial. A mensagem não propaga o corpo cru da resposta do provider
-    (que pode embutir conteúdo/segredo — §VIII)."""
+    (que pode embutir conteúdo/segredo — §VIII).
+
+    `scope` discrimina a janela da quota a partir do header `retry-after` (0014 A2):
+    `minute` (retry-after curto, janela de minuto — recuperável no próximo run),
+    `day` (retry-after longo — TPD/RPD, o run desiste imediato) ou `unknown` (header
+    ausente/não-numérico). O distiller mapeia `scope` para o `error.kind` visível em
+    Execuções."""
+
+    def __init__(self, message: str, *, scope: str = "unknown") -> None:
+        """Guarda a `message` (já sanitizada pelo executor) e o `scope` da quota."""
+        super().__init__(message)
+        self.scope = scope
 
 
 class SenderError(KuboError):

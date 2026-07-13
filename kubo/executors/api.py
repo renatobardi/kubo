@@ -40,6 +40,50 @@ _TRANSIENT = (
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
 
+# Teto de espera do retry-after (0014 A1): acima disso é janela longa (TPD/RPD do Groq),
+# em que retentar dentro do run não adianta — desiste imediato com scope='day'. Abaixo,
+# é janela de minuto (TPM 60s), recuperável: espera o header e retenta.
+_RETRY_AFTER_CAP = 120.0
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Extrai o `retry-after` (em segundos) do erro do provider, ou None.
+
+    Só valores NUMÉRICOS atravessam a fronteira (§VIII) — nunca o corpo cru da
+    resposta. Header ausente, em HTTP-date (não-numérico) ou `<= 0` devolve None e o
+    chamador cai no backoff exponencial. Sobrevive a exceções transientes sem
+    `headers`/`response` (Timeout, APIConnectionError...): lê `exc.headers` (dict do
+    LiteLLM) e `exc.response.headers` (httpx, case-insensitive), defensivo em ambos."""
+    raw = _header_value(exc, "retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _header_value(exc: BaseException, name: str) -> str | None:
+    """1º valor do header `name` (case-insensitive) em `exc.headers` ou
+    `exc.response.headers`; None se ausente. Nunca toca o corpo da resposta."""
+    name_cf = name.casefold()
+    sources = (
+        getattr(exc, "headers", None),
+        getattr(getattr(exc, "response", None), "headers", None),
+    )
+    for source in sources:
+        if not source:
+            continue
+        try:
+            items = source.items()
+        except AttributeError:
+            continue
+        for key, value in items:
+            if str(key).casefold() == name_cf:
+                return value
+    return None
+
 
 class ApiExecutorConfig(BaseModel):
     """Configuração do `ApiExecutor`: modelo LiteLLM e parâmetros de geração.
@@ -142,12 +186,22 @@ class ApiExecutor:
                     num_retries=0,
                     timeout=self._config.timeout,
                 )
-            except _TRANSIENT:
-                if attempt == self._max_attempts - 1:
+            except _TRANSIENT as exc:
+                wait = _retry_after_seconds(exc)
+                if wait is not None and wait > _RETRY_AFTER_CAP:
+                    # Janela longa (TPD/RPD): retentar dentro do run não recupera a quota.
                     raise RateLimitExhausted(
-                        f"provider transiente após {self._max_attempts} tentativas"
+                        "quota de janela longa do provider (retry-after acima do teto)",
+                        scope="day",
                     ) from None
-                self._sleep(0.5 * (2**attempt))
+                if attempt == self._max_attempts - 1:
+                    # Havia header numérico (janela de minuto) → scope='minute'; senão 'unknown'.
+                    raise RateLimitExhausted(
+                        f"provider transiente após {self._max_attempts} tentativas",
+                        scope="minute" if wait is not None else "unknown",
+                    ) from None
+                # retry-after curto é honrado; sem header, cai no backoff exponencial.
+                self._sleep(wait if wait is not None else 0.5 * (2**attempt))
             except Exception:  # noqa: BLE001
                 # Fronteira ao provider hostil: os erros não-transientes do litellm
                 # (auth, bad request, context window...) herdam de classes do `openai`,

@@ -25,7 +25,8 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import DistilledPayload, EntityRef, Payload
 from kubo.contracts.worker import ItemView
-from kubo.errors import ConfigError, MalformedOutputError, RateLimitExhausted
+from kubo.embedding import Embedder
+from kubo.errors import ConfigError, EmbeddingError, MalformedOutputError, RateLimitExhausted
 from kubo.workers.distiller import (
     DistillerConfig,
     DistillerWorker,
@@ -99,12 +100,10 @@ class _FakeCtx:
     integrations: dict[str, object]
     knowledge: _FakeKnowledge
     logger: Any
-    embedder: _FakeEmbedder | None
+    embedder: Embedder | None
 
 
-def _ctx(
-    config: DistillerConfig, knowledge: _FakeKnowledge, embedder: _FakeEmbedder | None
-) -> _FakeCtx:
+def _ctx(config: DistillerConfig, knowledge: _FakeKnowledge, embedder: Embedder | None) -> _FakeCtx:
     """Monta um `RunContext` fake pronto pra passar a `DistillerWorker.run`."""
     return _FakeCtx(
         config=config,
@@ -198,6 +197,78 @@ def test_run_stops_on_rate_limit_exhausted_and_returns_partial_with_error() -> N
     assert result.error is not None
     assert result.error.kind == "rate_limit_exhausted"
     assert executor.call_count == 2  # nunca chamou pro 3º item
+
+
+def test_run_maps_rate_limit_scope_minute_to_error_kind() -> None:
+    """RateLimitExhausted(scope='minute') vira `error.kind == 'rate_limit_minute'`
+    — visível em Execuções para o dono discriminar janela de minuto de janela de dia (A2)."""
+    items = [ItemView(ref=0, title=None, content="c0")]
+    executor = _FakeExecutor(errors={0: RateLimitExhausted("janela de minuto", scope="minute")})
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    assert result.error is not None
+    assert result.error.kind == "rate_limit_minute"
+
+
+def test_run_maps_rate_limit_scope_day_to_error_kind() -> None:
+    """RateLimitExhausted(scope='day') vira `error.kind == 'rate_limit_day'` (A2)."""
+    items = [ItemView(ref=0, title=None, content="c0")]
+    executor = _FakeExecutor(errors={0: RateLimitExhausted("janela de dia", scope="day")})
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    assert result.error is not None
+    assert result.error.kind == "rate_limit_day"
+
+
+class _FailingEmbedder:
+    """Fake de `Embedder` que embedda `fail_at` vezes com sucesso e depois levanta
+    `EmbeddingError` — simula a API de embedding caindo no meio de um lote (A3)."""
+
+    model = "gemini-embedding-001"
+    dim = 768
+    task_type = "SEMANTIC_SIMILARITY"
+
+    def __init__(self, fail_at: int) -> None:
+        self._fail_at = fail_at
+        self.calls = 0
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if self.calls >= self._fail_at:
+            raise EmbeddingError("API de embedding falhou")
+        self.calls += 1
+        return [[0.1] * 768 for _ in texts]
+
+
+def test_run_stops_on_embedding_error_and_returns_partial_with_error() -> None:
+    """EmbeddingError no meio do lote é falha SISTÊMICA (análoga a RateLimitExhausted, E2):
+    para o loop, PERSISTE o parcial já destilado e devolve `error` estruturado — no dreno
+    pago, perder o parcial seria dinheiro re-gasto a cada re-run."""
+    items = [
+        ItemView(ref=0, title=None, content="c0"),
+        ItemView(ref=1, title=None, content="c1"),
+        ItemView(ref=2, title=None, content="c2"),
+    ]
+    executor = _FakeExecutor(
+        outputs={
+            0: DistillOutput(summary="resumo 0", entities=[]),
+            1: DistillOutput(summary="resumo 1", entities=[]),
+            2: DistillOutput(summary="resumo 2", entities=[]),
+        }
+    )
+    embedder = _FailingEmbedder(fail_at=1)  # item 0 embedda; item 1 falha
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), embedder)
+
+    result = DistillerWorker(executor).run(ctx)
+
+    assert len(result.payloads) == 1  # só o 1º item, já destilado, sobrevive
+    assert _as_distilled(result.payloads[0]).ref == 0
+    assert result.error is not None
+    assert result.error.kind == "embedding_failed"
+    assert executor.call_count == 2  # parou no item 1, nunca chamou o 3º
 
 
 def test_run_truncates_content_to_input_char_cap_before_calling_executor() -> None:

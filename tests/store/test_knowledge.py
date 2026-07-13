@@ -1048,3 +1048,90 @@ def test_related_distilled_shares_entity_excludes_self(db: Any) -> None:
     ids = {str(c.id) for c in related}
     assert str(d2) in ids
     assert str(d1) not in ids  # nunca ele mesmo
+
+
+# ---------------------------------------------------------------------------
+# Sessão 0014 (A4): leituras read-only que alimentam a auditoria (B1) e o
+# piloto (B2) do dreno — invariante 2 (nenhuma query crua no script one-off).
+# `list_distilled_with_items` devolve o par summary×item + `run_worker` (o
+# discriminador recente-vs-legado); `items_by_ids` busca o content por item id.
+# ---------------------------------------------------------------------------
+
+
+def test_items_by_ids_returns_id_title_content(db: Any) -> None:
+    """items_by_ids devolve (id, title, content) dos itens pedidos — o piloto (B2)
+    reenvia os MESMOS itens da amostra ao candidato, então precisa do content bruto
+    por id, não da proveniência."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    a = knowledge.upsert_item(
+        db, source=src, external_id="a", content="conteúdo A", title="Título A"
+    )
+    b = knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")  # sem title
+
+    by_id = {str(i): (t, c) for i, t, c in knowledge.items_by_ids(db, [a, b])}
+
+    assert set(by_id) == {str(a), str(b)}
+    assert by_id[str(a)] == ("Título A", "conteúdo A")
+    assert by_id[str(b)] == (None, "conteúdo B")
+
+
+def test_items_by_ids_empty_returns_empty(db: Any) -> None:
+    """Lista de ids vazia devolve [] sem tocar o banco (não None, não erro)."""
+    assert knowledge.items_by_ids(db, []) == []
+
+
+def test_list_distilled_with_items_carries_summary_item_and_run_worker(db: Any) -> None:
+    """Um distilled produzido por um run de worker `distiller` devolve
+    (distilled_id, summary, item_id, created_at, run_worker="distiller") — o script
+    da auditoria classifica RECENTE por `run_worker == "distiller"`."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c1")
+    run = knowledge.start_run(db, worker="distiller")
+    dist = knowledge.insert_distilled(db, item=item, summary="resumo recente", chunks=[], run=run)
+
+    rows = knowledge.list_distilled_with_items(db, limit=10)
+
+    assert len(rows) == 1
+    d_id, summary, item_id, created_at, run_worker = rows[0]
+    assert d_id == dist
+    assert summary == "resumo recente"
+    assert item_id == item
+    assert created_at  # carimbo presente (string)
+    assert run_worker == "distiller"
+
+
+def test_list_distilled_with_items_legacy_without_run_has_none_worker(db: Any) -> None:
+    """Um distilled SEM produced_by (legado do import Neon) devolve `run_worker is None`
+    — o discriminador nunca crasha na ausência do run; o script trata None como legado."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(db, source=src, external_id="e1", content="c1")
+    knowledge.insert_distilled(db, item=item, summary="resumo legado", chunks=[])
+
+    rows = knowledge.list_distilled_with_items(db, limit=10)
+
+    assert len(rows) == 1
+    assert rows[0][4] is None
+
+
+def test_list_distilled_with_items_empty_returns_empty(db: Any) -> None:
+    """Sem destilados, a leitura é [] (não None, não erro)."""
+    assert knowledge.list_distilled_with_items(db, limit=10) == []
+
+
+def test_count_items_without_distilled_matches_the_filter(db: Any) -> None:
+    """count_items_without_distilled conta os MESMOS candidatos de items_without_distilled
+    (sem derived_from + content não-vazio) — métrica de progresso/reconciliação do dreno
+    (0014), sem puxar o content de milhares de itens só para contá-los."""
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A")
+    knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")
+    knowledge.upsert_item(db, source=src, external_id="empty", content="   ")  # vazio: fora
+    item_done = knowledge.upsert_item(db, source=src, external_id="c", content="conteúdo C")
+    knowledge.insert_distilled(db, item=item_done, summary="já destilado", chunks=[])  # fora
+
+    assert knowledge.count_items_without_distilled(db) == 2
+
+
+def test_count_items_without_distilled_zero_when_none_pending(db: Any) -> None:
+    """Banco sem candidato pendente conta 0 (não None, não erro)."""
+    assert knowledge.count_items_without_distilled(db) == 0
