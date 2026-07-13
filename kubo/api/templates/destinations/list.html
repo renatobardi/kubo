@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Destinos · Kubo{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-6">
+  {{ macros.page_header("Destinos", "O que é distribuído e para onde. Convidados recebem — não operam.") }}
+
+  {# Artefatos configurados — digests recorrentes (do schedules.yaml) #}
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <h2 class="text-sm font-medium">Artefatos configurados</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Digests e relatórios recorrentes.</p>
+    </div>
+    {% if not artefatos %}
+      <p class="p-4 text-sm text-muted-foreground">Nenhum artefato agendado.</p>
+    {% else %}
+    <ul class="divide-y divide-border">
+      {% for a in artefatos %}
+      <li class="flex flex-col gap-1.5 p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-sm font-medium">{{ a.name }}</span>
+          <span class="inline-flex items-center gap-1 rounded-4xl bg-transparent px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/15">
+            <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            {{ a.agenda }}
+          </span>
+        </div>
+        <p class="text-xs text-muted-foreground">origem: <span class="font-mono">{{ a.origem }}</span></p>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-xs text-muted-foreground">destinos:</span>
+          {% for dn in a.destinos %}
+          <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">{{ dn }}</span>
+          {% endfor %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  {# Destinos — pessoas (dono) e sistemas (do destinations.yaml) #}
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <h2 class="text-sm font-medium">Destinos</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Pessoas (dono) e sistemas.</p>
+    </div>
+    {% if not destinations %}
+      <p class="p-4 text-sm text-muted-foreground">Nenhum destino declarado no destinations.yaml.</p>
+    {% else %}
+    <ul class="divide-y divide-border">
+      {% for r in destinations %}
+      <li class="flex items-center gap-3 p-4">
+        <span class="flex size-8 shrink-0 items-center justify-center text-xs font-semibold {% if r.kind == 'pessoa' %}rounded-full bg-primary text-primary-foreground{% else %}rounded-lg bg-muted text-muted-foreground{% endif %}">
+          {% if r.kind == 'pessoa' %}{{ r.name[0] | upper }}{% else %}
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+          {% endif %}
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium">{{ r.name }}</span>
+            <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">{{ "dono" if r.kind == "pessoa" else r.kind }}</span>
+            <span class="inline-flex items-center gap-1 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+              <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+              {{ r.channel }}
+            </span>
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  <p class="text-xs text-muted-foreground">Destinos e agenda são configuração (destinations.yaml + schedules.yaml) — editar é mudar o arquivo e abrir PR.</p>
+</div>
+{% endblock %}
