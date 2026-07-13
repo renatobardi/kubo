@@ -14,6 +14,7 @@ rede). Comportamento fixado (não implementação):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -58,6 +59,9 @@ class _FakeKnowledge:
     def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
         self.calls.append((destination, limit))
         return list(self._per_dest.get(destination, []))
+
+    def search_distilled(self, embedding: Sequence[float], k: int) -> list[Any]:  # não usado
+        return []
 
 
 @dataclass

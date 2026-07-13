@@ -84,6 +84,10 @@ class _FakeKnowledge:
         """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
         return []
 
+    def search_distilled(self, embedding: Sequence[float], k: int) -> list[Any]:
+        """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
+        return []
+
 
 @dataclass
 class _FakeCtx:
