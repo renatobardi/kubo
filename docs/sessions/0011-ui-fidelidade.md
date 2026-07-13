@@ -20,14 +20,14 @@ mostra algo que o backend não produz (sparkline de menções, relações, "adic
 é **placeholder honesto** ("sem dados ainda" / "em breve") + um **épico de backend** separado — nunca
 um gráfico/lista/registro fabricado com carimbo real (viola os invariantes de integridade do projeto).
 
-## Decisões do dono necessárias (resolver antes de executar)
+## Decisões do dono — TRAVADAS (dono, 2026-07-12)
 
-| # | Questão | Recomendação da thread |
+| # | Questão | Decisão |
 |---|---|---|
-| **D-a** | Sparkline "menções ao tempo" + card "Relações" no detalhe de entidade (cortados no E2 por dado inexistente) | **(c)** placeholder honesto agora + **EPIC-A** (produtor de relações + timestamp de menção) depois |
-| **D-b** | Botão "+ Adicionar fonte" (cortado no E1: UI read-only, sem backend) | **(c)** botão desabilitado "em breve" agora + **EPIC-B** (escrita na UI) depois |
-| **D-c** | Views em Execuções (mockup só tem `allowed=['list']`) | **(a)** seguir o mockup: só lista, sem grid (não inventar além do mockup) |
-| **D-d** | Teto do seletor de tamanho de página (`_MAX_PAGE=100` hoje) | 50/100 (cabem no teto atual); >100 exige subir `_MAX_PAGE` conscientemente na store |
+| **D-a** | Sparkline + card "Relações" no detalhe de entidade (E2, dado inexistente) | **Placeholder discreto** agora + **EPIC-A** depois. Expectativa calibrada: mesmo pós-EPIC-A o gráfico começa vazio e enche em semanas (sem backfill). **Fallback:** se o placeholder incomodar visualmente, ausência também é aceitável — dono decide no olho. |
+| **D-b** | Botão "+ Adicionar fonte" (E1: UI read-only) | **AUSÊNCIA** (diverge da recomendação). Botão "em breve" desabilitado = link morto com outra roupa, contra o D27 ("zero link morto"). O botão **nasce funcionando** quando o EPIC-B existir — não antes. |
+| **D-c** | Views em Execuções (mockup só `allowed=['list']`) | **Só lista**, sem grid. A regra corta nos dois sentidos (política do próprio dono). |
+| **D-d** | Teto do seletor de página (`_MAX_PAGE=100`) | **50/100.** Com ~942 destilados, 100/pág = 10 páginas; quem precisa de mais precisa de BUSCA, não de mais paginação. Não subir o teto. |
 
 ## Marcos
 
@@ -67,9 +67,11 @@ fatia funcionando.
   tamanho de página reseta pra página 1.
 
 ### M4 — Placeholders honestos (dado inexistente; sem fabricar)
-- Detalhe de entidade: bloco "Menções ao longo do tempo" e card "Relações" com estado **"sem dados
-  ainda"** (estrutura do mockup, zero número inventado). Some quando EPIC-A entregar os dados.
-- Fontes: botão "+ Adicionar fonte" **desabilitado** com "em breve". Ativa quando EPIC-B entregar.
+- Detalhe de entidade (D-a): bloco "Menções ao longo do tempo" e card "Relações" com estado
+  **"sem dados ainda"** (estrutura do mockup, zero número inventado). Some quando EPIC-A entregar os
+  dados. Se o dono achar visualmente pior que ausência no review, vira ausência (fallback do D-a).
+- Fontes (D-b): "+ Adicionar fonte" fica **AUSENTE** — nada de botão desabilitado (seria link morto,
+  D27). Nasce funcionando no EPIC-B.
 
 ### Épicos de backend (fora desta sessão; cada um com ADR + advisor próprios quando atacado)
 - **EPIC-A — Produtores de dado do grafo de entidade:** extração de relações (`relates_to`) no
