@@ -9,6 +9,7 @@ por isso agora; ficam verdes quando a implementação (GREEN) entrar.
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Any
@@ -17,15 +18,21 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.__main__ import (
+    _build_parser,
+    _handle_flow,
     _sanitize,
     dedupe_hits,
     format_distilled,
     format_query_results,
     main,
     parse_distilled_id,
+    run_flow_command,
     run_query,
     run_show,
 )
+from kubo.distribution.destinations import ResolvedDestination
+from kubo.errors import ConfigError
+from kubo.runtime.flow_runner import FlowRunResult
 from kubo.store import client, knowledge, migrations
 from kubo.store.knowledge import Chunk, DistilledView, ProvenanceItem, RunRef, SearchHit
 
@@ -323,3 +330,63 @@ def test_main_query_without_gemini_api_key_exits_with_code_2(
     assert exit_code == 2
     captured = capsys.readouterr()
     assert "GEMINI_API_KEY" in (captured.err + captured.out)
+
+
+# ---------------------------------------------------------------------------
+# flow run (ADR-0016) — parser + wiring do CLI (unit, sem DB nem rede)
+# ---------------------------------------------------------------------------
+
+
+def _flow_result(state: str) -> FlowRunResult:
+    return FlowRunResult(
+        flow=RecordID("flow", "1"),
+        task=RecordID("task", "1"),
+        run=RecordID("run", "1"),
+        state=state,
+    )
+
+
+def test_parser_parses_flow_run() -> None:
+    """`flow run <template> <pergunta>` roteia, com destino default owner-telegram."""
+    args = _build_parser().parse_args(["flow", "run", "analysis", "o que é X?"])
+    assert args.command == "flow"
+    assert args.flow_command == "run"
+    assert args.template == "analysis"
+    assert args.question == "o que é X?"
+    assert args.destination == "owner-telegram"
+
+
+def test_handle_flow_without_run_subcommand_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
+    """`kubo flow` sem `run` imprime uso e sai 2."""
+    args = argparse.Namespace(flow_command=None)
+    assert _handle_flow(None, args) == 2
+    assert "uso:" in capsys.readouterr().err
+
+
+def test_handle_flow_maps_state_to_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """delivered → exit 0; failed → exit 1; ambos imprimem o id do flow e o estado."""
+    monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("delivered"))
+    args = argparse.Namespace(
+        flow_command="run", template="analysis", question="q", destination="owner-telegram"
+    )
+    assert _handle_flow(object(), args) == 0
+    assert "delivered" in capsys.readouterr().out
+
+    monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("failed"))
+    assert _handle_flow(object(), args) == 1
+
+
+def test_run_flow_command_rejects_unknown_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Destino inexistente em destinations.yaml falha alto (ConfigError), antes de embeddar."""
+    monkeypatch.setattr(
+        "kubo.__main__.resolve_destinations",
+        lambda ds: [
+            ResolvedDestination(
+                id="owner-telegram", name="R", kind="pessoa", channel="telegram", address="c"
+            )
+        ],
+    )
+    with pytest.raises(ConfigError, match="não existe"):
+        run_flow_command(object(), template="analysis", question="q", destination_id="fantasma")

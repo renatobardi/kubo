@@ -10,14 +10,23 @@ import argparse
 import re
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from surrealdb import RecordID
 
+from kubo.distribution.destinations import (
+    load_destinations,
+    resolve_base_url,
+    resolve_destinations,
+)
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, EmbeddingError
+from kubo.runtime.flow_runner import FlowRunResult, run_flow
 from kubo.store import client, knowledge
 from kubo.store.knowledge import DistilledView, SearchHit
+
+_DESTINATIONS_PATH = Path(__file__).parents[1] / "destinations.yaml"
 
 _DISTILLED_TABLE = "distilled"
 
@@ -146,8 +155,42 @@ def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
     return format_distilled(view, provenance=provenance)
 
 
+def run_flow_command(
+    db: Any, *, template: str, question: str, destination_id: str
+) -> FlowRunResult:
+    """Resolve as dependências do flow (embedder Gemini, destino do destinations.yaml, base
+    URL — tudo por env, invariante 8) e executa o flow SÍNCRONO no processo do CLI (ADR-0016
+    §VII). Destino inexistente falha alto (ConfigError). O flow runner faz o resto."""
+    destinations = resolve_destinations(load_destinations(_DESTINATIONS_PATH))
+    dest = next((d for d in destinations if d.id == destination_id), None)
+    if dest is None:
+        raise ConfigError(f"destino '{destination_id}' não existe em destinations.yaml")
+    embedder = GeminiEmbedder.from_env()
+    return run_flow(
+        db,
+        template_name=template,
+        question=question,
+        embedder=embedder,
+        destination=dest,
+        base_url=resolve_base_url(),
+    )
+
+
+def _handle_flow(db: Any, args: argparse.Namespace) -> int:
+    """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 0
+    se entregue, 1 se o flow terminou em `failed` (o deliverable pode existir mesmo assim)."""
+    if args.flow_command != "run":
+        print('uso: kubo flow run <template> "pergunta"', file=sys.stderr)
+        return 2
+    result = run_flow_command(
+        db, template=args.template, question=args.question, destination_id=args.destination
+    )
+    print(f"flow {result.flow} — {result.state} (run {result.run})")
+    return 0 if result.state == "delivered" else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    """Monta o parser com os subcomandos `query` e `show`."""
+    """Monta o parser com os subcomandos `query`, `show` e `flow run`."""
     parser = argparse.ArgumentParser(prog="kubo")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -158,6 +201,13 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser = subparsers.add_parser("show", help="mostra um distilled por id")
     show_parser.add_argument("id")
     show_parser.add_argument("--provenance", action="store_true")
+
+    flow_parser = subparsers.add_parser("flow", help="instancia e executa flows")
+    flow_sub = flow_parser.add_subparsers(dest="flow_command")
+    run_parser = flow_sub.add_parser("run", help="flow run <template> <pergunta>")
+    run_parser.add_argument("template")
+    run_parser.add_argument("question")
+    run_parser.add_argument("--destination", default="owner-telegram")
 
     return parser
 
@@ -183,6 +233,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     print(_sanitize(out))
                 return 0
+
+            if args.command == "flow":
+                return _handle_flow(db, args)
 
             try:
                 out_show = run_show(db, args.id, provenance=args.provenance)
