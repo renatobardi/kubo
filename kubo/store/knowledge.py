@@ -1012,3 +1012,69 @@ def _first_title(titles: Any) -> str | None:
         if title:
             return str(title)
     return None
+
+
+@dataclass(frozen=True)
+class DispatchListItem:
+    """Linha da tela de Envios (ADR-0015, 12.7): canal, destino, status e — quando
+    falha — o erro estruturado (`error_kind` para o badge, `error` para o painel
+    expansível, mesmo padrão de `RunListItem`). `item_count` = destilados no digest.
+    O artefato é sempre o digest nesta fase (a view rotula "Digest")."""
+
+    channel: str
+    destination: str
+    status: str
+    item_count: int
+    error_kind: str | None
+    error: dict[str, Any] | None
+    sent_at: str
+
+
+def _dispatch_filter(query: str | None) -> tuple[str, dict[str, Any]]:
+    """WHERE + bind para a busca de envio por canal/destino/status (substring,
+    case-insensitive). Vazia = sem filtro."""
+    if not query or not query.strip():
+        return "", {}
+    return (
+        " WHERE string::contains(string::lowercase(channel), $q) "
+        "OR string::contains(string::lowercase(destination), $q) "
+        "OR string::contains(string::lowercase(status), $q)",
+        {"q": query.strip().lower()},
+    )
+
+
+def list_dispatches(
+    db: Any, *, limit: int, start: int, query: str | None = None
+) -> list[DispatchListItem]:
+    """Página de envios, mais recentes primeiro (tela de Envios), opcionalmente
+    filtrada por `query` (canal/destino/status). Projeta o `error` inteiro para o
+    painel expansível (ErrorInfo é seguro: extra=forbid, message<=500). `limit`/`start`
+    clampados; LIMIT/START interpolados como literal (não aceitam bind, quirk do v3)."""
+    limit = max(1, min(int(limit), _MAX_PAGE))
+    start = max(0, int(start))
+    where, params = _dispatch_filter(query)
+    q = (
+        "SELECT channel, destination, status, item_count, error, "  # noqa: S608
+        f"error.kind AS error_kind, sent_at FROM dispatch{where} "
+        f"ORDER BY sent_at DESC LIMIT {limit} START {start};"
+    )
+    rows = db.query(q, params)
+    return [
+        DispatchListItem(
+            channel=r["channel"],
+            destination=r["destination"],
+            status=r["status"],
+            item_count=int(r["item_count"]),
+            error_kind=r.get("error_kind"),
+            error=r.get("error"),
+            sent_at=str(r["sent_at"]),
+        )
+        for r in rows
+    ]
+
+
+def count_dispatches(db: Any, *, query: str | None = None) -> int:
+    """Total de envios sob o MESMO filtro de `list_dispatches` (para o 'X de Y')."""
+    where, params = _dispatch_filter(query)
+    rows = db.query(f"SELECT count() FROM dispatch{where} GROUP ALL;", params)  # noqa: S608
+    return int(rows[0]["count"]) if rows else 0

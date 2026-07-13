@@ -29,7 +29,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kubo.api.routes import auth, dashboard, distilled, entities, runs, sources
+from kubo.api.routes import auth, dashboard, dispatches, distilled, entities, runs, sources
 from kubo.errors import ConfigError
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -124,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(runs.router, prefix="/runs")
     app.include_router(sources.router, prefix="/sources")
     app.include_router(entities.router, prefix="/entities")
+    app.include_router(dispatches.router, prefix="/dispatches")
 
     # add_middleware empilha do interno para o externo: o ÚLTIMO é o mais externo.
     app.add_middleware(RequireLoginMiddleware)

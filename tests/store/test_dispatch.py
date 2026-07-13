@@ -233,3 +233,70 @@ def _orphan_item(db: Any, seq: int) -> RecordID:
     """Item mínimo para o distilled derivar (derived_from exige endpoint existente)."""
     src = knowledge.upsert_source(db, kind="rss", canonical=f"wm-src::{seq}")
     return knowledge.upsert_item(db, source=src, external_id=f"wm::{seq}", content="x", title="T")
+
+
+# ── list_dispatches / count_dispatches (tela de Envios, 12.7) ──────────────────
+
+
+def test_list_dispatches_most_recent_first(db: Any) -> None:
+    """A tela de Envios lê os dispatches, mais recentes primeiro, com os campos de
+    exibição (canal/destino/status/item_count/sent_at)."""
+    now = datetime.now(timezone.utc)
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        watermark=now,
+        item_count=3,
+        items=[],
+    )
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-email",
+        channel="email",
+        status="error",
+        watermark=now,
+        item_count=0,
+        items=[],
+        error={"kind": "smtp_send", "message": "conn refused"},
+    )
+    rows = knowledge.list_dispatches(db, limit=50, start=0)
+    assert len(rows) == 2
+    # o de e-mail foi inserido depois → vem primeiro (sent_at DESC)
+    first = rows[0]
+    assert first.channel == "email"
+    assert first.status == "error"
+    assert first.error_kind == "smtp_send"
+    assert first.destination == "owner-email"
+    tele = rows[1]
+    assert tele.channel == "telegram"
+    assert tele.status == "ok"
+    assert tele.item_count == 3
+
+
+def test_list_dispatches_filters_by_query(db: Any) -> None:
+    """A busca filtra por canal/destino/status (substring, case-insensitive)."""
+    now = datetime.now(timezone.utc)
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        watermark=now,
+        item_count=1,
+        items=[],
+    )
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-email",
+        channel="email",
+        status="ok",
+        watermark=now,
+        item_count=1,
+        items=[],
+    )
+    assert len(knowledge.list_dispatches(db, limit=50, start=0, query="email")) == 1
+    assert len(knowledge.list_dispatches(db, limit=50, start=0, query="TELEGRAM")) == 1
+    assert knowledge.count_dispatches(db, query="email") == 1
+    assert knowledge.count_dispatches(db) == 2

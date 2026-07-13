@@ -31,4 +31,5 @@ NAV: list[NavItem] = [
     {"label": "Entidades", "route": "/entities", "group": "Conhecimento", "icon": "network"},
     {"label": "Fontes", "route": "/sources", "group": "Conhecimento", "icon": "rss"},
     {"label": "Execuções", "route": "/runs", "group": "Trabalho", "icon": "activity"},
+    {"label": "Envios", "route": "/dispatches", "group": "Distribuição", "icon": "mail"},
 ]
