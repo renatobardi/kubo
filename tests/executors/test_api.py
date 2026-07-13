@@ -248,6 +248,16 @@ def test_complete_cerca_com_json_fora_do_schema_ainda_malformed(monkeypatch):
         executor.complete("instrução", "conteúdo", _Out)
 
 
+def test_strip_code_fence_handles_unclosed_fence_linearly():
+    """Cerca ABERTA sem fechamento (truncagem por max_tokens / injeção) devolve o
+    conteúdo intacto e RÁPIDO — regressão do achado ALTO de ReDoS: a implementação por
+    string é O(n), não backtracking. 200k chars resolvem instantâneo."""
+    from kubo.executors.api import _strip_code_fence
+
+    pathological = "```json\n" + " " * 200_000  # abre a cerca, nunca fecha
+    assert _strip_code_fence(pathological) == pathological  # sem fecho → não descasca
+
+
 def test_complete_resposta_com_shape_inesperado_vira_malformed(monkeypatch):
     """Resposta com `choices` vazio (shape hostil/inesperado) vira MalformedOutputError,
     não IndexError cru que derrubaria o run inteiro. Regressão do achado ALTO do review."""

@@ -40,19 +40,32 @@ _TRANSIENT = (
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
 
-# Cerca markdown que alguns provedores embrulham no JSON mesmo com response_format
-# (llama via OpenRouter, 0014): ```json … ``` ou ``` … ```. O corpo interno é o JSON real.
-_CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+_FENCE = "```"
 
 
 def _strip_code_fence(content: str) -> str:
     """Descasca uma cerca markdown externa do `content`, devolvendo o JSON interno.
 
-    Só remove o invólucro quando a resposta INTEIRA é uma cerca (`^…$`); JSON já limpo
-    (Groq) passa intacto (no-op), e prosa+cerca no meio não casa (segue malformado). Não
-    afrouxa validação alguma — o resultado ainda é validado contra o schema (§IV)."""
-    match = _CODE_FENCE.match(content)
-    return match.group(1) if match else content
+    Alguns provedores (llama via OpenRouter, 0014) embrulham o JSON em ```json … ```
+    mesmo com response_format. Só descasca quando a resposta INTEIRA é uma cerca (começa
+    E termina com ```); JSON já limpo (Groq) passa intacto (no-op), e prosa+cerca no meio
+    não casa (segue malformado). Não afrouxa validação — o resultado ainda passa pelo
+    schema (§IV).
+
+    Implementação por STRING (O(n)), não regex: um `re` com quantificadores sobrepostos
+    (`(.*?)\\s*```) tem backtracking catastrófico numa cerca aberta sem fechar — entrada
+    plausível por truncagem de max_tokens ou injeção (achado ALTO de security-review)."""
+    stripped = content.strip()
+    if len(stripped) < 2 * len(_FENCE) or not (
+        stripped.startswith(_FENCE) and stripped.endswith(_FENCE)
+    ):
+        return content
+    inner = stripped[len(_FENCE) : -len(_FENCE)]
+    # Descarta um rótulo de linguagem na 1ª linha da cerca (ex.: ```json\n).
+    newline = inner.find("\n")
+    if newline != -1 and inner[:newline].strip().isalpha():
+        inner = inner[newline + 1 :]
+    return inner.strip()
 
 
 # Teto de espera do retry-after (0014 A1): acima disso é janela longa (TPD/RPD do Groq),
