@@ -19,7 +19,20 @@ pytestmark = pytest.mark.integration
 
 _KNOWLEDGE_DB = "test_knowledge_migrations"
 
-_TABLES = {"source", "item", "distilled", "chunk", "entity", "run", "dispatch"}
+_TABLES = {
+    "source",
+    "item",
+    "distilled",
+    "chunk",
+    "entity",
+    "run",
+    "dispatch",
+    # 0005 (execução, ADR-0016): flow/task/persona/deliverable.
+    "flow",
+    "task",
+    "persona",
+    "deliverable",
+}
 _EDGES = {
     "from_source",
     "derived_from",
@@ -28,6 +41,11 @@ _EDGES = {
     "produced_by",
     "collected_by",
     "relates_to",
+    # 0005 (execução, ADR-0016): arestas de flow/task.
+    "belongs_to",
+    "assigned_to",
+    "produces",
+    "consults",
 }
 
 
@@ -52,6 +70,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0002_hnsw_index.surql",
         "0003_collected_by_edge.surql",
         "0004_dispatch.surql",
+        "0005_flow_execution.surql",
     }
 
 

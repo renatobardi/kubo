@@ -247,6 +247,7 @@ def _dispatch(**kw: object) -> dict[str, object]:
         "destination": "owner-telegram",
         "channel": "telegram",
         "status": "ok",
+        "artifact": "digest",
         "watermark": _WM,
         "item_count": 1,
         "items": ["distilled:abc123"],
@@ -283,3 +284,31 @@ def test_dispatch_payload_error_is_structured() -> None:
     assert d.error.kind == "telegram_send"
     with pytest.raises(ValidationError):
         DispatchPayload.model_validate(_dispatch(error={"kind": "x", "message": "y", "boom": 1}))
+
+
+def test_dispatch_requires_artifact() -> None:
+    """`artifact` sem default (fix E1): omiti-lo é ValidationError, não vira digest em
+    silêncio — omitir num report moveria o watermark do digest."""
+    base = _dispatch()
+    del base["artifact"]
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(base)
+
+
+def test_dispatch_report_has_no_watermark() -> None:
+    """Um report valida SEM watermark (não move a marca-d'água do acervo)."""
+    d = DispatchPayload.model_validate(_dispatch(artifact="report", watermark=None, items=[]))
+    assert d.artifact == "report"
+    assert d.watermark is None
+
+
+def test_dispatch_report_rejects_watermark() -> None:
+    """Um report COM watermark é rejeitado — o validador cruza artifact↔watermark."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(artifact="report"))
+
+
+def test_dispatch_digest_requires_watermark() -> None:
+    """Um digest SEM watermark é rejeitado (o watermark é a semântica do digest)."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(artifact="digest", watermark=None))

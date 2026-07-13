@@ -156,7 +156,13 @@ class DispatchPayload(BaseModel):
     de ref opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão
     do ref opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
     `watermark` = `max(created_at)` do conjunto selecionado (o worker computa; ADR-0015
-    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009)."""
+    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009).
+
+    `artifact` (ADR-0016 §V, fix E1) discrimina `digest` de `report`. Sem default de
+    propósito: `extra="forbid"` força cada call site a declarar — omitir num dispatch de
+    report o marcaria como digest e moveria o watermark do digest (o bug latente que o E1
+    corrige). Um report NÃO tem watermark (não move a marca-d'água do acervo); um digest
+    exige — o validador cruza os dois campos."""
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
@@ -164,7 +170,10 @@ class DispatchPayload(BaseModel):
     destination: str = Field(min_length=1, max_length=200)
     channel: Literal["telegram", "email"]
     status: Literal["ok", "error"]
-    watermark: datetime
+    artifact: Literal["digest", "report"]
+    # watermark é opcional: obrigatório para digest, ausente (None) para report. O
+    # default None deixa o report omitir; o validador cruza artifact↔watermark.
+    watermark: datetime | None = None
     item_count: int = Field(ge=0)
     # Cada item é um id de distilled em forma string; pattern fecha a borda contra
     # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
@@ -182,6 +191,16 @@ class DispatchPayload(BaseModel):
             head, sep, key = item.partition(":")
             if head != "distilled" or not sep or not (key.isascii() and key.isalnum()):
                 raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
+        return self
+
+    @model_validator(mode="after")
+    def _watermark_matches_artifact(self) -> Self:
+        """Cruza `artifact` e `watermark` (fix E1): digest exige watermark (a marca do
+        acervo que ele cobre); report não tem — não move a marca-d'água do digest."""
+        if self.artifact == "digest" and self.watermark is None:
+            raise ValueError("dispatch de digest exige watermark")
+        if self.artifact == "report" and self.watermark is not None:
+            raise ValueError("dispatch de report não deve carregar watermark")
         return self
 
 

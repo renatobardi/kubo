@@ -9,9 +9,11 @@ last_dispatch_watermark (só `ok` avança, por destino), distilled_for_digest
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -300,3 +302,63 @@ def test_list_dispatches_filters_by_query(db: Any) -> None:
     assert len(knowledge.list_dispatches(db, limit=50, start=0, query="TELEGRAM")) == 1
     assert knowledge.count_dispatches(db, query="email") == 1
     assert knowledge.count_dispatches(db) == 2
+
+
+# ── E1 (ADR-0016 §V): artifact isola o watermark do digest do de report ─────────
+
+
+def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
+    """O bug latente que o E1 corrige: um dispatch de RELATÓRIO para o MESMO destino do
+    digest (Telegram do dono) não pode mover o watermark do digest — senão o digest de
+    amanhã pularia destilados em silêncio. O report entra com watermark None (forma de
+    produção); o filtro `artifact='digest'` o exclui inteiro, então o watermark do digest
+    permanece o do digest, nunca o None do report."""
+    digest_wm = datetime.now(timezone.utc) - timedelta(hours=2)
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        artifact="digest",
+        watermark=digest_wm,
+        item_count=1,
+        items=[],
+    )
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        artifact="report",
+        watermark=None,
+        item_count=0,
+        items=[],
+    )
+    assert knowledge.last_dispatch_watermark(db, "owner-telegram") == digest_wm
+
+
+def test_backfill_makes_legacy_dispatch_count_as_digest(tmp_path: Path) -> None:
+    """Prova o backfill da 0005 (armadilha do SurrealDB: DEFINE FIELD DEFAULT não
+    retro-preenche). Aplica só 0001-0004, cria um dispatch LEGADO (sem artifact),
+    aplica 0005 (backfill) e prova que a linha pré-migração CONTINUA contando como
+    digest — sem o backfill, o filtro `artifact='digest'` a perderia e o watermark
+    regrediria ao bootstrap."""
+    stage1 = tmp_path / "stage1"
+    stage1.mkdir()
+    for src in sorted(migrations.MIGRATIONS_DIR.glob("000[1-4]*.surql")):
+        shutil.copy(src, stage1 / src.name)
+
+    legacy_wm = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cfg = replace(client.config(), database="test_dispatch_backfill")
+    with client.connect(cfg) as conn:
+        conn.query("REMOVE DATABASE IF EXISTS test_dispatch_backfill;")
+        conn.use(cfg.namespace, cfg.database)
+        migrations.apply_migrations(conn, stage1)  # só 0001-0004: dispatch sem artifact
+        conn.query(
+            "CREATE dispatch SET destination = 'd', channel = 'telegram', "
+            "status = 'ok', watermark = $wm, item_count = 1, items = [];",
+            {"wm": legacy_wm},
+        )
+        migrations.apply_migrations(conn)  # aplica 0005 (0001-0004 já registradas): backfill
+        assert knowledge.last_dispatch_watermark(conn, "d") == legacy_wm
+        conn.query("REMOVE DATABASE IF EXISTS test_dispatch_backfill;")

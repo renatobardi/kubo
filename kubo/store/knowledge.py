@@ -926,21 +926,27 @@ def insert_dispatch(
     watermark: Any,
     item_count: int,
     items: Sequence[RecordID],
+    artifact: str = "digest",
     error: dict[str, Any] | None = None,
 ) -> RecordID:
-    """Grava um fato de entrega de digest (ADR-0015 §II). `sent_at` é DEFAULT do
-    schema (relógio do servidor). `items` são record<distilled> para AUDITORIA —
-    não é aresta (sem consumidor de drill-down). `destination` é o id do
-    destinations.yaml (string): o destino é YAML+env, não tabela (E1)."""
+    """Grava um fato de entrega (ADR-0015 §II). `sent_at` é DEFAULT do schema (relógio
+    do servidor). `items` são record<distilled> para AUDITORIA — não é aresta (sem
+    consumidor de drill-down). `destination` é o id do destinations.yaml (string): o
+    destino é YAML+env, não tabela (E1).
+
+    `artifact` (`digest`|`report`, ADR-0016 §V) discrimina a entrega. Default `digest`
+    é só conveniência de borda da store; a explicitude real mora no contrato
+    (`DispatchPayload.artifact` sem default) — o runner sempre passa o valor do payload."""
     rid = _fresh("dispatch")
     db.query(
-        "CREATE $r SET destination = $dest, channel = $ch, status = $st, "
+        "CREATE $r SET destination = $dest, channel = $ch, status = $st, artifact = $art, "
         "watermark = $wm, item_count = $ic, items = $items, error = $err;",
         {
             "r": rid,
             "dest": destination,
             "ch": channel,
             "st": status,
+            "art": artifact,
             "wm": watermark,
             "ic": item_count,
             "items": list(items),
@@ -951,13 +957,18 @@ def insert_dispatch(
 
 
 def last_dispatch_watermark(db: Any, destination: str) -> Any | None:
-    """Watermark do último dispatch `ok` daquele destino, ou None se não há nenhum
-    (sinal de bootstrap, ADR-0015 §III.2/§III.3). SÓ `ok` avança: um error posterior
-    com watermark maior é ignorado — é assim que o retry-de-graça funciona (o perdido
-    reentra amanhã). `watermark` na projeção (quirk do ORDER BY no v3); LIMIT literal."""
+    """Watermark do último dispatch de DIGEST `ok` daquele destino, ou None se não há
+    nenhum (sinal de bootstrap, ADR-0015 §III.2/§III.3). SÓ `ok` avança: um error
+    posterior com watermark maior é ignorado — é assim que o retry-de-graça funciona (o
+    perdido reentra amanhã).
+
+    Filtra `artifact = 'digest'` (fix E1, ADR-0016 §V): um dispatch de `report` para o
+    mesmo destino (Telegram do dono) NÃO pode mover o watermark do digest, senão o digest
+    de amanhã pularia destilados em silêncio. `watermark` na projeção (quirk do ORDER BY
+    no v3); LIMIT literal."""
     rows = db.query(
-        "SELECT watermark FROM dispatch "
-        "WHERE destination = $d AND status = 'ok' ORDER BY watermark DESC LIMIT 1;",
+        "SELECT watermark FROM dispatch WHERE destination = $d "
+        "AND status = 'ok' AND artifact = 'digest' ORDER BY watermark DESC LIMIT 1;",
         {"d": destination},
     )
     return rows[0]["watermark"] if rows else None

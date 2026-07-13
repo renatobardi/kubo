@@ -146,6 +146,7 @@ def _persist(db: Any, payloads: list[Payload], run_id: RecordID, knowledge: Grap
                 destination=payload.destination,
                 channel=payload.channel,
                 status=payload.status,
+                artifact=payload.artifact,
                 watermark=payload.watermark,
                 item_count=payload.item_count,
                 items=[_parse_distilled_id(s) for s in payload.items],
