@@ -66,6 +66,28 @@ fatia funcionando.
   reflete a busca ATIVA — o count usa o MESMO predicado da lista (ver superfície da store). Trocar o
   tamanho de página reseta pra página 1.
 
+### M5 — Detalhe do Destilado: REESCRITA completa (paridade `DestiladoDetail`)
+Achado do review: a tela atual não tem relação com o design. Reescrever pro layout do mockup:
+2-coluna (1.6fr / 1fr).
+- **Esquerda:** título (item.title / 1ª linha do summary, E3) + summary; card **"Claims extraídas"**
+  (cada claim com ícone de check); **"Entidades mencionadas"** (chips → `/entities/{id}`);
+  **"Relacionados"** (destilados que compartilham ≥1 entidade).
+- **Direita:** card **"Cadeia de proveniência"** — stepper vertical Destilado → Item bruto → Fonte →
+  Execução (ícones + conectores).
+- **Store nova (strict):** `read_distilled` (ou leitura irmã) passa a trazer as **entidades
+  mencionadas** (`->mentions->entity`); + **relacionados** (`->mentions->entity<-mentions<-distilled`,
+  excluindo o próprio, dedup). Título/summary/nome de entidade = hostil → escapado, sem `|safe`.
+
+### M1b — Logo [S3b]: sakura no claro sem o rosa
+Mapeamento de tokens invertido no `logo_mark`. Correto (`Logo.jsx`): pétalas
+`fill=var(--sakura-petal)` + `stroke=var(--sakura-ink)`; linhas `stroke=--sakura-ink`; pontos+miolo
+`fill=var(--sakura-ink)`. Claro = pétalas rosa + tinta escura; escuro = pétalas transparentes +
+contorno rosa. Trocar os fills em `logo_mark`.
+
+> **Round de execução (aprovado pelo dono "faz tudo", 2026-07-13):** M1b + M2 + M3 + M4 + M5 num
+> **PR único**. Ordem interna: logo → store reads (TDD) → componentes (paginação/view/busca) →
+> aplicação por tela → detalhe de entidade (placeholders) → reescrita do detalhe de destilado.
+
 ### M4 — Placeholders honestos (dado inexistente; sem fabricar)
 - Detalhe de entidade (D-a): bloco "Menções ao longo do tempo" e card "Relações" com estado
   **"sem dados ainda"** (estrutura do mockup, zero número inventado). Some quando EPIC-A entregar os
