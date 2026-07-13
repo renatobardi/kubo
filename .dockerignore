@@ -7,3 +7,6 @@ kubo/api/static/app.css
 **/*.pyc
 .pytest_cache/
 .ruff_cache/
+# Docs efêmeros de auditoria/piloto (conteúdo coletado, git-ignorados) — nunca
+# devem entrar no contexto de build nem na imagem (sessão 0014, defesa em profundidade).
+*.local.md
