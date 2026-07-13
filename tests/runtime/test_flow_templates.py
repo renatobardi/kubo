@@ -56,26 +56,30 @@ def _write(tmp_path: Path, body: str) -> Path:
 def test_rejects_verb_on_state(tmp_path: Path) -> None:
     """Verbo por estado (`on_enter`/`actions`/`steps`/`run`) = workflow engine → rejeitado.
     Aqui via campo espúrio no topo, que `extra="forbid"` barra."""
+    path = _write(tmp_path, "on_enter: do_stuff\n")
     with pytest.raises(ConfigError):
-        load_flow_template(_write(tmp_path, "on_enter: do_stuff\n"))
+        load_flow_template(path)
 
 
 def test_rejects_conditional(tmp_path: Path) -> None:
     """Condicional (`when`/`if`) — quem decide transicionar é o runtime, não o YAML."""
+    path = _write(tmp_path, "when: something\n")
     with pytest.raises(ConfigError):
-        load_flow_template(_write(tmp_path, "when: something\n"))
+        load_flow_template(path)
 
 
 def test_rejects_inheritance(tmp_path: Path) -> None:
     """Herança/composição (`extends`) — repetição em catálogo é feature, não dívida."""
+    path = _write(tmp_path, "extends: base\n")
     with pytest.raises(ConfigError):
-        load_flow_template(_write(tmp_path, "extends: base\n"))
+        load_flow_template(path)
 
 
 def test_rejects_dotted_path_handler(tmp_path: Path) -> None:
     """Dotted-path (`handler: kubo.workers...`) = registry dinâmico = DSL disfarçada."""
+    path = _write(tmp_path, "handler: kubo.workers.analyst\n")
     with pytest.raises(ConfigError):
-        load_flow_template(_write(tmp_path, "handler: kubo.workers.analyst\n"))
+        load_flow_template(path)
 
 
 def test_rejects_transition_endpoint_not_in_states(tmp_path: Path) -> None:

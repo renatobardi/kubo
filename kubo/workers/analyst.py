@@ -216,7 +216,7 @@ def _render_telegram(report_text: str, docs: list[RetrievedView], base_url: str)
         f"- {doc.title or _NO_TITLE}: {base_url}/distilled/{_key(doc.id)}" for doc in docs
     ]
     sources = "Fontes:\n" + "\n".join(source_lines)
-    budget = _TELEGRAM_LIMIT - len(sources) - 2  # 2 = "\n\n"
+    budget = _TELEGRAM_LIMIT - len(sources) - 2  # reserva os dois chars do separador prosa↔fontes
     if len(prose) > budget:
         prose = prose[: max(0, budget - 1)].rstrip() + "…"
     return f"{prose}\n\n{sources}"[:_TELEGRAM_LIMIT]

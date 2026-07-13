@@ -305,14 +305,16 @@ def test_dispatch_report_has_no_watermark() -> None:
 
 def test_dispatch_report_rejects_watermark() -> None:
     """Um report COM watermark é rejeitado — o validador cruza artifact↔watermark."""
+    data = _dispatch(artifact="report")
     with pytest.raises(ValidationError):
-        DispatchPayload.model_validate(_dispatch(artifact="report"))
+        DispatchPayload.model_validate(data)
 
 
 def test_dispatch_digest_requires_watermark() -> None:
     """Um digest SEM watermark é rejeitado (o watermark é a semântica do digest)."""
+    data = _dispatch(artifact="digest", watermark=None)
     with pytest.raises(ValidationError):
-        DispatchPayload.model_validate(_dispatch(artifact="digest", watermark=None))
+        DispatchPayload.model_validate(data)
 
 
 # ---------------------------------------------------------------------------

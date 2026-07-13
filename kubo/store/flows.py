@@ -122,9 +122,12 @@ def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) 
     flow_ids: list[RecordID] = list(rows[0].get("flow") or [])
     if not flow_ids:
         raise StateError(f"task {task} sem flow (belongs_to ausente)")
-    transitions = db.query("SELECT VALUE snapshot.board.transitions FROM $f;", {"f": flow_ids[0]})
+    flow_id = flow_ids[0]
+    transitions = db.query("SELECT VALUE snapshot.board.transitions FROM $f;", {"f": flow_id})
     raw: list[list[str]] = cast("list[list[str]]", transitions[0]) if transitions else []
-    pairs = {(t[0], t[1]) for t in raw}
+    # `len(t) == 2` guarda o índice duplo: o snapshot vem de um FlowTemplate validado (pares
+    # sempre 2), mas ler do banco é dado não-tipado — um par malformado é pulado, não crasha.
+    pairs = {(t[0], t[1]) for t in raw if len(t) == 2}
     if (from_state, to_state) not in pairs:
         raise StateError(f"transição ({from_state}, {to_state}) não está no snapshot do flow")
     db.query("UPDATE $t SET state = $to;", {"t": task, "to": to_state})

@@ -223,8 +223,10 @@ def test_empty_acervo_answers_honestly_without_calling_llm() -> None:
 
 def test_missing_embedder_is_config_error() -> None:
     """Sem embedder no ctx → ConfigError (busca semântica é impossível sem ele)."""
+    worker = _worker(_FakeSender())
+    ctx = _ctx(_DOCS, embedder=None)
     with pytest.raises(ConfigError):
-        _run(_worker(_FakeSender()), _ctx(_DOCS, embedder=None))
+        _run(worker, ctx)
 
 
 def test_validate_worker_accepts_analyst() -> None:

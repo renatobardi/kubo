@@ -11,13 +11,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from surrealdb import RecordID
 
 from kubo.contracts.models import ReportPayload, WorkerManifest
 from kubo.errors import ConfigError
 from kubo.runtime.flow_runner import _assert_permissions, _build_executor, run_flow
 from kubo.runtime.personas import Persona
-from kubo.runtime.runner import _persist
+from kubo.runtime.runner import _persist_report
 from kubo.workers.analyst import AnalystWorker
 
 
@@ -40,13 +39,15 @@ def _dest() -> Any:
 
 def test_run_flow_rejects_unknown_template() -> None:
     """Template que não existe no catálogo falha alto antes de tocar o grafo (E4)."""
+    embedder = _FakeEmbedder()
+    dest = _dest()
     with pytest.raises(ConfigError, match="não existe"):
         run_flow(
             db=object(),
             template_name="inexistente",
             question="q",
-            embedder=_FakeEmbedder(),  # type: ignore[arg-type]
-            destination=_dest(),
+            embedder=embedder,  # type: ignore[arg-type]
+            destination=dest,
             base_url="https://x",
         )
 
@@ -75,9 +76,8 @@ def test_persist_report_without_flow_ctx_is_config_error() -> None:
     """ReportPayload sem flow_ctx = erro de config do chamador — levanta ConfigError (o
     boundary do run_worker o mapeia para kind='config'), nunca costura às cegas."""
     payload = ReportPayload(content="corpo", consulted=[])
-    run_id = RecordID("run", "x")
     with pytest.raises(ConfigError, match="flow_ctx"):
-        _persist(object(), [payload], run_id, knowledge=object(), flow_ctx=None)  # type: ignore[arg-type]
+        _persist_report(object(), payload, None)
 
 
 def test_manifest_is_worker_manifest() -> None:

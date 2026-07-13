@@ -176,24 +176,30 @@ def _persist(
                 error=payload.error.model_dump() if payload.error else None,
             )
         elif isinstance(payload, ReportPayload):
-            # Costura de proveniência via `flow_ctx` (ADR-0016 §III): o worker não conhece
-            # os RecordIDs de flow/task. `consulted` (strings validadas na borda) vem do
-            # RETRIEVAL, nunca do LLM (§VI). ReportPayload sem flow_ctx é erro de config do
-            # chamador (só o flow runner emite report, sempre com ctx) → fecha o run em
-            # erro estruturado kind="config", nunca crash.
-            if flow_ctx is None:
-                raise ConfigError("ReportPayload exige flow_ctx (proveniência de flow/task)")
-            insert_deliverable(
-                db,
-                flow=flow_ctx.flow,
-                task=flow_ctx.task,
-                kind="report",
-                content=payload.content,
-                consulted=[_parse_distilled_id(s) for s in payload.consulted],
-            )
+            _persist_report(db, payload, flow_ctx)
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
     return unresolved
+
+
+def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -> None:
+    """Grava um ReportPayload como deliverable + arestas (ADR-0016 §III), fora do laço de
+    `_persist` (extraído para manter a complexidade do laço sob o teto).
+
+    Costura de proveniência via `flow_ctx`: o worker não conhece os RecordIDs de flow/task.
+    `consulted` (strings validadas na borda) vem do RETRIEVAL, nunca do LLM (§VI). Sem
+    `flow_ctx` é erro de config do chamador (só o flow runner emite report, sempre com ctx)
+    → ConfigError, que a fronteira do `run_worker` fecha como `kind="config"`, nunca crash."""
+    if flow_ctx is None:
+        raise ConfigError("ReportPayload exige flow_ctx (proveniência de flow/task)")
+    insert_deliverable(
+        db,
+        flow=flow_ctx.flow,
+        task=flow_ctx.task,
+        kind="report",
+        content=payload.content,
+        consulted=[_parse_distilled_id(s) for s in payload.consulted],
+    )
 
 
 def _parse_distilled_id(raw: str) -> RecordID:
