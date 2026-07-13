@@ -290,6 +290,12 @@ with client.connect(client.config()) as db:
 `... db.query(\"SELECT id, started_at FROM run WHERE status = 'running';\")`. Na
 fase 1 não há reconciliação automática (ADR-0009) — inspeção manual.
 
+**Flows/tasks órfãos** (ADR-0016 §VII): `kubo flow run` é síncrono no CLI; um crash
+deixa o task preso em `analyzing`. Mesmo regime dos runs órfãos — sem janitor,
+inspeção manual: `... db.query(\"SELECT id, created_at FROM task WHERE state =
+'analyzing';\")`. Não reprocessar: re-execução = novo flow (o flow/task antigo fica
+como registro de auditoria).
+
 ---
 
 ## 4. Backup e restore

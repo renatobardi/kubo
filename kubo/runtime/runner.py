@@ -9,6 +9,7 @@ vira erro estruturado no `run` — o runtime não explode.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from kubo.contracts.models import (
     ErrorInfo,
     ItemPayload,
     Payload,
+    ReportPayload,
     RunResult,
     WorkerManifest,
 )
@@ -30,6 +32,7 @@ from kubo.embedding import Embedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import load_integrations, resolve_integrations
+from kubo.store.flows import insert_deliverable
 from kubo.store.knowledge import (
     Chunk,
     fail_run,
@@ -41,6 +44,20 @@ from kubo.store.knowledge import (
     upsert_item,
     upsert_source,
 )
+
+
+@dataclass(frozen=True)
+class FlowCtx:
+    """Contexto de flow opcional passado a `run_worker`: os RecordIDs de flow/task que o
+    `_persist` usa para costurar a proveniência de um `ReportPayload` (`produces`/`consults`).
+
+    O worker NUNCA o vê — atribuição de proveniência mora no runtime, não no worker (ADR-0016
+    §III). A analista tem LLM no circuito, então a disciplina de ref opaco vale: nem bug nem
+    injeção conseguem apontar um relatório para o flow/task errado."""
+
+    flow: RecordID
+    task: RecordID
+
 
 _DEFAULT_CATALOG_DIR = Path(__file__).parents[2] / "catalogs" / "integrations"
 # Teto do `message` de erro: o caminho de exceção é por onde conteúdo coletado
@@ -77,7 +94,13 @@ def _error_from_exception(exc: Exception) -> ErrorInfo:
     )
 
 
-def _persist(db: Any, payloads: list[Payload], run_id: RecordID, knowledge: GraphKnowledge) -> int:
+def _persist(
+    db: Any,
+    payloads: list[Payload],
+    run_id: RecordID,
+    knowledge: GraphKnowledge,
+    flow_ctx: FlowCtx | None,
+) -> int:
     """Persiste cada payload por match EXPLÍCITO e hardcoded tipo→função da store.
     Devolve a contagem de `DistilledPayload` pulados por `ref` não-resolvível.
 
@@ -146,14 +169,37 @@ def _persist(db: Any, payloads: list[Payload], run_id: RecordID, knowledge: Grap
                 destination=payload.destination,
                 channel=payload.channel,
                 status=payload.status,
+                artifact=payload.artifact,
                 watermark=payload.watermark,
                 item_count=payload.item_count,
                 items=[_parse_distilled_id(s) for s in payload.items],
                 error=payload.error.model_dump() if payload.error else None,
             )
+        elif isinstance(payload, ReportPayload):
+            _persist_report(db, payload, flow_ctx)
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
     return unresolved
+
+
+def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -> None:
+    """Grava um ReportPayload como deliverable + arestas (ADR-0016 §III), fora do laço de
+    `_persist` (extraído para manter a complexidade do laço sob o teto).
+
+    Costura de proveniência via `flow_ctx`: o worker não conhece os RecordIDs de flow/task.
+    `consulted` (strings validadas na borda) vem do RETRIEVAL, nunca do LLM (§VI). Sem
+    `flow_ctx` é erro de config do chamador (só o flow runner emite report, sempre com ctx)
+    → ConfigError, que a fronteira do `run_worker` fecha como `kind="config"`, nunca crash."""
+    if flow_ctx is None:
+        raise ConfigError("ReportPayload exige flow_ctx (proveniência de flow/task)")
+    insert_deliverable(
+        db,
+        flow=flow_ctx.flow,
+        task=flow_ctx.task,
+        kind="report",
+        content=payload.content,
+        consulted=[_parse_distilled_id(s) for s in payload.consulted],
+    )
 
 
 def _parse_distilled_id(raw: str) -> RecordID:
@@ -197,13 +243,18 @@ def run_worker(
     config: dict[str, Any] | None = None,
     catalog_dir: Path = _DEFAULT_CATALOG_DIR,
     embedder: Embedder | None = None,
+    flow_ctx: FlowCtx | None = None,
 ) -> RecordID:
     """Executa um worker sob contrato ponta a ponta e devolve o id do `run`.
 
     `validate_worker` roda ANTES de abrir o run (worker inválido nunca executa —
     levanta ContractError, sem run órfão). A partir daí, toda exceção vira erro
     estruturado no run. Payloads e error podem coexistir (ADR-0009 item VII): os
-    payloads entregues são persistidos e SÓ DEPOIS o run fecha em erro."""
+    payloads entregues são persistidos e SÓ DEPOIS o run fecha em erro.
+
+    `flow_ctx` (opcional) carrega os RecordIDs de flow/task para o `_persist` costurar a
+    proveniência de um `ReportPayload` (ADR-0016 §III) — o mecanismo genérico só ganha um
+    contexto de ATRIBUIÇÃO opcional, não lógica de flow. `None` para os workers da fase 1."""
     manifest = validate_worker(worker)
     run_id = start_run(db, worker=manifest.name)
     try:
@@ -212,7 +263,7 @@ def run_worker(
         result = RunResult.model_validate(raw_result)
         # _persist DENTRO do try: uma falha de store não pode deixar o run travado
         # em 'running' nem propagar exceção crua fora da fronteira.
-        unresolved = _persist(db, result.payloads, run_id, ctx.knowledge)
+        unresolved = _persist(db, result.payloads, run_id, ctx.knowledge, flow_ctx)
         # Precedência do fechamento: erro do próprio worker vence (já é o motivo de
         # falha mais específico); senão, ref não-resolvível (defensivo, §III.6);
         # senão, ok.

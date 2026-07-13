@@ -20,4 +20,7 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0010](0010-agendamento-fase-1.md) | Agendamento na fase 1 (`schedules.yaml` + APScheduler) | aceito |
 | [0011](0011-topologia-deploy-oute-server.md) | Topologia de deploy no oute-server (LXD + Docker aninhado) | aceito |
 | [0012](0012-import-legado-neon.md) | Import do legado NeonDB (script one-off via store) | aceito |
+| [0013](0013-destilacao-e-grafo-buscavel.md) | Destilação e grafo buscável | aceito |
 | [0014](0014-ui-foundation-browser-auth.md) | Fundação da UI: autenticação de browser da fase 2 | aceito |
+| [0015](0015-distribuicao-dispatch-destinations.md) | Distribuição: `dispatch` + `destinations.yaml` | aceito |
+| [0016](0016-personas-flow-minimo-analysis.md) | Personas + flow mínimo: template `analysis`, snapshot congelado | aceito |

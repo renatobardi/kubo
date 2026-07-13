@@ -8,17 +8,17 @@ handle de `db` — persistir é do runtime.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
 from surrealdb import RecordID
 
-from kubo.contracts.worker import DigestView, ItemView
+from kubo.contracts.worker import DigestView, ItemView, RetrievedView
 from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
-from kubo.store.knowledge import distilled_for_digest, items_without_distilled
+from kubo.store.knowledge import distilled_for_digest, items_without_distilled, search_distilled
 
 
 class GraphKnowledge:
@@ -48,6 +48,16 @@ class GraphKnowledge:
             self._ref_map[ref] = rid
             views.append(ItemView(ref=ref, title=title, content=content))
         return views
+
+    def search_distilled(self, embedding: Sequence[float], k: int) -> list[RetrievedView]:
+        """Busca semântica no acervo para a analista (ADR-0016 §III): delega à store
+        (`search_distilled`, que reusa o KNN único) e mapeia cada `RetrievedDoc` a
+        `RetrievedView` — o id vira forma STRING opaca (`distilled:<hex>`), a única
+        exposição de id ao worker (entra em `consulted`/citação, vem do retrieval)."""
+        return [
+            RetrievedView(id=str(doc.id), title=doc.title, summary=doc.summary)
+            for doc in search_distilled(self._db, embedding=embedding, k=k)
+        ]
 
     def resolve(self, ref: int) -> RecordID | None:
         """Resolve um `ref` opaco ao `RecordID` real, ou `None` se não existe

@@ -12,7 +12,7 @@ ADR-0009 item I). A validação de runtime é a função explícita
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -61,6 +61,19 @@ class DigestView:
     entities: list[str]
 
 
+@dataclass(frozen=True)
+class RetrievedView:
+    """View read-only de um distilled recuperado pela busca semântica, entregue à analista
+    (ADR-0016 §III). `id` é a forma STRING do RecordID (`distilled:<hex>`): a analista tem
+    LLM no circuito, mas o id vem do RETRIEVAL (não do LLM) — entra em `consulted` e vira link
+    de citação, nunca forjável pela saída do modelo (regra das citações §VI). `summary` é
+    conteúdo derivado de dado HOSTIL — vai como untrusted_content ao LLM, nunca como instrução."""
+
+    id: str
+    title: str | None
+    summary: str
+
+
 class KnowledgeReader(Protocol):
     """Seam de leitura do grafo entregue ao worker (ADR-0009 item VI, ADR-0013 §III.1).
 
@@ -71,6 +84,12 @@ class KnowledgeReader(Protocol):
     def items_to_distill(self, limit: int) -> list[ItemView]:
         """Devolve até `limit` itens pendentes de destilação (§III.1), com
         `ref` opaco atribuído pelo runtime — nunca o RecordID real."""
+        ...
+
+    def search_distilled(self, embedding: Sequence[float], k: int) -> list[RetrievedView]:
+        """Busca semântica no acervo para a analista (ADR-0016 §III): top-k distilled por
+        proximidade, dedup por distilled. O worker recebe a lista pronta e nunca conhece
+        RecordIDs — só a forma string do id (display/citação/`consulted`)."""
         ...
 
     def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:

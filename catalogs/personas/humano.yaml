@@ -1,0 +1,5 @@
+# Persona humano — o dono (D33). Materializada no grafo como parte do elenco, mas
+# NÃO recebe task nesta fase (gates humanos são a sessão 0014). Sem modelo/prompt:
+# uma pessoa não executa via LLM.
+name: humano
+executor: human

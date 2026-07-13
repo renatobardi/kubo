@@ -20,6 +20,17 @@ from typing import Annotated, Any, Literal, Self, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _is_distilled_id(item: str) -> bool:
+    """True se `item` é um id de distilled em forma string (`distilled:<alfanum ASCII>`).
+
+    Borda contra id forjado, compartilhada por `DispatchPayload.items` e
+    `ReportPayload.consulted` — os dois só aceitam referências a distilled em forma
+    string (ADR-0015 §IV / ADR-0016 §VI). ASCII (não Unicode): os ids reais são
+    hex/base-alfanumérica ASCII."""
+    head, sep, key = item.partition(":")
+    return head == "distilled" and bool(sep) and key.isascii() and key.isalnum()
+
+
 class WorkerManifest(BaseModel):
     """Identidade e config declarada de um worker (ADR-0009 item II).
 
@@ -156,7 +167,13 @@ class DispatchPayload(BaseModel):
     de ref opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão
     do ref opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
     `watermark` = `max(created_at)` do conjunto selecionado (o worker computa; ADR-0015
-    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009)."""
+    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009).
+
+    `artifact` (ADR-0016 §V, fix E1) discrimina `digest` de `report`. Sem default de
+    propósito: `extra="forbid"` força cada call site a declarar — omitir num dispatch de
+    report o marcaria como digest e moveria o watermark do digest (o bug latente que o E1
+    corrige). Um report NÃO tem watermark (não move a marca-d'água do acervo); um digest
+    exige — o validador cruza os dois campos."""
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
@@ -164,7 +181,10 @@ class DispatchPayload(BaseModel):
     destination: str = Field(min_length=1, max_length=200)
     channel: Literal["telegram", "email"]
     status: Literal["ok", "error"]
-    watermark: datetime
+    artifact: Literal["digest", "report"]
+    # watermark é opcional: obrigatório para digest, ausente (None) para report. O
+    # default None deixa o report omitir; o validador cruza artifact↔watermark.
+    watermark: datetime | None = None
     item_count: int = Field(ge=0)
     # Cada item é um id de distilled em forma string; pattern fecha a borda contra
     # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
@@ -176,17 +196,52 @@ class DispatchPayload(BaseModel):
 
     @model_validator(mode="after")
     def _items_are_distilled_ids(self) -> Self:
-        """Todo item deve ter a forma `distilled:<alfanumérico ASCII>` — borda contra id
-        forjado. ASCII (não Unicode): os ids reais são hex/base-alfanumérica ASCII."""
+        """Todo item deve ser um id de distilled em forma string — borda contra id forjado."""
         for item in self.items:
-            head, sep, key = item.partition(":")
-            if head != "distilled" or not sep or not (key.isascii() and key.isalnum()):
+            if not _is_distilled_id(item):
                 raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
+        return self
+
+    @model_validator(mode="after")
+    def _watermark_matches_artifact(self) -> Self:
+        """Cruza `artifact` e `watermark` (fix E1): digest exige watermark (a marca do
+        acervo que ele cobre); report não tem — não move a marca-d'água do digest."""
+        if self.artifact == "digest" and self.watermark is None:
+            raise ValueError("dispatch de digest exige watermark")
+        if self.artifact == "report" and self.watermark is not None:
+            raise ValueError("dispatch de report não deve carregar watermark")
+        return self
+
+
+class ReportPayload(BaseModel):
+    """Relatório de análise produzido pela analista (ADR-0016 §III).
+
+    `content` é o markdown do relatório (derivado de summaries hostis → untrusted no
+    consumo, ADR-0013 §V.2). `consulted` são ids de distilled em forma STRING vindos do
+    RETRIEVAL — NUNCA da saída do LLM (regra das citações, §VI): injeção num documento não
+    forja proveniência. O runner grava via `insert_deliverable` usando o `FlowCtx`
+    (flow/task); o worker NÃO conhece RecordIDs de flow/task (disciplina de ref opaco — a
+    analista tem LLM no circuito, ao contrário do digest). Cerca de volume em `content`
+    (o relatório é output de LLM, limitado por max_tokens, mas o teto fecha por tipo)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["report"] = "report"
+    content: str = Field(min_length=1, max_length=40000)
+    consulted: list[str] = Field(default_factory=lambda: [], max_length=100)
+
+    @model_validator(mode="after")
+    def _consulted_are_distilled_ids(self) -> Self:
+        """Toda fonte consultada é um id de distilled em forma string — a proveniência
+        vem do retrieval, e a borda rejeita qualquer coisa que não seja distilled."""
+        for item in self.consulted:
+            if not _is_distilled_id(item):
+                raise ValueError("consulted deve conter ids de distilled (distilled:<id>)")
         return self
 
 
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload,
+    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload | ReportPayload,
     Field(discriminator="type"),
 ]
 

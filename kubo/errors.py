@@ -36,6 +36,16 @@ class StoreError(KuboError):
     """
 
 
+class StateError(KuboError):
+    """Transição de task inválida (ADR-0016 §II/§III).
+
+    Levantada por `transition_task` quando o `from_state` não bate com o estado
+    atual do task, ou quando o par `(from, to)` não está nas transições do
+    `flow.snapshot` congelado. A validação é SEMPRE contra o snapshot, nunca contra
+    o catálogo vivo — reescrever o template não afeta um flow em andamento
+    (invariante 4)."""
+
+
 class EmbeddingError(KuboError):
     """Falha ao gerar embedding (ADR-0006/0013).
 

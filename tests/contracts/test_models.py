@@ -20,6 +20,7 @@ from kubo.contracts.models import (
     ErrorInfo,
     ItemPayload,
     Payload,
+    ReportPayload,
     SourcePayload,
 )
 
@@ -247,6 +248,7 @@ def _dispatch(**kw: object) -> dict[str, object]:
         "destination": "owner-telegram",
         "channel": "telegram",
         "status": "ok",
+        "artifact": "digest",
         "watermark": _WM,
         "item_count": 1,
         "items": ["distilled:abc123"],
@@ -283,3 +285,68 @@ def test_dispatch_payload_error_is_structured() -> None:
     assert d.error.kind == "telegram_send"
     with pytest.raises(ValidationError):
         DispatchPayload.model_validate(_dispatch(error={"kind": "x", "message": "y", "boom": 1}))
+
+
+def test_dispatch_requires_artifact() -> None:
+    """`artifact` sem default (fix E1): omiti-lo é ValidationError, não vira digest em
+    silêncio — omitir num report moveria o watermark do digest."""
+    base = _dispatch()
+    del base["artifact"]
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(base)
+
+
+def test_dispatch_report_has_no_watermark() -> None:
+    """Um report valida SEM watermark (não move a marca-d'água do acervo)."""
+    d = DispatchPayload.model_validate(_dispatch(artifact="report", watermark=None, items=[]))
+    assert d.artifact == "report"
+    assert d.watermark is None
+
+
+def test_dispatch_report_rejects_watermark() -> None:
+    """Um report COM watermark é rejeitado — o validador cruza artifact↔watermark."""
+    data = _dispatch(artifact="report")
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(data)
+
+
+def test_dispatch_digest_requires_watermark() -> None:
+    """Um digest SEM watermark é rejeitado (o watermark é a semântica do digest)."""
+    data = _dispatch(artifact="digest", watermark=None)
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# ReportPayload (ADR-0016 §III/§VI)
+# ---------------------------------------------------------------------------
+
+
+def test_report_payload_accepts_valid() -> None:
+    """Um report bem formado valida: markdown + consulted em forma `distilled:<id>`."""
+    r = ReportPayload.model_validate(
+        {"type": "report", "content": "# Relatório\n...", "consulted": ["distilled:abc123"]}
+    )
+    assert r.content.startswith("# Relatório")
+    assert r.consulted == ["distilled:abc123"]
+
+
+def test_report_payload_rejects_non_distilled_consulted() -> None:
+    """Fonte consultada que não é id de distilled é rejeitada (a proveniência é do
+    retrieval, a borda a fecha)."""
+    with pytest.raises(ValidationError):
+        ReportPayload.model_validate({"type": "report", "content": "x", "consulted": ["item:abc"]})
+
+
+def test_report_payload_rejects_empty_content() -> None:
+    """content vazio é rejeitado (min_length=1) — um relatório sem corpo não é entrega."""
+    with pytest.raises(ValidationError):
+        ReportPayload.model_validate({"type": "report", "content": "", "consulted": []})
+
+
+def test_report_payload_is_discriminated_in_union() -> None:
+    """O `type="report"` roteia para ReportPayload na união discriminada Payload."""
+    parsed = TypeAdapter(Payload).validate_python(
+        {"type": "report", "content": "corpo", "consulted": []}
+    )
+    assert isinstance(parsed, ReportPayload)
