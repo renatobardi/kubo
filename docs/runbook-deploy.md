@@ -78,9 +78,16 @@ Verificação do setup: `docker run --rm hello-world` e
 Ele faz, nesta ordem, e **falha (exit != 0) em qualquer erro**: (1) rsync do repo pro
 `kubo-test:~/kubo` (exclui o arquivo de ambiente do servidor — segredo intacto); (2) no
 servidor, `docker compose build` → `up -d surrealdb` (espera healthy) → migrations
-(idempotentes) → `up -d`; (3) smoke `GET /healthz` na tailnet, exigindo `ok`. Overrides:
-`KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`. Pré-requisito: env do servidor com
-`KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
+(idempotentes) → **`up -d --force-recreate`** + **guard de image-ID** (o container da
+`kubo-api` DEVE estar na imagem recém-buildada); (3) smoke `GET /healthz` na tailnet,
+exigindo `ok`. Overrides: `KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`. Pré-requisito: env do
+servidor com `KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
+
+> **Por que `--force-recreate` + guard (bug do deploy 0011):** `docker compose up -d` **não
+> recria** um container quando a única mudança é a imagem `kubo:latest` rebuildada — o
+> container velho fica no ar servindo a versão antiga, e o `/healthz` passa mentindo. O
+> `--force-recreate` força a troca; o guard compara o image-ID do container com o da imagem
+> recém-buildada e **falha o deploy** se divergirem — o smoke não confia só no `/healthz`.
 
 > **Não repita os passos manuais numa sessão de agente** — o CLAUDE.md (§Comandos) aponta
 > o script como o único caminho de deploy. A sequência manual abaixo fica só como
