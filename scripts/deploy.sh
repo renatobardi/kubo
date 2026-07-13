@@ -27,6 +27,12 @@ echo "[deploy] 2/3 build + migrations + up (remoto)"
 # Heredoc CITADO: o $(...) roda no SERVIDOR. NÃO exportar o env do servidor no shell antes
 # do compose — o compose lê o arquivo sozinho, e uma variável exportada no shell fura a
 # interpolação ${...} (lição do deploy 0010: gravaria valor velho nos containers).
+#
+# --force-recreate É OBRIGATÓRIO: `docker compose up -d` (sem ele) NÃO recria um container
+# quando a única mudança é a imagem `kubo:latest` rebuildada — o container velho fica no ar
+# servindo a versão antiga, e o /healthz passa mentindo (bug do deploy 0011). O guard de
+# image-ID abaixo falha o deploy se, por qualquer motivo, o container não estiver na imagem
+# recém-buildada — o smoke não confia só no /healthz.
 ssh "${HOST}" bash -s <<'REMOTE'
 set -euo pipefail
 cd ~/kubo
@@ -36,7 +42,14 @@ until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q 
   sleep 3
 done
 docker compose run --rm kubo-scheduler python -m kubo.store.migrations
-docker compose up -d
+docker compose up -d --force-recreate
+built="$(docker image inspect kubo:latest --format '{{.Id}}')"
+running="$(docker inspect "$(docker compose ps -q kubo-api)" --format '{{.Image}}')"
+if [ "$built" != "$running" ]; then
+  echo "[deploy] FALHOU: kubo-api roda imagem velha ($running != recém-buildada $built)" >&2
+  exit 1
+fi
+echo "[deploy] verificado: kubo-api roda a imagem recém-buildada"
 REMOTE
 
 echo "[deploy] 3/3 smoke ${HEALTH_URL}"
