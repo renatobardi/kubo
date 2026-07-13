@@ -40,6 +40,34 @@ _TRANSIENT = (
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
 
+_FENCE = "```"
+
+
+def _strip_code_fence(content: str) -> str:
+    """Descasca uma cerca markdown externa do `content`, devolvendo o JSON interno.
+
+    Alguns provedores (llama via OpenRouter, 0014) embrulham o JSON em ```json … ```
+    mesmo com response_format. Só descasca quando a resposta INTEIRA é uma cerca (começa
+    E termina com ```); JSON já limpo (Groq) passa intacto (no-op), e prosa+cerca no meio
+    não casa (segue malformado). Não afrouxa validação — o resultado ainda passa pelo
+    schema (§IV).
+
+    Implementação por STRING (O(n)), não regex: um `re` com quantificadores sobrepostos
+    (`(.*?)\\s*```) tem backtracking catastrófico numa cerca aberta sem fechar — entrada
+    plausível por truncagem de max_tokens ou injeção (achado ALTO de security-review)."""
+    stripped = content.strip()
+    if len(stripped) < 2 * len(_FENCE) or not (
+        stripped.startswith(_FENCE) and stripped.endswith(_FENCE)
+    ):
+        return content
+    inner = stripped[len(_FENCE) : -len(_FENCE)]
+    # Descarta um rótulo de linguagem na 1ª linha da cerca (ex.: ```json\n).
+    newline = inner.find("\n")
+    if newline != -1 and inner[:newline].strip().isalpha():
+        inner = inner[newline + 1 :]
+    return inner.strip()
+
+
 # Teto de espera do retry-after (0014 A1): acima disso é janela longa (TPD/RPD do Groq),
 # em que retentar dentro do run não adianta — desiste imediato com scope='day'. Abaixo,
 # é janela de minuto (TPM 60s), recuperável: espera o header e retenta.
@@ -238,6 +266,6 @@ class ApiExecutor:
         if not isinstance(content, str):
             raise MalformedOutputError(_MALFORMED_MSG)
         try:
-            return response_model.model_validate_json(content)
+            return response_model.model_validate_json(_strip_code_fence(content))
         except ValidationError:
             raise MalformedOutputError(_MALFORMED_MSG) from None
