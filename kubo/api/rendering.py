@@ -14,14 +14,32 @@ from typing import Any
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from kubo.api.nav import NAV
+from kubo.api.nav import NAV, NavItem
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _current_nav_item(path: str) -> NavItem | None:
+    """Item de nav correspondente ao path atual — casa exato ou como prefixo (detalhe:
+    `/entities/xyz` casa `/entities`). Alimenta o breadcrumb da barra de topo."""
+    if path == "/":
+        return next((i for i in NAV if i["route"] == "/"), None)
+    candidates = [
+        i
+        for i in NAV
+        if i["route"] != "/" and (path == i["route"] or path.startswith(i["route"] + "/"))
+    ]
+    return max(candidates, key=lambda i: len(i["route"]), default=None)
+
+
 def _nav_context(request: Request) -> dict[str, Any]:
-    """Injeta `nav` (menu) e `current_path` (para marcar o item ativo) em todo template."""
-    return {"nav": NAV, "current_path": request.url.path}
+    """Injeta `nav` (menu), `current_path` (item ativo) e `crumb` (breadcrumb da barra
+    de topo: grupo › rótulo da tela atual) em todo template."""
+    return {
+        "nav": NAV,
+        "current_path": request.url.path,
+        "crumb": _current_nav_item(request.url.path),
+    }
 
 
 def _parse(iso: str | None) -> datetime | None:
