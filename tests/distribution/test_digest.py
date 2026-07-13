@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from kubo.contracts.worker import DigestView
 from kubo.distribution.digest import TELEGRAM_LIMIT, build_telegram_digest
 
-_BASE = "http://100.66.254.24:3900"
+_BASE = "https://kubo.test:3900"
 
 
 def _view(

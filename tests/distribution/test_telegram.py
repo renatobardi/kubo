@@ -44,8 +44,9 @@ def test_http_error_does_not_leak_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"ok": False, "description": "Unauthorized"})
 
+    transport = _transport(handler)
     with pytest.raises(SenderError) as exc:
-        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=_transport(handler))
+        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=transport)
     assert _TOKEN not in str(exc.value)
     assert _TOKEN not in repr(exc.value)
 
@@ -56,8 +57,9 @@ def test_telegram_ok_false_is_error_without_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": False, "description": "chat not found"})
 
+    transport = _transport(handler)
     with pytest.raises(SenderError) as exc:
-        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=_transport(handler))
+        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=transport)
     assert _TOKEN not in str(exc.value)
 
 
@@ -67,6 +69,7 @@ def test_network_error_does_not_leak_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
 
+    transport = _transport(handler)
     with pytest.raises(SenderError) as exc:
-        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=_transport(handler))
+        send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=transport)
     assert _TOKEN not in str(exc.value)

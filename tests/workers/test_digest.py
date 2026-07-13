@@ -27,7 +27,7 @@ from kubo.errors import SenderError
 from kubo.workers.digest import DigestConfig, DigestWorker
 
 _NOW = datetime(2026, 7, 13, 9, 30, tzinfo=timezone.utc)
-_BASE = "http://kubo.local:3900"
+_BASE = "https://kubo.test:3900"
 _FAKE_TOKEN = "BOT-TOKEN"  # constante nomeada (evita S107 no default do fake)
 
 

@@ -24,7 +24,8 @@ from kubo.workers.digest import DigestWorker
 pytestmark = pytest.mark.integration
 
 _DIGEST_DB = "test_digest_vertical"
-_CHAT_TOKEN = "fake-bot-token"  # noqa: S105 — valor de teste, não segredo real
+# valor de teste, não segredo real
+_CHAT_TOKEN = "fake-bot-token"  # noqa: S105
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def _worker(sender: _RecordingSender) -> DigestWorker:
         id="owner-telegram", name="dono", kind="pessoa", channel="telegram", address="99"
     )
     return DigestWorker(
-        destinations=[dest], base_url="http://kubo.local:3900", senders={"telegram": sender}
+        destinations=[dest], base_url="https://kubo.test:3900", senders={"telegram": sender}
     )
 
 

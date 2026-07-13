@@ -982,7 +982,8 @@ def distilled_for_digest(db: Any, *, destination: str, limit: int) -> list[Diges
         "->derived_from->item.title AS titles, "
         "->mentions->entity.name AS entity_names FROM distilled"
     )
-    order = f"ORDER BY created_at LIMIT {int(limit)};"  # noqa: S608 — limit é int, não conteúdo
+    # limit é int (não conteúdo coletado); LIMIT não aceita bind param neste SurrealDB.
+    order = f"ORDER BY created_at LIMIT {int(limit)};"  # noqa: S608
     if watermark is None:
         rows = db.query(
             f"{projection} WHERE {_FLOOR_CREATED} > time::now() - {_BOOTSTRAP_WINDOW} {order}"

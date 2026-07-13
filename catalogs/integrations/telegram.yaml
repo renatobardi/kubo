@@ -6,5 +6,5 @@ name: telegram
 kind: http
 auth:
   type: bearer
-  secret_ref: env:TELEGRAM_BOT_TOKEN
+  secret_ref: env:TELEGRAM_BOT_TOKEN  # pragma: allowlist secret
 base_url: https://api.telegram.org
