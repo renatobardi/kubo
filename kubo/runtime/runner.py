@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from surrealdb import RecordID
 
 from kubo.contracts.models import (
+    DispatchPayload,
     DistilledPayload,
     ErrorInfo,
     ItemPayload,
@@ -34,6 +35,7 @@ from kubo.store.knowledge import (
     fail_run,
     finish_run,
     get_or_create_entity,
+    insert_dispatch,
     insert_distilled,
     start_run,
     upsert_item,
@@ -135,9 +137,32 @@ def _persist(db: Any, payloads: list[Payload], run_id: RecordID, knowledge: Grap
             insert_distilled(
                 db, item=item, summary=payload.summary, chunks=chunks, run=run_id, entities=entities
             )
+        elif isinstance(payload, DispatchPayload):
+            # `items` (strings validadas na borda pydantic) → RecordID para a store.
+            # `run_id` NÃO entra: dispatch é fato de entrega, não tem aresta produced_by
+            # (sem consumidor — ADR-0015 §II); a proveniência de execução é o próprio run.
+            insert_dispatch(
+                db,
+                destination=payload.destination,
+                channel=payload.channel,
+                status=payload.status,
+                watermark=payload.watermark,
+                item_count=payload.item_count,
+                items=[_parse_distilled_id(s) for s in payload.items],
+                error=payload.error.model_dump() if payload.error else None,
+            )
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
     return unresolved
+
+
+def _parse_distilled_id(raw: str) -> RecordID:
+    """Converte a forma string `distilled:<id>` (validada na borda pydantic) em RecordID.
+
+    Não revalida o formato: `DispatchPayload._items_are_distilled_ids` já é a fronteira
+    (os payloads chegam ao `_persist` já validados por `RunResult.model_validate`)."""
+    table, _, key = raw.partition(":")
+    return RecordID(table, key)
 
 
 def _build_context(

@@ -16,20 +16,32 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from kubo.distribution.destinations import (
+    load_destinations,
+    resolve_base_url,
+    resolve_destinations,
+)
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
 from kubo.store import client
+from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.feed import FeedWorker
 
-_SCHEDULES_PATH = Path(__file__).parents[2] / "schedules.yaml"
+_REPO_ROOT = Path(__file__).parents[2]
+_SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
+_DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
 _log = structlog.get_logger()
 
 # Mapa nome→classe HARDCODED (ADR-0010): sem registry/plugin/entry-point dinâmico
 # (seria DSL disfarçada). Ativar um worker novo = editar este dict + PR (gate humano).
-WORKER_REGISTRY: dict[str, type[Any]] = {"feed": FeedWorker, "distiller": DistillerWorker}
+WORKER_REGISTRY: dict[str, type[Any]] = {
+    "feed": FeedWorker,
+    "distiller": DistillerWorker,
+    "digest": DigestWorker,
+}
 
 # Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
 # 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
@@ -98,6 +110,12 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
             ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
         )
         return DistillerWorker(executor), GeminiEmbedder.from_env()
+    if worker_name == "digest":
+        # Destinos + base URL resolvidos do env AQUI (no disparo), como o embedder do
+        # distiller: env ausente (chat_id/KUBO_BASE_URL) vira `scheduler_job_failed`,
+        # não derruba o processo. O worker recebe tudo resolvido — nunca lê os.environ.
+        destinations = resolve_destinations(load_destinations(_DESTINATIONS_PATH))
+        return DigestWorker(destinations=destinations, base_url=resolve_base_url()), None
     return WORKER_REGISTRY[worker_name](), None
 
 

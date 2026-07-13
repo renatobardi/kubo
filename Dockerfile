@@ -54,11 +54,11 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Código + dados de runtime: o scheduler lê schedules.yaml; o runner lê
-# catalogs/integrations. Nada mais do repo entra na imagem.
+# Código + dados de runtime: o scheduler lê schedules.yaml + destinations.yaml
+# (ADR-0015); o runner lê catalogs/integrations. Nada mais do repo entra na imagem.
 COPY kubo/ ./kubo/
 COPY catalogs/ ./catalogs/
-COPY schedules.yaml ./
+COPY schedules.yaml destinations.yaml ./
 # CSS gerado pelo stage tailwind (não vem do host — ver .dockerignore). Servido de
 # /app/kubo/api/static pelo StaticFiles (o app roda do source /app/kubo via CWD do
 # `python -m`, não do wheel — mesmo esquema do scheduler que lê schedules.yaml).

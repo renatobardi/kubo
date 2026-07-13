@@ -67,6 +67,15 @@ class RateLimitExhausted(ExecutorError):
     (que pode embutir conteúdo/segredo — §VIII)."""
 
 
+class SenderError(KuboError):
+    """Falha ao entregar um digest por um canal (Telegram/e-mail, ADR-0015 §IV).
+
+    A mensagem NUNCA embute o segredo do canal: o token do bot vai na URL do Bot
+    API e as exceções httpx embutem a URL — o sender captura e SANITIZA (redação do
+    token, análogo do `repr=False`) antes de construir este erro. O worker de digest
+    a captura e a transforma num `dispatch(error)` estruturado, sem explodir o run."""
+
+
 class ContractError(KuboError):
     """Objeto não honra o contrato de worker (ADR-0009).
 

@@ -1,0 +1,24 @@
+# destinations.yaml — o "para-quem" da distribuição (ADR-0015 §I).
+#
+# NÃO é um 4º catálogo: catálogos descrevem ARTEFATOS (o quê), schedules descreve
+# OPERAÇÃO (quando), destinations descreve DESTINO (para quem) — mesmo eixo
+# declarativo do schedules.yaml, mesma prateleira (raiz do repo). Consumido pelo
+# worker `digest` via o scheduler.
+#
+# Endereço SÓ por referência a env (`address_ref: env:VAR`, invariante 8): chat_id /
+# e-mail é PII, fica fora do repo. O runtime resolve no disparo do job.
+#
+# D11: kind = pessoa (dono/convidado) OU sistema (webhook/arquivo — sem consumidor
+# ainda, não implementado). Desabilitar um destino = REMOVER a entry (sem flag
+# `enabled:` — flag de comportamento em YAML é o 1º degrau da DSL, invariante 3).
+#
+# O destino de e-mail (owner-email, channel: email) entra aqui JUNTO com o sender
+# de e-mail (sessão 0012 marco 12.9 / ou 0013): declarar um canal sem sender geraria
+# dispatch(error) diário (ruído em Envios).
+
+destinations:
+  - id: owner-telegram
+    name: Renato (Telegram)
+    kind: pessoa
+    channel: telegram
+    address_ref: env:KUBO_OWNER_TELEGRAM_CHAT_ID

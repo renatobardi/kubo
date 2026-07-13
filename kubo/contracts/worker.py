@@ -14,6 +14,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
@@ -42,6 +43,24 @@ class ItemView:
     content: str
 
 
+@dataclass(frozen=True)
+class DigestView:
+    """View read-only de um destilado a incluir num digest (ADR-0015 §IV).
+
+    `id` é a forma STRING do RecordID (`distilled:<hex>`) — exceção nomeada à
+    disciplina de ref opaco: o digest worker é MECÂNICO (sem LLM no circuito), a
+    razão do ref opaco (LLM forjando alvos de escrita) não existe aqui. O id é
+    leitura display-only (link da UI + auditoria em `dispatch.items`). `created_at`
+    é `datetime` (não string): alimenta o `max()` do watermark. `title`/`summary`/
+    `entities` são conteúdo derivado de dado HOSTIL — o builder os escapa sempre."""
+
+    id: str
+    title: str | None
+    summary: str
+    created_at: datetime
+    entities: list[str]
+
+
 class KnowledgeReader(Protocol):
     """Seam de leitura do grafo entregue ao worker (ADR-0009 item VI, ADR-0013 §III.1).
 
@@ -52,6 +71,13 @@ class KnowledgeReader(Protocol):
     def items_to_distill(self, limit: int) -> list[ItemView]:
         """Devolve até `limit` itens pendentes de destilação (§III.1), com
         `ref` opaco atribuído pelo runtime — nunca o RecordID real."""
+        ...
+
+    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
+        """Devolve os destilados novos para o digest de `destination` (ADR-0015 §IV):
+        a store lê o watermark do último dispatch `ok` (bootstrap now-24h se não há)
+        e seleciona `created_at > watermark`. O worker computa o novo watermark do
+        conjunto devolvido — nunca conhece o anterior."""
         ...
 
 

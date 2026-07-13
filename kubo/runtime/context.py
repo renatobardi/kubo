@@ -15,10 +15,10 @@ from typing import Any
 from pydantic import BaseModel
 from surrealdb import RecordID
 
-from kubo.contracts.worker import ItemView
+from kubo.contracts.worker import DigestView, ItemView
 from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
-from kubo.store.knowledge import items_without_distilled
+from kubo.store.knowledge import distilled_for_digest, items_without_distilled
 
 
 class GraphKnowledge:
@@ -54,6 +54,21 @@ class GraphKnowledge:
         (§III.6: ref não-resolvível é ErrorInfo por-payload no runner — `resolve`
         nunca levanta)."""
         return self._ref_map.get(ref)
+
+    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
+        """Seleção de digest (ADR-0015 §IV): delega à store (que resolve watermark +
+        bootstrap) e mapeia cada `DigestRow` a `DigestView` — o id vira forma STRING
+        opaca (`distilled:<hex>`), a única exposição de id ao digest worker."""
+        return [
+            DigestView(
+                id=str(row.id),
+                title=row.title,
+                summary=row.summary,
+                created_at=row.created_at,
+                entities=row.entities,
+            )
+            for row in distilled_for_digest(self._db, destination=destination, limit=limit)
+        ]
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Envios · Kubo{% endblock %}
+{% block content %}
+<div class="max-w-3xl space-y-4">
+  {{ macros.page_header("Envios", "Histórico do que já saiu — artefato, canal, destino e quando.") }}
+
+  <div class="flex items-center gap-3">
+    {{ macros.search_bar("/dispatches", "Buscar envios por artefato, canal ou destino…", query) }}
+  </div>
+
+  {% if not dispatches %}
+    <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+      {% if query %}Nada casa com “{{ query }}”. Tente outro termo.{% else %}Nenhum envio ainda — o digest diário aparece aqui após o primeiro disparo.{% endif %}
+    </div>
+  {% else %}
+  <section class="space-y-2.5">
+    {% for d in dispatches %}
+      <div class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+        {% if d.error %}
+        <details class="group">
+          <summary class="flex cursor-pointer list-none items-center gap-3 p-4">
+        {% else %}
+          <div class="flex items-center gap-3 p-4">
+        {% endif %}
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium">Digest</span>
+                <span class="rounded-4xl bg-transparent px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/15">{{ d.channel }}</span>
+                {% if d.status == "ok" %}
+                  <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">ok</span>
+                {% else %}
+                  <span class="rounded-4xl bg-destructive/10 px-2.5 py-0.5 text-xs text-destructive">{{ d.error_kind or "falhou" }}</span>
+                {% endif %}
+              </div>
+              <p class="mt-0.5 truncate text-xs text-muted-foreground">
+                {{ d.destination }} · {{ d.sent_at | short_datetime }}{% if d.status == "ok" %} · {{ d.item_count }} destilado{{ "s" if d.item_count != 1 else "" }}{% endif %}
+              </p>
+            </div>
+            {% if d.error %}
+            <svg class="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+            <div class="px-4 pb-4">
+              <div class="rounded-lg bg-destructive/10 p-3 font-mono text-xs text-destructive">
+                <div class="font-semibold">{{ d.error.kind }}</div>
+                {% if d.error.message %}<div class="mt-1 whitespace-pre-wrap break-words">{{ d.error.message }}</div>{% endif %}
+              </div>
+            </div>
+        </details>
+            {% else %}
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </section>
+  {% if total > 0 %}{{ macros.pagination("/dispatches", start, size, total, query) }}{% endif %}
+  {% endif %}
+
+  <p class="text-xs text-muted-foreground">Clique num envio com falha para ver o erro estruturado. O digest diário sai às 09:30.</p>
+</div>
+{% endblock %}

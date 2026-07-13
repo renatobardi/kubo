@@ -146,14 +146,15 @@ def test_unknown_timezone_is_rejected() -> None:
 def test_load_schedules_reads_real_repo_config() -> None:
     """`load_schedules()` sobre o `schedules.yaml` real da raiz: 6 feeds reais
     (critério de aceite do plano 0005) + 1 entry do destilador diário ATIVO (marco
-    8.7, ADR-0013 §VIII) — 7 entries no total, timezone explícita, cada feed aponta
-    pro worker `feed` com uma URL http(s) não-vazia, e o destilador roda 1x/dia."""
+    8.7, ADR-0013 §VIII) + 1 entry do digest diário (ADR-0015) — 8 entries no total,
+    timezone explícita, cada feed aponta pro worker `feed` com uma URL http(s)
+    não-vazia, e destilador/digest rodam 1x/dia."""
     from kubo.scheduler import load_schedules
 
     schedules = load_schedules()
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 7
+    assert len(schedules.schedules) == 8
     feed_entries = [e for e in schedules.schedules if e.worker == "feed"]
     assert len(feed_entries) == 6
     for entry in feed_entries:
@@ -167,6 +168,11 @@ def test_load_schedules_reads_real_repo_config() -> None:
     distiller_entries = [e for e in schedules.schedules if e.worker == "distiller"]
     assert len(distiller_entries) == 1
     assert distiller_entries[0].config == {"max_items": 20}
+
+    # O digest diário (ADR-0015): um job às 09:30, após a destilação das 09:00.
+    digest_entries = [e for e in schedules.schedules if e.worker == "digest"]
+    assert len(digest_entries) == 1
+    assert digest_entries[0].cron == "30 9 * * *"
 
 
 def test_distiller_entry_config_validates() -> None:
@@ -189,14 +195,14 @@ def test_distiller_entry_config_validates() -> None:
 
 def test_build_scheduler_creates_one_job_per_entry() -> None:
     """Um job por entry do `schedules.yaml` real — 6 feeds + 1 destilador diário
-    (reativado na mini-sessão 0008) = 7 jobs. Não inicia o scheduler (`.start()`
-    bloquearia o teste)."""
+    (reativado na mini-sessão 0008) + 1 digest diário (ADR-0015) = 8 jobs. Não inicia
+    o scheduler (`.start()` bloquearia o teste)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 7
+    assert len(scheduler.get_jobs()) == 8
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:

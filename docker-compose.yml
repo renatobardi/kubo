@@ -65,6 +65,14 @@ services:
       # (busca/backfill); GROQ = chat do destilador (worker distiller + smoke, M6 8.6).
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Distribuição do digest (ADR-0015). SEM `:?` fail-fast — o scheduler sobe para
+      # feed/distiller sem o Telegram; a ausência só falha quando o job `digest` roda
+      # (destinations/resolve_base_url levantam ConfigError no disparo → scheduler_job_
+      # failed, não derruba o processo). TOKEN e CHAT_ID são segredo/PII: só por env do
+      # servidor, nunca literal (invariante 8). BASE_URL = link do digest para a UI.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      KUBO_OWNER_TELEGRAM_CHAT_ID: ${KUBO_OWNER_TELEGRAM_CHAT_ID:-}
+      KUBO_BASE_URL: ${KUBO_BASE_URL:-}
       # Timezone explícita: alinha timestamps de log ao horário do schedules.yaml.
       TZ: ${TZ:-America/Sao_Paulo}
     # Sem healthcheck: BlockingScheduler sem porta não tem check honesto; a restart

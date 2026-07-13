@@ -1,0 +1,10 @@
+# Integração Telegram Bot API — envio do digest ao dono (ADR-0015 §IV).
+# Segredo SÓ por referência (invariante 8): o token do bot vem de env, nunca inline.
+# O runtime resolve `secret_ref` na montagem do ctx e injeta em ctx.integrations;
+# o worker de digest declara `integrations: [telegram]` e o least-privilege libera.
+name: telegram
+kind: http
+auth:
+  type: bearer
+  secret_ref: env:TELEGRAM_BOT_TOKEN  # pragma: allowlist secret
+base_url: https://api.telegram.org

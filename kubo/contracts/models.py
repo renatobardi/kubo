@@ -14,6 +14,7 @@ design, mas com um validador que rejeita valor extra não-numérico.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -131,8 +132,62 @@ class DistilledPayload(BaseModel):
     chunks: list[ChunkPayload] = Field(default_factory=lambda: [])
 
 
+class ErrorInfo(BaseModel):
+    """Erro estruturado que fecha `run.error` (ADR-0009 item IV).
+
+    `message` é legível e NUNCA deve embutir conteúdo coletado (item VIII);
+    `detail` carrega o diagnóstico estruturado que não cabe na mensagem.
+    """
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    kind: str
+    # Teto de 500: fecha POR TIPO o vazamento de conteúdo coletado, mesmo quando o
+    # worker RETORNA o erro (não só quando o runner o constrói do exception).
+    message: str = Field(max_length=500)
+    detail: dict[str, Any] | None = None
+
+
+class DispatchPayload(BaseModel):
+    """Fato de entrega de um digest (ADR-0015 §IV) — espelha `insert_dispatch` da store.
+
+    `items` são ids de distilled em forma STRING (`distilled:<hex>`) validados por
+    pattern na borda; a store os converte para RecordID. Exceção NOMEADA à disciplina
+    de ref opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão
+    do ref opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
+    `watermark` = `max(created_at)` do conjunto selecionado (o worker computa; ADR-0015
+    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["dispatch"] = "dispatch"
+    destination: str = Field(min_length=1, max_length=200)
+    channel: Literal["telegram", "email"]
+    status: Literal["ok", "error"]
+    watermark: datetime
+    item_count: int = Field(ge=0)
+    # Cada item é um id de distilled em forma string; pattern fecha a borda contra
+    # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
+    items: list[str] = Field(default_factory=lambda: [], max_length=1000)
+    # ErrorInfo (não dict solto): mesmo boundary estruturado do resto do contrato
+    # (extra="forbid", message<=500) — fecha o vazamento de conteúdo/segredo que um
+    # dict arbitrário deixaria passar para dispatch.error (visível em Envios).
+    error: ErrorInfo | None = None
+
+    @model_validator(mode="after")
+    def _items_are_distilled_ids(self) -> Self:
+        """Todo item deve ter a forma `distilled:<alfanumérico ASCII>` — borda contra id
+        forjado. ASCII (não Unicode): os ids reais são hex/base-alfanumérica ASCII."""
+        for item in self.items:
+            head, sep, key = item.partition(":")
+            if head != "distilled" or not sep or not (key.isascii() and key.isalnum()):
+                raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
+        return self
+
+
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload, Field(discriminator="type")
+    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload,
+    Field(discriminator="type"),
 ]
 
 
@@ -156,22 +211,6 @@ class Stats(BaseModel):
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"contador {key!r} deve ser numérico, veio {type(value).__name__}")
         return self
-
-
-class ErrorInfo(BaseModel):
-    """Erro estruturado que fecha `run.error` (ADR-0009 item IV).
-
-    `message` é legível e NUNCA deve embutir conteúdo coletado (item VIII);
-    `detail` carrega o diagnóstico estruturado que não cabe na mensagem.
-    """
-
-    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
-
-    kind: str
-    # Teto de 500: fecha POR TIPO o vazamento de conteúdo coletado, mesmo quando o
-    # worker RETORNA o erro (não só quando o runner o constrói do exception).
-    message: str = Field(max_length=500)
-    detail: dict[str, Any] | None = None
 
 
 class RunResult(BaseModel):
