@@ -132,6 +132,22 @@ class DistilledPayload(BaseModel):
     chunks: list[ChunkPayload] = Field(default_factory=lambda: [])
 
 
+class ErrorInfo(BaseModel):
+    """Erro estruturado que fecha `run.error` (ADR-0009 item IV).
+
+    `message` é legível e NUNCA deve embutir conteúdo coletado (item VIII);
+    `detail` carrega o diagnóstico estruturado que não cabe na mensagem.
+    """
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    kind: str
+    # Teto de 500: fecha POR TIPO o vazamento de conteúdo coletado, mesmo quando o
+    # worker RETORNA o erro (não só quando o runner o constrói do exception).
+    message: str = Field(max_length=500)
+    detail: dict[str, Any] | None = None
+
+
 class DispatchPayload(BaseModel):
     """Fato de entrega de um digest (ADR-0015 §IV) — espelha `insert_dispatch` da store.
 
@@ -153,14 +169,18 @@ class DispatchPayload(BaseModel):
     # Cada item é um id de distilled em forma string; pattern fecha a borda contra
     # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
     items: list[str] = Field(default_factory=lambda: [], max_length=1000)
-    error: dict[str, Any] | None = None
+    # ErrorInfo (não dict solto): mesmo boundary estruturado do resto do contrato
+    # (extra="forbid", message<=500) — fecha o vazamento de conteúdo/segredo que um
+    # dict arbitrário deixaria passar para dispatch.error (visível em Envios).
+    error: ErrorInfo | None = None
 
     @model_validator(mode="after")
     def _items_are_distilled_ids(self) -> Self:
-        """Todo item deve ter a forma `distilled:<alfanumérico>` — borda contra id forjado."""
+        """Todo item deve ter a forma `distilled:<alfanumérico ASCII>` — borda contra id
+        forjado. ASCII (não Unicode): os ids reais são hex/base-alfanumérica ASCII."""
         for item in self.items:
             head, sep, key = item.partition(":")
-            if head != "distilled" or not sep or not key.isalnum():
+            if head != "distilled" or not sep or not (key.isascii() and key.isalnum()):
                 raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
         return self
 
@@ -191,22 +211,6 @@ class Stats(BaseModel):
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"contador {key!r} deve ser numérico, veio {type(value).__name__}")
         return self
-
-
-class ErrorInfo(BaseModel):
-    """Erro estruturado que fecha `run.error` (ADR-0009 item IV).
-
-    `message` é legível e NUNCA deve embutir conteúdo coletado (item VIII);
-    `detail` carrega o diagnóstico estruturado que não cabe na mensagem.
-    """
-
-    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
-
-    kind: str
-    # Teto de 500: fecha POR TIPO o vazamento de conteúdo coletado, mesmo quando o
-    # worker RETORNA o erro (não só quando o runner o constrói do exception).
-    message: str = Field(max_length=500)
-    detail: dict[str, Any] | None = None
 
 
 class RunResult(BaseModel):

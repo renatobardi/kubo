@@ -152,5 +152,5 @@ def _error_dispatch(
         watermark=watermark,
         item_count=len(items),
         items=items,
-        error={"kind": f"{dest.channel}_send", "message": str(exc)[:_MSG_CAP]},
+        error=ErrorInfo(kind=f"{dest.channel}_send", message=str(exc)[:_MSG_CAP]),
     )

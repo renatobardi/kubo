@@ -156,7 +156,7 @@ def test_send_failure_becomes_error_dispatch_without_exploding() -> None:
 
     d = _dispatch(result.payloads[0])
     assert d.status == "error"
-    assert d.error is not None and d.error["kind"] == "telegram_send"
+    assert d.error is not None and d.error.kind == "telegram_send"
     assert d.watermark == _NOW + timedelta(minutes=3)
     assert result.error is not None and result.error.kind == "dispatch_partial"
 

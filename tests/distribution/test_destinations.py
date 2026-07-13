@@ -112,3 +112,22 @@ def test_resolve_base_url_missing_fails(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("KUBO_BASE_URL", raising=False)
     with pytest.raises(ConfigError):
         resolve_base_url()
+
+
+def test_duplicate_ids_rejected(tmp_path: Path) -> None:
+    """Dois destinos com o mesmo `id` são rejeitados (id é a chave do watermark)."""
+    text = """
+destinations:
+  - id: dup
+    name: A
+    kind: pessoa
+    channel: telegram
+    address_ref: env:KUBO_A
+  - id: dup
+    name: B
+    kind: pessoa
+    channel: email
+    address_ref: env:KUBO_B
+"""
+    with pytest.raises(ConfigError):
+        load_destinations(_write(tmp_path, text))

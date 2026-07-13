@@ -14,8 +14,10 @@ from pydantic import TypeAdapter, ValidationError
 
 from kubo.contracts.models import (
     ChunkPayload,
+    DispatchPayload,
     DistilledPayload,
     EntityRef,
+    ErrorInfo,
     ItemPayload,
     Payload,
     SourcePayload,
@@ -230,3 +232,54 @@ def test_payload_uniao_continua_resolvendo_source_e_item() -> None:
 
     assert isinstance(source, SourcePayload)
     assert isinstance(item, ItemPayload)
+
+
+# ---------------------------------------------------------------------------
+# DispatchPayload (ADR-0015) — validação de items + error estruturado
+# ---------------------------------------------------------------------------
+
+_WM = "2026-07-13T09:30:00+00:00"
+
+
+def _dispatch(**kw: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "type": "dispatch",
+        "destination": "owner-telegram",
+        "channel": "telegram",
+        "status": "ok",
+        "watermark": _WM,
+        "item_count": 1,
+        "items": ["distilled:abc123"],
+    }
+    base.update(kw)
+    return base
+
+
+def test_dispatch_payload_accepts_valid() -> None:
+    """Um dispatch bem formado valida, com items em forma `distilled:<hex>`."""
+    d = DispatchPayload.model_validate(_dispatch())
+    assert d.items == ["distilled:abc123"]
+    assert d.error is None
+
+
+def test_dispatch_payload_rejects_unicode_item_id() -> None:
+    """Item com id não-ASCII (borda contra id forjado) é rejeitado."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(items=["distilled:café"]))
+
+
+def test_dispatch_payload_rejects_non_distilled_item() -> None:
+    """Item que não é id de distilled é rejeitado."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(items=["run:abc123"]))
+
+
+def test_dispatch_payload_error_is_structured() -> None:
+    """`error` é ErrorInfo (extra=forbid, message<=500) — não dict solto."""
+    d = DispatchPayload.model_validate(
+        _dispatch(status="error", error={"kind": "telegram_send", "message": "HTTP 400"})
+    )
+    assert isinstance(d.error, ErrorInfo)
+    assert d.error.kind == "telegram_send"
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(error={"kind": "x", "message": "y", "boom": 1}))

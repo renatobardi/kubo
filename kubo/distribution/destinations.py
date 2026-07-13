@@ -17,10 +17,10 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from kubo.errors import ConfigError, format_validation_error
 
@@ -64,6 +64,16 @@ class _DestinationsFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     destinations: list[Destination]
+
+    @model_validator(mode="after")
+    def _ids_are_unique(self) -> Self:
+        """`id` é a chave do watermark em `dispatch.destination` (string): dois destinos
+        com o mesmo id compartilhariam o watermark — um `ok` de um avançaria o do outro
+        em silêncio. Duplicata falha na borda."""
+        ids = [d.id for d in self.destinations]
+        if len(set(ids)) != len(ids):
+            raise ValueError("destinos com `id` duplicado — cada destino deve ter id único")
+        return self
 
 
 @dataclass(frozen=True)

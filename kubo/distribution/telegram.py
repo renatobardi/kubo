@@ -57,8 +57,12 @@ def send_telegram(
 
 def _ensure_ok(resp: httpx.Response) -> None:
     """Telegram às vezes responde 200 com `{"ok": false, ...}` — trata como falha.
-    A `description` do Telegram não carrega o token (o token só está na URL)."""
-    body = resp.json()
+    A `description` do Telegram não carrega o token (o token só está na URL). Corpo
+    não-JSON num 2xx (borda improvável) vira SenderError, não JSONDecodeError cru."""
+    try:
+        body = resp.json()
+    except ValueError as exc:  # JSONDecodeError é subclasse de ValueError
+        raise SenderError("Telegram respondeu 2xx com corpo não-JSON") from exc
     if not (isinstance(body, dict) and body.get("ok") is True):
         desc = body.get("description") if isinstance(body, dict) else None
         raise SenderError(f"Telegram recusou o envio: {desc or 'resposta ok=false'}")

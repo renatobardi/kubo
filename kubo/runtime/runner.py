@@ -149,7 +149,7 @@ def _persist(db: Any, payloads: list[Payload], run_id: RecordID, knowledge: Grap
                 watermark=payload.watermark,
                 item_count=payload.item_count,
                 items=[_parse_distilled_id(s) for s in payload.items],
-                error=payload.error,
+                error=payload.error.model_dump() if payload.error else None,
             )
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
