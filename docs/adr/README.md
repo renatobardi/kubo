@@ -23,4 +23,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0013](0013-destilacao-e-grafo-buscavel.md) | Destilação e grafo buscável | aceito |
 | [0014](0014-ui-foundation-browser-auth.md) | Fundação da UI: autenticação de browser da fase 2 | aceito |
 | [0015](0015-distribuicao-dispatch-destinations.md) | Distribuição: `dispatch` + `destinations.yaml` | aceito |
-| [0016](0016-personas-flow-minimo-analysis.md) | Personas + flow mínimo: template `analysis`, snapshot congelado | proposto |
+| [0016](0016-personas-flow-minimo-analysis.md) | Personas + flow mínimo: template `analysis`, snapshot congelado | aceito |

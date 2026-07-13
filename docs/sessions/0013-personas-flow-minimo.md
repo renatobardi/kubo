@@ -131,4 +131,22 @@ Teste prático: se remover um campo exige mudar um `if` no runtime, é dado; se 
 
 ---
 
+## Resultado da execução (2026-07-13, CLI Opus)
+
+Marcos **13.1–13.6 concluídos numa sessão** — o ponto de corte 13.3 NÃO disparou. Todos os gates verdes (509 testes, cobertura 97.9%, pyright 0, ruff/format/detect-secrets limpos). Deploy DEV no kubo-test **OK** (migration 0005 aplicada, `/healthz` ok). Smoke físico: o mecanismo funcionou **ponta a ponta em produção** até a síntese (flow instanciado com snapshot congelado + pergunta, task `created→analyzing→failed`, personas materializadas, embed Gemini + `search_distilled` recuperaram do acervo real, E1 provado em prod — runs de report criaram 0 report-dispatches, o watermark do digest intocado). **Falhou só na chamada LLM: `RateLimitExhausted`** (quota free-tier do Groq esgotada — 09:00 distiller + digest a consomem). NÃO é reprovação de qualidade da síntese: o modelo não respondeu. **O relatório real no Telegram fica para a 0013b** (decisão do dono: retry em janela de quota; modelo segue pinado por evidência). ADR-0016 **cravado (aceito)** após validação do advisor. PR: **#29** (draft → ready).
+
+## Notas de handoff (fila 0014)
+
+1. **0013b é o gate de aprovação do MODELO, não um retry.** A primeira síntese real é a aprovação pendente do llama-3.3-70b em síntese; reprovou → **decisão de modelo volta ao dono** (ponto de consulta extraordinária do plano AINDA VIVO — "mecanismo provado" não mascara isso).
+2. **Quota Groq tem agora 3 consumidores** (distiller 09:00 + digest + análise on-demand): flows sob demanda vão colidir com quota esgotada rotineiramente à tarde. Tensão operacional conhecida — em algum momento vira decisão do dono (tier pago, ou modelo distinto para a analista). Não resolver antes.
+3. **Épicos da 0014:** boards + gates (a tela de Fluxos é um board) + **EPIC-B** (caminho de escrita da UI, decidido UMA vez, servindo gates + botão de "flow run"; tripwire CSRF do ADR-0014 dispara lá).
+4. **Gatilho do `flow_ctx` fica QUENTE na 0014:** gates mexem perto do runner; o gatilho registrado (2º campo flow-específico no ctx, ou `run_worker` ramificando por presença de flow → reabre a costura de proveniência via ADR) deve estar explícito para quem tocar o runner não disparar sem notar.
+5. **`flow.status` NÃO existe de propósito** (alternativa rejeitada (c) do ADR-0016): a tela de Fluxos deriva status dos tasks. A 0014 não deve "consertar" adicionando o campo.
+6. **`board_state`-tabela** (desvio registrado): estados ganharem config própria (WIP limit, flag de gate) na 0014 → a tabela `board_state` + aresta `in_state` entram lá.
+7. **Escrita concorrente via UI (EPIC-B)** reexamina o check-then-update não-atômico de `transition_task` — hoje inofensivo (CLI single-process), deixa de ser óbvio com dois escritores.
+8. **Gatilhos de fase futura registrados:** budget enforçado entra com flow de chamadas data-dependent (fase 3, não 0014); relatório buscável (deliverable no acervo) = ADR novo se o dono pedir (hoje poluição barrada).
+9. **Nits de polimento (não bloqueantes, advisor):** cap de título no `_render_telegram` (a garantia "trunca prosa, não fontes" só vale com `len(fontes) < 4094`); e uma linha de runbook quando a 0013b rodar, se "análise longa (>4096 tokens) sempre falha" aparecer (JSON truncado → flow `failed`, comportamento correto mas sintoma confuso).
+
+---
+
 *Fontes: sessão de planejamento Cowork de 2026-07-13; decisões do dono D32–D34; consulta de validação ao advisor (Fable 5): GO com E1–E5 — bug latente do watermark (artifact no dispatch), deliverable+consults como casa in-spec do relatório ("o diferencial" da spec existindo pela primeira vez), analista como worker sob contrato com flow runner fino acima de run_worker, FLOW_REGISTRY hardcoded, lista negativa da fronteira dado×DSL, snapshot FLEXIBLE com teste honesto (YAML reescrito), persona-snapshot por flow, task.state string (desvio registrado com gatilho), runner síncrono no CLI, citações programáticas nunca-via-LLM, budget fora sem campo mentiroso, timebox 11–14h com corte pré-acordado pós-13.3 e 0013b pré-autorizada.*
