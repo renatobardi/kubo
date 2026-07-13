@@ -16,6 +16,7 @@ import secrets
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 
 import structlog
@@ -894,8 +895,9 @@ _BOOTSTRAP_WINDOW = "24h"
 # MICROSSEGUNDOS — mas `distilled.created_at` é gravado por `time::now()` com
 # precisão de NANOSSEGUNDOS. Comparar o created_at ns cru com o watermark μs
 # re-selecionaria o último item enviado (created_at > watermark pela cauda de ns,
-# bola de neve). Piso a μs nos DOIS lados reconcilia a precisão. Empate na fronteira
-# de μs é teoricamente perdido — desprezível por construção (ADR-0015 §III).
+# bola de neve). Piso o created_at do banco a μs no WHERE; o watermark já chega em μs
+# por construção (o datetime do Python/SDK não carrega ns). Empate na fronteira de μs
+# é teoricamente perdido — desprezível por construção (ADR-0015 §III).
 _FLOOR_CREATED = "time::floor(created_at, 1us)"
 
 
@@ -911,7 +913,7 @@ class DigestRow:
     id: RecordID
     title: str | None
     summary: str
-    created_at: Any  # datetime do SDK (surrealdb 2.0.0) — round-trip validado por integração
+    created_at: datetime  # do SDK (surrealdb 2.0.0), sempre μs — round-trip validado por integração
     entities: list[str]
 
 

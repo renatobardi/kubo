@@ -1,6 +1,6 @@
 # ADR-0015 — Distribuição: `dispatch` (fato) + `destinations.yaml` (para-quem)
 
-> Status: **proposto** · Data: 2026-07-13
+> Status: **aceito** · Data: 2026-07-13
 
 ## Contexto
 
@@ -70,8 +70,9 @@ tabela, sem UI de escrita** (EPIC-B): editar um destino é editar YAML + env.
 
 ### II. `dispatch` é a ÚNICA tabela nova — emenda ao ADR-0002 (E2)
 
-`dispatch` é a **terceira tabela extra-spec** (depois de `run` no ADR-0002), da
-mesma família: um **fato de execução**, não parte do modelo de conhecimento.
+`dispatch` é a **terceira tabela extra-spec** (depois de `run`, ADR-0002, e
+`chunk`, ADR-0008), da mesma família de `run`: um **fato de execução**, não parte
+do modelo de conhecimento.
 Registra que um digest saiu (ou falhou) para um destino, num instante, cobrindo
 até certa marca-d'água. Forma mínima:
 
@@ -106,9 +107,16 @@ surgir um consumidor.
    permanente (trunca para sempre). São duas fronteiras distintas: o `limit` da
    query (o que sobra além dele tem `created_at > watermark` e flui para amanhã) e
    o truncamento de exibição "+N" (coberto pelo watermark).
-   Empate teórico: dois distilled com `created_at` idêntico na fronteira do `>`
-   estrito seriam perdidos; desprezível por construção (cada `insert_distilled` é
-   transação própria com `time::now()` de precisão ns) — não construir maquinário.
+   **Reconciliação de precisão (descoberta no smoke, decisão registrada):** o
+   watermark faz round-trip pelo SDK (surrealdb 2.0.0), que trunca datetime a
+   MICROSSEGUNDOS, enquanto `distilled.created_at` nasce de `time::now()` com
+   precisão de NANOSSEGUNDOS. Comparar o created_at-ns cru contra o watermark-μs
+   re-seleciona o último item enviado (a cauda de ns o faz `> watermark` — bola de
+   neve). A seleção **pisa o `created_at` do banco a μs** (`time::floor(created_at,
+   1us)` no WHERE); o watermark já chega em μs por construção (o `datetime` do
+   Python/SDK não carrega ns, então nem o bind envia nem a leitura devolve cauda de
+   ns). A fronteira do empate passa a ser μs — empate teórico em μs seria perdido,
+   desprezível por construção (cada `insert_distilled` é transação própria).
 2. **Por destination, e só dispatch `ok` avança.** Seleção do próximo digest =
    `distilled.created_at > watermark do último dispatch ok deste destination`.
    Consequência desejada: Telegram entregou mas e-mail falhou → o e-mail de

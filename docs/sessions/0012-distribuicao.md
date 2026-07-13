@@ -90,3 +90,74 @@ Digest diário dos destilados novos chegando no Telegram do dono (e e-mail), com
 ---
 
 *Fontes: sessão de planejamento Cowork de 2026-07-13; decisões do dono D29–D31 + D11; consulta de validação ao advisor (Fable 5): GO com emendas E1–E7, todas incorporadas — destination como YAML declarativo (eixo o-quê/quando/para-quem), dispatch única tabela nova com watermark max(created_at)-por-destination-só-ok + bootstrap now-24h, worker sob contrato com DispatchPayload/seam/integrações de catálogo e at-least-once nomeado, Telegram HTML com escaping stdlib + truncamento em fronteira + redação de token, e-mail text/plain stdlib com teste de header injection, fatia Telegram deployada antes da UI, timebox com sacrifícios pré-declarados.*
+
+---
+
+## Notas de execução (2026-07-13, CLI Opus + advisor Fable 5)
+
+**Entregue:** 12.1–12.8 + 12.10. **Sacrificado:** 12.9 (e-mail, 1º sacrifício
+pré-declarado — o dono não forneceu SMTP; Telegram já entrega o valor).
+Destinos (12.8, 2º sacrifício) **NÃO** foi cortada — entregue acima da fila.
+
+Gates: ruff + ruff format + pyright (0 erros) + 449 testes verdes + cobertura
+98,43% em store/contracts/runtime. Smoke físico provado no meio da sessão.
+
+### Registros (drift plano→código e emendas de critério)
+
+1. **Seam renomeado `distilled_since` → `distilled_for_digest(destination, limit)`**
+   — mudança para melhor: encapsula watermark + bootstrap na store; o worker nunca
+   conhece o watermark anterior (computa `max(created_at)` do conjunto devolvido). O
+   ADR-0015 §IV registra a forma final.
+2. **`smtp.yaml` + teste de header injection foram junto no sacrifício do e-mail** —
+   o critério de aceite "integrações telegram/**smtp** no catálogo" fica emendado
+   para só-telegram nesta sessão; smtp/header-injection entram na 0013 com o sender.
+3. **Bug de precisão datetime encontrado E corrigido no smoke:** o watermark faz
+   round-trip pelo SDK em μs, mas `distilled.created_at` nasce ns (`time::now()`); a
+   seleção re-enviava o último item (cauda de ns > watermark μs — bola de neve). Fix:
+   `time::floor(created_at, 1us)` no WHERE. Guardado por `test_watermark_round_trip`
+   (semeando com `time::now()` do servidor) + `test_digest_vertical` (re-run no-op).
+
+### Smoke físico (kubo-test, provado)
+
+- ✅ Digest real no Telegram do dono (2 destilados; link "abrir no Kubo" → detalhe OK).
+- ✅ Re-run sem novidade: `ok`, zero mensagem, zero dispatch novo.
+- ✅ Digest grande truncado (3921 chars, rodapé "+N", HTML balanceado) aceito pelo Bot API — sem 400.
+- Deploy: `COPY destinations.yaml` no Dockerfile + 3 envs no compose do scheduler (TELEGRAM_BOT_TOKEN, KUBO_OWNER_TELEGRAM_CHAT_ID, KUBO_BASE_URL).
+
+### Fila para 0013
+
+- **E-mail** inteiro (12.9): sender `smtplib`+`EmailMessage` text/plain, teste de
+  header injection, `smtp.yaml` (secret_ref), entry `owner-email` no destinations.yaml.
+- Gatilhos de reabertura de modelagem (ADR-0015): split multi-mensagem se a quota do
+  Groq subir; destino vira tabela se surgir digest por-destino/multi-artefato; aresta
+  `delivered` se surgir consumidor de drill-down.
+
+### Paridade de UI — tabela (aceite: screenshot lado a lado, ver abaixo)
+
+**Envios** (mockup `EnviosScreen` em `DistribuicaoScreen.jsx`):
+
+| Elemento | Status |
+|---|---|
+| PageHeader "Envios" + descrição | igual |
+| SearchBar (artefato/canal/destino) | igual (busca canal/destino/status na store) |
+| Linha: ícone + artefato (`kind`) | igual (glifo `send` + "Digest") |
+| Badge de canal | igual |
+| Destino + quando | igual |
+| Status ok/erro + erro expansível | adição do plano (D declarado) — presente |
+| ViewToggle list/grid2 | desvio: só lista (grid2 = luxo cortável, mesma decisão dos Destilados) |
+| Estado vazio | igual |
+| Paginação | igual (peek/total, como Execuções) |
+
+**Destinos** (mockup `DestinosScreen`):
+
+| Elemento | Status |
+|---|---|
+| PageHeader "Destinos" + descrição | igual |
+| Card "Artefatos configurados" (nome/agenda/origem/destinos) | igual (do schedules.yaml) |
+| Card "Destinos" (avatar+nome+kind+canal) | igual (do destinations.yaml) |
+| Ação "Novo artefato" | fora de escopo (config é YAML+PR — desvio pré-declarado no plano) |
+| Badge de convidado | fora de escopo (dado inexistente — sem convidados nesta fase, desvio pré-declarado) |
+| Badge de role "dono" | igual |
+
+Screenshots lado a lado das duas telas: anexados pelo dono (a UI é autenticada; o
+agente não tem a senha) — pendentes no PR antes do merge.
