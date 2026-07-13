@@ -1,4 +1,5 @@
 <!doctype html>
+{% import "_macros.html" as macros %}
 <html lang="pt-BR" class="h-full">
 <head>
   <meta charset="utf-8" />
@@ -19,7 +20,7 @@
   <main class="flex min-h-screen items-center justify-center bg-muted/40 p-6">
     <div class="w-full max-w-sm rounded-2xl bg-card p-6 ring-1 ring-foreground/10">
       <div class="mb-5 flex items-center gap-2.5">
-        <img src="/static/favicon.svg" alt="" class="size-8 rounded-lg" />
+        {{ macros.logo_mark(32) }}
         <div class="leading-tight">
           <div class="text-base font-semibold tracking-tight">Kubo</div>
           <div class="text-2xs text-muted-foreground">The art of getting things done</div>

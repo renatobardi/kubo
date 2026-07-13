@@ -14,19 +14,21 @@ from typing import TypedDict
 
 
 class NavItem(TypedDict):
-    """Um item de navegação: rótulo visível (PT-BR), rota (EN), grupo da sidebar."""
+    """Um item de navegação: rótulo visível (PT-BR), rota (EN), grupo da sidebar e a
+    chave do glifo (resolvida pelo macro `nav_icon` — paridade com o mockup)."""
 
     label: str
     route: str
     group: str | None
+    icon: str
 
 
 # Ordem = ordem de exibição; itens do mesmo grupo ficam CONSECUTIVOS (o header do
 # grupo é renderizado na 1ª ocorrência). Só o implementado (D27: zero link morto).
 NAV: list[NavItem] = [
-    {"label": "Painel", "route": "/", "group": None},
-    {"label": "Destilados", "route": "/distilled", "group": "Conhecimento"},
-    {"label": "Entidades", "route": "/entities", "group": "Conhecimento"},
-    {"label": "Fontes", "route": "/sources", "group": "Conhecimento"},
-    {"label": "Execuções", "route": "/runs", "group": "Trabalho"},
+    {"label": "Painel", "route": "/", "group": None, "icon": "home"},
+    {"label": "Destilados", "route": "/distilled", "group": "Conhecimento", "icon": "book-open"},
+    {"label": "Entidades", "route": "/entities", "group": "Conhecimento", "icon": "network"},
+    {"label": "Fontes", "route": "/sources", "group": "Conhecimento", "icon": "rss"},
+    {"label": "Execuções", "route": "/runs", "group": "Trabalho", "icon": "activity"},
 ]
