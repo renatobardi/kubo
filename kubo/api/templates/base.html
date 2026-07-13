@@ -1,4 +1,4 @@
-<!doctype html>
+{% import "_macros.html" as macros %}<!doctype html>
 <html lang="pt-BR" class="h-full">
 <head>
   <meta charset="utf-8" />
@@ -6,12 +6,23 @@
   <title>{% block title %}Kubo{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" />
   <link rel="stylesheet" href="/static/app.css" />
+  <style>
+    /* Recolher-menu [S2]: sidebar só-ícones. Estado em html.nav-collapsed (persistido). */
+    html.nav-collapsed aside { width: 4rem; }
+    html.nav-collapsed .nav-collapsible { display: none; }
+    html.nav-collapsed .nav-link { justify-content: center; padding-left: 0; padding-right: 0; }
+    html.nav-collapsed .nav-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+    html.nav-collapsed .nav-footer { justify-content: center; padding-left: 0; padding-right: 0; }
+  </style>
   <script>
-    // Aplica o tema salvo antes do paint (sem flash de tema errado).
+    // Antes do paint (sem flash): tema salvo + estado recolhido da sidebar.
     (function () {
       var t = localStorage.getItem("theme");
       if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
         document.documentElement.classList.add("dark");
+      }
+      if (localStorage.getItem("navCollapsed") === "1") {
+        document.documentElement.classList.add("nav-collapsed");
       }
     })();
   </script>
@@ -19,10 +30,10 @@
 </head>
 <body class="h-full">
   <div class="flex h-full min-h-screen">
-    <aside class="flex w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar">
-      <a href="/" class="flex h-[72px] items-center gap-2.5 px-4">
-        <img src="/static/favicon.svg" alt="" class="size-8 rounded-lg" />
-        <span class="flex flex-col leading-tight">
+    <aside class="flex w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar">
+      <a href="/" class="nav-brand flex h-[72px] items-center gap-2.5 px-4">
+        {{ macros.logo_mark(32) }}
+        <span class="nav-collapsible flex flex-col leading-tight">
           <span class="text-base font-semibold tracking-tight text-sidebar-foreground">Kubo</span>
           <span class="text-2xs text-muted-foreground">The art of getting things done</span>
         </span>
@@ -32,23 +43,24 @@
         <ul class="space-y-1">
           {% for item in nav %}
             {% if item.group and (loop.first or item.group != loop.previtem.group) %}
-              <li class="px-2 pt-3 pb-1 text-2xs font-medium tracking-wide uppercase text-muted-foreground">{{ item.group }}</li>
+              <li class="nav-collapsible px-2 pt-3 pb-1 text-2xs font-medium tracking-wide uppercase text-muted-foreground">{{ item.group }}</li>
             {% endif %}
             {% set active = current_path == item.route or (item.route != "/" and current_path.startswith(item.route)) %}
             <li>
-              <a href="{{ item.route }}"
-                 class="flex items-center rounded-lg px-2 py-1.5 text-sm transition-colors
+              <a href="{{ item.route }}" title="{{ item.label }}"
+                 class="nav-link flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors
                         {% if active %}bg-sidebar-accent font-medium text-sidebar-accent-foreground{% else %}text-sidebar-foreground hover:bg-sidebar-accent/60{% endif %}">
-                {{ item.label }}
+                {{ macros.nav_icon(item.icon) }}
+                <span class="nav-collapsible">{{ item.label }}</span>
               </a>
             </li>
           {% endfor %}
         </ul>
       </nav>
 
-      <div class="flex items-center gap-2.5 border-t border-border/60 px-4 py-3">
+      <div class="nav-footer flex items-center gap-2.5 border-t border-border/60 px-4 py-3">
         <span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">R</span>
-        <div class="min-w-0 leading-tight">
+        <div class="nav-collapsible min-w-0 leading-tight">
           <div class="truncate text-sm font-medium text-sidebar-foreground">Renato Bardi</div>
           <div class="truncate text-2xs text-muted-foreground">renato@kubo.studio</div>
         </div>
@@ -57,6 +69,11 @@
 
     <div class="flex min-w-0 flex-1 flex-col">
       <header class="flex h-[72px] items-center gap-3 border-b border-border/60 px-6">
+        {# Recolher a sidebar (só ícones) [S2] — paridade com o ▢ do topo do mockup. #}
+        <button type="button" onclick="toggleNav()" title="Recolher menu"
+                class="flex size-9 shrink-0 items-center justify-center rounded-4xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          <svg class="size-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
         {# Breadcrumb (grupo › tela) — paridade com a barra de topo do mockup. #}
         <nav class="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
           {% if crumb and crumb.group %}
@@ -86,6 +103,10 @@
     function toggleTheme() {
       var dark = document.documentElement.classList.toggle("dark");
       localStorage.setItem("theme", dark ? "dark" : "light");
+    }
+    function toggleNav() {
+      var c = document.documentElement.classList.toggle("nav-collapsed");
+      localStorage.setItem("navCollapsed", c ? "1" : "0");
     }
   </script>
 </body>

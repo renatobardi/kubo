@@ -60,5 +60,36 @@ def test_theme_toggle_present(authed_client: TestClient) -> None:
     assert "toggleTheme()" in html
 
 
+def test_nav_items_have_icons(authed_client: TestClient) -> None:
+    """[S1] Cada item de nav tem um glifo. Sanidade por dois paths lucide conhecidos:
+    home (Painel) e activity (Execuções)."""
+    html = authed_client.get("/").text
+    assert "M9 22V12h6v10" in html  # home (Painel)
+    assert "M22 12h-4l-3 9L9 3l-3 9H2" in html  # activity (Execuções)
+
+
+def test_logo_is_floating_sakura_not_black_box(authed_client: TestClient) -> None:
+    """[S3] O logo é a sakura de linha theme-aware (tokens --sakura-*), não o favicon
+    com fundo preto. O <img> do favicon sai da sidebar (o <link rel=icon> pode ficar)."""
+    html = authed_client.get("/").text
+    assert "var(--sakura-ink)" in html
+    assert "var(--sakura-petal)" in html
+    assert '<img src="/static/favicon.svg"' not in html  # sem o quadrado preto na sidebar
+
+
+def test_sidebar_collapse_wired(authed_client: TestClient) -> None:
+    """[S2] O recolher-menu está ligado: função, botão e reaplicação do estado salvo."""
+    html = authed_client.get("/").text
+    assert "toggleNav()" in html
+    assert "nav-collapsed" in html  # classe + reaplicação no <head>
+
+
+def test_login_logo_is_floating_sakura(client: TestClient) -> None:
+    """[S3] A tela de login também usa a sakura solta, não o favicon com fundo."""
+    html = client.get("/login").text
+    assert "var(--sakura-ink)" in html
+    assert '<img src="/static/favicon.svg"' not in html
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
