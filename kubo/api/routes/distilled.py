@@ -32,6 +32,7 @@ _SEARCH_K = 20
 _UI_EMBED_TIMEOUT = 10.0  # UI degrada rápido; não os 60s do backfill (E-f)
 _DISTILLED_TABLE = "distilled"
 _RESULTS_TEMPLATE = "distilled/_results.html"
+_RELATED = 6  # máximo de "Relacionados" no detalhe (escala pessoal)
 
 
 def _dedupe_by_distilled(hits: list[SearchHit]) -> list[SearchHit]:
@@ -109,11 +110,17 @@ def detail(request: Request, distilled_id: str) -> Response:
     a tabela; um id inexistente vira 404, não uma porta para ler outro registro."""
     key = distilled_id.strip()
     view = None
+    related: list[knowledge.DistilledListItem] = []
     if key:
+        rid = RecordID(_DISTILLED_TABLE, key)
         with client.connect() as db:
-            view = knowledge.read_distilled(db, RecordID(_DISTILLED_TABLE, key))
+            view = knowledge.read_distilled(db, rid)
+            if view is not None:
+                related = knowledge.related_distilled(db, rid, limit=_RELATED)
     if view is None:
         return templates.TemplateResponse(
             request, "distilled/not_found.html", {"raw": distilled_id}, status_code=404
         )
-    return templates.TemplateResponse(request, "distilled/detail.html", {"view": view})
+    return templates.TemplateResponse(
+        request, "distilled/detail.html", {"view": view, "related": related}
+    )

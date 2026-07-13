@@ -13,6 +13,52 @@
   {% endif %}
 {% endmacro %}
 
+{# Glifo de entidade por kind (pessoa/tecnologia/organização/default) — reutilizado
+   na lista e nos chips do detalhe do destilado. #}
+{% macro entity_glyph(kind, size="size-4") %}
+  {% if kind == "pessoa" %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+  {% elif kind == "tecnologia" %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+  {% elif kind == "organização" %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4"/></svg>
+  {% else %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="m6.5 6.5 4 4M17.5 6.5l-4 4M6.5 17.5l4-4M17.5 17.5l-4-4"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{# Passo da cadeia de proveniência (detalhe do destilado): ícone + conector + rótulo.
+   `url` (item.url, coletado/hostil) só vira href se http(s) — o autoescape NÃO filtra
+   esquema de URL, um javascript:/data: seria XSS ao clicar (E1/§XSS). #}
+{% macro prov_step(icon, kind_label, label, sub="", url="", last=false) %}
+  <div class="flex gap-3">
+    <div class="flex flex-col items-center">
+      <span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
+        {% if icon == "book-open" %}
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+        {% elif icon == "file" %}
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>
+        {% elif icon == "rss" %}
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+        {% else %}
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        {% endif %}
+      </span>
+      {% if not last %}<span class="my-1 w-0.5 flex-1 bg-border"></span>{% endif %}
+    </div>
+    <div class="{% if not last %}pb-4{% endif %} min-w-0">
+      <span class="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{{ kind_label }}</span>
+      <p class="mt-0.5 truncate text-sm">{{ label }}</p>
+      {% if sub %}<p class="mt-0.5 truncate text-xs text-muted-foreground">{{ sub }}</p>{% endif %}
+      {% if url and url.startswith(("https://", "http://")) %}
+        <a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all text-xs text-primary underline underline-offset-2">{{ url }}</a>
+      {% elif url %}
+        <span class="mt-1 block break-all text-xs text-muted-foreground">{{ url }}</span>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
 {# Logo Kubo: sakura de LINHA solta (sem fundo). Theme-aware pelos tokens
    --sakura-ink (traço) / --sakura-petal (miolo/pétalas): claro = traço escuro +
    miolo rosa; escuro = só contorno rosa (petal transparente). Substitui o

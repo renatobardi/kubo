@@ -17,6 +17,7 @@ from kubo.errors import ConfigError, EmbeddingError
 from kubo.store.knowledge import (
     DistilledListItem,
     DistilledView,
+    EntityRef,
     ProvenanceItem,
     RunRef,
     SearchHit,
@@ -61,6 +62,9 @@ def patch_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutraliza a conexão real e o embedder; cada teste mocka a leitura que usa."""
     monkeypatch.setattr("kubo.api.routes.distilled.client.connect", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.distilled.GeminiEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.related_distilled", lambda db, rid, **kw: []
+    )
 
 
 def _view(summary: str, items: list[ProvenanceItem] | None = None) -> DistilledView:
@@ -250,6 +254,32 @@ def test_detail_renders_provenance_chain(
     assert "Meu Feed" in html
     assert 'href="https://example.com/post"' in html
     assert "feed" in html  # worker do run
+
+
+def test_detail_shows_entity_chips_and_related(
+    authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O detalhe (reescrita 0011) mostra os chips de entidade (→ /entities) e o bloco
+    'Relacionados'. Nome de entidade é hostil → escapado."""
+    view = DistilledView(
+        id=RecordID("distilled", "x1"),
+        summary="resumo",
+        claims=["afirmação"],
+        items=[],
+        runs=[],
+        entities=[EntityRef(id=RecordID("entity", "e1"), name="Python", kind="tecnologia")],
+    )
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid: view)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.related_distilled",
+        lambda db, rid, **kw: [_card("r1", "resumo relacionado", title="Relacionado A")],
+    )
+    html = authed_client.get("/distilled/x1").text
+    assert "Entidades mencionadas" in html
+    assert "Python" in html
+    assert 'href="/entities/e1"' in html
+    assert "Claims extraídas" in html and "afirmação" in html
+    assert "Relacionados" in html and "Relacionado A" in html
 
 
 def test_no_template_uses_safe_filter() -> None:

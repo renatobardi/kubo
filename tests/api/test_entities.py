@@ -137,6 +137,23 @@ def test_entities_has_view_toggle_and_pagination(
     assert "página 1 de 2" in html and "90 no total" in html
 
 
+def test_entity_detail_has_placeholder_cards(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detalhe traz os 2 cards do mockup (Menções ao longo do tempo, Relações) como
+    placeholder honesto 'sem dados ainda' (D-a — sem fabricar dado)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.entities.knowledge.read_entity",
+        lambda db, eid: EntityView(
+            id=RecordID("entity", "e1"), name="Python", kind="tecnologia", mentions=1, distilled=[]
+        ),
+    )
+    html = authed_client.get("/entities/e1").text
+    assert "Menções ao longo do tempo" in html
+    assert "Relações" in html
+    assert "sem dados ainda" in html
+
+
 def test_entity_detail_404_for_unknown_id(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
