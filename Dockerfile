@@ -55,10 +55,16 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Código + dados de runtime: o scheduler lê schedules.yaml + destinations.yaml
-# (ADR-0015); o runner lê catalogs/integrations. Nada mais do repo entra na imagem.
+# (ADR-0015); o runner lê catalogs/integrations.
 COPY kubo/ ./kubo/
 COPY catalogs/ ./catalogs/
 COPY schedules.yaml destinations.yaml ./
+# Scripts one-off (import legado, backfill, e a Trilha B do dreno 0014): rodam no
+# servidor via `docker compose run --rm kubo-scheduler python -m scripts.X` (mesmo
+# esquema do `python -m` do scheduler, CWD /app). Sem eles na imagem, o one-off não
+# acha o arquivo. `scripts` é namespace package (sem __init__): `-m scripts.X` acha
+# pelo CWD /app.
+COPY scripts/ ./scripts/
 # CSS gerado pelo stage tailwind (não vem do host — ver .dockerignore). Servido de
 # /app/kubo/api/static pelo StaticFiles (o app roda do source /app/kubo via CWD do
 # `python -m`, não do wheel — mesmo esquema do scheduler que lê schedules.yaml).
