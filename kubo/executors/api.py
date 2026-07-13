@@ -187,21 +187,9 @@ class ApiExecutor:
                     timeout=self._config.timeout,
                 )
             except _TRANSIENT as exc:
-                wait = _retry_after_seconds(exc)
-                if wait is not None and wait > _RETRY_AFTER_CAP:
-                    # Janela longa (TPD/RPD): retentar dentro do run não recupera a quota.
-                    raise RateLimitExhausted(
-                        "quota de janela longa do provider (retry-after acima do teto)",
-                        scope="day",
-                    ) from None
-                if attempt == self._max_attempts - 1:
-                    # Havia header numérico (janela de minuto) → scope='minute'; senão 'unknown'.
-                    raise RateLimitExhausted(
-                        f"provider transiente após {self._max_attempts} tentativas",
-                        scope="minute" if wait is not None else "unknown",
-                    ) from None
-                # retry-after curto é honrado; sem header, cai no backoff exponencial.
-                self._sleep(wait if wait is not None else 0.5 * (2**attempt))
+                # A decisão do transiente (honrar retry-after, desistir ou dormir) mora em
+                # _next_backoff para manter a complexidade cognitiva do loop baixa (S3776).
+                self._sleep(self._next_backoff(exc, attempt))
             except Exception:  # noqa: BLE001
                 # Fronteira ao provider hostil: os erros não-transientes do litellm
                 # (auth, bad request, context window...) herdam de classes do `openai`,
@@ -211,6 +199,28 @@ class ApiExecutor:
                 # genérico, `from None` (sem encadear o corpo), sem retry.
                 raise ExecutorError("falha do provider de LLM") from None
         raise ExecutorError("falha do provider de LLM")  # pragma: no cover — inalcançável
+
+    def _next_backoff(self, exc: Exception, attempt: int) -> float:
+        """Segundos a dormir antes de retentar um erro transiente — ou levanta
+        `RateLimitExhausted` quando não há retry a fazer (0014 A1/A2).
+
+        `retry-after` acima do teto = janela longa (TPD/RPD): desiste imediato
+        (`scope="day"`) — retentar no run não recupera a quota. Esgotado o teto de
+        tentativas: `scope="minute"` se havia header numérico (janela de minuto),
+        senão `"unknown"`. Caso contrário: honra o `retry-after` curto, ou cai no
+        backoff exponencial quando o header está ausente."""
+        wait = _retry_after_seconds(exc)
+        if wait is not None and wait > _RETRY_AFTER_CAP:
+            raise RateLimitExhausted(
+                "quota de janela longa do provider (retry-after acima do teto)",
+                scope="day",
+            ) from None
+        if attempt == self._max_attempts - 1:
+            raise RateLimitExhausted(
+                f"provider transiente após {self._max_attempts} tentativas",
+                scope="minute" if wait is not None else "unknown",
+            ) from None
+        return wait if wait is not None else 0.5 * (2**attempt)
 
     def _parse_response(self, response: Any, response_model: type[T]) -> T:
         """Extrai `content` da resposta e valida contra `response_model` (§IV).

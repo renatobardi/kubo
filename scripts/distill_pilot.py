@@ -37,7 +37,7 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
 from kubo.store import client, knowledge
 from kubo.workers.distiller import _INSTRUCTION, DistillOutput, filter_present_entities
-from scripts.audit_sample import select_sample
+from scripts.audit_sample import select_sample, validated_out
 
 _log = structlog.get_logger().bind(worker="distill_pilot")
 
@@ -87,9 +87,14 @@ def run_candidate(
             result.malformed += 1
             result.summaries[key] = None
             continue
-        except RateLimitExhausted:
+        except RateLimitExhausted as exc:
             result.rate_limited += 1
             result.summaries[key] = None
+            if exc.scope == "day":
+                # Quota DIÁRIA esgotada: os itens restantes só repetiriam o backoff
+                # completo para falhar de novo (tempo — e, no candidato pago, dinheiro
+                # em tentativas). Aborta o candidato cedo (0014, achado CodeRabbit).
+                break
             continue
         except ExecutorError:
             result.provider_errors += 1
@@ -174,6 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", default=_DEFAULT_OUT, help=f"saída (default {_DEFAULT_OUT})")
     parser.add_argument("--delay", type=float, default=_DEFAULT_DELAY, help="pausa entre itens (s)")
     args = parser.parse_args(argv)
+    out = validated_out(args.out)  # barra path traversal do arg de CLI antes de escrever
 
     models = args.models.split(",") if args.models else list(_DEFAULT_MODELS)
     if not os.environ.get("OPENROUTER_API_KEY") and any(
@@ -187,8 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     results = [run_candidate(model, items, delay=args.delay) for model in models]
     doc = render_pilot(items, baselines, results)
-    with open(args.out, "w", encoding="utf-8") as fh:
-        fh.write(doc)
+    out.write_text(doc, encoding="utf-8")
 
     for res in results:
         ok = sum(1 for v in res.summaries.values() if v is not None)
@@ -200,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rate_limited=res.rate_limited,
             provider_errors=res.provider_errors,
         )
-    print(f"piloto em {args.out} (NÃO commitar): {len(items)} itens, {len(models)} modelo(s)")
+    print(f"piloto em {out} (NÃO commitar): {len(items)} itens, {len(models)} modelo(s)")
     return 0
 
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -100,7 +101,7 @@ def select_sample(
     não há content para comparar com o summary. Preencher menos que a cota é OK: a
     rubrica julga tendência por estrato, não caso isolado (plano 0014 B1)."""
     quotas = quotas if quotas is not None else _QUOTAS
-    counts = {s: 0 for s in STRATA}
+    counts: dict[str, int] = dict.fromkeys(STRATA, 0)
     picked: list[Candidate] = []
     for distilled_id, summary, item_id, created_at, run_worker in rows:
         if item_id is None:
@@ -141,7 +142,7 @@ def render_doc(
     `entries` são pares `(candidate, item_content)`. Cada item mostra o summary, o
     content truncado ao MESMO cap do LLM (com marca de truncagem) e um stub da
     rubrica para o dono marcar. Nunca reordena: respeita a ordem de `select_sample`."""
-    counts: dict[str, int] = {s: 0 for s in STRATA}
+    counts: dict[str, int] = dict.fromkeys(STRATA, 0)
     for cand, _ in entries:
         counts[cand.stratum] = counts.get(cand.stratum, 0) + 1
     parts = [_rubric_header(counts)]
@@ -167,6 +168,16 @@ def render_doc(
 # ── Camada de I/O ───────────────────────────────────────────────────────────
 
 
+def validated_out(path: str) -> Path:
+    """Resolve `path` (arg de CLI) e garante que não escapa o diretório de trabalho
+    antes de qualquer acesso ao filesystem — barra path traversal por argumento
+    malicioso/errado (SonarCloud S8707). Reusado pelo piloto (B2)."""
+    resolved = Path(path).resolve()
+    if not resolved.is_relative_to(Path.cwd().resolve()):
+        raise ValueError(f"caminho de saída fora do diretório de trabalho: {path}")
+    return resolved
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: lê o acervo, estratifica, grava o doc e imprime só o agregado (não o conteúdo)."""
     parser = argparse.ArgumentParser(description="Amostra de auditoria do dreno (gate B1).")
@@ -180,6 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--scan-limit", type=int, default=10000, help="quantos destilados varrer do acervo"
     )
     args = parser.parse_args(argv)
+    out = validated_out(args.out)  # falha rápido, antes de tocar o banco, se o path escapar
 
     with client.connect(client.config()) as db:
         rows = knowledge.list_distilled_with_items(db, limit=args.scan_limit)
@@ -191,13 +203,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     entries = [(c, contents.get(str(c.item_id), "")) for c in sample]
     doc = render_doc(entries, input_char_cap=args.cap)
-    with open(args.out, "w", encoding="utf-8") as fh:
-        fh.write(doc)
+    out.write_text(doc, encoding="utf-8")
 
     counts = {s: sum(1 for c in sample if c.stratum == s) for s in STRATA}
-    _log.info("audit.written", out=args.out, **counts)
+    _log.info("audit.written", out=str(out), **counts)
     got = " ".join(f"{s}={counts[s]}/{_QUOTAS[s]}" for s in STRATA)
-    print(f"auditoria escrita em {args.out} (NÃO commitar) — amostra: {got}")
+    print(f"auditoria escrita em {out} (NÃO commitar) — amostra: {got}")
     if any(counts[s] < _QUOTAS[s] for s in STRATA):
         print("aviso: algum estrato ficou abaixo da cota — a rubrica julga tendência, siga assim.")
     return 0

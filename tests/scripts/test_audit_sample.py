@@ -8,6 +8,11 @@ items_by_ids, escrita do doc) é exercida na sessão de execução contra o banc
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
+from kubo.store import knowledge
 from scripts import audit_sample as aud
 
 _PT = "O banco central manteve a taxa de juros nesta reunião para observar mais dados."
@@ -82,3 +87,39 @@ def test_render_doc_truncates_content_at_cap() -> None:
     assert "x" * 10 in doc
     assert "x" * 11 not in doc
     assert "truncado" in doc
+
+
+def test_validated_out_rejects_path_escaping_cwd() -> None:
+    """validated_out barra path traversal (arg de CLI escapando o cwd) — S8707."""
+    with pytest.raises(ValueError, match="fora do diretório"):
+        aud.validated_out("/etc/passwd")
+
+
+def test_validated_out_accepts_path_inside_cwd() -> None:
+    """Caminho dentro do diretório de trabalho é aceito e resolvido."""
+    resolved = aud.validated_out("audit_sample.local.md")
+    assert resolved == Path.cwd() / "audit_sample.local.md"
+
+
+@pytest.mark.integration
+def test_main_writes_doc_against_seeded_db(db, tmp_path, monkeypatch) -> None:
+    """Casca de main(): lê o acervo (list_distilled_with_items + items_by_ids), estratifica
+    e grava o doc. Prova o encanamento store→doc contra o banco real (achado CodeRabbit).
+    `chdir` em tmp_path para o `validated_out` (confina ao cwd) aceitar o `--out`."""
+    monkeypatch.chdir(tmp_path)
+    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(
+        db, source=src, external_id="e1", content="conteúdo original do item para auditar"
+    )
+    run = knowledge.start_run(db, worker="distiller")
+    knowledge.insert_distilled(
+        db, item=item, summary="resumo recente destilado", chunks=[], run=run
+    )
+
+    rc = aud.main(["--out", "audit.local.md"])
+
+    assert rc == 0
+    text = (tmp_path / "audit.local.md").read_text(encoding="utf-8")
+    assert "resumo recente destilado" in text
+    assert "conteúdo original do item para auditar" in text
+    assert "[recent]" in text  # estrato classificado pelo run_worker == "distiller"

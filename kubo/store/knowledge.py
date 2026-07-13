@@ -884,7 +884,7 @@ def list_distilled_with_items(
     # LIMIT não aceita bind param nesta versão do SurrealDB (parser exige literal, mesmo
     # caso de list_distilled); `limit` é int já clampado pela store, não conteúdo coletado.
     query = (
-        "SELECT id, summary, created_at, "  # noqa: S608 — limit é int clampado, não conteúdo
+        "SELECT id, summary, created_at, "  # noqa: S608  # limit é int clampado, não conteúdo
         "->derived_from->item AS item_id, "
         "->produced_by->run.worker AS run_worker "
         f"FROM distilled ORDER BY created_at DESC, id LIMIT {limit};"

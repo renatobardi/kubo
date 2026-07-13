@@ -69,6 +69,31 @@ def test_run_candidate_counts_failures_and_leaves_summary_none() -> None:
     assert result.summaries == {"a": None, "b": None, "c": "ok"}
 
 
+def test_run_candidate_aborts_early_on_daily_exhaustion() -> None:
+    """RateLimitExhausted(scope='day') aborta o candidato: os itens restantes NÃO são
+    tentados (não repetem o backoff só para falhar; no pago, não gastam dinheiro à toa)."""
+    items = [("a", "ca"), ("b", "cb"), ("c", "cc")]
+    executor = _FakeExecutor(errors={0: RateLimitExhausted("quota diária", scope="day")})
+    result = dp.run_candidate("cand/x", items, executor=executor, sleep=lambda _: None)
+
+    assert executor.calls == 1  # parou no 1º; b e c nunca foram chamados
+    assert result.rate_limited == 1
+    assert "b" not in result.summaries and "c" not in result.summaries
+
+
+def test_run_candidate_continues_on_minute_exhaustion() -> None:
+    """scope='minute' NÃO aborta: o item seguinte ainda é tentado (janela de minuto)."""
+    items = [("a", "ca"), ("b", "cb")]
+    executor = _FakeExecutor(
+        errors={0: RateLimitExhausted("janela de minuto", scope="minute")},
+        outputs={1: DistillOutput(summary="ok b", entities=[])},
+    )
+    result = dp.run_candidate("cand/x", items, executor=executor, sleep=lambda _: None)
+
+    assert executor.calls == 2  # seguiu para o 2º
+    assert result.summaries == {"a": None, "b": "ok b"}
+
+
 def test_run_candidate_counts_kept_entities_verbatim_filtered() -> None:
     """entity_counts guarda só o COUNT de entidades pós-`filter_present_entities`
     (verbatim no content) — nunca os nomes; a entidade não-presente é descartada."""
