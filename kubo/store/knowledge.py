@@ -930,6 +930,16 @@ def fail_run(db: Any, run: RecordID, *, error: dict[str, Any]) -> None:
     )
 
 
+def run_status(db: Any, run: RecordID) -> str | None:
+    """Status de um `run` ('running'|'ok'|'error'), ou None se o id não existe.
+
+    Porta única (invariante 2) para o flow runner decidir delivered vs failed sem
+    tocar a store diretamente — a leitura de status mora aqui, ao lado de
+    start/finish/fail_run."""
+    rows = db.query("SELECT VALUE status FROM $r;", {"r": run})
+    return str(rows[0]) if rows else None
+
+
 # ── dispatch: fato de entrega de digest (ADR-0015) ─────────────────────────────
 # Janela de bootstrap do 1º digest de um destino: sem dispatch anterior, seleciona
 # só o que nasceu nas últimas 24h — evita despejar o legado (935 destilados do

@@ -29,6 +29,7 @@ from kubo.runtime.flow_templates import FlowTemplate, load_flow_templates
 from kubo.runtime.personas import Persona, load_personas
 from kubo.runtime.runner import FlowCtx, run_worker
 from kubo.store.flows import create_task, instantiate_flow, set_task_run, transition_task
+from kubo.store.knowledge import run_status
 from kubo.workers.analyst import AnalystWorker, Sender
 
 _CATALOG_ROOT = Path(__file__).parents[2] / "catalogs"
@@ -159,9 +160,9 @@ def _build_executor(persona: Persona) -> Executor:
 
 def _run_succeeded(db: Any, run_id: RecordID) -> bool:
     """True se o run fechou `ok` — decide delivered vs failed (o run é a fonte da verdade
-    do resultado da execução; o flow runner só reflete no estado do task)."""
-    rows = db.query("SELECT VALUE status FROM $r;", {"r": run_id})
-    return bool(rows) and rows[0] == "ok"
+    do resultado da execução; o flow runner só reflete no estado do task). A leitura passa
+    pela store (`run_status`, invariante 2), não por `db.query` direto aqui."""
+    return run_status(db, run_id) == "ok"
 
 
 # Binding template→comportamento HARDCODED (E4). Template novo = função nova + PR (gate humano).

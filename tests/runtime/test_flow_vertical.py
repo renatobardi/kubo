@@ -107,6 +107,7 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
     d1 = _seed(db, "Rust", "resumo sobre Rust")
     d2 = _seed(db, "GC", "resumo sobre GC")
     sender = _FakeSender()
+    executor = _FakeExecutor()
 
     result = run_flow(
         db,
@@ -115,7 +116,7 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
         embedder=_FakeEmbedder(),
         destination=_DEST,
         base_url=_BASE,
-        executor=_FakeExecutor(),
+        executor=executor,
         senders={"telegram": sender},
     )
 
@@ -146,6 +147,7 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
     assert dispatch["watermark"] is None
     assert knowledge.last_dispatch_watermark(db, "owner-telegram") is None
     assert len(sender.calls) == 1
+    assert executor.calls == 1  # a etapa de síntese foi de fato exercitada (não pulou o LLM)
 
 
 def test_flow_send_failure_lands_in_failed_with_deliverable_persisted(db: Any) -> None:

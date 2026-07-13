@@ -123,9 +123,12 @@ def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) 
     if flow_id is None:
         raise StateError(f"task {task} sem flow (belongs_to ausente)")
     transitions = db.query("SELECT VALUE snapshot.board.transitions FROM $f;", {"f": flow_id})
-    raw: list[list[str]] = cast("list[list[str]]", transitions[0]) if transitions else []
-    # `len(t) == 2` guarda o índice duplo: o snapshot vem de um FlowTemplate validado (pares
-    # sempre 2), mas ler do banco é dado não-tipado — um par malformado é pulado, não crasha.
+    # `first` pode ser NONE se o snapshot não tiver board.transitions (registro malformado/
+    # manual): SurrealDB devolve `[None]`. `if first` cobre lista vazia E None → pairs vazio →
+    # a transição não casa → StateError (não um TypeError cru). `len(t) == 2` guarda o índice
+    # duplo: o snapshot nasce de um FlowTemplate validado, mas ler do banco é dado não-tipado.
+    first = transitions[0] if transitions else None
+    raw: list[list[str]] = cast("list[list[str]]", first) if first else []
     pairs = {(t[0], t[1]) for t in raw if len(t) == 2}
     if (from_state, to_state) not in pairs:
         raise StateError(f"transição ({from_state}, {to_state}) não está no snapshot do flow")

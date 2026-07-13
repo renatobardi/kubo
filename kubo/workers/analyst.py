@@ -36,6 +36,7 @@ from kubo.errors import ConfigError, ContractError, SenderError
 Sender = Callable[..., None]
 _MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conteúdo/segredo
 _TELEGRAM_LIMIT = 4096  # uma mensagem só (Bot API)
+_TITLE_CAP = 120  # teto por título nas fontes (o link ocupa o resto da linha)
 _NO_TITLE = "(sem título)"
 _NO_SOURCES = "Não encontrei fontes no acervo para responder a esta pergunta."
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -195,13 +196,20 @@ def _key(distilled_id: str) -> str:
     return distilled_id.partition(":")[2]
 
 
+def _source_title(title: str | None) -> str:
+    """Título de uma fonte, capado — um título gigante não pode inflar a lista de fontes a
+    ponto de o slice de 4096 do Telegram cortar um link no meio."""
+    text = title or _NO_TITLE
+    return text if len(text) <= _TITLE_CAP else text[: _TITLE_CAP - 1].rstrip() + "…"
+
+
 def _render_markdown(report_text: str, docs: list[RetrievedView], base_url: str) -> str:
     """Relatório markdown COMPLETO para o `deliverable` (§VI: fontes = apêndice
     programático do retrieval). Título+link por documento recuperado."""
     body = report_text.strip()
     if not docs:
         return body
-    lines = [f"- [{doc.title or _NO_TITLE}]({base_url}/distilled/{_key(doc.id)})" for doc in docs]
+    lines = [f"- [{_source_title(doc.title)}]({base_url}/distilled/{_key(doc.id)})" for doc in docs]
     return f"{body}\n\n## Fontes\n" + "\n".join(lines)
 
 
@@ -213,7 +221,7 @@ def _render_telegram(report_text: str, docs: list[RetrievedView], base_url: str)
     if not docs:
         return prose[:_TELEGRAM_LIMIT]
     source_lines = [
-        f"- {doc.title or _NO_TITLE}: {base_url}/distilled/{_key(doc.id)}" for doc in docs
+        f"- {_source_title(doc.title)}: {base_url}/distilled/{_key(doc.id)}" for doc in docs
     ]
     sources = "Fontes:\n" + "\n".join(source_lines)
     budget = _TELEGRAM_LIMIT - len(sources) - 2  # reserva os dois chars do separador prosa↔fontes

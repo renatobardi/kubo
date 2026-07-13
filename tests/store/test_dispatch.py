@@ -353,12 +353,15 @@ def test_backfill_makes_legacy_dispatch_count_as_digest(tmp_path: Path) -> None:
     with client.connect(cfg) as conn:
         conn.query("REMOVE DATABASE IF EXISTS test_dispatch_backfill;")
         conn.use(cfg.namespace, cfg.database)
-        migrations.apply_migrations(conn, stage1)  # só 0001-0004: dispatch sem artifact
-        conn.query(
-            "CREATE dispatch SET destination = 'd', channel = 'telegram', "
-            "status = 'ok', watermark = $wm, item_count = 1, items = [];",
-            {"wm": legacy_wm},
-        )
-        migrations.apply_migrations(conn)  # aplica 0005 (0001-0004 já registradas): backfill
-        assert knowledge.last_dispatch_watermark(conn, "d") == legacy_wm
-        conn.query("REMOVE DATABASE IF EXISTS test_dispatch_backfill;")
+        try:
+            migrations.apply_migrations(conn, stage1)  # só 0001-0004: dispatch sem artifact
+            conn.query(
+                "CREATE dispatch SET destination = 'd', channel = 'telegram', "
+                "status = 'ok', watermark = $wm, item_count = 1, items = [];",
+                {"wm": legacy_wm},
+            )
+            migrations.apply_migrations(conn)  # aplica 0005 (0001-0004 já registradas): backfill
+            assert knowledge.last_dispatch_watermark(conn, "d") == legacy_wm
+        finally:
+            # cleanup garantido mesmo se o assert falhar — não deixa o banco órfão.
+            conn.query("REMOVE DATABASE IF EXISTS test_dispatch_backfill;")

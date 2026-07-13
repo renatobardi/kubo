@@ -161,10 +161,12 @@ def run_flow_command(
     """Resolve as dependências do flow (embedder Gemini, destino do destinations.yaml, base
     URL — tudo por env, invariante 8) e executa o flow SÍNCRONO no processo do CLI (ADR-0016
     §VII). Destino inexistente falha alto (ConfigError). O flow runner faz o resto."""
-    destinations = resolve_destinations(load_destinations(_DESTINATIONS_PATH))
-    dest = next((d for d in destinations if d.id == destination_id), None)
-    if dest is None:
+    raw = next((d for d in load_destinations(_DESTINATIONS_PATH) if d.id == destination_id), None)
+    if raw is None:
         raise ConfigError(f"destino '{destination_id}' não existe em destinations.yaml")
+    # Resolve SÓ o destino pedido: `resolve_destinations` falha se a env de QUALQUER destino
+    # faltar; um e-mail sem env não pode quebrar um `flow run` para o Telegram (CodeRabbit).
+    dest = resolve_destinations([raw])[0]
     embedder = GeminiEmbedder.from_env()
     return run_flow(
         db,
