@@ -317,6 +317,16 @@ def test_dispatch_digest_requires_watermark() -> None:
         DispatchPayload.model_validate(data)
 
 
+def test_dispatch_gate_has_no_watermark() -> None:
+    """ADR-0018 §III: a notificação de gate (`artifact="gate"`) valida SEM watermark e
+    é rejeitada COM watermark — só o digest carrega marca-d'água de acervo."""
+    ok = DispatchPayload.model_validate(_dispatch(artifact="gate", watermark=None, items=[]))
+    assert ok.artifact == "gate"
+    assert ok.watermark is None
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(artifact="gate"))
+
+
 # ---------------------------------------------------------------------------
 # ReportPayload (ADR-0016 §III/§VI)
 # ---------------------------------------------------------------------------

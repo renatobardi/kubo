@@ -22,6 +22,7 @@ from kubo.runtime.personas import load_personas
 from kubo.store import client, knowledge, migrations
 from kubo.store.flows import (
     create_task,
+    decide_gate,
     insert_deliverable,
     instantiate_flow,
     set_task_run,
@@ -188,6 +189,87 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
     assert deliverable in produced
     consulted = db.query("SELECT VALUE ->consults->distilled FROM $t;", {"t": task})[0]
     assert {str(x) for x in consulted} == {str(d1), str(d2)}
+
+
+_ANALYSIS_REVIEW = (
+    "name: analysis-review\nversion: 1\n"
+    "board:\n"
+    "  states: [created, analyzing, awaiting_review, delivered, rejected, failed]\n"
+    "  transitions:\n"
+    "    - [created, analyzing]\n    - [analyzing, awaiting_review]\n"
+    "    - [awaiting_review, delivered]\n    - [awaiting_review, rejected]\n"
+    "    - [analyzing, failed]\n"
+    "  gates:\n    - [awaiting_review, delivered]\n    - [awaiting_review, rejected]\n"
+    "cast: [analista, humano]\ndeliverable: report\ntriggers: [manual]\n"
+)
+
+
+def _review_flow(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
+    """Instancia um flow `analysis-review` e o leva até o gate aberto: a task da analista
+    em `awaiting_review` + a task do gate (do humano) nascida em `awaiting_review`. Devolve
+    (inst, analyst_task, gate_task) — o estado de partida das decisões de gate."""
+    inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
+    analyst = create_task(db, flow=inst.flow, persona=inst.personas["analista"], state="created")
+    transition_task(db, analyst, from_state="created", to_state="analyzing")
+    transition_task(db, analyst, from_state="analyzing", to_state="awaiting_review")
+    gate = create_task(db, flow=inst.flow, persona=inst.personas["humano"], state="awaiting_review")
+    return inst, analyst, gate
+
+
+def test_transition_task_refuses_gate_pair(db: Any, tmp_path: Path) -> None:
+    """A guarda de gate (ADR-0018 §II): `transition_task` NUNCA atravessa um par gated —
+    levanta StateError apontando `decide_gate`, mesmo o par estando nas transições."""
+    _, analyst, _ = _review_flow(db, tmp_path)
+    with pytest.raises(StateError, match="decide_gate"):
+        transition_task(db, analyst, from_state="awaiting_review", to_state="delivered")
+
+
+def test_decide_gate_approves_both_tasks_atomically(db: Any, tmp_path: Path) -> None:
+    """Aprovar move AS DUAS tasks (analista + gate) para `delivered` numa transação e grava
+    a decisão na task do gate (decision/decided_at). Lê de volta — o footgun do no-op
+    silencioso só morre lendo o estado persistido (ADR-0018 §I/§IV)."""
+    _, analyst, gate = _review_flow(db, tmp_path)
+    decide_gate(db, analyst_task=analyst, gate_task=gate, to_state="delivered", decision="approved")
+    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "delivered"
+    g = db.query("SELECT state, decision, reason, decided_at FROM $t;", {"t": gate})[0]
+    assert g["state"] == "delivered"
+    assert g["decision"] == "approved"
+    assert g["decided_at"] is not None
+
+
+def test_decide_gate_rejects_with_reason(db: Any, tmp_path: Path) -> None:
+    """Rejeitar move as duas tasks para `rejected` e grava o motivo obrigatório na task
+    do gate — a decisão vira registro no grafo, não só efeito de UI."""
+    _, analyst, gate = _review_flow(db, tmp_path)
+    decide_gate(
+        db,
+        analyst_task=analyst,
+        gate_task=gate,
+        to_state="rejected",
+        decision="rejected",
+        reason="fontes fracas",
+    )
+    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "rejected"
+    g = db.query("SELECT state, decision, reason FROM $t;", {"t": gate})[0]
+    assert g["state"] == "rejected"
+    assert g["decision"] == "rejected"
+    assert g["reason"] == "fontes fracas"
+
+
+def test_decide_gate_rejection_requires_reason(db: Any, tmp_path: Path) -> None:
+    """Motivo obrigatório na rejeição (nunca cortável): rejeitar sem motivo (ou só espaços)
+    levanta StateError e NÃO transiciona nada."""
+    _, analyst, gate = _review_flow(db, tmp_path)
+    with pytest.raises(StateError):
+        decide_gate(
+            db,
+            analyst_task=analyst,
+            gate_task=gate,
+            to_state="rejected",
+            decision="rejected",
+            reason="   ",
+        )
+    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "awaiting_review"
 
 
 def _write(tmp_path: Path, body: str) -> Path:

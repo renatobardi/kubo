@@ -181,7 +181,7 @@ class DispatchPayload(BaseModel):
     destination: str = Field(min_length=1, max_length=200)
     channel: Literal["telegram", "email"]
     status: Literal["ok", "error"]
-    artifact: Literal["digest", "report"]
+    artifact: Literal["digest", "report", "gate"]
     # watermark é opcional: obrigatório para digest, ausente (None) para report. O
     # default None deixa o report omitir; o validador cruza artifact↔watermark.
     watermark: datetime | None = None
@@ -204,12 +204,12 @@ class DispatchPayload(BaseModel):
 
     @model_validator(mode="after")
     def _watermark_matches_artifact(self) -> Self:
-        """Cruza `artifact` e `watermark` (fix E1): digest exige watermark (a marca do
-        acervo que ele cobre); report não tem — não move a marca-d'água do digest."""
+        """Cruza `artifact` e `watermark` (fix E1 + ADR-0018 §III): só o digest carrega
+        marca-d'água de acervo; report e gate não têm — não movem o watermark do digest."""
         if self.artifact == "digest" and self.watermark is None:
             raise ValueError("dispatch de digest exige watermark")
-        if self.artifact == "report" and self.watermark is not None:
-            raise ValueError("dispatch de report não deve carregar watermark")
+        if self.artifact != "digest" and self.watermark is not None:
+            raise ValueError("só dispatch de digest carrega watermark")
         return self
 
 

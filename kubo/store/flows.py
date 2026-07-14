@@ -106,13 +106,34 @@ def create_task(db: Any, *, flow: RecordID, persona: RecordID, state: str) -> Re
     return task
 
 
+def _pairs(raw: Any) -> set[tuple[str, str]]:
+    """Coage a lista de pares `[[from, to], ...]` de um snapshot (dado não-tipado do banco)
+    a um conjunto de tuplas. `raw` NONE/ausente (snapshot antigo sem a chave) → conjunto
+    vazio; `len == 2` guarda o índice duplo contra registro malformado."""
+    items: list[list[str]] = cast("list[list[str]]", raw) if raw else []
+    return {(t[0], t[1]) for t in items if len(t) == 2}
+
+
+def _snapshot_board(db: Any, flow: RecordID) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Lê `(transitions, gates)` do `flow.snapshot` congelado (invariante 4) como conjuntos
+    de pares. Fonte única para `transition_task` e `decide_gate` — a validação de estado
+    nunca lê o catálogo vivo. Snapshot sem `gates` (flow `analysis` legado) → gates vazio."""
+    rows = db.query(
+        "SELECT snapshot.board.transitions AS transitions, snapshot.board.gates AS gates FROM $f;",
+        {"f": flow},
+    )
+    row: dict[str, Any] = rows[0] if rows else {}
+    return _pairs(row.get("transitions")), _pairs(row.get("gates"))
+
+
 def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) -> None:
     """Transiciona um task de `from_state` para `to_state`, validando SEMPRE contra o
     `flow.snapshot` congelado — nunca contra o catálogo (invariante 4, teste honesto R5).
 
     Levanta `StateError` se o task não existe, se o estado atual não é `from_state`
-    (guarda contra dupla-transição), ou se o par `(from, to)` não está nas transições
-    do snapshot. Sucesso grava `task.state = to_state`."""
+    (guarda contra dupla-transição), se o par é uma travessia de GATE (§II — exige decisão
+    humana, só `decide_gate` passa), ou se o par não está nas transições do snapshot.
+    Sucesso grava `task.state = to_state`."""
     rows = db.query("SELECT state, ->belongs_to->flow AS flow FROM $t;", {"t": task})
     if not rows:
         raise StateError(f"task {task} não existe")
@@ -122,17 +143,81 @@ def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) 
     flow_id: RecordID | None = next(iter(rows[0].get("flow") or []), None)
     if flow_id is None:
         raise StateError(f"task {task} sem flow (belongs_to ausente)")
-    transitions = db.query("SELECT VALUE snapshot.board.transitions FROM $f;", {"f": flow_id})
-    # `first` pode ser NONE se o snapshot não tiver board.transitions (registro malformado/
-    # manual): SurrealDB devolve `[None]`. `if first` cobre lista vazia E None → pairs vazio →
-    # a transição não casa → StateError (não um TypeError cru). `len(t) == 2` guarda o índice
-    # duplo: o snapshot nasce de um FlowTemplate validado, mas ler do banco é dado não-tipado.
-    first = transitions[0] if transitions else None
-    raw: list[list[str]] = cast("list[list[str]]", first) if first else []
-    pairs = {(t[0], t[1]) for t in raw if len(t) == 2}
+    pairs, gates = _snapshot_board(db, flow_id)
+    # Guarda de gate ANTES da validação genérica (ADR-0018 §II): um par gated dá o erro
+    # específico "use decide_gate", não "fora do snapshot". `transition_task` NUNCA
+    # atravessa um gate — não tem como portar contexto de decisão, então é sempre erro.
+    if (from_state, to_state) in gates:
+        raise StateError(
+            f"transição de gate ({from_state}, {to_state}) exige decisão humana — use decide_gate"
+        )
     if (from_state, to_state) not in pairs:
         raise StateError(f"transição ({from_state}, {to_state}) não está no snapshot do flow")
     db.query("UPDATE $t SET state = $to;", {"t": task, "to": to_state})
+
+
+def _task_state_and_flow(db: Any, task: RecordID) -> tuple[str, RecordID]:
+    """Estado atual + flow de um task; StateError se o task ou a aresta `belongs_to` falta."""
+    rows = db.query("SELECT state, ->belongs_to->flow AS flow FROM $t;", {"t": task})
+    if not rows:
+        raise StateError(f"task {task} não existe")
+    flow_id: RecordID | None = next(iter(rows[0].get("flow") or []), None)
+    if flow_id is None:
+        raise StateError(f"task {task} sem flow (belongs_to ausente)")
+    return rows[0]["state"], flow_id
+
+
+def decide_gate(
+    db: Any,
+    *,
+    analyst_task: RecordID,
+    gate_task: RecordID,
+    to_state: str,
+    decision: str,
+    reason: str | None = None,
+) -> None:
+    """Decide um gate: transiciona a task da analista E a task do gate JUNTAS para `to_state`
+    (`delivered`|`rejected`) numa ÚNICA transação, gravando a decisão na task do gate
+    (ADR-0018 §IV). É a ÚNICA porta que atravessa um par gated — `transition_task` recusa.
+
+    Valida (StateError, antes da transação, para erro legível): motivo obrigatório na
+    rejeição; ambas as tasks no MESMO estado de partida e no MESMO flow; e o par
+    `(from, to)` ∈ gates do snapshot congelado. O UPDATE é condicional (`WHERE state =
+    $from`): uma corrida double-decide (duas abas passando o pré-check) degrada para no-op
+    total, nunca para decisão sobrescrita nem board incoerente (TOCTOU residual nomeado)."""
+    reason = (reason or "").strip()
+    if decision == "rejected" and not reason:
+        raise StateError("rejeição de gate exige motivo")
+
+    gate_from, gate_flow = _task_state_and_flow(db, gate_task)
+    analyst_from, analyst_flow = _task_state_and_flow(db, analyst_task)
+    if analyst_flow != gate_flow:
+        raise StateError("tasks do gate pertencem a flows distintos")
+    if analyst_from != gate_from:
+        raise StateError(
+            f"tasks do gate em estados divergentes (analista '{analyst_from}', gate '{gate_from}')"
+        )
+
+    _, gates = _snapshot_board(db, gate_flow)
+    if (gate_from, to_state) not in gates:
+        raise StateError(f"({gate_from}, {to_state}) não é uma transição de gate do snapshot")
+
+    run_transaction(
+        db,
+        [
+            "UPDATE $at SET state = $to WHERE state = $from",
+            "UPDATE $gt SET state = $to, decision = $dec, reason = $rsn, "
+            "decided_at = time::now() WHERE state = $from",
+        ],
+        {
+            "at": analyst_task,
+            "gt": gate_task,
+            "to": to_state,
+            "from": gate_from,
+            "dec": decision,
+            "rsn": reason or None,
+        },
+    )
 
 
 def set_task_run(db: Any, task: RecordID, run: RecordID) -> None:
