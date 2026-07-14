@@ -223,3 +223,12 @@ separado. (12.3)
 
 (e) **Watermark = `sent_at`** — rejeitada: distilled criado entre query e envio
 cairia num buraco eterno; `max(created_at)` do conjunto enviado é a marca honesta.
+
+## Nota — timezone de apresentação (fix)
+
+Regra permanente do projeto: **todo datetime formatado para humano converte para a
+tz local** (`env TZ`, default `America/Sao_Paulo`); **todo datetime armazenado ou
+comparado permanece UTC**. Storage é UTC (SurrealDB `time::now()`); a conversão vive
+só na borda de apresentação — `kubo/api/rendering.py` (`_local`), que cobre todas as
+telas (incl. Envios/`sent_at`). Os builders de distribuição (digest/telegram) não
+formatam datetime em texto humano hoje; se passarem a formatar, aplicam a mesma regra.

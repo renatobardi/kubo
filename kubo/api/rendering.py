@@ -7,9 +7,11 @@ template por context processor — nenhuma rota precisa lembrar de passá-los.
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -43,19 +45,29 @@ def _nav_context(request: Request) -> dict[str, Any]:
 
 
 def _parse(iso: str | None) -> datetime | None:
-    """Parseia um carimbo ISO (a store devolve `str(datetime)`); None se ausente/ilegível."""
+    """Parseia um carimbo ISO (a store devolve `str(datetime)`); None se ausente/ilegível.
+    Carimbo naive é assumido UTC (o storage é sempre UTC) para que a conversão de tela
+    seja consistente — nunca reinterpretado como hora local."""
     if not iso:
         return None
     try:
-        return datetime.fromisoformat(iso)
+        dt = datetime.fromisoformat(iso)
     except ValueError:
         return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _local(dt: datetime) -> datetime:
+    """Converte um carimbo (UTC) para a tz de apresentação: env `TZ`, default
+    America/Sao_Paulo. Regra: todo datetime formatado para humano passa por aqui;
+    o que é armazenado/comparado permanece UTC."""
+    return dt.astimezone(ZoneInfo(os.environ.get("TZ", "America/Sao_Paulo")))
 
 
 def short_datetime(iso: str | None) -> str:
     """Carimbo curto para exibição ('Jul 12, 09:00'); '—' se ausente/ilegível."""
     dt = _parse(iso)
-    return dt.strftime("%b %d, %H:%M") if dt else "—"
+    return _local(dt).strftime("%b %d, %H:%M") if dt else "—"
 
 
 def duration(start: str | None, end: str | None) -> str:
