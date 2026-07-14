@@ -1,6 +1,6 @@
 # ADR-0018 — Boards + gates + caminho de escrita da UI: o gate humano no browser
 
-> Status: proposto · Data: 2026-07-14 · valida o advisor (Fable 5) antes de cravar (marco 15.8)
+> Status: **aceito** · Data: 2026-07-14 · validado pelo advisor (Fable 5) no marco 15.8 (GO com as correções documentais aplicadas). Emenda ADR-0014 (§I) e ADR-0016 (§II/§III/§V-bis).
 
 ## Contexto
 
@@ -79,9 +79,9 @@ board:
     - [awaiting_review, delivered]
     - [awaiting_review, rejected]
     - [analyzing, failed]
-gates:
-  - [awaiting_review, delivered]
-  - [awaiting_review, rejected]
+  gates:                          # campo do Board (snapshot.board.gates), não do topo
+    - [awaiting_review, delivered]
+    - [awaiting_review, rejected]
 ```
 
 - **Loader:** `gates` é campo do `Board` com **default vazio** (`extra="forbid"`
@@ -155,6 +155,28 @@ gates:
   incoerente. O pré-check + `StateError` continua antes para dar erro legível; o
   `WHERE` é o cinto de segurança de graça.
 
+### V. E4 — Retomada pós-aprovação: SÍNCRONA no request, comportamento no `FLOW_REGISTRY`
+
+- `FLOW_REGISTRY["analysis-review"]` vira um comportamento com **três entradas**
+  keyed pelo nome (E4 do ADR-0016 preservado): **run-até-o-gate** (instancia,
+  roda o worker, para em `awaiting_review`, cria a task do Humano, notifica),
+  **resume-pós-gate** (aprovado) e **reject** (rejeitado). A **rota é casca**:
+  auth + CSRF + validação de estado + chamada + render.
+- **Approve:** `sendMessage` (~1s, via `kubo/distribution/telegram.py` —
+  distribuição é BIBLIOTECA, não identidade de processo) → `insert_dispatch(
+  artifact="report")` → `decide_gate(...)` das 2 tasks para `delivered` → 200.
+  Rota `def` síncrona (threadpool, padrão ADR-0014 §4). **Sem `run`** — envio
+  mecânico sem LLM; o dispatch audita o envio, a task do gate audita a decisão
+  (um worker aqui seria cerimônia).
+- **Reject:** sem envio; `decide_gate(...)` das 2 tasks para `rejected` +
+  `reason` obrigatório → 200. Arquiva.
+- **At-least-once herdado (ADR-0015):** crash entre o `sendMessage` e o dispatch/
+  transação deixa o gate aberto; o dono clica de novo; pior caso = relatório
+  duplicado para o dono. **Nomear, NÃO construir outbox.**
+- **TOCTOU residual nomeado:** a guarda de staleness (§VI) + `Semaphore` + o
+  `UPDATE ... WHERE` + dono único cobrem a corrida; o TOCTOU entre pré-check e
+  transação é irmão do at-least-once (degrada para no-op, não para incoerência).
+
 ### V-bis. Refinamentos fixados na execução (validados pelo advisor no 15.4)
 
 Três decisões concretas emergiram ao implementar o produce-only + a retomada, todas
@@ -179,28 +201,6 @@ validadas pelo advisor antes de cravar:
   `id`+`title`) — a aprovação re-hidrata as fontes das arestas sem forjar `summary`. A
   ordem do ranking do retrieval se perde no re-render (`consults` é conjunto): cosmético,
   nomeado, não construído.
-
-### V. E4 — Retomada pós-aprovação: SÍNCRONA no request, comportamento no `FLOW_REGISTRY`
-
-- `FLOW_REGISTRY["analysis-review"]` vira um comportamento com **três entradas**
-  keyed pelo nome (E4 do ADR-0016 preservado): **run-até-o-gate** (instancia,
-  roda o worker, para em `awaiting_review`, cria a task do Humano, notifica),
-  **resume-pós-gate** (aprovado) e **reject** (rejeitado). A **rota é casca**:
-  auth + CSRF + validação de estado + chamada + render.
-- **Approve:** `sendMessage` (~1s, via `kubo/distribution/telegram.py` —
-  distribuição é BIBLIOTECA, não identidade de processo) → `insert_dispatch(
-  artifact="report")` → `decide_gate(...)` das 2 tasks para `delivered` → 200.
-  Rota `def` síncrona (threadpool, padrão ADR-0014 §4). **Sem `run`** — envio
-  mecânico sem LLM; o dispatch audita o envio, a task do gate audita a decisão
-  (um worker aqui seria cerimônia).
-- **Reject:** sem envio; `decide_gate(...)` das 2 tasks para `rejected` +
-  `reason` obrigatório → 200. Arquiva.
-- **At-least-once herdado (ADR-0015):** crash entre o `sendMessage` e o dispatch/
-  transação deixa o gate aberto; o dono clica de novo; pior caso = relatório
-  duplicado para o dono. **Nomear, NÃO construir outbox.**
-- **TOCTOU residual nomeado:** a guarda de staleness (§VI) + `Semaphore` + o
-  `UPDATE ... WHERE` + dono único cobrem a corrida; o TOCTOU entre pré-check e
-  transação é irmão do at-least-once (degrada para no-op, não para incoerência).
 
 ### VI. E5 — Disparo pela UI + endurecimento dos handlers
 

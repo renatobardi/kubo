@@ -1,6 +1,7 @@
 # ADR-0016 — Personas + flow mínimo: template `analysis`, snapshot congelado, flow runner fino
 
 > Status: **aceito** · Data: 2026-07-13 · validado pelo advisor (Fable 5) no marco 13.8
+> · **Emendado por ADR-0018** (§II: o gatilho de `board_state` reescrito — gate é transição, não estado; §III: `dispatch.artifact` ganha `gate`; §V-bis: deliverable vira prosa-pura, fontes só nas arestas `consults`).
 
 ## Contexto
 

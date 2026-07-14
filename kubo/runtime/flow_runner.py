@@ -220,7 +220,15 @@ def _run_analysis_review(
     gate_task = create_task(
         db, flow=inst.flow, persona=inst.personas[_HUMAN_PERSONA], state=_AWAITING
     )
-    _notify_gate(db, destination=destination, question=question, base_url=base_url, senders=senders)
+    _notify_gate(
+        db,
+        flow=inst.flow,
+        gate_task=gate_task,
+        destination=destination,
+        question=question,
+        base_url=base_url,
+        senders=senders,
+    )
     return FlowRunResult(
         flow=inst.flow, task=task, run=run_id, state=_AWAITING, gate_task=gate_task
     )
@@ -343,14 +351,16 @@ def _reject_review(db: Any, *, gate_task: RecordID, reason: str) -> None:
 def _notify_gate(
     db: Any,
     *,
+    flow: RecordID,
+    gate_task: RecordID,
     destination: ResolvedDestination,
     question: str,
     base_url: str,
     senders: Mapping[str, Sender] | None,
 ) -> None:
     """Avisa o dono que um gate abriu + grava o dispatch de gate (ADR-0018 §III). BEST-EFFORT:
-    falha de notificação NÃO falha o gate (loga e segue — o board é a fonte da verdade). O
-    dispatch de gate NÃO move o watermark do digest (filtro artifact='digest')."""
+    falha de notificação NÃO falha o gate (loga com flow_id/task_id e segue — o board é a fonte
+    da verdade). O dispatch de gate NÃO move o watermark do digest (filtro artifact='digest')."""
     try:
         text = (
             f"🔔 Um relatório aguarda sua aprovação no Kubo.\n\n{question}\n\n"
@@ -368,7 +378,12 @@ def _notify_gate(
             items=[],
         )
     except Exception as exc:  # noqa: BLE001 — fronteira best-effort: o gate vive sem notificação
-        _log.warning("gate.notify_failed", error=type(exc).__name__)
+        _log.warning(
+            "gate.notify_failed",
+            error=type(exc).__name__,
+            flow_id=str(flow),
+            task_id=str(gate_task),
+        )
 
 
 def _dispatch_report(
