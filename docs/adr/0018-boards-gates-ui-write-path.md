@@ -155,6 +155,31 @@ gates:
   incoerente. O pré-check + `StateError` continua antes para dar erro legível; o
   `WHERE` é o cinto de segurança de graça.
 
+### V-bis. Refinamentos fixados na execução (validados pelo advisor no 15.4)
+
+Três decisões concretas emergiram ao implementar o produce-only + a retomada, todas
+validadas pelo advisor antes de cravar:
+
+- **Deliverable é PROSA PURA; fontes só nas arestas `consults`.** Antes, o
+  `deliverable.content` do `analysis` embutia `## Fontes` (markdown). Agora o content é só
+  a prosa do LLM; as fontes (título + link) são DERIVADAS das arestas `consults` no momento
+  de cada render (UI e Telegram). Isso fecha o §VI pela raiz — um documento hostil que
+  induza o modelo a emitir `## Fontes` na prosa não desloca nem forja proveniência, porque
+  nada de estrutura depende do texto. **Muda o formato do `analysis` legado** (o teste do
+  worker foi ajustado; deliverables históricos com `## Fontes` embutido são heterogeneidade
+  inofensiva — a UI renderiza texto plano). **Nomeado, não migrado.**
+- **Chave de entrega é CAPACIDADE-AUSENTE, nunca flag.** `AnalystWorker.destination:
+  ResolvedDestination | None` sem default. `None` ⇒ produce-only: o worker fica
+  ESTRUTURALMENTE incapaz de enviar (não carrega destino nem resolve token). O switch é
+  parâmetro de construção, wired SÓ pelo handler do `FLOW_REGISTRY` — **jamais alcançável
+  por config/YAML** (senão `deliver=true` num `analysis-review` seria o bypass de gate
+  proibido). Ausência-de-capacidade > checagem-de-flag (mesmo idioma de least-privilege).
+- **`render_telegram` é PÚBLICA e compartilhada** pelos 2 pontos de envio (run do `analysis`
+  e aprovação do `analysis-review`), tipada contra um Protocol mínimo `SourceView` (só
+  `id`+`title`) — a aprovação re-hidrata as fontes das arestas sem forjar `summary`. A
+  ordem do ranking do retrieval se perde no re-render (`consults` é conjunto): cosmético,
+  nomeado, não construído.
+
 ### V. E4 — Retomada pós-aprovação: SÍNCRONA no request, comportamento no `FLOW_REGISTRY`
 
 - `FLOW_REGISTRY["analysis-review"]` vira um comportamento com **três entradas**
@@ -220,7 +245,12 @@ gates:
   tabela (emenda ao ADR-0016); (b) segundo consumidor de "executar fora do
   request" (flow agendado com gate, retry automático, executor `cli` de minutos)
   → o desenho síncrono morre, vira "processo executor", ADR próprio + dono na
-  mesa; (c) exposição fora da tailnet → reabre §I + TLS do ADR-0014.
+  mesa; (c) exposição fora da tailnet → reabre §I + TLS do ADR-0014; (d) **dois
+  pontos de envio de report hoje** (worker `_deliver` no run do `analysis`; handler
+  de approve no `analysis-review`, render compartilhado) — um TERCEIRO ponto ou um
+  segundo canal → unificar a entrega no runtime, aí sim tocando o `analysis`, com
+  sessão própria; (e) **relatórios buscáveis** (deliverable no acervo) permanece
+  barrado (ADR-0016).
 
 ## Alternativas rejeitadas
 
