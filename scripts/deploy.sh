@@ -23,42 +23,32 @@ rsync -az --delete \
   --exclude='.env' \
   ./ "${HOST}:kubo/"
 
-echo "[deploy] 2/3 build + migrations + up (remoto)"
-# Heredoc CITADO: o $(...) roda no SERVIDOR. NÃO exportar o env do servidor no shell antes
-# do compose — o compose lê o arquivo sozinho, e uma variável exportada no shell fura a
-# interpolação ${...} (lição do deploy 0010: gravaria valor velho nos containers).
-#
-# --force-recreate É OBRIGATÓRIO: `docker compose up -d` (sem ele) NÃO recria um container
-# quando a única mudança é a imagem `kubo:latest` rebuildada — o container velho fica no ar
-# servindo a versão antiga, e o /healthz passa mentindo (bug do deploy 0011). O guard de
-# image-ID abaixo falha o deploy se, por qualquer motivo, o container não estiver na imagem
-# recém-buildada — o smoke não confia só no /healthz.
-ssh "${HOST}" bash -s <<'REMOTE'
-set -euo pipefail
-cd ~/kubo
-docker compose build
-docker compose up -d surrealdb
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)")" = healthy ]; do
-  sleep 3
-done
-docker compose run --rm kubo-scheduler python -m kubo.store.migrations
-docker compose up -d --force-recreate
-built="$(docker image inspect kubo:latest --format '{{.Id}}')"
-running="$(docker inspect "$(docker compose ps -q kubo-api)" --format '{{.Image}}')"
-if [ "$built" != "$running" ]; then
-  echo "[deploy] FALHOU: kubo-api roda imagem velha ($running != recém-buildada $built)" >&2
-  exit 1
-fi
-echo "[deploy] verificado: kubo-api roda a imagem recém-buildada"
-REMOTE
+# Token ÚNICO por deploy (SHA curto + timestamp UTC), calculado NO MAC (o remoto não tem
+# `.git` — rsync exclui). O rsync deploya a WORKING TREE, não o HEAD: comparar image-id ou
+# `git HEAD` deixaria um deploy 2 com árvore editada (HEAD igual) passar com código velho.
+# O token é injetado na imagem (ARG/ENV KUBO_BUILD_ID) e conferido no container vivo abaixo.
+KUBO_BUILD_ID="$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+echo "[deploy] 2/3 build ${KUBO_BUILD_ID} + migrations + up (remoto)"
+# O bloco remoto roda como ARQUIVO rsynced (scripts/deploy-remote.sh), NÃO por heredoc no
+# stdin: um `compose build`/`run` dentro de `ssh HOST bash -s <<EOF` consome o stdin (o próprio
+# script) e engole os passos seguintes — foi a causa PROXIMA do incidente (o guard nunca
+# rodava). O build_id vai por argumento; `< /dev/null` garante que nada leia o canal do ssh.
+ssh "${HOST}" "cd ~/kubo && bash scripts/deploy-remote.sh '${KUBO_BUILD_ID}'" < /dev/null
 
 echo "[deploy] 3/3 smoke ${HEALTH_URL}"
-body="$(curl -fsS --max-time 10 "${HEALTH_URL}")" || {
-  echo "[deploy] FALHOU: /healthz inacessível em ${HEALTH_URL}"
-  exit 1
-}
-[ "${body}" = "ok" ] || {
-  echo "[deploy] FALHOU: /healthz devolveu '${body}' (esperado 'ok')"
+# O kubo-api foi recém-recriado (force-recreate): o uvicorn leva alguns segundos para aceitar
+# conexão. Retry com TETO (~30s) em vez de tentativa única — senão o smoke falha flaky logo
+# após o recreate (connection refused) e ensina a desconfiar do "FALHOU". O teto evita travar
+# se o serviço não subir de fato; a última resposta entra na mensagem de falha.
+smoke_ok=""
+body=""
+for _ in $(seq 1 10); do
+  body="$(curl -fsS --max-time 10 "${HEALTH_URL}" 2>/dev/null || true)"
+  if [ "${body}" = "ok" ]; then smoke_ok=1; break; fi
+  sleep 3
+done
+[ -n "${smoke_ok}" ] || {
+  echo "[deploy] FALHOU: ${HEALTH_URL} não devolveu 'ok' em ~30s (última: '${body:-<sem resposta>}')" >&2
   exit 1
 }
 echo "[deploy] OK ✓ — ${HOST} atualizado; ${HEALTH_URL} → ok"

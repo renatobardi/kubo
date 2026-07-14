@@ -78,16 +78,35 @@ Verificação do setup: `docker run --rm hello-world` e
 Ele faz, nesta ordem, e **falha (exit != 0) em qualquer erro**: (1) rsync do repo pro
 `kubo-test:~/kubo` (exclui o arquivo de ambiente do servidor — segredo intacto); (2) no
 servidor, `docker compose build` → `up -d surrealdb` (espera healthy) → migrations
-(idempotentes) → **`up -d --force-recreate`** + **guard de image-ID** (o container da
-`kubo-api` DEVE estar na imagem recém-buildada); (3) smoke `GET /healthz` na tailnet,
-exigindo `ok`. Overrides: `KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`. Pré-requisito: env do
-servidor com `KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
+(idempotentes) → **`up -d --force-recreate kubo-api kubo-scheduler`** + **guard por
+BUILD_ID** (os dois containers de app DEVEM reportar o token do deploy); (3) smoke
+`GET /healthz` na tailnet, exigindo `ok`. Overrides: `KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`.
+Pré-requisito: env do servidor com `KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
 
-> **Por que `--force-recreate` + guard (bug do deploy 0011):** `docker compose up -d` **não
-> recria** um container quando a única mudança é a imagem `kubo:latest` rebuildada — o
-> container velho fica no ar servindo a versão antiga, e o `/healthz` passa mentindo. O
-> `--force-recreate` força a troca; o guard compara o image-ID do container com o da imagem
-> recém-buildada e **falha o deploy** se divergirem — o smoke não confia só no `/healthz`.
+> **Por que guard por BUILD_ID, não por image-ID (incidente pós-#37):** o host roda Docker
+> com o **containerd image store**, cujo build gera digest **não-determinístico** (attestations
+> de provenance/sbom: rebuild cacheado do MESMO fonte muda o digest de `kubo:latest`). Pior:
+> `kubo-api` e `kubo-scheduler` compartilhavam `build: .` na mesma tag — o compose assa um
+> label por-serviço, então eram **duas imagens distintas disputando `kubo:latest`** (quem
+> buildava por último ganhava). O guard antigo comparava o `.Id` (alvo móvel) do `kubo:latest`
+> com o `.Image` do container e **passava com container velho no ar** — o deploy dizia `OK ✓`
+> servindo código de dias atrás. Correção: (a) **um único builder** — só o `kubo-scheduler`
+> tem `build:`; a `kubo-api` só consome a tag (`pull_policy: never`); (b) **guard por token
+> único de deploy** (`git rev-parse --short HEAD` + timestamp UTC) injetado na imagem
+> (`ARG/ENV KUBO_BUILD_ID`, última camada) e conferido no container VIVO via
+> `compose exec printenv` — nos DOIS serviços (o `kubo-scheduler` é o caminho de ESCRITA,
+> mesmo risco). O rsync deploya a **working tree**, não o HEAD, então comparar `git HEAD` ou
+> image-id **não basta**: só o token único por deploy é inequívoco. `--force-recreate` fica
+> escopado aos serviços de app (não bounceia o SurrealDB a cada deploy).
+>
+> **Causa PROXIMA (o que fazia o guard nem rodar):** o bloco remoto era um heredoc no stdin
+> (`ssh HOST bash -s <<EOF`). O `docker compose build`/`run` lá dentro **consome o stdin** — que
+> era o próprio script — e engolia todos os passos seguintes (`up --force-recreate` + guard):
+> eles nunca executavam, o container ficava velho e o deploy dizia `OK ✓`. Correção estrutural:
+> o bloco remoto virou um ARQUIVO no repo (`scripts/deploy-remote.sh`), rsynced e executado como
+> arquivo (`ssh HOST "bash scripts/deploy-remote.sh <build_id>" </dev/null`) — sem script no
+> stdin, nenhum comando tem o que consumir. Regra: **nunca** ponha lógica multi-passo de deploy
+> num heredoc-stdin com comandos que leem stdin; use arquivo + argumento.
 
 > **Não repita os passos manuais numa sessão de agente** — o CLAUDE.md (§Comandos) aponta
 > o script como o único caminho de deploy. A sequência manual abaixo fica só como
