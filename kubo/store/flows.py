@@ -226,6 +226,82 @@ def set_task_run(db: Any, task: RecordID, run: RecordID) -> None:
     db.query("UPDATE $t SET run = $run;", {"t": task, "run": run})
 
 
+@dataclass(frozen=True)
+class GateSource:
+    """Uma fonte que a análise consultou: id (`distilled:<key>`) + título (via
+    `derived_from->item`). Satisfaz o Protocol `SourceView` do worker (id + title) — o mesmo
+    render de Telegram serve o run e a aprovação. A ORDEM não é significativa: `consults` é
+    conjunto, o ranking do retrieval se perde (cosmético, ADR-0018 §V)."""
+
+    id: str
+    title: str | None
+
+
+@dataclass(frozen=True)
+class GateContext:
+    """Tudo que uma decisão de gate precisa, lido do grafo numa passada (ADR-0018 §I/§V): os
+    dois tasks (para `decide_gate`), a pergunta do flow, a PROSA do deliverable e as fontes
+    consultadas. Uma leitura, dois consumidores: o painel de gate (UI) e o envio na aprovação."""
+
+    flow: RecordID
+    analyst_task: RecordID
+    gate_task: RecordID
+    question: str
+    content: str
+    sources: list[GateSource]
+
+
+def _first_title(titles: Any) -> str | None:
+    """Primeiro título de uma projeção `->derived_from->item.title` (um distilled pode derivar
+    de vários itens; o painel mostra um). None se vazio/ausente."""
+    if isinstance(titles, list):
+        items = cast("list[Any]", titles)
+        return next((str(t) for t in items if t), None)
+    return str(titles) if titles else None
+
+
+def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
+    """Reúne o contexto de um gate a partir do task do gate (ADR-0018 §I/§V): o flow, a
+    pergunta, o task da analista (para transicionar junto), a prosa do deliverable e as fontes
+    consultadas (id+título). `None` se o gate não resolve um flow (registro órfão/inexistente).
+
+    Fonte única do painel de gate e do re-render de Telegram na aprovação — a apresentação se
+    computa no USO, o grafo guarda só o fato (prosa + arestas `consults`)."""
+    head = db.query(
+        "SELECT VALUE {"
+        "flow: (->belongs_to->flow)[0], "
+        "question: (->belongs_to->flow.question)[0], "
+        "content: (->belongs_to->flow->produces->deliverable.content)[0]"
+        "} FROM $g;",
+        {"g": gate_task},
+    )
+    row: dict[str, Any] = head[0] if head else {}
+    flow = row.get("flow")
+    if flow is None:
+        return None
+    analyst = db.query(
+        "SELECT VALUE id FROM $flow<-belongs_to<-task "
+        "WHERE ->assigned_to->persona.catalog_name CONTAINS 'analista';",
+        {"flow": flow},
+    )
+    analyst_task: RecordID | None = analyst[0] if analyst else None
+    if analyst_task is None:
+        return None
+    src_rows = db.query(
+        "SELECT id, ->derived_from->item.title AS titles FROM $a->consults->distilled;",
+        {"a": analyst_task},
+    )
+    sources = [GateSource(id=str(r["id"]), title=_first_title(r.get("titles"))) for r in src_rows]
+    return GateContext(
+        flow=flow,
+        analyst_task=analyst_task,
+        gate_task=gate_task,
+        question=str(row.get("question") or ""),
+        content=str(row.get("content") or ""),
+        sources=sources,
+    )
+
+
 def insert_deliverable(
     db: Any,
     *,

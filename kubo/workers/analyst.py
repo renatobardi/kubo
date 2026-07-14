@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +36,23 @@ from kubo.errors import ConfigError, ContractError, SenderError
 
 # Sender de um canal (assinatura por-keyword de `send_telegram`); injetável para teste.
 Sender = Callable[..., None]
+
+
+class SourceView(Protocol):
+    """Mínimo que `render_telegram` precisa de uma fonte (ADR-0018 §V): id + título.
+
+    Protocol (não classe concreta) para que tanto o `RetrievedView` do retrieval quanto o
+    objeto leve que a aprovação re-hidrata das arestas `consults` sirvam sem herança nem
+    `summary` forjado. O render NUNCA toca `summary` — se um dia tocar, o Protocol quebra o
+    call site da aprovação em vez de deixá-lo passar silenciosamente."""
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def title(self) -> str | None: ...
+
+
 _MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conteúdo/segredo
 _TELEGRAM_LIMIT = 4096  # uma mensagem só (Bot API)
 _TITLE_CAP = 120  # teto por título nas fontes (o hyperlink carrega o resto da linha)
@@ -83,12 +101,18 @@ class AnalystWorker:
         executor: object,
         *,
         prompt: str,
-        destination: ResolvedDestination,
+        destination: ResolvedDestination | None,
         base_url: str,
         senders: Mapping[str, Sender] | None = None,
     ) -> None:
-        """Guarda o executor (seam), o prompt congelado da persona, o destino resolvido, a
-        base URL dos links e o mapa de senders por canal (default = sender real do Telegram)."""
+        """Guarda o executor (seam), o prompt congelado da persona, a base URL dos links e o
+        mapa de senders por canal (default = sender real do Telegram).
+
+        `destination` SEM default e opcional (ADR-0018 §V): `None` ⇒ modo PRODUCE-ONLY — o
+        worker produz só o deliverable e é estruturalmente incapaz de enviar (não carrega
+        destino nem resolve token). Isso é capacidade-ausente, não flag: o switch de entrega
+        NUNCA é alcançável por config/YAML (seria o bypass de gate proibido). Só o handler do
+        FLOW_REGISTRY escolhe — `analysis` passa o destino, `analysis-review` passa `None`."""
         self._executor = executor
         self._prompt = prompt
         self._destination = destination
@@ -96,12 +120,17 @@ class AnalystWorker:
         self._senders: Mapping[str, Sender] = senders or {"telegram": send_telegram}
 
     def run(self, ctx: RunContext) -> RunResult:
-        """Recupera top-k, sintetiza, monta as citações programaticamente e entrega.
+        """Recupera top-k, sintetiza e produz o deliverable (PROSA PURA — ADR-0018 §V).
 
-        Devolve `[ReportPayload, DispatchPayload]`: o relatório vira deliverable no grafo
-        (via FlowCtx no runner) e a entrega vira fato de dispatch (artifact=report — NÃO move
-        o watermark do digest, fix E1). Falha de envio → dispatch(error) + ErrorInfo, o
-        deliverable permanece no grafo (o produto é o deliverable; Telegram é entrega)."""
+        O `deliverable.content` é SÓ a prosa: as fontes são derivadas das arestas `consults`
+        no momento de cada render (UI e Telegram), nunca embutidas no texto. Isso fecha o
+        canal do §VI pela raiz — um documento hostil que induza o modelo a emitir "## Fontes"
+        na prosa não desloca nem forja proveniência, porque nada de estrutura depende do texto.
+
+        `destination is None` (produce-only): devolve SÓ o ReportPayload e para no gate. Com
+        destino (`analysis`): entrega no Telegram e anexa o DispatchPayload (artifact=report —
+        NÃO move o watermark do digest, fix E1). Falha de envio → dispatch(error) + ErrorInfo,
+        o deliverable permanece no grafo (o produto é o deliverable; Telegram é entrega)."""
         config = ctx.config
         if not isinstance(config, AnalystConfig):  # narrowing (padrão do FeedWorker)
             raise ContractError(
@@ -114,14 +143,16 @@ class AnalystWorker:
         vector = embedder.embed([config.question])[0]
         docs = ctx.knowledge.search_distilled(vector, config.k)
         report_text = self._synthesize(config.question, docs)
-
-        markdown = _render_markdown(report_text, docs, self._base_url)
         consulted = [doc.id for doc in docs]
         payloads: list[ReportPayload | DispatchPayload] = [
-            ReportPayload(content=markdown, consulted=consulted)
+            ReportPayload(content=report_text.strip(), consulted=consulted)
         ]
 
-        error = self._deliver(ctx, report_text, docs, consulted, payloads)
+        if self._destination is None:  # produce-only: o gate segura o relatório até a decisão
+            stats = Stats.model_validate({"sources": len(docs), "delivered": 0})
+            return RunResult(payloads=list(payloads), stats=stats)
+
+        error = self._deliver(ctx, self._destination, report_text, docs, consulted, payloads)
         stats = Stats.model_validate({"sources": len(docs), "delivered": 0 if error else 1})
         return RunResult(payloads=list(payloads), stats=stats, error=error)
 
@@ -144,6 +175,7 @@ class AnalystWorker:
     def _deliver(
         self,
         ctx: RunContext,
+        dest: ResolvedDestination,
         report_text: str,
         docs: list[RetrievedView],
         consulted: list[str],
@@ -152,24 +184,29 @@ class AnalystWorker:
         """Envia o relatório ao destino e anexa o DispatchPayload (ok|error). Devolve
         ErrorInfo se o envio falhou (o run fecha em erro; o deliverable já está no payload)."""
         try:
-            self._send(ctx, report_text, docs)
+            self._send(ctx, dest, report_text, docs)
         except SenderError as exc:
-            ctx.logger.warning("analyst.send_failed", destination=self._destination.id)
-            payloads.append(_dispatch(self._destination, consulted, status="error", exc=exc))
-            return ErrorInfo(kind=f"{self._destination.channel}_send", message=str(exc)[:_MSG_CAP])
-        payloads.append(_dispatch(self._destination, consulted, status="ok"))
+            ctx.logger.warning("analyst.send_failed", destination=dest.id)
+            payloads.append(_dispatch(dest, consulted, status="error", exc=exc))
+            return ErrorInfo(kind=f"{dest.channel}_send", message=str(exc)[:_MSG_CAP])
+        payloads.append(_dispatch(dest, consulted, status="ok"))
         return None
 
-    def _send(self, ctx: RunContext, report_text: str, docs: list[RetrievedView]) -> None:
+    def _send(
+        self,
+        ctx: RunContext,
+        dest: ResolvedDestination,
+        report_text: str,
+        docs: list[RetrievedView],
+    ) -> None:
         """Monta a mensagem de texto do canal e envia; levanta SenderError se não puder."""
-        dest = self._destination
         sender = self._senders.get(dest.channel)
         if sender is None:
             raise SenderError(f"canal {dest.channel!r} sem sender configurado")
         if dest.channel != "telegram":  # e-mail/etc não suportados nesta sessão
             raise SenderError(f"canal {dest.channel!r} não suportado nesta sessão")
         token = _integration_secret(ctx, "telegram")
-        text = _render_telegram(report_text, docs, self._base_url)
+        text = render_telegram(report_text, docs, self._base_url)
         sender(token=token, chat_id=dest.address, text=text, parse_mode="HTML")
 
 
@@ -205,20 +242,15 @@ def _source_title(title: str | None) -> str:
     return text if len(text) <= _TITLE_CAP else text[: _TITLE_CAP - 1].rstrip() + "…"
 
 
-def _render_markdown(report_text: str, docs: list[RetrievedView], base_url: str) -> str:
-    """Relatório markdown COMPLETO para o `deliverable` (§VI: fontes = apêndice
-    programático do retrieval). Título+link por documento recuperado."""
-    body = report_text.strip()
-    if not docs:
-        return body
-    lines = [f"- [{_source_title(doc.title)}]({base_url}/distilled/{_key(doc.id)})" for doc in docs]
-    return f"{body}\n\n## Fontes\n" + "\n".join(lines)
-
-
-def _render_telegram(report_text: str, docs: list[RetrievedView], base_url: str) -> str:
+def render_telegram(report_text: str, docs: Sequence[SourceView], base_url: str) -> str:
     """Mensagem HTML (parse_mode=HTML) para o Telegram. A prosa do LLM é HOSTIL (ADR-0013):
     escapada integralmente — só `<a href>` das fontes é markup nosso. Cada fonte vira
     `• <a href="link">título</a>` (link programático do retrieval, §VI — nunca a URL crua).
+
+    PÚBLICA (ADR-0018 §V): o run do `analysis` e o handler de aprovação do `analysis-review`
+    compartilham EXATAMENTE este render — a duplicação entre os dois pontos de envio se reduz
+    a orquestração. `docs` é tipado contra o Protocol mínimo `SourceView` (só `id`+`title`):
+    a aprovação re-hidrata as fontes das arestas `consults` sem forjar `summary`.
 
     Garante ≤ 4096 SEM cortar tag: as fontes são truncadas em fronteira de LINHA inteira
     (rodapé "+N fontes") e a prosa por `_truncate_html` (não parte entidade `&…;`)."""

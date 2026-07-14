@@ -179,8 +179,9 @@ def run_flow_command(
 
 
 def _handle_flow(db: Any, args: argparse.Namespace) -> int:
-    """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 0
-    se entregue, 1 se o flow terminou em `failed` (o deliverable pode existir mesmo assim)."""
+    """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 0 se
+    entregue OU se o gate abriu (`awaiting_review` é sucesso — o relatório espera a decisão no
+    board); 1 se o flow terminou em `failed` (o deliverable pode existir mesmo assim)."""
     if args.flow_command != "run":
         print('uso: kubo flow run <template> "pergunta"', file=sys.stderr)
         return 2
@@ -188,7 +189,7 @@ def _handle_flow(db: Any, args: argparse.Namespace) -> int:
         db, template=args.template, question=args.question, destination_id=args.destination
     )
     print(f"flow {result.flow} — {result.state} (run {result.run})")
-    return 0 if result.state == "delivered" else 1
+    return 0 if result.state in ("delivered", "awaiting_review") else 1
 
 
 def _build_parser() -> argparse.ArgumentParser:

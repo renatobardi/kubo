@@ -25,9 +25,11 @@ from kubo.store.flows import (
     decide_gate,
     insert_deliverable,
     instantiate_flow,
+    read_gate_context,
     set_task_run,
     transition_task,
 )
+from kubo.store.knowledge import Chunk
 
 pytestmark = pytest.mark.integration
 
@@ -270,6 +272,46 @@ def test_decide_gate_rejection_requires_reason(db: Any, tmp_path: Path) -> None:
             reason="   ",
         )
     assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "awaiting_review"
+
+
+def _seed_distilled(db: Any, title: str) -> Any:
+    """Semeia um distilled com um item titulado (via derived_from) — para read_gate_context
+    resolver o título da fonte."""
+    src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
+    item = knowledge.upsert_item(
+        db, source=src, external_id=f"ext::{title}", content="x", title=title
+    )
+    chunk = Chunk(text="s", seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
+    return knowledge.insert_distilled(db, item=item, summary="s", chunks=[chunk])
+
+
+def test_read_gate_context_gathers_flow_deliverable_and_sources(db: Any, tmp_path: Path) -> None:
+    """read_gate_context (ADR-0018 §I/§V): a partir do task do gate reúne flow, pergunta, o
+    task da analista, a PROSA do deliverable e as fontes consultadas (id+título) — a leitura
+    única que serve o painel de gate E o re-render do Telegram na aprovação."""
+    inst, analyst, gate = _review_flow(db, tmp_path)
+    d1 = _seed_distilled(db, "Rust ownership")
+    d2 = _seed_distilled(db, "GC tradeoffs")
+    insert_deliverable(
+        db, flow=inst.flow, task=analyst, kind="report", content="A análise.", consulted=[d1, d2]
+    )
+
+    ctx = read_gate_context(db, gate)
+
+    assert ctx is not None
+    assert ctx.flow == inst.flow
+    assert ctx.analyst_task == analyst
+    assert ctx.gate_task == gate
+    assert ctx.question == "q?"
+    assert ctx.content == "A análise."
+    assert {s.id for s in ctx.sources} == {str(d1), str(d2)}
+    assert {s.title for s in ctx.sources} == {"Rust ownership", "GC tradeoffs"}
+
+
+def test_read_gate_context_none_for_orphan_task(db: Any) -> None:
+    """Um task sem flow (belongs_to ausente) → None, nunca crash (registro órfão/manual)."""
+    orphan = db.query("CREATE task SET state = 'awaiting_review';")[0]["id"]
+    assert read_gate_context(db, orphan) is None
 
 
 def _write(tmp_path: Path, body: str) -> Path:
