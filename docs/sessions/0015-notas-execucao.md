@@ -14,7 +14,18 @@
 | 15.5 | Credencial `kubo_rw` (connect_rw, compose, runbook §2d) | ✅ (EDITOR suficiente) |
 | 15.6 | UI: lista → board → GateSheet → 2 POSTs (CSRF + staleness) | ✅ (disparo D38-b diferido) |
 | 15.7 | Deploy + smoke físico gated | ⏳ **bloqueado no dono** (dreno parado + autorização) |
-| 15.8 | ADR-0018 final (advisor) + paridade | ✅ (esta nota) |
+| 15.8 | ADR-0018 final (advisor) + paridade | ✅ ADR **aceito** (advisor GO + 3 correções aplicadas) |
+
+## Pré-condições operacionais do deploy (15.7) — ordem obrigatória
+
+1. **Dreno parado** no kubo-test (`docker stop kubo-drain`, nunca Ctrl-C) — regra do período.
+2. **One-time do `kubo_rw`** no servidor (runbook §2d) + `KUBO_RW_SURREAL_PASS` no `.env`
+   **antes** do smoke — senão as 2 rotas de escrita dão 503 e o smoke "falha" por setup.
+3. **Env novo do kubo-api** no `.env`: `GROQ_API_KEY`, `TELEGRAM_BOT_TOKEN`,
+   `KUBO_OWNER_TELEGRAM_CHAT_ID`, `KUBO_BASE_URL` (o disparo/entrega precisa).
+4. **"Pode executar"** → `./scripts/deploy.sh` → smoke: disparar (CLI) → gate notificado →
+   board âmbar → GateSheet → **aprovar** (entrega no Telegram) E **rejeitar com motivo** —
+   os DOIS caminhos, com o dono clicando (aceite visual = screenshots lado a lado aqui).
 
 ## Desvios de escopo pré-acordados nesta execução
 
