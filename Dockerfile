@@ -77,6 +77,15 @@ USER kubo
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Identidade do build, injetada pelo deploy (token único por deploy: SHA curto +
+# timestamp). É a ÚLTIMA camada de propósito — só ela rebuilda quando o id muda, e o
+# `deploy.sh` a lê via `compose exec printenv` para provar que o container roda a
+# imagem recém-buildada (guard honesto: rsync deploya a working tree, não o HEAD, então
+# comparar image-id/SHA não basta — ver docs/runbook-deploy.md). Default para builds
+# avulsos (`docker build` sem --build-arg) não quebrarem.
+ARG KUBO_BUILD_ID=unknown
+ENV KUBO_BUILD_ID=$KUBO_BUILD_ID
+
 # BlockingScheduler síncrono; SIGTERM faz shutdown que espera a run em voo
 # (compose dá stop_grace_period 60s para isso completar).
 CMD ["python", "-m", "kubo.scheduler"]

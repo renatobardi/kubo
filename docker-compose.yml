@@ -42,7 +42,13 @@ services:
   # BlockingScheduler síncrono; SIGTERM faz shutdown que espera a run em voo — daí
   # o stop_grace_period 60s (o default de 10s mataria a run antes do shutdown limpo).
   kubo-scheduler:
-    build: .
+    # ÚNICO serviço que builda a imagem `kubo:latest` (o kubo-api só a consome). Dois
+    # `build:` na MESMA tag geram imagens distintas — o compose assa um label por-serviço
+    # — e disputam `kubo:latest`, quebrando o guard do deploy (incidente; runbook-deploy.md).
+    build:
+      context: .
+      args:
+        KUBO_BUILD_ID: ${KUBO_BUILD_ID:-unknown}
     image: kubo:latest
     restart: unless-stopped
     depends_on:
@@ -95,8 +101,14 @@ services:
   # (base = PRD/OCI): o overlay compose.dev-lxc.yml publica no IP Tailscale
   # (100.66.254.24:3900, E2); o publish de PRD/OCI é decisão futura (como o backup).
   kubo-api:
-    build: .
+    # MESMA imagem do kubo-scheduler (só o `command` muda). NÃO tem `build:` de propósito:
+    # o kubo-scheduler é o único builder de `kubo:latest` (evita o race de dois `build:` na
+    # mesma tag). `pull_policy: never` = a tag é local, nunca buscada de registry.
+    # Env deliberadamente SEM Telegram/LLM-de-escrita: a UI usa Surreal READ-ONLY (least-
+    # privilege, ADR-0014 amendment); o analista/report ESCREVE no grafo, então roda do
+    # kubo-scheduler (que tem root + os segredos de distribuição), nunca daqui.
     image: kubo:latest
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       surrealdb:
