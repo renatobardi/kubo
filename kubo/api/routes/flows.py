@@ -35,8 +35,10 @@ from kubo.store.flows import (
     FlowBoardView,
     count_flows,
     flow_board,
+    flow_of_task,
     list_flows,
     read_gate_context,
+    task_state,
 )
 
 _log = structlog.get_logger(__name__)
@@ -120,11 +122,11 @@ def _decide(request: Request, *, task: str, csrf: str, approve: bool, reason: st
     try:
         with client.connect_rw() as db:
             return _apply_decision(request, db, gate_task, approve=approve, reason=reason)
-    except ConfigError:  # connect_rw fail-fast (sem KUBO_RW_SURREAL_PASS) ou config de envio
+    except ConfigError:  # connect_rw sem KUBO_RW_SURREAL_PASS OU destino/base_url do envio
+        # Mensagem genérica: o ConfigError pode vir de connect_rw (credencial) OU de
+        # _owner_delivery/resume_gate (destino/base_url) — não afirma uma causa específica.
         _log.warning("flows.write_unavailable")
-        return PlainTextResponse(
-            "Escrita indisponível (credencial kubo_rw ausente).", status_code=503
-        )
+        return PlainTextResponse("Escrita indisponível por erro de configuração.", status_code=503)
 
 
 def _apply_decision(
@@ -132,7 +134,7 @@ def _apply_decision(
 ) -> Response:
     """Com a conexão de ESCRITA aberta: staleness (409) → decisão → redirect ao board. Envio
     falho na aprovação (SenderError) reabre o board com aviso; o gate segue aberto."""
-    if _task_state(db, gate_task) != "awaiting_review":
+    if task_state(db, gate_task) != "awaiting_review":
         return _reopen_board(
             request, gate_task, notice="Esta decisão já foi tomada.", status=409, db=db
         )
@@ -204,7 +206,7 @@ def _reopen_with(
     request: Request, db: object, gate_task: RecordID, notice: str, status: int
 ) -> Response:
     """Renderiza o board do flow ao qual o gate pertence, com aviso e status dados."""
-    flow = _flow_of(db, gate_task)
+    flow = flow_of_task(db, gate_task)
     if flow is None:
         return RedirectResponse(_LIST_PATH, status_code=303)
     board = flow_board(db, flow)
@@ -226,19 +228,7 @@ def _parse_task_id(raw: str) -> RecordID | None:
     return RecordID("task", key)
 
 
-def _task_state(db: object, task: RecordID) -> str | None:
-    """Estado atual de um task (staleness); None se não existe."""
-    rows = db.query("SELECT VALUE state FROM $t;", {"t": task})  # type: ignore[attr-defined]
-    return str(rows[0]) if rows else None
-
-
-def _flow_of(db: object, task: RecordID) -> RecordID | None:
-    """O flow ao qual um task pertence (belongs_to), ou None."""
-    rows = db.query("SELECT VALUE (->belongs_to->flow)[0] FROM $t;", {"t": task})  # type: ignore[attr-defined]
-    return rows[0] if rows and rows[0] is not None else None
-
-
 def _flow_key(db: object, task: RecordID) -> str:
-    """A KEY do flow do task (para o redirect `/flows/<key>`)."""
-    flow = _flow_of(db, task)
+    """A KEY do flow do task (para o redirect `/flows/<key>`), via a store (invariante 2)."""
+    flow = flow_of_task(db, task)
     return str(flow).partition(":")[2] if flow is not None else ""

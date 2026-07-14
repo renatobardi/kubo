@@ -77,20 +77,22 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
+        # DEFINE USER + try juntos: uma falha em _seed_distilled/run_flow NÃO pode pular o
+        # finally e vazar o usuário kubo_rw no nível ROOT (afeta a instância inteira).
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
-        _seed_distilled(root, "Rust")
-        result = run_flow(
-            root,
-            template_name="analysis-review",
-            question="o que dizem sobre memória?",
-            embedder=_FakeEmbedder(),
-            destination=_DEST,
-            base_url="https://kubo.example",
-            executor=_FakeExecutor(),
-            senders={"telegram": lambda **kw: None},  # notificação do gate: no-op no seed
-        )
-        flow_key = str(result.flow).partition(":")[2]
         try:
+            _seed_distilled(root, "Rust")
+            result = run_flow(
+                root,
+                template_name="analysis-review",
+                question="o que dizem sobre memória?",
+                embedder=_FakeEmbedder(),
+                destination=_DEST,
+                base_url="https://kubo.example",
+                executor=_FakeExecutor(),
+                senders={"telegram": lambda **kw: None},  # notificação do gate: no-op no seed
+            )
+            flow_key = str(result.flow).partition(":")[2]
             yield create_app(), flow_key, result.gate_task, sent
         finally:
             root.query("REMOVE USER IF EXISTS kubo_rw ON ROOT;")

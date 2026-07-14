@@ -29,6 +29,13 @@ def _fresh(table: str) -> RecordID:
     return RecordID(table, secrets.token_hex(16))
 
 
+# Pares (decisão, estado-destino) válidos num gate: a decisão NÃO pode contradizer o destino
+# (approved só entrega, rejected só arquiva). Fecha a trilha de auditoria contra par forjado.
+_GATE_DECISIONS = {("approved", "delivered"), ("rejected", "rejected")}
+_ANALYST_CATALOG = "analista"
+_HUMAN_CATALOG = "humano"
+
+
 # LIMIT/START não aceitam bind param neste SurrealDB; `list_flows` interpola SÓ ints
 # (paginação da store, nunca entrada coletada) via .format — S608 suprimido no call site.
 _LIST_FLOWS_SQL = (
@@ -196,6 +203,11 @@ def decide_gate(
     $from`): uma corrida double-decide (duas abas passando o pré-check) degrada para no-op
     total, nunca para decisão sobrescrita nem board incoerente (TOCTOU residual nomeado)."""
     reason = (reason or "").strip()
+    if (decision, to_state) not in _GATE_DECISIONS:
+        raise StateError(
+            f"decisão '{decision}' não corresponde ao estado destino '{to_state}' "
+            "(só approved→delivered ou rejected→rejected)"
+        )
     if decision == "rejected" and not reason:
         raise StateError("rejeição de gate exige motivo")
 
@@ -236,6 +248,27 @@ def set_task_run(db: Any, task: RecordID, run: RecordID) -> None:
     db.query("UPDATE $t SET run = $run;", {"t": task, "run": run})
 
 
+def task_state(db: Any, task: RecordID) -> str | None:
+    """Estado atual de um task; `None` se não existe (staleness — invariante 2: a leitura é da
+    store, não da rota)."""
+    rows = db.query("SELECT VALUE state FROM $t;", {"t": task})
+    return str(rows[0]) if rows else None
+
+
+def flow_of_task(db: Any, task: RecordID) -> RecordID | None:
+    """O flow ao qual um task pertence (`belongs_to`), ou `None` (invariante 2)."""
+    rows = db.query("SELECT VALUE (->belongs_to->flow)[0] FROM $t;", {"t": task})
+    return rows[0] if rows and rows[0] is not None else None
+
+
+def template_of_task(db: Any, task: RecordID) -> str | None:
+    """O `template_name` do flow ao qual um task pertence — binding gate→comportamento keyed
+    pelo nome (E4). `None` se o task/flow não resolve (invariante 2)."""
+    rows = db.query("SELECT VALUE (->belongs_to->flow.template_name)[0] FROM $t;", {"t": task})
+    name = rows[0] if rows else None
+    return str(name) if isinstance(name, str) else None
+
+
 @dataclass(frozen=True)
 class GateSource:
     """Uma fonte que a análise consultou: id (`distilled:<key>`) + título (via
@@ -273,26 +306,35 @@ def _first_title(titles: Any) -> str | None:
 def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
     """Reúne o contexto de um gate a partir do task do gate (ADR-0018 §I/§V): o flow, a
     pergunta, o task da analista (para transicionar junto), a prosa do deliverable e as fontes
-    consultadas (id+título). `None` se o gate não resolve um flow (registro órfão/inexistente).
+    consultadas (id+título).
 
-    Fonte única do painel de gate e do re-render de Telegram na aprovação — a apresentação se
-    computa no USO, o grafo guarda só o fato (prosa + arestas `consults`)."""
+    `None` a menos que `gate_task` seja de fato o GATE HUMANO ABERTO: persona `humano` E estado
+    `awaiting_review`. A validação fecha a forja pela borda HTTP (o id vem do form): sem ela,
+    passar a task da analista a resolveria como a própria contraparte (`analyst_task == gate_task`)
+    e `decide_gate` atualizaria o mesmo registro duas vezes, deixando o gate real aberto após os
+    efeitos externos. O par da analista é exigido `analista` E distinto do gate."""
     head = db.query(
         "SELECT VALUE {"
         "flow: (->belongs_to->flow)[0], "
         "question: (->belongs_to->flow.question)[0], "
-        "content: (->belongs_to->flow->produces->deliverable.content)[0]"
+        "content: (->belongs_to->flow->produces->deliverable.content)[0], "
+        "state: state, "
+        "persona: (->assigned_to->persona.catalog_name)[0]"
         "} FROM $g;",
         {"g": gate_task},
     )
     row: dict[str, Any] = head[0] if head else {}
     flow = row.get("flow")
-    if flow is None:
+    if (
+        flow is None
+        or row.get("persona") != _HUMAN_CATALOG
+        or row.get("state") != "awaiting_review"
+    ):
         return None
     analyst = db.query(
         "SELECT VALUE id FROM $flow<-belongs_to<-task "
-        "WHERE ->assigned_to->persona.catalog_name CONTAINS 'analista';",
-        {"flow": flow},
+        "WHERE ->assigned_to->persona.catalog_name CONTAINS $analyst AND id != $g;",
+        {"flow": flow, "g": gate_task, "analyst": _ANALYST_CATALOG},
     )
     analyst_task: RecordID | None = analyst[0] if analyst else None
     if analyst_task is None:

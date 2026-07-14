@@ -37,6 +37,7 @@ from kubo.store.flows import (
     instantiate_flow,
     read_gate_context,
     set_task_run,
+    template_of_task,
     transition_task,
 )
 from kubo.store.knowledge import insert_dispatch, run_status
@@ -291,10 +292,10 @@ def reject_gate(db: Any, *, gate_task: RecordID, reason: str) -> None:
 
 def _behavior_for_gate(db: Any, gate_task: RecordID) -> FlowBehavior:
     """Resolve o FlowBehavior pelo `template_name` do flow do gate (E4: comportamento keyed
-    pelo nome). Gate sem template registrado → ConfigError."""
-    rows = db.query("SELECT VALUE (->belongs_to->flow.template_name)[0] FROM $g;", {"g": gate_task})
-    name = rows[0] if rows else None
-    behavior = _FLOW_REGISTRY.get(name) if isinstance(name, str) else None
+    pelo nome). Gate sem template registrado → ConfigError. A leitura passa pela store
+    (`template_of_task`, invariante 2), nunca `db.query` direto aqui."""
+    name = template_of_task(db, gate_task)
+    behavior = _FLOW_REGISTRY.get(name) if name is not None else None
     if behavior is None:
         raise ConfigError(f"gate sem template no FLOW_REGISTRY: {name!r}")
     return behavior

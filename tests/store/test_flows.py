@@ -317,6 +317,26 @@ def test_read_gate_context_none_for_orphan_task(db: Any) -> None:
     assert read_gate_context(db, orphan) is None
 
 
+def test_read_gate_context_rejects_non_gate_task(db: Any, tmp_path: Path) -> None:
+    """Só a task do HUMANO em awaiting_review resolve um gate (ADR-0018 §I): passar a task da
+    ANALISTA (forja pela borda HTTP) → None, senão `decide_gate` atualizaria a task errada e o
+    gate real ficaria aberto após os efeitos externos."""
+    _inst, analyst, _gate = _review_flow(db, tmp_path)
+    assert read_gate_context(db, analyst) is None  # analista não é o gate
+
+
+def test_decide_gate_rejects_contradictory_decision(db: Any, tmp_path: Path) -> None:
+    """A decisão não pode contradizer o estado destino (ADR-0018 §IV): approved→rejected (ou
+    qualquer par fora de {approved→delivered, rejected→rejected}) levanta StateError, sem
+    corromper a trilha de auditoria."""
+    _inst, analyst, gate = _review_flow(db, tmp_path)
+    with pytest.raises(StateError):
+        decide_gate(
+            db, analyst_task=analyst, gate_task=gate, to_state="rejected", decision="approved"
+        )
+    assert db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "awaiting_review"
+
+
 def test_list_flows_derives_status_gate_and_cast(db: Any, tmp_path: Path) -> None:
     """list_flows deriva o status dos tasks (ADR-0016 §II), marca gate aberto e junta o elenco
     ativo. Um flow no gate → status 'aguardando', gate_open, cast {analista, humano}."""
