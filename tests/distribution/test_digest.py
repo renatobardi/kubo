@@ -50,6 +50,13 @@ def test_link_points_to_ui_by_id_only() -> None:
     assert out.count("<a ") == 1  # exatamente um link
 
 
+def test_title_is_the_hyperlink_no_separate_link_line() -> None:
+    """O próprio título é o hyperlink (title-as-link) — não há mais linha 'abrir no Kubo'."""
+    out = build_telegram_digest([_view(key="deadbeef")], _BASE)
+    assert f'<a href="{_BASE}/distilled/deadbeef"><b>OpenAI lança modelo</b></a>' in out
+    assert "abrir no Kubo" not in out
+
+
 def test_collected_url_in_summary_is_not_linkified() -> None:
     """Uma URL coletada no summary NÃO vira hyperlink — só texto escapado."""
     out = build_telegram_digest([_view(summary="veja http://evil.example/x")], _BASE)

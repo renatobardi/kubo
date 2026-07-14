@@ -60,16 +60,16 @@ def _header(total: int) -> str:
 
 
 def _render_entry(view: DigestView, base_url: str) -> str:
-    """Renderiza UMA entrada: título (negrito), resumo curto, entidades e o link da UI.
-    Todo conteúdo dinâmico é escapado; só `<b>`/`<a>` do template são markup."""
+    """Renderiza UMA entrada: título (hyperlink para a UI, em negrito), resumo curto e
+    entidades. Todo conteúdo dinâmico é escapado; só `<b>`/`<a>` do template são markup.
+    O título É o link (title-as-hyperlink) — sem linha separada de "abrir"."""
     title = _escape(_cap(view.title or _NO_TITLE, _TITLE_CAP))
     summary = _escape(_cap(view.summary, _SUMMARY_CAP))
     link = _link(view.id, base_url)
-    lines = [f"<b>{title}</b>", summary]
+    lines = [f'<a href="{link}"><b>{title}</b></a>', summary]
     if view.entities:
         names = ", ".join(_escape(e) for e in view.entities[:_ENTITIES_CAP])
         lines.append(f"Entidades: {names}")
-    lines.append(f'<a href="{link}">abrir no Kubo</a>')
     return "\n".join(lines)
 
 

@@ -23,7 +23,7 @@ from kubo.contracts.models import DispatchPayload, ReportPayload
 from kubo.contracts.worker import RetrievedView, validate_worker
 from kubo.distribution.destinations import ResolvedDestination
 from kubo.errors import ConfigError, SenderError
-from kubo.workers.analyst import AnalystConfig, AnalystWorker, ReportOutput
+from kubo.workers.analyst import AnalystConfig, AnalystWorker, ReportOutput, _truncate_html
 
 _DEST = ResolvedDestination(
     id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-123"
@@ -134,7 +134,7 @@ def _run(worker: AnalystWorker, ctx: _FakeCtx) -> Any:
 
 def test_produces_report_and_report_dispatch() -> None:
     """Caminho feliz: RunResult com ReportPayload (markdown + fontes) + DispatchPayload
-    ok de report; o sender do Telegram foi chamado em texto puro."""
+    ok de report; o sender do Telegram foi chamado em HTML."""
     sender = _FakeSender()
     result = _run(_worker(sender), _ctx(_DOCS))
 
@@ -146,7 +146,7 @@ def test_produces_report_and_report_dispatch() -> None:
     assert dispatch.status == "ok"
     assert result.error is None
     assert len(sender.calls) == 1
-    assert sender.calls[0]["parse_mode"] is None
+    assert sender.calls[0]["parse_mode"] == "HTML"
     assert sender.calls[0]["chat_id"] == "chat-123"
 
 
@@ -234,3 +234,59 @@ def test_validate_worker_accepts_analyst() -> None:
     manifest = validate_worker(_worker(_FakeSender()))
     assert manifest.name == "analista"
     assert manifest.integrations == ["telegram"]
+
+
+def _telegram_text(sender: _FakeSender) -> str:
+    return str(sender.calls[0]["text"])
+
+
+def test_telegram_sources_are_hyperlinks_without_raw_url() -> None:
+    """As fontes no Telegram viram `• <a href=…>título</a>` — o link programático do
+    retrieval, sem a URL crua ao lado do título."""
+    sender = _FakeSender()
+    _run(_worker(sender), _ctx(_DOCS))
+
+    text = _telegram_text(sender)
+    assert f'• <a href="{_BASE}/distilled/aaa111">Rust ownership</a>' in text
+    assert f'• <a href="{_BASE}/distilled/bbb222">GC tradeoffs</a>' in text
+    assert "Rust ownership: https://" not in text  # título já não carrega a URL crua
+
+
+def test_telegram_escapes_hostile_prose() -> None:
+    """A prosa do LLM é HOSTIL (ADR-0013): em HTML, markup nela é escapado, não interpretado."""
+    sender = _FakeSender()
+    worker = AnalystWorker(
+        _FakeExecutor(ReportOutput(report="<script>alert(1)</script> e <b>x</b>")),
+        prompt="p",
+        destination=_DEST,
+        base_url=_BASE,
+        senders={"telegram": sender},
+    )
+    _run(worker, _ctx(_DOCS))
+
+    text = _telegram_text(sender)
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text
+
+
+def test_truncate_html_does_not_split_an_entity() -> None:
+    """Cortar no meio de `&amp;` deixaria uma entidade partida (Telegram rejeita): o helper
+    recua até antes do `&` e fecha com reticências."""
+    escaped = "abc &amp; def"  # o `&amp;` começa no índice 4
+    out = _truncate_html(escaped, 7)  # corte cairia dentro de `&amp;`
+    assert "&" not in out  # nenhuma entidade partida sobrou
+    assert out.endswith("…")
+    assert len(out) <= 7
+
+
+def test_telegram_truncates_sources_at_line_boundary() -> None:
+    """Muitas fontes estouram 4096: o bloco de fontes é cortado em fronteira de LINHA
+    (nunca no meio de `<a href=…>` = 400) com rodapé '+N fontes', e as tags ficam balanceadas."""
+    docs = [RetrievedView(id=f"distilled:k{i}", title="T" * 120, summary="s") for i in range(60)]
+    sender = _FakeSender()
+    _run(_worker(sender), _ctx(docs))
+
+    text = _telegram_text(sender)
+    assert len(text) <= 4096
+    assert "fontes — ver na UI" in text
+    assert text.count("<a ") == text.count("</a>")  # nenhuma tag cortada
