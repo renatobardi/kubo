@@ -45,6 +45,7 @@ router = APIRouter()
 _PAGE_SIZE = 20
 _OWNER_DESTINATION = "owner-telegram"
 _DESTINATIONS_PATH = Path(__file__).parents[3] / "destinations.yaml"
+_LIST_PATH = "/flows"
 _LIST_TEMPLATE = "flows/list.html"
 _BOARD_TEMPLATE = "flows/board.html"
 
@@ -77,7 +78,7 @@ def board_page(request: Request, flow_key: str) -> Response:
     with client.connect() as db:
         board = flow_board(db, flow)
         if board is None:
-            return RedirectResponse("/flows", status_code=303)
+            return RedirectResponse(_LIST_PATH, status_code=303)
         gate_ctx = _gate_context(db, board)
     return _render_board(request, board, gate_ctx)
 
@@ -205,10 +206,10 @@ def _reopen_with(
     """Renderiza o board do flow ao qual o gate pertence, com aviso e status dados."""
     flow = _flow_of(db, gate_task)
     if flow is None:
-        return RedirectResponse("/flows", status_code=303)
+        return RedirectResponse(_LIST_PATH, status_code=303)
     board = flow_board(db, flow)
     if board is None:
-        return RedirectResponse("/flows", status_code=303)
+        return RedirectResponse(_LIST_PATH, status_code=303)
     return _render_board(request, board, _gate_context(db, board), notice=notice, status=status)
 
 

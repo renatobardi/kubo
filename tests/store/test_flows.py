@@ -338,7 +338,7 @@ def test_list_flows_derives_status_gate_and_cast(db: Any, tmp_path: Path) -> Non
 
 def test_list_flows_delivered_status(db: Any, tmp_path: Path) -> None:
     """Após aprovar, as 2 tasks vão a delivered → status 'entregue', sem gate aberto."""
-    inst, analyst, gate = _review_flow(db, tmp_path)
+    _, analyst, gate = _review_flow(db, tmp_path)
     decide_gate(db, analyst_task=analyst, gate_task=gate, to_state="delivered", decision="approved")
 
     row = list_flows(db, limit=20, start=0)[0]

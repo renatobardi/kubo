@@ -13,8 +13,22 @@
 | 15.4 | Runtime: produce-only, gate, notificação, `resume_gate`/`reject_gate` | ✅ + advisor |
 | 15.5 | Credencial `kubo_rw` (connect_rw, compose, runbook §2d) | ✅ (EDITOR suficiente) |
 | 15.6 | UI: lista → board → GateSheet → 2 POSTs (CSRF + staleness) | ✅ (disparo D38-b diferido) |
-| 15.7 | Deploy + smoke físico gated | ⏳ **bloqueado no dono** (dreno parado + autorização) |
+| 15.7 | Deploy + smoke físico gated | ✅ **no ar no kubo-test** (build bee978d); smoke dos 2 caminhos verde |
 | 15.8 | ADR-0018 final (advisor) + paridade | ✅ ADR **aceito** (advisor GO + 3 correções aplicadas) |
+
+## Smoke físico (15.7) — executado 2026-07-14, os DOIS caminhos verdes
+
+Deploy via `./scripts/deploy.sh` (build `bee978d-…`, migration 0006 aplicada, `/healthz`→ok).
+Disparo pelo **kubo-scheduler** (root + LLM/Telegram no env) — o kubo-api é `kubo_ro`, não escreve.
+
+| Caminho | Flow | Resultado no grafo (read-back como root) |
+|---|---|---|
+| **Aprovar** | `flow:qz5m39j07cdnq89ls6dv` | notificação de gate no Telegram; board com card âmbar; GateSheet com relatório real (903 chars) + 8 fontes; aprovado → 2 tasks `delivered`, `decision=approved`, dispatch report=ok (relatório entregue no Telegram do dono) |
+| **Rejeitar** | `flow:uhavrqznzz50xqgs11r0` | rejeitado com motivo → 2 tasks `rejected`, `decision=rejected`, `reason` gravado; sem envio |
+
+Footgun do no-op silencioso desmentido AO VIVO (a escrita caiu via `kubo_rw`). D14 materializado no
+browser, com o dono clicando. Nota de UX do dono: o gate mostra o output pra julgar, mas não
+*assiste* o julgamento (claim→fonte, sinal de fidelidade) — candidato a sessão futura, fora do 0015.
 
 ## Pré-condições operacionais do deploy (15.7) — ordem obrigatória
 

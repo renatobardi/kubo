@@ -10,7 +10,7 @@ import ipaddress
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -120,7 +120,14 @@ def rw_config() -> Config:
             "KUBO_RW_SURREAL_PASS ausente — a escrita da UI (kubo_rw) está indisponível. "
             "Crie o usuário pelo runbook e defina a env (invariante 8: segredo por referência)."
         )
-    return replace(config(), user=_RW_USER, password=password)
+    base = config()
+    return Config(
+        url=base.url,
+        user=_RW_USER,
+        password=password,
+        namespace=base.namespace,
+        database=base.database,
+    )
 
 
 @contextmanager

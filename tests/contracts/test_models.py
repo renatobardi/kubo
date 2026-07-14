@@ -323,8 +323,9 @@ def test_dispatch_gate_has_no_watermark() -> None:
     ok = DispatchPayload.model_validate(_dispatch(artifact="gate", watermark=None, items=[]))
     assert ok.artifact == "gate"
     assert ok.watermark is None
+    with_watermark = _dispatch(artifact="gate")
     with pytest.raises(ValidationError):
-        DispatchPayload.model_validate(_dispatch(artifact="gate"))
+        DispatchPayload.model_validate(with_watermark)
 
 
 # ---------------------------------------------------------------------------

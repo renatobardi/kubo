@@ -172,14 +172,11 @@ def test_approve_send_failure_keeps_gate_open(db: Any) -> None:
     """At-least-once (ADR-0018 §V): falha de ENVIO na aprovação deixa o gate ABERTO (o dono
     clica de novo), grava o dispatch de report em erro e NÃO decide o gate."""
     result = _run_to_gate(db, _FakeSender())
+    failing = {"telegram": _FakeSender(fail=True)}
 
     with pytest.raises(SenderError):
         resume_gate(
-            db,
-            gate_task=result.gate_task,
-            destination=_DEST,
-            base_url=_BASE,
-            senders={"telegram": _FakeSender(fail=True)},
+            db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE, senders=failing
         )
 
     # gate segue aberto — nada transicionou
