@@ -85,6 +85,11 @@ def _short(rid: Any) -> str:
     return str(rid).split(":")[-1][:12]
 
 
+def _count(rows: Any) -> int:
+    """Normaliza `SELECT count() ... GROUP ALL` para int — a query volta [] quando 0."""
+    return int(rows[0]["count"]) if rows else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """DRY-RUN por default (só imprime o plano); `--apply` executa a limpeza."""
     parser = argparse.ArgumentParser(description="Limpeza do incidente de duplicação (0014 E4).")
@@ -119,14 +124,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"pares_divergentes_pulados={skipped_divergent}"
         )
         if args.apply:
-            dup = db.query(
-                "SELECT count() FROM item WHERE array::len(<-derived_from) > 1 GROUP ALL;"
+            dup = _count(
+                db.query("SELECT count() FROM item WHERE array::len(<-derived_from) > 1 GROUP ALL;")
             )
-            orphan = db.query(
-                "SELECT count() FROM chunk WHERE array::len(->chunk_of) = 0 GROUP ALL;"
+            orphan = _count(
+                db.query("SELECT count() FROM chunk WHERE array::len(->chunk_of) = 0 GROUP ALL;")
             )
-            _log.info("cleanup.done", deleted=to_delete, skipped=skipped_divergent)
-            print(f"pos-verificacao: itens_ainda_duplicados={dup} chunks_orfaos={orphan}")
+            _log.info(
+                "cleanup.done",
+                deleted=to_delete,
+                skipped=skipped_divergent,
+                still_dup=dup,
+                orphan_chunks=orphan,
+            )
+            print(
+                f"pos-verificacao: chunks_orfaos={orphan} "
+                f"itens_ainda_duplicados={dup} (métrica; >0 esperado se houve divergentes pulados)"
+            )
+            # Falha só em chunk órfão — é a corrupção real do índice vetorial. `dup` pode
+            # ser >0 legitimamente (pares divergentes pulados); se >0 sem divergentes, o
+            # operador re-roda (retomável).
+            if orphan > 0:
+                print("FALHA: chunk órfão no índice — investigar antes de retomar o dreno.")
+                return 1
     return 0
 
 
