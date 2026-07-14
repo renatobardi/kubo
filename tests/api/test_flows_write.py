@@ -10,6 +10,7 @@ default para as rotas de leitura).
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Any
@@ -29,7 +30,7 @@ from tests.api.conftest import UI_PASSWORD
 pytestmark = pytest.mark.integration
 
 _DB = "test_flows_write"
-_RW_PASS = "editor-ephemeral-write-test-pw"  # pragma: allowlist secret  # efêmero, descartado
+_RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca um literal no repo (invariante 8)
 _DEST = ResolvedDestination(
     id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-1"
 )

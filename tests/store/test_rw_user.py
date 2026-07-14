@@ -10,6 +10,7 @@ efêmera; em produção é passo one-time do runbook, NUNCA migration (senha em 
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -25,7 +26,7 @@ from kubo.store.flows import create_task, decide_gate, instantiate_flow, transit
 
 _RW_DB = "test_rw_user"
 _RW_USER = "kubo_rw"
-_RW_PASS = "editor-ephemeral-test-pw"  # pragma: allowlist secret  # container efêmero, descartado
+_RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca um literal no repo (invariante 8)
 _CATALOG = Path(__file__).parents[2] / "catalogs"
 _PERSONAS = load_personas(_CATALOG / "personas")
 
