@@ -19,12 +19,16 @@ chunk-ids do distilled-a-deletar, (2) DELETE dos chunks por id, (3) DELETE do di
 `chunk_of`), então NÃO se deleta aresta explicitamente. Chunks ANTES do distilled: se o
 distilled for primeiro, o `chunk_of` some na cascata e o chunk vira órfão no índice.
 
-Só apaga pares com `summary` IDÊNTICO (temp=0 + mesmo modelo + mesmo item → devem ser);
-par divergente é pulado e reportado para decisão manual (advisor).
+Por default só apaga pares com `summary` IDÊNTICO; par divergente é pulado. Mas o
+provider (llama via OpenRouter) é NÃO-DETERMINÍSTICO, então itens duplicados por dreno
+concorrente saem com wording diferente (ambos summaries válidos do mesmo item, spot-check
+confirmou). `--include-divergent` apaga esses também (mantém o menor id) — é o caso deste
+incidente, onde todo par é duplicata verdadeira e manter qualquer um é correto.
 
-Uso:
-    uv run python -m scripts.cleanup_0014_dup_distilled           # DRY-RUN (default): só imprime
-    uv run python -m scripts.cleanup_0014_dup_distilled --apply   # executa
+Uso (M = `python -m scripts.cleanup_0014_dup_distilled`):
+    uv run $M                              # DRY-RUN, só idênticos
+    uv run $M --include-divergent          # DRY-RUN, inclui divergentes
+    uv run $M --include-divergent --apply  # executa
 """
 
 from __future__ import annotations
@@ -94,6 +98,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """DRY-RUN por default (só imprime o plano); `--apply` executa a limpeza."""
     parser = argparse.ArgumentParser(description="Limpeza do incidente de duplicação (0014 E4).")
     parser.add_argument("--apply", action="store_true", help="executa (default é dry-run)")
+    parser.add_argument(
+        "--include-divergent",
+        action="store_true",
+        help=(
+            "apaga TAMBÉM pares com summary divergente — mesmo item, wording diferente "
+            "por não-determinismo do provider; ambos são summaries válidos, mantém o menor id"
+        ),
+    )
     args = parser.parse_args(argv)
 
     with client.connect(client.config()) as db:
@@ -106,12 +118,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             for d in dels:
                 chs = chunks_of(db, d)
                 identical = summary_of(db, d) == keep_sum
-                flag = "ok" if identical else "DIVERGENTE-pula"
+                delete_it = identical or args.include_divergent
+                if identical:
+                    flag = "ok"
+                elif args.include_divergent:
+                    flag = "DIVERGENTE-apaga"
+                else:
+                    flag = "DIVERGENTE-pula"
                 print(
                     f"item {_short(item)} keep={_short(keep)} del={_short(d)} "
                     f"chunks={len(chs)} summary={flag}"
                 )
-                if not identical:
+                if not delete_it:
                     skipped_divergent += 1
                     continue
                 to_delete += 1
