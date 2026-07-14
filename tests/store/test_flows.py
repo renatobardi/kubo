@@ -337,6 +337,66 @@ def test_decide_gate_rejects_contradictory_decision(db: Any, tmp_path: Path) -> 
     assert db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "awaiting_review"
 
 
+def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
+    db: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """open_gate transiciona a analista E cria a task humana numa ÚNICA transação: se a criação
+    falha no meio, a transição da analista reverte — o flow nunca fica em `awaiting_review` sem
+    gate humano associado (CodeRabbit #3581867024, ADR-0018 §IV). Com chamadas separadas
+    (transition_task + create_task) a transição commitaria antes da falha, deixando o flow órfão."""
+    from kubo.errors import StoreError
+    from kubo.store import flows as flows_mod
+
+    inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
+    analyst = create_task(db, flow=inst.flow, persona=inst.personas["analista"], state="created")
+    transition_task(db, analyst, from_state="created", to_state="analyzing")
+    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
+
+    def boom(*_args: Any, **_kw: Any) -> None:
+        raise StoreError("transação revertida: simulação de falha na criação do gate")
+
+    monkeypatch.setattr(flows_mod, "run_transaction", boom)
+
+    with pytest.raises(StoreError, match="simulação"):
+        flows_mod.open_gate(
+            db,
+            analyst_task=analyst,
+            analyst_from="analyzing",
+            analyst_to="awaiting_review",
+            flow=inst.flow,
+            human_persona=inst.personas["humano"],
+            gate_state="awaiting_review",
+        )
+    # A transição da analista REVERTEU: segue em `analyzing`, não em `awaiting_review`.
+    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
+    # Nenhuma task do humano foi criada (rollback integral).
+    human_tasks = db.query(
+        "SELECT VALUE id FROM $flow<-belongs_to<-task "
+        "WHERE ->assigned_to->persona.catalog_name CONTAINS $human;",
+        {"flow": inst.flow, "human": "humano"},
+    )
+    assert human_tasks == []
+
+
+def test_open_gate_validates_analyst_transition_against_snapshot(db: Any, tmp_path: Path) -> None:
+    """open_gate valida o par da analista contra o snapshot congelado (invariante 4): um par fora
+    das transições declaradas levanta StateError antes de tocar o banco, como `transition_task`."""
+    from kubo.store import flows as flows_mod
+
+    inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
+    analyst = create_task(db, flow=inst.flow, persona=inst.personas["analista"], state="created")
+    with pytest.raises(StateError):
+        flows_mod.open_gate(
+            db,
+            analyst_task=analyst,
+            analyst_from="created",
+            analyst_to="delivered",  # par não está nas transições do snapshot
+            flow=inst.flow,
+            human_persona=inst.personas["humano"],
+            gate_state="awaiting_review",
+        )
+
+
 def test_list_flows_derives_status_gate_and_cast(db: Any, tmp_path: Path) -> None:
     """list_flows deriva o status dos tasks (ADR-0016 §II), marca gate aberto e junta o elenco
     ativo. Um flow no gate → status 'aguardando', gate_open, cast {analista, humano}."""

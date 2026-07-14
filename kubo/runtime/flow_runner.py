@@ -35,6 +35,7 @@ from kubo.store.flows import (
     create_task,
     decide_gate,
     instantiate_flow,
+    open_gate,
     read_gate_context,
     set_task_run,
     template_of_task,
@@ -217,9 +218,14 @@ def _run_analysis_review(
         transition_task(db, task, from_state=_ANALYZING, to_state=_FAILED)
         return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_FAILED)
 
-    transition_task(db, task, from_state=_ANALYZING, to_state=_AWAITING)
-    gate_task = create_task(
-        db, flow=inst.flow, persona=inst.personas[_HUMAN_PERSONA], state=_AWAITING
+    gate_task = open_gate(
+        db,
+        analyst_task=task,
+        analyst_from=_ANALYZING,
+        analyst_to=_AWAITING,
+        flow=inst.flow,
+        human_persona=inst.personas[_HUMAN_PERSONA],
+        gate_state=_AWAITING,
     )
     _notify_gate(
         db,

@@ -173,6 +173,67 @@ def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) 
     db.query("UPDATE $t SET state = $to;", {"t": task, "to": to_state})
 
 
+def open_gate(
+    db: Any,
+    *,
+    analyst_task: RecordID,
+    analyst_from: str,
+    analyst_to: str,
+    flow: RecordID,
+    human_persona: RecordID,
+    gate_state: str,
+) -> RecordID:
+    """Abre um gate atomicamente (ADR-0018 §IV): transiciona a task da analista de
+    `analyst_from` para `analyst_to` E cria/liga a task do humano em `gate_state`
+    numa ÚNICA transação. Se a criação falhar, a transição REVERTE — o flow nunca
+    fica em `awaiting_review` sem gate humano associado (CodeRabbit #3581867024).
+
+    Valida o par da analista contra o snapshot congelado (invariante 4) antes da
+    transação, como `transition_task` (guarda de gate + par ∈ transitions); o
+    `flow` informado deve corresponder ao `belongs_to` do task. O UPDATE condicional
+    (`WHERE state = $from`) fecha TOCTOU de dupla abertura. Devolve o id do task do
+    humano criado."""
+    rows = db.query("SELECT state, ->belongs_to->flow AS flow FROM $t;", {"t": analyst_task})
+    if not rows:
+        raise StateError(f"task {analyst_task} não existe")
+    current = rows[0]["state"]
+    if current != analyst_from:
+        raise StateError(f"task em estado '{current}', from_state esperado era '{analyst_from}'")
+    flow_id: RecordID | None = next(iter(rows[0].get("flow") or []), None)
+    if flow_id is None:
+        raise StateError(f"task {analyst_task} sem flow (belongs_to ausente)")
+    if flow_id != flow:
+        raise StateError("flow informado não corresponde ao flow do task da analista")
+    pairs, gates = _snapshot_board(db, flow_id)
+    if (analyst_from, analyst_to) in gates:
+        raise StateError(
+            f"transição de gate ({analyst_from}, {analyst_to}) "
+            "exige decisão humana — use decide_gate"
+        )
+    if (analyst_from, analyst_to) not in pairs:
+        raise StateError(f"transição ({analyst_from}, {analyst_to}) não está no snapshot do flow")
+    gate_task = _fresh("task")
+    run_transaction(
+        db,
+        [
+            "UPDATE $at SET state = $to WHERE state = $from",
+            "CREATE $gt SET state = $gate_state",
+            "RELATE $gt->belongs_to->$flow",
+            "RELATE $gt->assigned_to->$persona",
+        ],
+        {
+            "at": analyst_task,
+            "to": analyst_to,
+            "from": analyst_from,
+            "gt": gate_task,
+            "gate_state": gate_state,
+            "flow": flow,
+            "persona": human_persona,
+        },
+    )
+    return gate_task
+
+
 def _task_state_and_flow(db: Any, task: RecordID) -> tuple[str, RecordID]:
     """Estado atual + flow de um task; StateError se o task ou a aresta `belongs_to` falta."""
     rows = db.query("SELECT state, ->belongs_to->flow AS flow FROM $t;", {"t": task})
