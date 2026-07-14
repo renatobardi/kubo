@@ -108,6 +108,39 @@ def test_rejects_board_extra_field(tmp_path: Path) -> None:
         load_flow_template(path)
 
 
+def test_analysis_has_no_gates(tmp_path: Path) -> None:
+    """`gates` tem default vazio (ADR-0018 §II): o `analysis` legado não declara gate,
+    e um snapshot antigo sem a chave deve re-hidratar — logo o campo nunca é required."""
+    template = load_flow_template(_CATALOG / "analysis.yaml")
+    assert template.board.gates == []
+
+
+def test_load_analysis_review_from_real_catalog() -> None:
+    """O `analysis-review.yaml` versionado declara os DOIS pares gated (entrega E
+    rejeição — motivo obrigatório na rejeição exige o par [awaiting_review, rejected])."""
+    template = load_flow_template(_CATALOG / "analysis-review.yaml")
+
+    assert template.name == "analysis-review"
+    assert "awaiting_review" in template.board.states
+    assert "rejected" in template.board.states
+    gates = {tuple(g) for g in template.board.gates}
+    assert gates == {("awaiting_review", "delivered"), ("awaiting_review", "rejected")}
+
+
+def test_rejects_gate_not_in_transitions(tmp_path: Path) -> None:
+    """`gates ⊆ transitions` (ADR-0018 §II): um par de gate fora das transições é config
+    quebrada — o gate marcaria uma travessia que o board nem permite."""
+    body = (
+        "name: t\nversion: 1\n"
+        "board:\n  states: [a, b]\n  transitions: [[a, b]]\n  gates: [[b, a]]\n"
+        "cast: [analista]\ndeliverable: report\ntriggers: [manual]\n"
+    )
+    path = tmp_path / "bad.yaml"
+    path.write_text(body, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_flow_template(path)
+
+
 def test_load_flow_templates_rejects_duplicate_name(tmp_path: Path) -> None:
     """Dois templates com o mesmo `name` falham alto — o binding do FLOW_REGISTRY é por nome."""
     _write(tmp_path, "")

@@ -34,6 +34,11 @@ class Board(BaseModel):
 
     states: list[str]
     transitions: list[tuple[str, str]]
+    # gates: subconjunto marcado de `transitions` — os pares que EXIGEM decisão humana
+    # (ADR-0018 §II). Default vazio (não required): flows `analysis` já persistidos têm
+    # snapshot sem esta chave, e um campo required quebraria a re-hidratação sob
+    # `extra="forbid"`. Ausência = nenhuma travessia gated.
+    gates: list[tuple[str, str]] = []
 
     @model_validator(mode="after")
     def _endpoints_in_states(self) -> Self:
@@ -43,6 +48,16 @@ class Board(BaseModel):
         for src, dst in self.transitions:
             if src not in known or dst not in known:
                 raise ValueError(f"transição [{src}, {dst}] referencia estado fora de states")
+        return self
+
+    @model_validator(mode="after")
+    def _gates_subset_of_transitions(self) -> Self:
+        """`gates ⊆ transitions` (ADR-0018 §II): um par de gate fora das transições marcaria
+        uma travessia que o board nem permite — config quebrada, barrada na borda."""
+        allowed = {(src, dst) for src, dst in self.transitions}
+        for src, dst in self.gates:
+            if (src, dst) not in allowed:
+                raise ValueError(f"gate [{src}, {dst}] não está entre as transições do board")
         return self
 
 
