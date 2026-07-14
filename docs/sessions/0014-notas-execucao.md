@@ -58,3 +58,13 @@ O dreno para sozinho em: backlog vazio (`done`), erro sistêmico do dia (`error`
 ## Notas
 - Docs de auditoria/piloto contêm **conteúdo coletado**: `*.local.md` é git-ignorado; nunca commitar.
 - A casca de I/O dos 3 scripts é validada no 1º uso supervisionado contra o banco vivo (precedente `backfill_chunks.py`); a camada pura tem testes unitários.
+
+## Incidente E4 — duplicação por dreno concorrente (2026-07-13)
+
+**O que aconteceu:** dois `drain_distill` rodaram simultaneamente (dois terminais) durante o 1º dia de dreno. Resultado: **42 itens com 2 `distilled` cada** (duplicata, 1 chunk cada).
+
+**Causa raiz (a própria E4 que o plano previu):** `items_without_distilled` é `ORDER BY id` **sem lock** e `insert_distilled` **não é idempotente** → os dois processos leram os mesmos itens e ambos inseriram. A regra operacional "um dreno de cada vez" é o mitigador; não houve barreira técnica.
+
+**Remediação:** `scripts/cleanup_0014_dup_distilled.py` (one-off, NÃO helper de store — ADR-0013 §VII decidiu não ter delete de distilled; validado pelo advisor). Mantém 1 distilled/item (menor id), apaga os extras + chunks. Ordem: resolve chunk-ids → DELETE chunks por id → DELETE distilled (o DELETE do nó cascadeia as arestas RELATION no v3.1.5; chunks ANTES, senão o chunk vira órfão no índice). Salvaguardas: dry-run default, ensaio local (reproduziu 1 duplicata → 0 órfãos), transação por item, verificação pós (`itens_dup=0`, `chunks_orfaos=0`).
+
+**Follow-up estrutural (backlog separado, com TDD — NÃO nesta sessão):** guarda de idempotência DENTRO da transação do `insert_distilled`, no molde do `attach_chunks` (ADR-0013 §VI) — no-op se o item já tem distilled. Fecha a janela da E4 por construção, não por disciplina. NÃO criar caminho de delete/replace de distilled (ADR-0013 §VII permanece).
