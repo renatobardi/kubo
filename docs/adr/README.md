@@ -25,3 +25,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0015](0015-distribuicao-dispatch-destinations.md) | Distribuição: `dispatch` + `destinations.yaml` | aceito |
 | [0016](0016-personas-flow-minimo-analysis.md) | Personas + flow mínimo: template `analysis`, snapshot congelado | aceito |
 | [0017](0017-dreno-pago-backlog-destilacao.md) | Dreno pago one-off do backlog + `retry-after` no regime diário | aceito |
+| [0018](0018-boards-gates-ui-write-path.md) | Boards + gates + caminho de escrita da UI (gate humano no browser) | proposto |
