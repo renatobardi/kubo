@@ -1,6 +1,7 @@
 # ADR-0014 — Fundação da UI: autenticação de browser da fase 2
 
 > Status: **aceito** · Data: 2026-07-11 (validado pelo advisor Fable 5 na sessão 0009)
+> · **Emendado por ADR-0018** (§I: o tripwire R4 disparou — a 1ª rota de escrita ganhou a credencial `kubo_rw` EDITOR).
 >
 > (Emenda ao ADR-0003: bearer estático fica escopado a futuras rotas `/api/*`; UI de browser usa autenticação própria.)
 

@@ -133,14 +133,16 @@ def _run(worker: AnalystWorker, ctx: _FakeCtx) -> Any:
 
 
 def test_produces_report_and_report_dispatch() -> None:
-    """Caminho feliz: RunResult com ReportPayload (markdown + fontes) + DispatchPayload
-    ok de report; o sender do Telegram foi chamado em HTML."""
+    """Caminho feliz: RunResult com ReportPayload (PROSA PURA — sem fontes embutidas, ADR-0018
+    §V) + DispatchPayload ok de report; o sender do Telegram foi chamado em HTML e as fontes
+    aparecem no render do canal, derivadas do retrieval — nunca no deliverable."""
     sender = _FakeSender()
     result = _run(_worker(sender), _ctx(_DOCS))
 
     report = next(p for p in result.payloads if isinstance(p, ReportPayload))
     dispatch = next(p for p in result.payloads if isinstance(p, DispatchPayload))
-    assert "## Fontes" in report.content
+    assert report.content == "corpo"  # prosa pura: fonte NÃO entra no deliverable
+    assert "## Fontes" not in report.content
     assert dispatch.artifact == "report"
     assert dispatch.watermark is None
     assert dispatch.status == "ok"
@@ -148,17 +150,21 @@ def test_produces_report_and_report_dispatch() -> None:
     assert len(sender.calls) == 1
     assert sender.calls[0]["parse_mode"] == "HTML"
     assert sender.calls[0]["chat_id"] == "chat-123"
+    assert "distilled/aaa111" in str(sender.calls[0]["text"])  # fontes vivem no render do canal
 
 
 def test_citations_come_from_retrieval_not_from_llm() -> None:
-    """§VI, o teste central: o LLM devolve um texto que INVENTA uma fonte; consulted e as
-    fontes renderizadas contêm SÓ os ids do retrieval, nunca o id forjado pelo modelo."""
+    """§VI, o teste central: o LLM INVENTA uma fonte no texto; a PROVENIÊNCIA (consulted +
+    dispatch.items + os LINKS renderizados) contém só os ids do retrieval, nunca o forjado.
+    Com prosa pura o texto forjado pode aparecer no content — é prosa, não citação: não vira
+    aresta nem link `distilled/…`."""
+    sender = _FakeSender()
     forging = AnalystWorker(
         _FakeExecutor(ReportOutput(report="Conforme distilled:forjado999, a resposta é X.")),
         prompt="p",
         destination=_DEST,
         base_url=_BASE,
-        senders={"telegram": _FakeSender()},
+        senders={"telegram": sender},
     )
     result = _run(forging, _ctx(_DOCS))
 
@@ -166,11 +172,12 @@ def test_citations_come_from_retrieval_not_from_llm() -> None:
     dispatch = next(p for p in result.payloads if isinstance(p, DispatchPayload))
     assert report.consulted == ["distilled:aaa111", "distilled:bbb222"]
     assert "forjado999" not in report.consulted
-    # a seção de fontes lista só os recuperados (links do retrieval), não o id inventado
-    assert "distilled/aaa111" in report.content
-    assert "distilled/bbb222" in report.content
-    assert "forjado999" not in report.content.split("## Fontes")[1]
     assert dispatch.items == ["distilled:aaa111", "distilled:bbb222"]
+    # os LINKS de fonte (forma `distilled/<key>`) são só os do retrieval — nunca o forjado
+    text = str(sender.calls[0]["text"])
+    assert "distilled/aaa111" in text
+    assert "distilled/bbb222" in text
+    assert "distilled/forjado999" not in text
 
 
 def test_question_in_instruction_summaries_in_untrusted() -> None:

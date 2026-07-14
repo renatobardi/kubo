@@ -30,6 +30,7 @@ NAV: list[NavItem] = [
     {"label": "Destilados", "route": "/distilled", "group": "Conhecimento", "icon": "book-open"},
     {"label": "Entidades", "route": "/entities", "group": "Conhecimento", "icon": "network"},
     {"label": "Fontes", "route": "/sources", "group": "Conhecimento", "icon": "rss"},
+    {"label": "Fluxos", "route": "/flows", "group": "Trabalho", "icon": "workflow"},
     {"label": "Execuções", "route": "/runs", "group": "Trabalho", "icon": "activity"},
     {"label": "Destinos", "route": "/destinations", "group": "Distribuição", "icon": "send"},
     {"label": "Envios", "route": "/dispatches", "group": "Distribuição", "icon": "mail"},

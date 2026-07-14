@@ -135,7 +135,8 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
     assert len(delivered) == 1
     body = db.query("SELECT kind, content FROM $d;", {"d": delivered[0]})[0]
     assert body["kind"] == "report"
-    assert "## Fontes" in body["content"]
+    assert body["content"] == "Análise sintetizada."  # prosa pura: fontes só nas arestas (§V)
+    assert "## Fontes" not in body["content"]
     consulted = db.query("SELECT VALUE ->consults->distilled FROM $t;", {"t": result.task})[0]
     assert {str(x) for x in consulted} == {str(d1), str(d2)}
     # task.run liga ao run

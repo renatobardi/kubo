@@ -1,0 +1,24 @@
+# Template analysis-review — análise sob demanda com GATE humano antes da entrega
+# (D37, ADR-0018). Variante do `analysis`: o relatório PARA em awaiting_review, o dono
+# aprova (→delivered, entrega) ou rejeita com motivo (→rejected, arquiva).
+# DADO, não DSL (ADR-0016 §I): declara só a FORMA. O que "aprovar" faz é código keyed
+# por `name` no FLOW_REGISTRY. Instanciar congela uma cópia em flow.snapshot (invariante 4).
+name: analysis-review
+version: 1
+board:
+  states: [created, analyzing, awaiting_review, delivered, rejected, failed]
+  transitions:
+    - [created, analyzing]
+    - [analyzing, awaiting_review]
+    - [awaiting_review, delivered]
+    - [awaiting_review, rejected]
+    - [analyzing, failed]
+  # gates: os pares que EXIGEM decisão humana (ADR-0018 §II). AMBOS gated: a rejeição
+  # também é decisão do gate (motivo obrigatório), senão o reject escaparia a guarda da
+  # store e o enforcement viveria só na UI. transition_task recusa gate; só decide_gate passa.
+  gates:
+    - [awaiting_review, delivered]
+    - [awaiting_review, rejected]
+cast: [analista, humano]
+deliverable: report
+triggers: [manual]

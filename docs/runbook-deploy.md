@@ -266,6 +266,50 @@ ROLES VIEWER;` (o `OVERWRITE` sobrescreve) + atualize o `.env` + `docker compose
 kubo-api`. **Revogação:** `REMOVE USER kubo_ro ON ROOT;` (a UI cai no fail-fast até
 nova senha).
 
+## 2d. Usuário de ESCRITA da UI — kubo_rw (ADR-0018 §I) — passo one-time
+
+A partir da sessão 0015 a UI tem **2 ações de escrita** (aprovar/rejeitar um gate,
+disparar um flow). Elas — e SÓ elas — usam uma segunda credencial **ROOT-level EDITOR**
+(`kubo_rw`): lê/escreve DADOS, mas **não gerencia usuários** (EDITOR não escala para
+OWNER). Continua valendo o `kubo_ro` VIEWER para todo o resto (leitura). A separação é o
+tripwire do ADR-0014 R4 disparando como desenhado: a 1ª rota de escrita ganha credencial
+própria, jamais a de leitura.
+
+**Diferença de postura vs. o §2c:** o `kubo_rw` é **opcional no compose** (`${KUBO_RW_SURREAL_PASS:-}`,
+SEM `:?`). Ausente, a UI **sobe normalmente** e só os 2 handlers de escrita respondem
+**503** — o resto (leitura via `kubo_ro`) segue vivo. Fail-closed continua sendo o ponto:
+sem a env, a UI simplesmente **não escreve**.
+
+Valem AS MESMAS armadilhas do §2c (senha só por SQL `DEFINE USER OVERWRITE`, nunca pelo
+flag do compose; não deixe segredo exportado no shell antes do `docker compose`).
+
+**Criar o editor (uma vez, direto no SurrealDB — NUNCA migration):**
+
+```bash
+# no servidor, no diretório do compose:
+set -a; . ./.env; set +a                 # exporta SURREAL_USER/SURREAL_PASS (root)
+read -rsp 'Senha do editor (kubo_rw), 32+ chars aleatorios: ' RW_PASS; echo
+printf 'DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD "%s" ROLES EDITOR;\n' "$RW_PASS" \
+  | docker exec -i "$(docker compose ps -q surrealdb)" /surreal sql \
+      --endpoint http://localhost:8000 \
+      --username "$SURREAL_USER" --password "$SURREAL_PASS" \
+      --namespace kubo --database kubo
+unset RW_PASS                            # não deixa a senha no ambiente do shell
+```
+
+Depois grave `KUBO_RW_SURREAL_PASS=<a mesma senha>` no `.env` do servidor e suba a UI:
+`docker compose up -d kubo-api`. Prova (opcional, no CI já coberta por
+`tests/store/test_rw_user.py`): o EDITOR executa as escritas do gate e a leitura como
+root confirma que caíram. **Rotação:** repita `DEFINE USER OVERWRITE kubo_rw … ROLES
+EDITOR;` + atualize o `.env` + `up -d kubo-api`. **Revogação:** `REMOVE USER kubo_rw ON
+ROOT;` (os 2 handlers caem em 503; o resto da UI segue).
+
+> **Nota de superfície (ADR-0018 §I, custo nomeado):** com a escrita, a `kubo-api`
+> passa a carregar no env `GROQ_API_KEY` + `TELEGRAM_BOT_TOKEN` +
+> `KUBO_OWNER_TELEGRAM_CHAT_ID` + `KUBO_BASE_URL` (disparar flow e entregar o relatório
+> na aprovação). Aceito por Tailscale-only + auth + dono único; exposição fora da
+> tailnet reabre a decisão (junto com a pré-condição de TLS do ADR-0014).
+
 ---
 
 ## 3. Observabilidade

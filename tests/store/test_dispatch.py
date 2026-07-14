@@ -337,6 +337,35 @@ def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
     assert knowledge.last_dispatch_watermark(db, "owner-telegram") == digest_wm
 
 
+def test_gate_dispatch_does_not_move_digest_watermark(db: Any) -> None:
+    """ADR-0018 §III: a notificação de GATE (novo `artifact="gate"`) grava um dispatch no
+    mesmo destino do digest — e NÃO pode mover o watermark do digest (senão a notificação
+    de gate faria o digest de amanhã pular destilados). Gate entra com watermark None; o
+    filtro `artifact='digest'` o exclui, o watermark do digest permanece intacto."""
+    digest_wm = datetime.now(timezone.utc) - timedelta(hours=2)
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        artifact="digest",
+        watermark=digest_wm,
+        item_count=1,
+        items=[],
+    )
+    knowledge.insert_dispatch(
+        db,
+        destination="owner-telegram",
+        channel="telegram",
+        status="ok",
+        artifact="gate",
+        watermark=None,
+        item_count=0,
+        items=[],
+    )
+    assert knowledge.last_dispatch_watermark(db, "owner-telegram") == digest_wm
+
+
 def test_backfill_makes_legacy_dispatch_count_as_digest(tmp_path: Path) -> None:
     """Prova o backfill da 0005 (armadilha do SurrealDB: DEFINE FIELD DEFAULT não
     retro-preenche). Aplica só 0001-0004, cria um dispatch LEGADO (sem artifact),
