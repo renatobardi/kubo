@@ -61,7 +61,7 @@ def _local(dt: datetime) -> datetime:
     """Converte um carimbo (UTC) para a tz de apresentação: env `TZ`, default
     America/Sao_Paulo. Regra: todo datetime formatado para humano passa por aqui;
     o que é armazenado/comparado permanece UTC."""
-    return dt.astimezone(ZoneInfo(os.environ.get("TZ", "America/Sao_Paulo")))
+    return dt.astimezone(ZoneInfo(os.environ.get("TZ") or "America/Sao_Paulo"))
 
 
 def short_datetime(iso: str | None) -> str:

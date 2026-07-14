@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from kubo.api import rendering
 
 
@@ -21,9 +23,15 @@ def test_short_datetime_assumes_utc_for_naive_input() -> None:
     assert rendering.short_datetime("2026-07-14T12:00:00") == "Jul 14, 09:00"
 
 
-def test_short_datetime_respects_env_tz(monkeypatch) -> None:
+def test_short_datetime_respects_env_tz(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TZ", "UTC")
     assert rendering.short_datetime("2026-07-14T12:00:00+00:00") == "Jul 14, 12:00"
+
+
+def test_short_datetime_empty_env_tz_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # TZ="" (comum em Docker/K8s) não pode explodir ZoneInfoNotFoundError → usa o default.
+    monkeypatch.setenv("TZ", "")
+    assert rendering.short_datetime("2026-07-14T12:00:00+00:00") == "Jul 14, 09:00"
 
 
 def test_short_datetime_missing_is_dash() -> None:
