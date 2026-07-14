@@ -29,6 +29,16 @@ def _fresh(table: str) -> RecordID:
     return RecordID(table, secrets.token_hex(16))
 
 
+# LIMIT/START não aceitam bind param neste SurrealDB; `list_flows` interpola SÓ ints
+# (paginação da store, nunca entrada coletada) via .format — S608 suprimido no call site.
+_LIST_FLOWS_SQL = (
+    "SELECT id, template_name, question, created_at, "
+    "<-belongs_to<-task.state AS task_states, "
+    "array::distinct(<-belongs_to<-task->assigned_to->persona.catalog_name) AS cast "
+    "FROM flow ORDER BY created_at DESC LIMIT {limit} START {start};"
+)
+
+
 @dataclass(frozen=True)
 class InstantiatedFlow:
     """Resultado de `instantiate_flow`: o flow criado + o mapa catalog-name →
@@ -300,6 +310,133 @@ def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
         content=str(row.get("content") or ""),
         sources=sources,
     )
+
+
+@dataclass(frozen=True)
+class FlowListRow:
+    """Uma linha da lista de Fluxos (UI, paridade FlowsScreen): a pergunta como nome, o
+    template, o status DERIVADO dos tasks (ADR-0016 §II — flow não tem máquina própria),
+    se há gate aberto, o elenco ativo (glifos) e a contagem de tasks abertas."""
+
+    id: str
+    question: str
+    template: str
+    status: str
+    gate_open: bool
+    cast: list[str]
+    tasks_open: int
+    created_at: str
+
+
+@dataclass(frozen=True)
+class FlowTaskCard:
+    """Um card do board (cards = TASKS, não flows — ADR-0018 §V): estado, persona (glifo) e se
+    é o GATE aguardando decisão (task do humano em awaiting_review → ring âmbar + botões)."""
+
+    id: str
+    state: str
+    persona: str
+    is_gate: bool
+
+
+@dataclass(frozen=True)
+class FlowBoardView:
+    """O board de UM flow: a pergunta, o template, as COLUNAS (estados do snapshot congelado) e
+    os cards (tasks). `None` de `flow_board` = flow inexistente."""
+
+    id: str
+    question: str
+    template: str
+    states: list[str]
+    tasks: list[FlowTaskCard]
+
+
+_TERMINAL = frozenset({"delivered", "rejected", "failed"})
+
+
+def _flow_status(states: list[str]) -> str:
+    """Status DERIVADO dos estados dos tasks (o flow não tem máquina própria, ADR-0016 §II).
+    Precedência: gate aberto > falhou > rejeitado > entregue (tudo delivered) > rodando."""
+    if "awaiting_review" in states:
+        return "aguardando"
+    if "failed" in states:
+        return "falhou"
+    if "rejected" in states:
+        return "rejeitado"
+    if states and all(s == "delivered" for s in states):
+        return "entregue"
+    return "rodando"
+
+
+def list_flows(db: Any, *, limit: int, start: int) -> list[FlowListRow]:
+    """Lista os flows mais recentes primeiro, com status/gate/elenco derivados dos tasks
+    (ADR-0018 §V). Busca é 2º sacrifício do plano — não implementada aqui. `limit`/`start` são
+    ints internos (paginação da store), interpolados como literais."""
+    rows = db.query(_LIST_FLOWS_SQL.format(limit=int(limit), start=int(start)))  # noqa: S608
+    result: list[FlowListRow] = []
+    for r in rows:
+        states = [str(s) for s in _as_list(r.get("task_states"))]
+        result.append(
+            FlowListRow(
+                id=str(r["id"]),
+                question=str(r.get("question") or ""),
+                template=str(r.get("template_name") or ""),
+                status=_flow_status(states),
+                gate_open="awaiting_review" in states,
+                cast=[str(c) for c in _as_list(r.get("cast"))],
+                tasks_open=sum(1 for s in states if s not in _TERMINAL),
+                created_at=str(r.get("created_at") or ""),
+            )
+        )
+    return result
+
+
+def count_flows(db: Any) -> int:
+    """Total de flows (paginação da lista). `count()` com GROUP ALL; 0 quando vazio."""
+    rows = db.query("SELECT count() FROM flow GROUP ALL;")
+    return rows[0]["count"] if rows else 0
+
+
+def flow_board(db: Any, flow: RecordID) -> FlowBoardView | None:
+    """O board de um flow: pergunta, template, COLUNAS (estados do snapshot) e os cards (tasks
+    com estado + persona + flag de gate). `None` se o flow não existe."""
+    head = db.query(
+        "SELECT question, template_name, snapshot.board.states AS states FROM $f;", {"f": flow}
+    )
+    if not head:
+        return None
+    row: dict[str, Any] = head[0]
+    task_rows = db.query(
+        "SELECT id, state, created_at, (->assigned_to->persona.catalog_name)[0] AS persona "
+        "FROM $f<-belongs_to<-task ORDER BY created_at;",  # created_at na projeção: quirk v3
+        {"f": flow},
+    )
+    cards = [
+        FlowTaskCard(
+            id=str(t["id"]),
+            state=str(t["state"]),
+            persona=str(t.get("persona") or ""),
+            is_gate=t.get("state") == "awaiting_review" and t.get("persona") == _HUMAN,
+        )
+        for t in task_rows
+    ]
+    return FlowBoardView(
+        id=str(flow),
+        question=str(row.get("question") or ""),
+        template=str(row.get("template_name") or ""),
+        states=[str(s) for s in _as_list(row.get("states"))],
+        tasks=cards,
+    )
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coage o valor de uma projeção (Any do SDK) a lista — [] se ausente/None."""
+    if value is None:
+        return []
+    return cast("list[Any]", value) if isinstance(value, list) else [value]
+
+
+_HUMAN = "humano"
 
 
 def insert_deliverable(

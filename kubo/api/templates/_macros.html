@@ -14,7 +14,44 @@
     <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
   {% elif name == "send" %}
     <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+  {% elif name == "workflow" %}
+    <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></svg>
   {% endif %}
+{% endmacro %}
+
+{# Glifo de persona (elenco do flow — paridade PersonaGlyph). humano = pessoa; analista =
+   caneta (síntese). Chave = catalog_name da persona materializada. #}
+{% macro persona_glyph(name, size="size-4") %}
+  {% if name == "humano" %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+  {% else %}
+    <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{# Triângulo de alerta (marcador de gate — âmbar/primary). #}
+{% macro triangle_alert(size="size-4") %}
+  <svg class="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+{% endmacro %}
+
+{# Badge de status DERIVADO do flow (ADR-0016 §II). Cores: entregue=neutro, falhou=
+   destructive, os demais tinted. #}
+{% macro flow_status_badge(status) %}
+  {% if status == "falhou" %}
+    <span class="rounded-4xl bg-destructive/10 px-2.5 py-0.5 text-xs text-destructive">falhou</span>
+  {% elif status == "aguardando" %}
+    <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">aguardando</span>
+  {% elif status == "rodando" %}
+    <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">rodando</span>
+  {% else %}
+    <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">{{ status }}</span>
+  {% endif %}
+{% endmacro %}
+
+{# Rótulo humano de um estado do board (coluna). Fallback = o próprio nome. #}
+{% macro state_label(state) %}
+  {%- set labels = {"created": "Criado", "analyzing": "Analisando", "awaiting_review": "Aguardando revisão", "delivered": "Entregue", "rejected": "Rejeitado", "failed": "Falhou"} -%}
+  {{- labels.get(state, state) -}}
 {% endmacro %}
 
 {# Glifo de entidade por kind (pessoa/tecnologia/organização/default) — reutilizado

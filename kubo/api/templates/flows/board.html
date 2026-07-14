@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}{{ board.question or "Flow" }} · Fluxos · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {# ── cabeçalho: voltar + nome + badges + elenco ───────────────────────────── #}
+  <div class="flex items-start gap-3">
+    <a href="/flows" class="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+      <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+      Fluxos
+    </a>
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-2">
+        <h2 class="font-heading text-lg font-semibold tracking-tight">{{ board.question or "(sem pergunta)" }}</h2>
+        <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">{{ board.template }}</span>
+      </div>
+      <div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+        {% for c in board.tasks %}<span>{{ macros.persona_glyph(c.persona, "size-3.5") }}</span>{% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {% if notice %}
+    <div class="rounded-xl bg-primary/10 px-4 py-3 text-sm text-primary ring-1 ring-primary/20">{{ notice }}</div>
+  {% endif %}
+
+  {# ── board: uma coluna por estado do snapshot; cards = tasks ───────────────── #}
+  <div class="flex gap-3 overflow-x-auto pb-2">
+    {% for state in board.states %}
+      {% set items = board.tasks | selectattr("state", "equalto", state) | list %}
+      <div class="flex w-56 shrink-0 flex-col rounded-2xl bg-muted/50 p-3">
+        <div class="flex items-center justify-between px-1 pb-2.5">
+          <span class="font-heading text-xs font-medium {% if state == 'failed' or state == 'rejected' %}text-destructive{% else %}text-foreground{% endif %}">{{ macros.state_label(state) }}</span>
+          <span class="rounded-4xl bg-background px-2 py-0.5 text-xs text-muted-foreground">{{ items | length }}</span>
+        </div>
+        <div class="flex flex-col gap-2">
+          {% for c in items %}
+            <div class="rounded-xl bg-card p-3 {% if c.is_gate %}ring-1.5 ring-primary/55{% else %}ring-1 ring-foreground/10{% endif %}">
+              {% if c.is_gate %}
+                <div class="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-primary">{{ macros.triangle_alert("size-3") }} aguardando você</div>
+              {% endif %}
+              <p class="text-sm leading-snug">{% if c.persona == "humano" %}Revisar e decidir{% else %}Sintetizar relatório{% endif %}</p>
+              <div class="mt-2.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span>{{ macros.persona_glyph(c.persona, "size-4") }}</span>
+                <span class="flex-1">{{ c.persona }}</span>
+              </div>
+              {% if c.is_gate %}
+                <div class="mt-2.5 flex gap-1.5">
+                  <button type="button" onclick="document.getElementById('gatesheet').showModal()" class="flex-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">Aprovar</button>
+                  <button type="button" onclick="document.getElementById('gatesheet').showModal()" class="flex-1 rounded-lg bg-destructive px-2 py-1 text-xs font-medium text-white hover:opacity-90">Rejeitar</button>
+                </div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+{# ── GateSheet: painel de decisão (nativo <dialog> = modal do design system). O relatório
+   é renderizado como TEXTO PLANO (pre-wrap, autoescape) — NUNCA markdown→HTML (untrusted). #}
+{% if gate %}
+<dialog id="gatesheet" class="m-0 ml-auto h-full max-h-full w-[440px] max-w-[92vw] bg-popover text-popover-foreground backdrop:bg-black/40">
+  <div class="flex h-full flex-col">
+    <div class="flex items-start gap-2.5 border-b border-border p-5">
+      <span class="mt-0.5 text-primary">{{ macros.triangle_alert("size-4") }}</span>
+      <div class="min-w-0 flex-1">
+        <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Decisão de gate</div>
+        <h3 class="mt-0.5 font-heading text-base font-semibold">{{ gate.question or "Relatório" }}</h3>
+      </div>
+      <form method="dialog" class="shrink-0"><button class="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Fechar">
+        <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button></form>
+    </div>
+
+    <div class="flex-1 space-y-4 overflow-y-auto p-5">
+      <div>
+        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">O que a analista produziu</div>
+        <p class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{{ gate.content or "(relatório vazio)" }}</p>
+      </div>
+      {% if gate.sources %}
+      <div>
+        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">Fontes consultadas</div>
+        <ul class="space-y-1">
+          {% for s in gate.sources %}
+          <li><a href="/distilled/{{ s.id.split(':')[1] }}" class="text-xs text-primary hover:underline">{{ s.title or "(sem título)" }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div>
+        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">Motivo (obrigatório na rejeição)</div>
+        <form id="reject-form" method="post" action="/flows/gate/reject">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="task" value="{{ gate.gate_task }}">
+          <textarea name="reason" rows="3" required placeholder="Explique por que está rejeitando…" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"></textarea>
+        </form>
+      </div>
+    </div>
+
+    <div class="space-y-2.5 border-t border-border p-5">
+      <div class="flex gap-2">
+        <form method="post" action="/flows/gate/approve" class="flex-1">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="task" value="{{ gate.gate_task }}">
+          <button class="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">Aprovar e entregar</button>
+        </form>
+        <button form="reject-form" class="flex-1 rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-white hover:opacity-90">Confirmar rejeição</button>
+      </div>
+      <p class="text-center text-xs text-muted-foreground">Sua decisão fica registrada no grafo.</p>
+    </div>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}

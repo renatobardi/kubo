@@ -21,10 +21,13 @@ from kubo.runtime.flow_templates import load_flow_template
 from kubo.runtime.personas import load_personas
 from kubo.store import client, knowledge, migrations
 from kubo.store.flows import (
+    count_flows,
     create_task,
     decide_gate,
+    flow_board,
     insert_deliverable,
     instantiate_flow,
+    list_flows,
     read_gate_context,
     set_task_run,
     transition_task,
@@ -312,6 +315,68 @@ def test_read_gate_context_none_for_orphan_task(db: Any) -> None:
     """Um task sem flow (belongs_to ausente) → None, nunca crash (registro órfão/manual)."""
     orphan = db.query("CREATE task SET state = 'awaiting_review';")[0]["id"]
     assert read_gate_context(db, orphan) is None
+
+
+def test_list_flows_derives_status_gate_and_cast(db: Any, tmp_path: Path) -> None:
+    """list_flows deriva o status dos tasks (ADR-0016 §II), marca gate aberto e junta o elenco
+    ativo. Um flow no gate → status 'aguardando', gate_open, cast {analista, humano}."""
+    inst, _analyst, _gate = _review_flow(db, tmp_path)
+
+    rows = list_flows(db, limit=20, start=0)
+
+    assert count_flows(db) == 1
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.id == str(inst.flow)
+    assert row.question == "q?"
+    assert row.template == "analysis-review"
+    assert row.status == "aguardando"
+    assert row.gate_open is True
+    assert set(row.cast) == {"analista", "humano"}
+    assert row.tasks_open == 2  # ambas em awaiting_review (não-terminal)
+
+
+def test_list_flows_delivered_status(db: Any, tmp_path: Path) -> None:
+    """Após aprovar, as 2 tasks vão a delivered → status 'entregue', sem gate aberto."""
+    inst, analyst, gate = _review_flow(db, tmp_path)
+    decide_gate(db, analyst_task=analyst, gate_task=gate, to_state="delivered", decision="approved")
+
+    row = list_flows(db, limit=20, start=0)[0]
+    assert row.status == "entregue"
+    assert row.gate_open is False
+    assert row.tasks_open == 0
+
+
+def test_flow_board_columns_are_snapshot_states_cards_are_tasks(db: Any, tmp_path: Path) -> None:
+    """flow_board devolve as COLUNAS = estados do snapshot e os CARDS = tasks; a task do humano
+    em awaiting_review é marcada como gate (ring âmbar + botões na UI)."""
+    inst, analyst, gate = _review_flow(db, tmp_path)
+
+    board = flow_board(db, inst.flow)
+
+    assert board is not None
+    assert board.id == str(inst.flow)
+    assert board.template == "analysis-review"
+    assert board.states == [
+        "created",
+        "analyzing",
+        "awaiting_review",
+        "delivered",
+        "rejected",
+        "failed",
+    ]
+    by_id = {c.id: c for c in board.tasks}
+    assert by_id[str(analyst)].persona == "analista"
+    assert by_id[str(analyst)].is_gate is False
+    assert by_id[str(gate)].persona == "humano"
+    assert by_id[str(gate)].is_gate is True  # humano + awaiting_review = card de gate
+
+
+def test_flow_board_none_for_missing_flow(db: Any) -> None:
+    """flow_board de um flow inexistente → None (nunca crash)."""
+    from surrealdb import RecordID
+
+    assert flow_board(db, RecordID("flow", "does-not-exist")) is None
 
 
 def _write(tmp_path: Path, body: str) -> Path:
