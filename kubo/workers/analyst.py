@@ -14,6 +14,7 @@ Duas regras de segurança são estruturais aqui, não disciplina:
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Callable, Mapping
 
@@ -36,7 +37,8 @@ from kubo.errors import ConfigError, ContractError, SenderError
 Sender = Callable[..., None]
 _MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conteúdo/segredo
 _TELEGRAM_LIMIT = 4096  # uma mensagem só (Bot API)
-_TITLE_CAP = 120  # teto por título nas fontes (o link ocupa o resto da linha)
+_TITLE_CAP = 120  # teto por título nas fontes (o hyperlink carrega o resto da linha)
+_MIN_PROSE = 280  # piso de caracteres reservado à prosa mesmo com muitas fontes
 _NO_TITLE = "(sem título)"
 _NO_SOURCES = "Não encontrei fontes no acervo para responder a esta pergunta."
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -168,7 +170,7 @@ class AnalystWorker:
             raise SenderError(f"canal {dest.channel!r} não suportado nesta sessão")
         token = _integration_secret(ctx, "telegram")
         text = _render_telegram(report_text, docs, self._base_url)
-        sender(token=token, chat_id=dest.address, text=text, parse_mode=None)
+        sender(token=token, chat_id=dest.address, text=text, parse_mode="HTML")
 
 
 def _integration_secret(ctx: RunContext, name: str) -> str:
@@ -214,20 +216,66 @@ def _render_markdown(report_text: str, docs: list[RetrievedView], base_url: str)
 
 
 def _render_telegram(report_text: str, docs: list[RetrievedView], base_url: str) -> str:
-    """Mensagem de TEXTO PURO para o Telegram (parse_mode=None: sem HTML, sem escaping — o
-    texto do LLM vai como está). Prosa + fontes, truncando a PROSA (não as fontes) para caber
-    em 4096; a lista de fontes vem do retrieval (§VI)."""
-    prose = report_text.strip()
+    """Mensagem HTML (parse_mode=HTML) para o Telegram. A prosa do LLM é HOSTIL (ADR-0013):
+    escapada integralmente — só `<a href>` das fontes é markup nosso. Cada fonte vira
+    `• <a href="link">título</a>` (link programático do retrieval, §VI — nunca a URL crua).
+
+    Garante ≤ 4096 SEM cortar tag: as fontes são truncadas em fronteira de LINHA inteira
+    (rodapé "+N fontes") e a prosa por `_truncate_html` (não parte entidade `&…;`)."""
+    prose = _escape(report_text.strip())
     if not docs:
-        return prose[:_TELEGRAM_LIMIT]
+        return _truncate_html(prose, _TELEGRAM_LIMIT)
     source_lines = [
-        f"- {_source_title(doc.title)}: {base_url}/distilled/{_key(doc.id)}" for doc in docs
+        f'• <a href="{_link(doc.id, base_url)}">{_escape(_source_title(doc.title))}</a>'
+        for doc in docs
     ]
-    sources = "Fontes:\n" + "\n".join(source_lines)
+    sources = _fit_sources(source_lines)
     budget = _TELEGRAM_LIMIT - len(sources) - 2  # reserva os dois chars do separador prosa↔fontes
-    if len(prose) > budget:
-        prose = prose[: max(0, budget - 1)].rstrip() + "…"
-    return f"{prose}\n\n{sources}"[:_TELEGRAM_LIMIT]
+    prose = _truncate_html(prose, budget)
+    return f"{prose}\n\n{sources}"
+
+
+def _fit_sources(lines: list[str]) -> str:
+    """Bloco "Fontes:" com uma linha por fonte, cortado em fronteira de LINHA inteira
+    (rodapé "+N fontes — ver na UI") para caber deixando `_MIN_PROSE` à prosa. Cortar dentro
+    de `<a href=…>` = HTML inválido = 400 = mensagem perdida; por isso o corte é por linha."""
+    cap = _TELEGRAM_LIMIT - _MIN_PROSE
+    block = "Fontes:\n" + "\n".join(lines)
+    if len(block) <= cap:
+        return block
+    total = len(lines)
+    included = 0
+    while included < total:
+        footer = f"+{total - included - 1} fontes — ver na UI"
+        candidate = "\n".join(["Fontes:", *lines[: included + 1], footer])
+        if len(candidate) > cap:
+            break
+        included += 1
+    return "\n".join(["Fontes:", *lines[:included], f"+{total - included} fontes — ver na UI"])
+
+
+def _truncate_html(escaped: str, limit: int) -> str:
+    """Trunca texto JÁ ESCAPADO em `limit` chars sem partir uma entidade `&…;` — com
+    quote=False todo `&` no output é entidade que nós geramos, então um `&` sem `;` depois
+    é um corte no meio dela (Telegram rejeitaria). Reticências ocupam o char reservado."""
+    if len(escaped) <= limit:
+        return escaped
+    if limit <= 1:
+        return ""
+    cut = escaped[: limit - 1]
+    if cut.rfind("&") > cut.rfind(";"):
+        cut = cut[: cut.rfind("&")]
+    return cut.rstrip() + "…"
+
+
+def _escape(text: str) -> str:
+    """Escapa conteúdo dinâmico (prosa/título hostis) para nó HTML (quote=False)."""
+    return html.escape(text, quote=False)
+
+
+def _link(doc_id: str, base_url: str) -> str:
+    """Link programático da UI (base_url + KEY do id), escapado como valor de atributo."""
+    return html.escape(f"{base_url}/distilled/{_key(doc_id)}", quote=True)
 
 
 def _dispatch(
