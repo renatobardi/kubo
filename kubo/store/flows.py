@@ -461,7 +461,8 @@ class FlowListRow:
 @dataclass(frozen=True)
 class FlowTaskCard:
     """Um card do board (cards = TASKS, não flows — ADR-0018 §V): estado, persona (glifo) e se
-    é o GATE aguardando decisão (task do humano em awaiting_review → ring âmbar + botões)."""
+    é o GATE aguardando decisão (task do humano num estado gate-from do snapshot → ring âmbar +
+    botões; `awaiting_review` no report, `review` no dev — genérico, ADR-0019 §XII)."""
 
     id: str
     state: str

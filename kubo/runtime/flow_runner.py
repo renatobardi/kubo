@@ -329,7 +329,12 @@ def _dev_config(instruction: str, *, branch: str) -> dict[str, Any]:
 
 def _sandbox_from_env() -> dict[str, str]:
     """Coordenadas do repo sandbox (D37) só por ENV. Falta de qualquer var → ConfigError
-    legível ANTES de instanciar o flow (nunca um flow meio-formado por env faltando)."""
+    legível ANTES de instanciar o flow (nunca um flow meio-formado por env faltando).
+
+    Contrato ÚNICO de env do forge: o `_reject_dev` usa só um subconjunto (owner/repo) mas exige
+    o todo — deliberado. Uma função, um fail-fast; dividir em dois subconjuntos criaria irmãs que
+    divergem (a doença que a §XII diagnostica no leitor de gate paralelo). As vars não são
+    segredo; exigir GIT_NAME num processo que não comita custa zero."""
     missing = sorted(k for k in _FORGE_ENV.values() if not os.environ.get(k))
     if missing:
         raise ConfigError(f"flow dev exige env do sandbox: {missing}")
@@ -417,8 +422,9 @@ def _assert_permissions(persona: Persona, manifest: WorkerManifest) -> None:
 
 
 def _build_executor(persona: Persona) -> Executor:
-    """Constrói o executor de LLM da persona (modelo congelado do catálogo = gate humano por
-    PR). Só `api` nesta fase; `cli` é 0015."""
+    """Constrói o executor de LLM `api` da persona (modelo congelado do catálogo = gate humano
+    por PR). Só serve personas `api`; o executor `cli` (dev, ADR-0019) é construído à parte por
+    `_build_cli_executor` — seam SEPARADO por fronteira de segurança (ADR-0019 §I)."""
     if persona.executor != "api":
         raise ConfigError(
             f"executor '{persona.executor}' da persona '{persona.name}' não suportado (só api)"

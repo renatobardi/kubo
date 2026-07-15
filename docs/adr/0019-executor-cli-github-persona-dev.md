@@ -1,15 +1,21 @@
 # ADR-0019 — Executor `cli` + GitHub: a persona dev nasce (task → PR real → gate)
 
-> Status: **proposto (rascunho)** · Data: 2026-07-14 · cravado no marco 16.9, após o
-> spike (16.2) provar o mecanismo no kubo-test e o advisor (Fable 5) validar. Estende
+> Status: **aceito** · Data: 2026-07-14 (cravado 2026-07-15, marco 16.9) · Estende
 > ADR-0013 (seam do executor), ADR-0016 (budget/runner fino, gatilho (c)), ADR-0018
 > (gate/board no browser) e ADR-0009 (contrato de worker §VIII).
 
-> **Nota de rascunho:** as **Perguntas abertas** ao final são respondidas pelo spike
-> 16.2 e pela evidência do SDK pinado. Enquanto o status for `proposto`, nenhuma delas
-> é decisão fechada — o esqueleto marca o eixo e o critério, não crava. As seções de
-> **Decisão** abaixo são as que o plano 0016 (aprovado, advisor-validado nas correções
-> C1–C4 e emendas E1–E8) já fixou independentemente do spike.
+> **Base do crave (crave-on-decisions):** as decisões (I–XII) estão implementadas e testadas
+> (suíte completa verde, cobertura store/contracts/runtime ≥85%); os três eixos genuinamente
+> abertos foram fechados pelo **spike 16.2 com evidência numérica** (subprocess no LXC aninhado,
+> `total_cost_usd` populado, CLI vendorizado buildando). **Pendência operacional NOMEADA:** o
+> smoke físico do marco 16.8 (task real → PR real → aprovar/rejeitar) valida a **fiação de
+> deploy** (env do forge, PAT, git na imagem, branch protection) + a **reconciliação de custo
+> real**, não as decisões — é owner-gated (§2e do runbook: repo sandbox, PAT, spend limit).
+> **Gatilho de reabertura:** se o smoke contradisser uma decisão — custo real ordens de grandeza
+> acima do `budget_usd` de §V, ou o subprocess falhando numa task não-trivial (o spike foi um
+> turno trivial) — o ADR reabre por emenda, com o motivo registrado. (Nota: a versão `proposto`
+> prometia cravar "após a reconciliação de custo do smoke"; o advisor recomendou crave-on-decisions
+> com a pendência nomeada, ratificado pelo dono no checkpoint da 0016b.)
 
 ## Contexto
 
@@ -220,6 +226,69 @@ do git), com `--` no `clone`.
   humano"): honrado **por construção nesta fase** — nenhum conteúdo coletado entra no
   circuito cli (task do dono + sandbox privado, escopo negativo do plano). O gatilho de
   container-irmão (§X) é a condição para isso mudar na fase 4.
+
+### XII. Generalização da maquinaria de gate (marco 16.6) — IN PLACE, lendo o snapshot
+
+O gate do `analysis-review` (ADR-0018) nasceu com os nomes do analysis **hardcoded**:
+`read_gate_context` exigia estado `awaiting_review` + persona `analista`; `flow_board.is_gate`
+e `list_flows.gate_open` casavam o literal `awaiting_review`; `decide_gate` validava contra o
+conjunto `{(approved, delivered), (rejected, rejected)}`; o GateSheet dizia "O que a analista
+produziu"/"Fontes consultadas". O `dev-mini` diverge em TODO eixo (estado gate-from `review`,
+personas `dev`+`humano`, destino de sucesso `done`, deliverable `kind=pr`). Decisão (validada
+pelo advisor Fable 5 antes do código): **generalizar a maquinaria IN PLACE, lendo do snapshot
+congelado — não um leitor/decisor de gate PARALELO dev-específico.**
+
+- **Por que in place, não paralelo:** o `read_gate_context` carrega a guarda anti-forja (a
+  task da contraparte é exigida distinta do gate — sem ela, passar a contraparte pela borda
+  HTTP faria `decide_gate` atualizar o mesmo registro duas vezes, deixando o gate aberto após
+  os efeitos externos). Essa checagem é **load-bearing de segurança**; dois leitores = dois
+  lugares para mantê-la correta, e em 6 meses um diverge. O snapshot **já é** a fonte da
+  verdade por desenho (invariante 4) — derivar dele elimina o literal, não adiciona mecanismo.
+- **Detecção de gate genérica:** um card é gate se persona `humano` E estado ∈ `{from dos
+  pares de snapshot.gates}`. Serve `awaiting_review` (report) e `review` (dev) sem nome fixo.
+  `list_flows.gate_open`/`_flow_status` passam a projetar `snapshot.board.gates` — senão um
+  flow dev parado no gate apareceria como `rodando` sem gate na lista (funcional, não
+  cosmético). `done` entra na união de terminais de sucesso (rótulo, cosmético).
+- **Convenção do estado reservado `rejected`:** a coerência decisão↔destino do `decide_gate`
+  vira `(decision == "rejected") ⇔ (to_state == "rejected")`, mais o par ∈ `snapshot.gates`
+  (já validado). O nome `rejected` já era load-bearing (motivo obrigatório, `_TERMINAL`,
+  status). Formalizá-lo como **reservado** (docstring + comentário nos YAMLs de template) não
+  cria convenção nova, só nomeia a existente. **Não** um mapa por template: no registry violaria
+  camadas (store consultando runtime); no YAML seria crescimento de schema rumo a semântica
+  declarativa — a rampa de DSL que o invariante 3 proíbe. `delivered`/`done` deixam de ser
+  literais **na validação do `decide_gate`**; permanecem como rótulos na **derivação de status**
+  (cosmético, `_SUCCESS_TERMINAL` = {delivered, done}) — a distinção que um mantenedor precisa
+  ao ver o frozenset e não concluir que o ADR mente.
+- **`GateContext` único com `deliverable_kind` + campos PR opcionais:** read-model frozen (DTO),
+  o consumidor ramifica por kind — `report` traz `sources` (consults), `pr` traz `pr_url`/
+  `pr_number` ESTRUTURAIS (E3) e `sources` vazio. Honesto enquanto há dois kinds; um terceiro
+  conjunto de campos o dividiria. A contraparte não-humana é exigida **ÚNICA** — duas tasks
+  não-humanas (template ambíguo) falham alto (StateError), nunca "pega a primeira".
+- **Behaviors dev no `FLOW_REGISTRY`:** `_run_dev` (dev implementa → gate `review`; falha do run
+  → `failed`, sem gate), `_resume_dev` (aprovar → `done`, SEM envio e SEM merge — D38),
+  `_reject_dev`. Config do sandbox por **ENV** (invariante 8), fora do `FlowCtx` (que é
+  bookkeeping de grafo — config de executor ali contaminaria a camada). Budget do snapshot,
+  modelo da persona. O `CliExecutor` é construído no behavior (`_build_cli_executor`), não
+  injetado pelo seam `executor` do `run_flow` (que é tipado ao `Executor` api — widenar para
+  união forçaria cast nos dois lados); o teste do behavior monkeypatcha o builder.
+- **Ordem do reject com I/O externo:** FECHAR o PR via API PRIMEIRO, decidir o gate DEPOIS —
+  at-least-once, espelho exato do `_resume_review` (que envia antes de decidir). Decidir antes
+  deixaria o board `rejected` com o PR aberto no GitHub em divergência silenciosa e irrecuperável
+  pela UI; fechar antes degrada bem (close falho → gate segue aberto e visível, o dono reclica;
+  `PATCH state=closed` num PR já fechado é no-op). A chamada de rede fica **fora** do
+  `run_transaction`. O `pr_number` vem do campo ESTRUTURAL do deliverable (E3), nunca do
+  `content` untrusted; owner/repo do ENV. A rota de escrita ganhou `except ForgeError` (reabre o
+  board, gate aberto) espelhando o `SenderError` do envio; e o guard de staleness passou de
+  `task_state == "awaiting_review"` (literal) para `read_gate_context(...) is None` (o oráculo
+  genérico de "gate humano aberto"), rodando ANTES do efeito externo.
+  **Superfície NOMEADA (blast radius):** como o reject fecha o PR, o **`GITHUB_PAT_FORGE` (credencial
+  de ESCRITA no GitHub) passa a viver também no processo `kubo-api`** — o segundo processo, exposto
+  ao browser — não só no scheduler. A `kubo-api` NÃO roda o executor cli (sem agente, sem scrub):
+  só a chamada REST de close. Contido por Tailscale-only + auth + dono único + PAT restrito ao
+  sandbox (contents+PR); antes da fase 4 misturar terceiros, o gatilho de container-irmão (§X) vale.
+- **GateSheet ramifica por `deliverable_kind`:** bloco PR (link do `pr_url` ESTRUTURAL — nunca
+  URL extraída do `content` — + resumo do agente em texto plano `pre-wrap`, §VII) vs bloco
+  report. Botão aprovar dev = "Aprovar — você mescla no GitHub" (D38 explícito na UI).
 
 ## Perguntas abertas — RESOLVIDAS pelo spike 16.2
 
