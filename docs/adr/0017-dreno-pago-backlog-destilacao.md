@@ -86,21 +86,22 @@ O plano enumera 3 decisões binárias pré-fixadas:
 - **Batch cross-item de embedding** — rejeitada por E5: mudança de worker/store por one-off não se paga; teto Gemini é a restrição real.
 - **Modelo por fallback declarável** — rejeitada: fase 3 (persona com fallback); dreno é pinagem hardcode (decisão).
 
-## Reconciliação (a preencher no fechamento)
+## Reconciliação (fechamento — 2026-07-15)
 
-Após conclusão dos batches, preencher:
+Levantada via SSH sobre o grafo de PRD (kubo-test) no fechamento da sessão 0016b; o custo real vem do dashboard do OpenRouter (dono, antes do merge).
 
 | Campo | Valor |
 |---|---|
-| **N destilados novos** | — (a preencher) |
-| **Custo real** | — USD (dashboard OpenRouter) |
-| **Rejeitados/motivados** | — (itens que falharam, motivos estruturados) |
-| **Delta items_without_distilled** | — antes / — depois |
-| **Auditoria (B1)** | Estrato llama recente: ✓ APROVADO / ✗ REPROVADO · Estrato legado PT: ✓ / ✗ / diferido · Estrato legado EN: ✓ / ✗ / diferido |
-| **Piloto (B2)** | Vencedor: llama via OpenRouter · `malformed` count: — |
-| **Veredito geral** | ✓ Dreno bem-sucedido / ⚠ Parcial (motivo) / ✗ Abortado (motivo) |
+| **items_without_distilled (escopo do dreno)** | ~3.239 antes (registro da 0014) → **6 depois** (live) — o dreno destilou ≈3.233 itens |
+| **N destilados (cumulativo, live)** | **4.179** `distilled` / **5.734** `item` totais |
+| **Content-vazio (fora do escopo, filtro)** | **1.549** itens sem `derived_from` E `content` vazio — NUNCA candidatos ao dreno (reentram se um harvest futuro preencher o content); não são resíduo |
+| **Custo real** | — USD (dashboard OpenRouter — a preencher pelo dono antes do merge) |
+| **Residuais (6) — diagnóstico** | Cauda IRREDUTÍVEL de conteúdo não-destilável, não falha do dreno: 1 transcrição só-música (`🎵`, len=1); transcrições longas de baixo sinal (YouTube "Amazon travel gadgets" EN 16.5k; podcast/ad PT 11.4k; Hipsters #47/#412). Produzem `malformed` no LLM → skip → reentram no funil (ADR-0013 §V, comportamento por desenho). Follow-up opcional: prefiltro de qualidade de conteúdo ou revisão manual — não urgente. |
+| **Auditoria (B1)** | Estrato llama recente: ✓ APROVADO (GO do dreno) · legados PT/EN: registrados na 0014 (re-destilação = follow-up §IV, aguarda replace de chunks) |
+| **Piloto (B2)** | Vencedor: **llama via OpenRouter** (A/A de formalidade, dono apontou) |
+| **Veredito geral** | ✓ **Dreno bem-sucedido** — backlog destilável drenado a 6 residuais irredutíveis; regime diário intocado (Groq free, a run das 12:00 de 2026-07-15 acusou `rate_limit_exhausted`, TPD esperado pós-dreno) |
 
-**Nota:** Esta seção permanece com placeholders até o fechamento operacional. A validação de design do ADR acontece com o advisor antes do merge; o preenchimento desta tabela é responsabilidade do dono operador (após B3 término). Follow-up registrado: **re-destilação de legados reprovados** aguarda implementação de replace de chunks (pré-requisito).
+**Notas de fechamento:** (a) o "antes" exato do escopo do dreno é o registro operacional da sessão 0014 (~3,2k) — o dono confirma o número de partida se quiser precisão além da ordem de grandeza; o "depois" (6) e os cumulativos (4.179/5.734/1.549) são leitura viva do grafo. (b) O custo real do OpenRouter é o único campo que depende de dado fora do grafo — o dono o traz antes do merge. (c) Follow-up ainda aberto (§IV): **re-destilação de legados reprovados** aguarda implementação de `replace_distilled` com preservação de proveniência (pré-requisito nomeado).
 
 ---
 

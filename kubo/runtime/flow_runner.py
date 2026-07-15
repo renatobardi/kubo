@@ -12,6 +12,7 @@ sem janitor); re-execução = novo flow.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ from kubo.embedding import Embedder
 from kubo.errors import ConfigError, SenderError, StateError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
+from kubo.executors.cli import CliExecutor, CliExecutorConfig, CliRunner
 from kubo.runtime.flow_templates import FlowTemplate, load_flow_templates
 from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.runtime.personas import Persona, load_personas
@@ -42,7 +44,9 @@ from kubo.store.flows import (
     transition_task,
 )
 from kubo.store.knowledge import insert_dispatch, run_status
+from kubo.workers import github_api
 from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
+from kubo.workers.dev import DevWorker
 
 _CATALOG_ROOT = Path(__file__).parents[2] / "catalogs"
 _TEMPLATES_DIR = _CATALOG_ROOT / "flow_templates"
@@ -61,6 +65,18 @@ _CREATED, _ANALYZING, _DELIVERED, _FAILED = "created", "analyzing", "delivered",
 # `analysis-review` acrescenta o gate: a analista PARA em awaiting_review, o humano recebe task,
 # a decisão leva as duas a delivered|rejected (ADR-0018 §IV/§V).
 _AWAITING, _REJECTED = "awaiting_review", "rejected"
+# `dev-mini` (ADR-0019): a dev implementa (implementing), PARA no gate `review`, a decisão leva
+# as duas a done|rejected. `done` é o terminal de sucesso (aprovar NÃO faz merge — D38).
+_DEV_PERSONA = "dev"
+_IMPLEMENTING, _REVIEW, _DONE = "implementing", "review", "done"
+# Env do sandbox (invariante 8 — nunca em YAML/código): coordenadas do repo `kubo-forge` (D37).
+_FORGE_ENV = {
+    "repo_url": "KUBO_FORGE_REPO_URL",
+    "owner": "KUBO_FORGE_OWNER",
+    "repo": "KUBO_FORGE_REPO",
+    "git_name": "KUBO_FORGE_GIT_NAME",
+    "git_email": "KUBO_FORGE_GIT_EMAIL",
+}
 _log = structlog.get_logger(__name__)
 
 
@@ -94,8 +110,8 @@ def run_flow(
     *,
     template_name: str,
     question: str,
-    embedder: Embedder,
-    destination: ResolvedDestination,
+    embedder: Embedder | None = None,
+    destination: ResolvedDestination | None = None,
     base_url: str,
     executor: Executor | None = None,
     senders: Mapping[str, Sender] | None = None,
@@ -104,7 +120,8 @@ def run_flow(
 
     Carrega os catálogos, resolve o handler no `FLOW_REGISTRY` (template sem handler falha
     alto — E4) e delega. `executor`/`senders` são injetáveis (default = reais) para tornar o
-    caminho testável com LLM/Telegram falsos, como o DigestWorker."""
+    caminho testável com LLM/Telegram/cli falsos. `embedder`/`destination` são opcionais: o
+    flow `dev` (executor cli) não usa nenhum dos dois — o behavior declara o que precisa."""
     templates = load_flow_templates(_TEMPLATES_DIR)
     template = templates.get(template_name)
     if template is None:
@@ -241,6 +258,161 @@ def _run_analysis_review(
     )
 
 
+def _run_dev(
+    db: Any,
+    template: FlowTemplate,
+    personas: Mapping[str, Persona],
+    question: str,
+    *,
+    embedder: Embedder | None,
+    destination: ResolvedDestination | None,
+    base_url: str,
+    executor: Executor | None,
+    senders: Mapping[str, Sender] | None,
+) -> FlowRunResult:
+    """Comportamento do `dev-mini` (E4, ADR-0019): a persona dev implementa num clone efêmero do
+    sandbox → PARA no gate `review` com um deliverable `kind=pr`.
+
+    `embedder`/`destination`/`senders`/`executor` (api) NÃO se aplicam ao dev: disparo por CLI,
+    gate na UI (C1), e o executor é o `CliExecutor` construído da persona+snapshot (o teste do
+    behavior monkeypatcha `_build_cli_executor`). Sucesso abre o gate (implementing→review);
+    falha do run (agente/budget/timeout/git — E5) → `failed`, sem gate, sem PR vazio."""
+    dev = personas.get(_DEV_PERSONA)
+    if dev is None or _HUMAN_PERSONA not in personas:
+        raise ConfigError(f"'dev-mini' exige as personas '{_DEV_PERSONA}' e '{_HUMAN_PERSONA}'")
+    _assert_permissions(dev, DevWorker.manifest)
+    runner = _build_cli_executor(dev, template)
+
+    inst = instantiate_flow(db, template=template, personas=personas, question=question)
+    task = create_task(db, flow=inst.flow, persona=inst.personas[_DEV_PERSONA], state=_CREATED)
+    transition_task(db, task, from_state=_CREATED, to_state=_IMPLEMENTING)
+
+    worker = DevWorker(runner, prompt=dev.prompt)
+    config = _dev_config(question, branch=_dev_branch(inst.flow))
+    run_id = run_worker(db, worker, config=config, flow_ctx=FlowCtx(inst.flow, task))
+    set_task_run(db, task, run_id)
+    if not _run_succeeded(db, run_id):
+        transition_task(db, task, from_state=_IMPLEMENTING, to_state=_FAILED)
+        return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_FAILED)
+
+    gate_task = open_gate(
+        db,
+        analyst_task=task,
+        analyst_from=_IMPLEMENTING,
+        analyst_to=_REVIEW,
+        flow=inst.flow,
+        human_persona=inst.personas[_HUMAN_PERSONA],
+        gate_state=_REVIEW,
+    )
+    return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_REVIEW, gate_task=gate_task)
+
+
+def _build_cli_executor(persona: Persona, template: FlowTemplate) -> CliRunner:
+    """Constrói o `CliExecutor` do flow dev: modelo da persona (congelado = gate por PR) +
+    `budget_usd` do template (congela no snapshot na instanciação, invariante 4). Persona não-cli
+    ou sem model/budget falha alto (ConfigError) — nada de executor meio-formado."""
+    if persona.executor != "cli":
+        raise ConfigError(f"persona '{persona.name}' do flow dev deve ter executor 'cli'")
+    if not persona.model:
+        raise ConfigError(f"persona '{persona.name}' (executor cli) sem model")
+    if template.budget_usd is None:
+        raise ConfigError(f"template '{template.name}' (flow dev) exige budget_usd")
+    return CliExecutor(CliExecutorConfig(model=persona.model, budget_usd=template.budget_usd))
+
+
+def _dev_config(instruction: str, *, branch: str) -> dict[str, Any]:
+    """Monta a config da task dev: a instrução do dono + as coordenadas do sandbox do ENV
+    (invariante 8). O `run_worker` a valida contra o `DevConfig` do manifest."""
+    sandbox = _sandbox_from_env()
+    return {"instruction": instruction, "branch": branch, "base_branch": "main", **sandbox}
+
+
+def _sandbox_from_env() -> dict[str, str]:
+    """Coordenadas do repo sandbox (D37) só por ENV. Falta de qualquer var → ConfigError
+    legível ANTES de instanciar o flow (nunca um flow meio-formado por env faltando).
+
+    Contrato ÚNICO de env do forge: o `_reject_dev` usa só um subconjunto (owner/repo) mas exige
+    o todo — deliberado. Uma função, um fail-fast; dividir em dois subconjuntos criaria irmãs que
+    divergem (a doença que a §XII diagnostica no leitor de gate paralelo). As vars não são
+    segredo; exigir GIT_NAME num processo que não comita custa zero."""
+    missing = sorted(k for k in _FORGE_ENV.values() if not os.environ.get(k))
+    if missing:
+        raise ConfigError(f"flow dev exige env do sandbox: {missing}")
+    return {field: os.environ[env] for field, env in _FORGE_ENV.items()}
+
+
+def _dev_branch(flow: RecordID) -> str:
+    """Branch derivado do flow id — único por construção (E5): dois flows nunca colidem, e um
+    flow falho pós-push deixa um branch órfão de nome previsível (limpeza = runbook, não código)."""
+    return f"kubo/{str(flow).partition(':')[2]}"
+
+
+def _resume_dev(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    destination: ResolvedDestination,
+    base_url: str,
+    senders: Mapping[str, Sender] | None,
+) -> None:
+    """Aprovação do `dev-mini` (D38): move as 2 tasks a `done`. SEM envio e SEM merge — o Kubo não
+    tem capacidade de merge (anti-bypass por construção, ADR-0018 §V-bis); o merge é clique do dono
+    no GitHub. `destination`/`base_url`/`senders` existem só para casar o contrato do resume."""
+    ctx = read_gate_context(db, gate_task)
+    if ctx is None:
+        raise StateError("gate não resolve um flow/deliverable")
+    decide_gate(
+        db,
+        analyst_task=ctx.counterpart_task,
+        gate_task=ctx.gate_task,
+        to_state=_DONE,
+        decision="approved",
+    )
+
+
+def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
+    """Rejeição do `dev-mini` (D38): FECHA o PR via API com o motivo em comentário, DEPOIS decide o
+    gate → rejected. Ordem (fechar antes, decidir depois) é at-least-once, espelho do resume do
+    analysis (ADR-0019 §IX): close falho deixa o gate ABERTO e visível (o dono clica de novo);
+    decidir antes deixaria o board `rejected` com o PR aberto — divergência silenciosa.
+
+    O `pr_number` vem do campo ESTRUTURAL do deliverable (E3, veio da API), nunca do `content`
+    untrusted; owner/repo do ENV; o PAT do catálogo (o runtime resolve o segredo — §8).
+    `ForgeError` (close falho) propaga: a rota reabre o board e o gate segue aberto."""
+    ctx = read_gate_context(db, gate_task)
+    if ctx is None:
+        raise StateError("gate não resolve um flow")
+    if ctx.pr_number is None:
+        raise StateError("gate dev sem PR estrutural — não é rejeitável pela API")
+    sandbox = _sandbox_from_env()
+    base_url_api, pat = _forge_integration()
+    github_api.close_pull_request(
+        base_url=base_url_api,
+        token=pat,
+        owner=sandbox["owner"],
+        repo=sandbox["repo"],
+        number=ctx.pr_number,
+        reason=reason,
+    )
+    decide_gate(
+        db,
+        analyst_task=ctx.counterpart_task,
+        gate_task=ctx.gate_task,
+        to_state=_REJECTED,
+        decision="rejected",
+        reason=reason,
+    )
+
+
+def _forge_integration() -> tuple[str, str]:
+    """Resolve (base_url, PAT) da integração `github` do catálogo — o runtime resolve o segredo,
+    o worker/behavior nunca lê env direto (§8). PAT ausente → ConfigError (falha de config)."""
+    resolved = resolve_integrations(["github"], load_integrations(_INTEGRATIONS_DIR))["github"]
+    if not resolved.secret:
+        raise ConfigError("integração 'github' sem PAT resolvido (env GITHUB_PAT_FORGE)")
+    return resolved.base_url or "https://api.github.com", resolved.secret
+
+
 def _assert_permissions(persona: Persona, manifest: WorkerManifest) -> None:
     """R6 (least-privilege, ADR-0016 §IX): a persona deve declarar toda integração que o
     manifest do worker exige, senão ConfigError. Enforcement unificado por persona é fase 3."""
@@ -250,8 +422,9 @@ def _assert_permissions(persona: Persona, manifest: WorkerManifest) -> None:
 
 
 def _build_executor(persona: Persona) -> Executor:
-    """Constrói o executor de LLM da persona (modelo congelado do catálogo = gate humano por
-    PR). Só `api` nesta fase; `cli` é 0015."""
+    """Constrói o executor de LLM `api` da persona (modelo congelado do catálogo = gate humano
+    por PR). Só serve personas `api`; o executor `cli` (dev, ADR-0019) é construído à parte por
+    `_build_cli_executor` — seam SEPARADO por fronteira de segurança (ADR-0019 §I)."""
     if persona.executor != "api":
         raise ConfigError(
             f"executor '{persona.executor}' da persona '{persona.name}' não suportado (só api)"
@@ -332,7 +505,7 @@ def _resume_review(
     _dispatch_report(db, destination, items, status="ok")
     decide_gate(
         db,
-        analyst_task=ctx.analyst_task,
+        analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_DELIVERED,
         decision="approved",
@@ -347,7 +520,7 @@ def _reject_review(db: Any, *, gate_task: RecordID, reason: str) -> None:
         raise StateError("gate não resolve um flow")
     decide_gate(
         db,
-        analyst_task=ctx.analyst_task,
+        analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_REJECTED,
         decision="rejected",
@@ -448,4 +621,5 @@ _FLOW_REGISTRY: dict[str, FlowBehavior] = {
     "analysis-review": FlowBehavior(
         run=_run_analysis_review, resume=_resume_review, reject=_reject_review
     ),
+    "dev-mini": FlowBehavior(run=_run_dev, resume=_resume_dev, reject=_reject_dev),
 }

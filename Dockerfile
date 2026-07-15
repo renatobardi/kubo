@@ -42,8 +42,12 @@ ENV UV_COMPILE_BYTECODE=1 \
 # tzdata: a imagem slim não traz /usr/share/zoneinfo, e o scheduler valida a
 # timezone do schedules.yaml (America/Sao_Paulo) via zoneinfo no startup — sem
 # isto ele levanta ZoneInfoNotFoundError e não sobe.
+# git: o DevWorker (executor cli, ADR-0019) clona o sandbox, commita e faz push via
+# subprocess `git` — sem o binário na imagem, o flow dev falha no clone. É runtime de
+# ferramenta (como o binário `claude` do SDK), não linguagem de aplicação — invariante 1
+# intacto (ADR-0019 §XI).
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

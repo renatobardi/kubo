@@ -29,10 +29,13 @@ def _fresh(table: str) -> RecordID:
     return RecordID(table, secrets.token_hex(16))
 
 
-# Pares (decisão, estado-destino) válidos num gate: a decisão NÃO pode contradizer o destino
-# (approved só entrega, rejected só arquiva). Fecha a trilha de auditoria contra par forjado.
-_GATE_DECISIONS = {("approved", "delivered"), ("rejected", "rejected")}
-_ANALYST_CATALOG = "analista"
+# `rejected` é NOME DE ESTADO RESERVADO (ADR-0019 §VII): a coerência decisão↔destino do gate
+# deriva desta convenção, não de um mapa de nomes por template (isso seria rampa de DSL,
+# invariante 3). Rejeitar ⇔ destino `rejected`; aprovar leva a qualquer OUTRO destino de gate
+# (`delivered` no analysis, `done` no dev-mini). O par (from, to) ∈ snapshot.gates continua
+# sendo validado à parte; esta convenção só barra a incoerência (aprovar mandando pra rejected)
+# que forjaria a trilha de auditoria.
+_REJECTED = "rejected"
 _HUMAN_CATALOG = "humano"
 
 
@@ -41,6 +44,7 @@ _HUMAN_CATALOG = "humano"
 _LIST_FLOWS_SQL = (
     "SELECT id, template_name, question, created_at, "
     "<-belongs_to<-task.state AS task_states, "
+    "snapshot.board.gates AS gate_pairs, "
     "array::distinct(<-belongs_to<-task->assigned_to->persona.catalog_name) AS cast "
     "FROM flow ORDER BY created_at DESC LIMIT {limit} START {start};"
 )
@@ -264,12 +268,17 @@ def decide_gate(
     $from`): uma corrida double-decide (duas abas passando o pré-check) degrada para no-op
     total, nunca para decisão sobrescrita nem board incoerente (TOCTOU residual nomeado)."""
     reason = (reason or "").strip()
-    if (decision, to_state) not in _GATE_DECISIONS:
+    if decision not in ("approved", "rejected"):
+        raise StateError(f"decisão '{decision}' inválida (só approved|rejected)")
+    # Convenção do estado reservado (_REJECTED): rejeitar ⇔ destino `rejected`. Um par que
+    # discorda (approved→rejected, ou rejected→done) é forja de auditoria — barrado aqui; o
+    # par ∈ snapshot.gates é validado logo abaixo. Sem literais `delivered`/`done`.
+    if (decision == _REJECTED) != (to_state == _REJECTED):
         raise StateError(
             f"decisão '{decision}' não corresponde ao estado destino '{to_state}' "
-            "(só approved→delivered ou rejected→rejected)"
+            f"(rejeição exige destino '{_REJECTED}'; aprovação, um destino não-'{_REJECTED}')"
         )
-    if decision == "rejected" and not reason:
+    if decision == _REJECTED and not reason:
         raise StateError("rejeição de gate exige motivo")
 
     gate_from, gate_flow = _task_state_and_flow(db, gate_task)
@@ -343,16 +352,25 @@ class GateSource:
 
 @dataclass(frozen=True)
 class GateContext:
-    """Tudo que uma decisão de gate precisa, lido do grafo numa passada (ADR-0018 §I/§V): os
-    dois tasks (para `decide_gate`), a pergunta do flow, a PROSA do deliverable e as fontes
-    consultadas. Uma leitura, dois consumidores: o painel de gate (UI) e o envio na aprovação."""
+    """Tudo que uma decisão de gate precisa, lido do grafo numa passada (ADR-0018 §I/§V,
+    ADR-0019 §VII): os dois tasks (para `decide_gate`), a pergunta do flow, a PROSA untrusted do
+    deliverable e o que mais o consumidor precisa por KIND. Read-model frozen (DTO): o consumidor
+    (UI/behavior) ramifica por `deliverable_kind` — `report` traz `sources` (consults); `pr` traz
+    `pr_url`/`pr_number` ESTRUTURAIS (E3, vindos da API, nunca do `content`). Um só tipo com
+    campos opcionais é honesto enquanto há dois kinds; um terceiro conjunto de campos o dividiria.
+
+    `counterpart_task` é a task NÃO-HUMANA do flow (a analista no report, a dev no PR) — a
+    contraparte que `decide_gate` transiciona junto com o gate."""
 
     flow: RecordID
-    analyst_task: RecordID
+    counterpart_task: RecordID
     gate_task: RecordID
     question: str
     content: str
+    deliverable_kind: str
     sources: list[GateSource]
+    pr_url: str | None = None
+    pr_number: int | None = None
 
 
 def _first_title(titles: Any) -> str | None:
@@ -365,20 +383,26 @@ def _first_title(titles: Any) -> str | None:
 
 
 def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
-    """Reúne o contexto de um gate a partir do task do gate (ADR-0018 §I/§V): o flow, a
-    pergunta, o task da analista (para transicionar junto), a prosa do deliverable e as fontes
-    consultadas (id+título).
+    """Reúne o contexto de um gate a partir do task do gate (ADR-0018 §I/§V, ADR-0019 §VII): o
+    flow, a pergunta, a task NÃO-HUMANA (contraparte, para transicionar junto), o deliverable
+    (kind + prosa untrusted + ref PR estrutural) e — no report — as fontes consultadas.
 
-    `None` a menos que `gate_task` seja de fato o GATE HUMANO ABERTO: persona `humano` E estado
-    `awaiting_review`. A validação fecha a forja pela borda HTTP (o id vem do form): sem ela,
-    passar a task da analista a resolveria como a própria contraparte (`analyst_task == gate_task`)
-    e `decide_gate` atualizaria o mesmo registro duas vezes, deixando o gate real aberto após os
-    efeitos externos. O par da analista é exigido `analista` E distinto do gate."""
+    `None` a menos que `gate_task` seja de fato um GATE HUMANO ABERTO: persona `humano` E estado
+    que é um `from` de algum par em `snapshot.gates` (GENÉRICO — `awaiting_review` no report,
+    `review` no dev). A validação fecha a forja pela borda HTTP (o id vem do form): sem ela,
+    passar a contraparte a resolveria como o próprio gate (`counterpart == gate_task`) e
+    `decide_gate` atualizaria o mesmo registro duas vezes, deixando o gate real aberto após os
+    efeitos externos. A contraparte é exigida NÃO-humana, distinta do gate, e ÚNICA — duas
+    tasks não-humanas (template ambíguo) falham alto (StateError), nunca "pega a primeira"."""
     head = db.query(
         "SELECT VALUE {"
         "flow: (->belongs_to->flow)[0], "
         "question: (->belongs_to->flow.question)[0], "
         "content: (->belongs_to->flow->produces->deliverable.content)[0], "
+        "kind: (->belongs_to->flow->produces->deliverable.kind)[0], "
+        "pr_url: (->belongs_to->flow->produces->deliverable.pr_url)[0], "
+        "pr_number: (->belongs_to->flow->produces->deliverable.pr_number)[0], "
+        "gates: (->belongs_to->flow.snapshot.board.gates)[0], "
         "state: state, "
         "persona: (->assigned_to->persona.catalog_name)[0]"
         "} FROM $g;",
@@ -386,32 +410,35 @@ def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
     )
     row: dict[str, Any] = head[0] if head else {}
     flow = row.get("flow")
-    if (
-        flow is None
-        or row.get("persona") != _HUMAN_CATALOG
-        or row.get("state") != "awaiting_review"
-    ):
+    gate_from = {pair[0] for pair in _pairs(row.get("gates"))}
+    if flow is None or row.get("persona") != _HUMAN_CATALOG or row.get("state") not in gate_from:
         return None
-    analyst = db.query(
+    counterpart = db.query(
         "SELECT VALUE id FROM $flow<-belongs_to<-task "
-        "WHERE ->assigned_to->persona.catalog_name CONTAINS $analyst AND id != $g;",
-        {"flow": flow, "g": gate_task, "analyst": _ANALYST_CATALOG},
+        "WHERE (->assigned_to->persona.catalog_name)[0] != $human AND id != $g;",
+        {"flow": flow, "g": gate_task, "human": _HUMAN_CATALOG},
     )
-    analyst_task: RecordID | None = analyst[0] if analyst else None
-    if analyst_task is None:
+    if not counterpart:
         return None
+    if len(counterpart) > 1:
+        raise StateError("flow com múltiplas tasks não-humanas — gate ambíguo")
+    counterpart_task: RecordID = counterpart[0]
     src_rows = db.query(
         "SELECT id, ->derived_from->item.title AS titles FROM $a->consults->distilled;",
-        {"a": analyst_task},
+        {"a": counterpart_task},
     )
     sources = [GateSource(id=str(r["id"]), title=_first_title(r.get("titles"))) for r in src_rows]
+    pr_number = row.get("pr_number")
     return GateContext(
         flow=flow,
-        analyst_task=analyst_task,
+        counterpart_task=counterpart_task,
         gate_task=gate_task,
         question=str(row.get("question") or ""),
         content=str(row.get("content") or ""),
+        deliverable_kind=str(row.get("kind") or ""),
         sources=sources,
+        pr_url=str(row["pr_url"]) if row.get("pr_url") else None,
+        pr_number=int(pr_number) if pr_number is not None else None,
     )
 
 
@@ -434,7 +461,8 @@ class FlowListRow:
 @dataclass(frozen=True)
 class FlowTaskCard:
     """Um card do board (cards = TASKS, não flows — ADR-0018 §V): estado, persona (glifo) e se
-    é o GATE aguardando decisão (task do humano em awaiting_review → ring âmbar + botões)."""
+    é o GATE aguardando decisão (task do humano num estado gate-from do snapshot → ring âmbar +
+    botões; `awaiting_review` no report, `review` no dev — genérico, ADR-0019 §XII)."""
 
     id: str
     state: str
@@ -454,19 +482,24 @@ class FlowBoardView:
     tasks: list[FlowTaskCard]
 
 
-_TERMINAL = frozenset({"delivered", "rejected", "failed"})
+# `done` (dev-mini) e `delivered` (analysis) são os terminais de SUCESSO; `rejected`/`failed`,
+# os de falha. União literal barata (rótulos são cosméticos, ADR-0019 §VII); a detecção de gate
+# aberto NÃO é literal — deriva do snapshot.
+_SUCCESS_TERMINAL = frozenset({"delivered", "done"})
+_TERMINAL = _SUCCESS_TERMINAL | frozenset({"rejected", "failed"})
 
 
-def _flow_status(states: list[str]) -> str:
+def _flow_status(states: list[str], gate_from: set[str]) -> str:
     """Status DERIVADO dos estados dos tasks (o flow não tem máquina própria, ADR-0016 §II).
-    Precedência: gate aberto > falhou > rejeitado > entregue (tudo delivered) > rodando."""
-    if "awaiting_review" in states:
+    Precedência: gate aberto > falhou > rejeitado > entregue > rodando. `gate_from` vem do
+    snapshot (os `from` dos pares de gate) — a "espera de gate" não hardcoda `awaiting_review`."""
+    if any(s in gate_from for s in states):
         return "aguardando"
     if "failed" in states:
         return "falhou"
     if "rejected" in states:
         return "rejeitado"
-    if states and all(s == "delivered" for s in states):
+    if states and all(s in _SUCCESS_TERMINAL for s in states):
         return "entregue"
     return "rodando"
 
@@ -479,13 +512,14 @@ def list_flows(db: Any, *, limit: int, start: int) -> list[FlowListRow]:
     result: list[FlowListRow] = []
     for r in rows:
         states = [str(s) for s in _as_list(r.get("task_states"))]
+        gate_from = {pair[0] for pair in _pairs(r.get("gate_pairs"))}
         result.append(
             FlowListRow(
                 id=str(r["id"]),
                 question=str(r.get("question") or ""),
                 template=str(r.get("template_name") or ""),
-                status=_flow_status(states),
-                gate_open="awaiting_review" in states,
+                status=_flow_status(states, gate_from),
+                gate_open=any(s in gate_from for s in states),
                 cast=[str(c) for c in _as_list(r.get("cast"))],
                 tasks_open=sum(1 for s in states if s not in _TERMINAL),
                 created_at=str(r.get("created_at") or ""),
@@ -504,11 +538,14 @@ def flow_board(db: Any, flow: RecordID) -> FlowBoardView | None:
     """O board de um flow: pergunta, template, COLUNAS (estados do snapshot) e os cards (tasks
     com estado + persona + flag de gate). `None` se o flow não existe."""
     head = db.query(
-        "SELECT question, template_name, snapshot.board.states AS states FROM $f;", {"f": flow}
+        "SELECT question, template_name, snapshot.board.states AS states, "
+        "snapshot.board.gates AS gates FROM $f;",
+        {"f": flow},
     )
     if not head:
         return None
     row: dict[str, Any] = head[0]
+    gate_from = {pair[0] for pair in _pairs(row.get("gates"))}
     task_rows = db.query(
         "SELECT id, state, created_at, (->assigned_to->persona.catalog_name)[0] AS persona "
         "FROM $f<-belongs_to<-task ORDER BY created_at;",  # created_at na projeção: quirk v3
@@ -519,7 +556,9 @@ def flow_board(db: Any, flow: RecordID) -> FlowBoardView | None:
             id=str(t["id"]),
             state=str(t["state"]),
             persona=str(t.get("persona") or ""),
-            is_gate=t.get("state") == "awaiting_review" and t.get("persona") == _HUMAN,
+            # is_gate GENÉRICO: humano num estado gate-from do snapshot (não o literal
+            # `awaiting_review`) — serve report e dev-mini (`review`) sem nome fixo.
+            is_gate=t.get("persona") == _HUMAN and str(t.get("state")) in gate_from,
         )
         for t in task_rows
     ]

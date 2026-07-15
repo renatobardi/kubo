@@ -328,7 +328,7 @@ def test_read_gate_context_gathers_flow_deliverable_and_sources(db: Any, tmp_pat
 
     assert ctx is not None
     assert ctx.flow == inst.flow
-    assert ctx.analyst_task == analyst
+    assert ctx.counterpart_task == analyst
     assert ctx.gate_task == gate
     assert ctx.question == "q?"
     assert ctx.content == "A análise."
@@ -489,3 +489,143 @@ def _write(tmp_path: Path, body: str) -> Path:
     path = tmp_path / "analysis.yaml"
     path.write_text(body, encoding="utf-8")
     return path
+
+
+# dev-mini (ADR-0019): board com gate `review`→`done`/`rejected`, elenco dev+humano, deliverable
+# `pr`. Prova que a maquinaria de gate é GENÉRICA — lê o snapshot, não nomes fixos do analysis.
+_DEV_MINI = (
+    "name: dev-mini\nversion: 1\n"
+    "board:\n"
+    "  states: [created, implementing, review, done, rejected, failed]\n"
+    "  transitions:\n"
+    "    - [created, implementing]\n    - [implementing, review]\n"
+    "    - [implementing, failed]\n"
+    "    - [review, done]\n    - [review, rejected]\n"
+    "  gates:\n    - [review, done]\n    - [review, rejected]\n"
+    "cast: [dev, humano]\ndeliverable: pr\ntriggers: [manual]\nbudget_usd: 5.0\n"
+)
+
+
+def _dev_flow(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
+    """Instancia um flow `dev-mini` levado ao gate: a task dev em `review` + a task do gate
+    (humano) nascida em `review`. Devolve (inst, dev_task, gate_task)."""
+    path = tmp_path / "dev-mini.yaml"
+    path.write_text(_DEV_MINI, encoding="utf-8")
+    template = load_flow_template(path)
+    inst = instantiate_flow(db, template=template, personas=_PERSONAS, question="add hello()")
+    dev = create_task(db, flow=inst.flow, persona=inst.personas["dev"], state="created")
+    transition_task(db, dev, from_state="created", to_state="implementing")
+    transition_task(db, dev, from_state="implementing", to_state="review")
+    gate = create_task(db, flow=inst.flow, persona=inst.personas["humano"], state="review")
+    return inst, dev, gate
+
+
+def test_decide_gate_approves_non_delivered_target_by_convention(db: Any, tmp_path: Path) -> None:
+    """A coerência decisão↔destino deriva do snapshot, não de literais: aprovar um gate cujo
+    destino de sucesso é `done` (não `delivered`) move as 2 tasks a `done` — a maquinaria não
+    hardcoda o nome do estado terminal (só `rejected` é reservado, ADR-0019 §VII)."""
+    _inst, dev, gate = _dev_flow(db, tmp_path)
+    decide_gate(db, analyst_task=dev, gate_task=gate, to_state="done", decision="approved")
+    assert db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
+    g = db.query("SELECT state, decision FROM $t;", {"t": gate})[0]
+    assert g["state"] == "done"
+    assert g["decision"] == "approved"
+
+
+def test_decide_gate_rejects_approved_to_reject_state_dev(db: Any, tmp_path: Path) -> None:
+    """A convenção `rejected`: aprovar com destino `rejected` é contraditório (approved ⇔
+    não-rejected), StateError — sem corromper a auditoria, também no dev-mini."""
+    _inst, dev, gate = _dev_flow(db, tmp_path)
+    with pytest.raises(StateError):
+        decide_gate(db, analyst_task=dev, gate_task=gate, to_state="rejected", decision="approved")
+    assert db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "review"
+
+
+def test_read_gate_context_dev_pr_deliverable(db: Any, tmp_path: Path) -> None:
+    """read_gate_context num gate dev: estado gate-from GENÉRICO (`review`), a task não-humana
+    (dev) como counterpart, e o deliverable `kind=pr` com pr_url/pr_number ESTRUTURAIS (E3) +
+    content = resumo untrusted (E4). `sources` vazio (PR não tem consults)."""
+    inst, dev, gate = _dev_flow(db, tmp_path)
+    insert_deliverable(
+        db,
+        flow=inst.flow,
+        task=dev,
+        kind="pr",
+        content="resumo do agente",
+        consulted=[],
+        pr_url="https://github.com/owner/kubo-forge/pull/7",
+        pr_number=7,
+    )
+
+    ctx = read_gate_context(db, gate)
+
+    assert ctx is not None
+    assert ctx.flow == inst.flow
+    assert ctx.counterpart_task == dev
+    assert ctx.gate_task == gate
+    assert ctx.question == "add hello()"
+    assert ctx.content == "resumo do agente"
+    assert ctx.deliverable_kind == "pr"
+    assert ctx.pr_url == "https://github.com/owner/kubo-forge/pull/7"
+    assert ctx.pr_number == 7
+    assert ctx.sources == []
+
+
+def test_read_gate_context_report_sets_kind_and_null_pr(db: Any, tmp_path: Path) -> None:
+    """No gate de report o deliverable_kind é `report` e os campos PR ficam None — o consumidor
+    (UI/behavior) ramifica por kind sem adivinhar."""
+    inst, analyst, gate = _review_flow(db, tmp_path)
+    d1 = _seed_distilled(db, "Rust ownership")
+    insert_deliverable(
+        db, flow=inst.flow, task=analyst, kind="report", content="A análise.", consulted=[d1]
+    )
+
+    ctx = read_gate_context(db, gate)
+
+    assert ctx is not None
+    assert ctx.deliverable_kind == "report"
+    assert ctx.pr_url is None
+    assert ctx.pr_number is None
+    assert ctx.counterpart_task == analyst
+
+
+def test_read_gate_context_requires_exactly_one_counterpart(db: Any, tmp_path: Path) -> None:
+    """Se o flow tiver DUAS tasks não-humanas, read_gate_context falha alto (StateError) em vez
+    de escolher a primeira em silêncio — um template futuro ambíguo deve quebrar, não decidir."""
+    inst, _dev, gate = _dev_flow(db, tmp_path)
+    # segunda task não-humana no mesmo flow (dev extra) — ambiguidade
+    create_task(db, flow=inst.flow, persona=inst.personas["dev"], state="implementing")
+    with pytest.raises(StateError):
+        read_gate_context(db, gate)
+
+
+def test_flow_board_marks_dev_gate_from_snapshot(db: Any, tmp_path: Path) -> None:
+    """is_gate é derivado do snapshot: a task do humano em `review` (gate-from de dev-mini) é
+    marcada como gate, mesmo o estado NÃO se chamando `awaiting_review`."""
+    _inst, dev, gate = _dev_flow(db, tmp_path)
+    board = flow_board(db, _inst.flow)
+    assert board is not None
+    by_id = {c.id: c for c in board.tasks}
+    assert by_id[str(gate)].is_gate is True  # humano + review (gate-from) = card de gate
+    assert by_id[str(dev)].is_gate is False  # dev em review NÃO é gate (não é humano)
+
+
+def test_list_flows_dev_gate_open_and_status(db: Any, tmp_path: Path) -> None:
+    """list_flows marca gate_open para o dev-mini parado em `review` (gate-from do snapshot) —
+    senão o dono não veria o gate na lista. Status derivado = 'aguardando'."""
+    _inst, _dev, _gate = _dev_flow(db, tmp_path)
+    row = list_flows(db, limit=20, start=0)[0]
+    assert row.gate_open is True
+    assert row.status == "aguardando"
+    assert set(row.cast) == {"dev", "humano"}
+
+
+def test_list_flows_dev_done_status(db: Any, tmp_path: Path) -> None:
+    """Após aprovar o gate dev (→`done`), o status derivado é 'entregue' e sem gate aberto —
+    `done` conta como terminal de sucesso, como `delivered`."""
+    _inst, dev, gate = _dev_flow(db, tmp_path)
+    decide_gate(db, analyst_task=dev, gate_task=gate, to_state="done", decision="approved")
+    row = list_flows(db, limit=20, start=0)[0]
+    assert row.status == "entregue"
+    assert row.gate_open is False
+    assert row.tasks_open == 0

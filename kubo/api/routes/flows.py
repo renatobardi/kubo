@@ -28,7 +28,7 @@ from kubo.distribution.destinations import (
     resolve_base_url,
     resolve_destinations,
 )
-from kubo.errors import ConfigError, SenderError, StateError
+from kubo.errors import ConfigError, ForgeError, SenderError, StateError
 from kubo.runtime.flow_runner import reject_gate, resume_gate
 from kubo.store import client
 from kubo.store.flows import (
@@ -38,7 +38,6 @@ from kubo.store.flows import (
     flow_of_task,
     list_flows,
     read_gate_context,
-    task_state,
 )
 
 _log = structlog.get_logger(__name__)
@@ -132,9 +131,13 @@ def _decide(request: Request, *, task: str, csrf: str, approve: bool, reason: st
 def _apply_decision(
     request: Request, db: object, gate_task: RecordID, *, approve: bool, reason: str
 ) -> Response:
-    """Com a conexão de ESCRITA aberta: staleness (409) → decisão → redirect ao board. Envio
-    falho na aprovação (SenderError) reabre o board com aviso; o gate segue aberto."""
-    if task_state(db, gate_task) != "awaiting_review":
+    """Com a conexão de ESCRITA aberta: staleness (409) → decisão → redirect ao board. Efeito
+    externo falho (SenderError no envio do analysis, ForgeError no close do PR do dev) reabre o
+    board com aviso; o gate segue aberto (at-least-once)."""
+    # Staleness GENÉRICO (não o literal `awaiting_review`): read_gate_context é o oráculo de
+    # "gate humano ABERTO" — None se já decidido/inválido. Roda ANTES do efeito externo, então
+    # um gate dev já resolvido não dispara um close de PR à toa.
+    if read_gate_context(db, gate_task) is None:
         return _reopen_board(
             request, gate_task, notice="Esta decisão já foi tomada.", status=409, db=db
         )
@@ -149,6 +152,14 @@ def _apply_decision(
             request,
             gate_task,
             notice="Falha ao enviar no Telegram; tente de novo.",
+            status=502,
+            db=db,
+        )
+    except ForgeError:
+        return _reopen_board(
+            request,
+            gate_task,
+            notice="Falha ao fechar o PR no GitHub; tente de novo.",
             status=502,
             db=db,
         )

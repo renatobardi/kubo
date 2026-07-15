@@ -29,10 +29,11 @@ _BOARD = FlowBoardView(
 )
 _GATE = GateContext(
     flow=RecordID("flow", "f1"),
-    analyst_task=RecordID("task", "a1"),
+    counterpart_task=RecordID("task", "a1"),
     gate_task=RecordID("task", "g1"),
     question="O que dizem sobre memória?",
     content="Relatório com <b>tag</b> hostil e\nquebra de linha.",
+    deliverable_kind="report",
     sources=[GateSource(id="distilled:d1", title="Rust ownership")],
 )
 
@@ -81,6 +82,45 @@ def test_board_renders_gatesheet_with_plain_text(
     assert 'name="csrf"' in resp.text  # token presente para os POSTs
 
 
+_PR_BOARD = FlowBoardView(
+    id="flow:d1",
+    question="add a hello() function",
+    template="dev-mini",
+    states=["created", "implementing", "review", "done", "rejected", "failed"],
+    tasks=[
+        FlowTaskCard(id="task:c1", state="review", persona="dev", is_gate=False),
+        FlowTaskCard(id="task:h1", state="review", persona="humano", is_gate=True),
+    ],
+)
+_PR_GATE = GateContext(
+    flow=RecordID("flow", "d1"),
+    counterpart_task=RecordID("task", "c1"),
+    gate_task=RecordID("task", "h1"),
+    question="add a hello() function",
+    content="Implementei com <script>alert(1)</script> na prosa.",
+    deliverable_kind="pr",
+    sources=[],
+    pr_url="https://github.com/owner/kubo-forge/pull/9",
+    pr_number=9,
+)
+
+
+def test_board_pr_gate_renders_link_and_plain_summary(
+    monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
+) -> None:
+    """No gate de PR o GateSheet mostra o link ESTRUTURAL do PR (pr_url) e o resumo do agente em
+    TEXTO PLANO (a tag hostil ESCAPADA), sem a seção de fontes (PR não tem consults)."""
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PR_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PR_GATE)
+
+    resp = authed_client.get("/flows/d1")
+    assert resp.status_code == 200
+    assert "https://github.com/owner/kubo-forge/pull/9" in resp.text  # link do PR (estrutural)
+    assert "&lt;script&gt;" in resp.text  # resumo escapado
+    assert "<script>alert(1)</script>" not in resp.text  # NUNCA interpretado
+    assert "Fontes consultadas" not in resp.text  # PR não tem fontes
+
+
 def test_approve_without_csrf_is_403(
     monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
 ) -> None:
@@ -113,3 +153,38 @@ def test_write_routes_require_login(client: TestClient) -> None:
     resp = client.post("/flows/gate/approve", data={"task": "task:g1"}, follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/login"
+
+
+def test_reject_pr_close_failure_reopens_board(
+    monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
+) -> None:
+    """Rejeição do dev: se o close do PR na API falhar (ForgeError), o board REABRE com aviso (502,
+    at-least-once — o gate segue aberto), nunca 500. Espelha a falha de envio do analysis."""
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+
+    from kubo.errors import ForgeError
+
+    @contextmanager
+    def _fake_rw(cfg: object = None) -> Iterator[object]:
+        yield object()
+
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PR_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PR_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+
+    def _boom(db: object, *, gate_task: object, reason: str) -> None:
+        raise ForgeError("GitHub respondeu HTTP 500")
+
+    monkeypatch.setattr("kubo.api.routes.flows.reject_gate", _boom)
+    csrf = _csrf_from(authed_client.get("/flows/d1").text)
+
+    resp = authed_client.post(
+        "/flows/gate/reject",
+        data={"task": "task:h1", "csrf": csrf, "reason": "escopo errado"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 502
+    assert "PR" in resp.text

@@ -86,17 +86,16 @@ def test_manifest_is_worker_manifest() -> None:
     assert AnalystWorker.manifest.integrations == ["telegram"]
 
 
-def test_run_flow_rejects_dev_mini_without_behavior() -> None:
-    """Estado intermediário limpo (0016 parte A): `dev-mini` existe no catálogo mas ainda
-    não tem behavior no FLOW_REGISTRY (o wiring é 0016b). Disparar dá ConfigError LEGÍVEL,
-    nunca KeyError cru do registry — a falha é antes de tocar db/embedder."""
-    with pytest.raises(ConfigError, match="sem handler"):
-        run_flow(
-            db=None,
-            template_name="dev-mini",
-            question="x",
-            embedder=None,  # type: ignore[arg-type]
-            destination=None,  # type: ignore[arg-type]
-            base_url="",
-            executor=None,
-        )
+def test_dev_mini_is_wired_with_run_resume_reject() -> None:
+    """0016b: `dev-mini` tem behavior no FLOW_REGISTRY com os 3 handlers (run + gate: resume,
+    reject). Template sem handler ainda falha alto (ConfigError legível, nunca KeyError cru)."""
+    from kubo.runtime.flow_runner import _FLOW_REGISTRY
+
+    behavior = _FLOW_REGISTRY["dev-mini"]
+    assert behavior.run is not None
+    assert behavior.resume is not None  # aprovar (→ done, sem merge)
+    assert behavior.reject is not None  # rejeitar (→ fecha PR + rejected)
+
+    # Template desconhecido ainda falha alto e legível (nunca KeyError cru), antes de tocar db.
+    with pytest.raises(ConfigError, match="não existe no catálogo"):
+        run_flow(db=None, template_name="ghost-template", question="x", base_url="")

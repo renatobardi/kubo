@@ -155,33 +155,48 @@ def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
     return format_distilled(view, provenance=provenance)
 
 
+# Templates cujo flow é dev (executor cli): NÃO usam retrieval (embedder Gemini) nem destino
+# Telegram — disparo por CLI, gate na UI (C1, ADR-0019). Template dev novo = entrada aqui + PR.
+_DEV_TEMPLATES = frozenset({"dev-mini"})
+
+
 def run_flow_command(
     db: Any, *, template: str, question: str, destination_id: str
 ) -> FlowRunResult:
-    """Resolve as dependências do flow (embedder Gemini, destino do destinations.yaml, base
-    URL — tudo por env, invariante 8) e executa o flow SÍNCRONO no processo do CLI (ADR-0016
-    §VII). Destino inexistente falha alto (ConfigError). O flow runner faz o resto."""
-    raw = next((d for d in load_destinations(_DESTINATIONS_PATH) if d.id == destination_id), None)
-    if raw is None:
-        raise ConfigError(f"destino '{destination_id}' não existe em destinations.yaml")
-    # Resolve SÓ o destino pedido: `resolve_destinations` falha se a env de QUALQUER destino
-    # faltar; um e-mail sem env não pode quebrar um `flow run` para o Telegram (CodeRabbit).
-    dest = resolve_destinations([raw])[0]
-    embedder = GeminiEmbedder.from_env()
+    """Resolve as dependências do flow e o executa SÍNCRONO no processo do CLI (ADR-0016 §VII).
+
+    Flows de análise resolvem embedder Gemini + destino Telegram (por env, invariante 8); flows
+    dev (executor cli) NÃO usam nenhum dos dois — `question` é a instrução para a persona dev, o
+    sandbox vem do env do runtime, e o gate espera na UI (C1). Destino inexistente (nos flows que
+    o usam) falha alto (ConfigError). O flow runner faz o resto."""
+    embedder: Embedder | None = None
+    dest = None
+    base_url = ""  # dev ignora base_url; resolvê-lo aqui acoplaria o disparo a KUBO_BASE_URL
+    if template not in _DEV_TEMPLATES:
+        raw = next(
+            (d for d in load_destinations(_DESTINATIONS_PATH) if d.id == destination_id), None
+        )
+        if raw is None:
+            raise ConfigError(f"destino '{destination_id}' não existe em destinations.yaml")
+        # Resolve SÓ o destino pedido: `resolve_destinations` falha se a env de QUALQUER destino
+        # faltar; um e-mail sem env não pode quebrar um `flow run` para o Telegram (CodeRabbit).
+        dest = resolve_destinations([raw])[0]
+        embedder = GeminiEmbedder.from_env()
+        base_url = resolve_base_url()
     return run_flow(
         db,
         template_name=template,
         question=question,
         embedder=embedder,
         destination=dest,
-        base_url=resolve_base_url(),
+        base_url=base_url,
     )
 
 
 def _handle_flow(db: Any, args: argparse.Namespace) -> int:
-    """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 0 se
-    entregue OU se o gate abriu (`awaiting_review` é sucesso — o relatório espera a decisão no
-    board); 1 se o flow terminou em `failed` (o deliverable pode existir mesmo assim)."""
+    """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 1 SÓ
+    se o flow terminou em `failed`; qualquer outro desfecho é sucesso — entregue (`delivered`),
+    ou o gate abriu e espera a decisão no board (`awaiting_review` no analysis, `review` no dev)."""
     if args.flow_command != "run":
         print('uso: kubo flow run <template> "pergunta"', file=sys.stderr)
         return 2
@@ -189,7 +204,7 @@ def _handle_flow(db: Any, args: argparse.Namespace) -> int:
         db, template=args.template, question=args.question, destination_id=args.destination
     )
     print(f"flow {result.flow} — {result.state} (run {result.run})")
-    return 0 if result.state in ("delivered", "awaiting_review") else 1
+    return 1 if result.state == "failed" else 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
