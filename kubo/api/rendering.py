@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from kubo.api.nav import NAV, NavItem
+from kubo.api.nav import MOBILE_TABS, NAV, NavItem
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -34,13 +34,35 @@ def _current_nav_item(path: str) -> NavItem | None:
     return max(candidates, key=lambda i: len(i["route"]), default=None)
 
 
+_GROUP_TO_MOBILE_TAB = {
+    "Conhecimento": "saber",
+    "Trabalho": "trabalho",
+    "Distribuição": "distribuicao",
+}
+
+
+def _current_mobile_tab_key(crumb: NavItem | None) -> str:
+    """Mapeia o item de nav atual (já resolvido por `_current_nav_item`) pra uma das 5
+    tabs mobile (sessão 0019). Sem item casado (ex.: `/more`, 404) cai em 'mais' —
+    fallback deliberado, não uma tab própria pra cada rota desconhecida."""
+    if crumb is None:
+        return "mais"
+    if crumb["route"] == "/":
+        return "painel"
+    return _GROUP_TO_MOBILE_TAB.get(crumb["group"] or "", "mais")
+
+
 def _nav_context(request: Request) -> dict[str, Any]:
-    """Injeta `nav` (menu), `current_path` (item ativo) e `crumb` (breadcrumb da barra
-    de topo: grupo › rótulo da tela atual) em todo template."""
+    """Injeta `nav` (menu), `current_path` (item ativo), `crumb` (breadcrumb da barra
+    de topo: grupo › rótulo da tela atual) e `mobile_tabs`/`mobile_tab` (bottom tab bar,
+    sessão 0019) em todo template."""
+    crumb = _current_nav_item(request.url.path)
     return {
         "nav": NAV,
         "current_path": request.url.path,
-        "crumb": _current_nav_item(request.url.path),
+        "crumb": crumb,
+        "mobile_tabs": MOBILE_TABS,
+        "mobile_tab": _current_mobile_tab_key(crumb),
     }
 
 
