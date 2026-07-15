@@ -2,7 +2,7 @@
 {% import "_macros.html" as macros %}
 {% block title %}Destilados · Kubo{% endblock %}
 {% block content %}
-<div class="max-w-3xl space-y-6">
+<div class="space-y-6">
   {{ macros.page_header("Destilados", "Grafo consultável de destilados, com citação de origem em cada nó.") }}
   <form
     hx-get="/distilled/search"
