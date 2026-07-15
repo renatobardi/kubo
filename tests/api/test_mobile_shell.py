@@ -108,6 +108,15 @@ def test_more_route_renders_secondary_links(authed_client: TestClient) -> None:
         assert href in html
 
 
+def test_more_mobile_header_shows_mais_not_generic_kubo(authed_client: TestClient) -> None:
+    """/more não tem item de NAV — sem mobile_title, o header mobile cairia no
+    fallback genérico 'Kubo' em vez de 'Mais' (achado do smoke visual 19.6)."""
+    html = authed_client.get("/more").text
+    header_start = html.find("text-[1.875rem]")
+    header = html[html.rfind("<header", 0, header_start) : html.find("</header>", header_start)]
+    assert ">Mais<" in header
+
+
 def test_more_requires_auth(client: TestClient) -> None:
     assert client.get("/more", follow_redirects=False).status_code == 303
 
