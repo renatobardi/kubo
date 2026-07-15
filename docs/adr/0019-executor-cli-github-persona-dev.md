@@ -120,6 +120,15 @@ NÃO entram: budget por estado, fallback de modelo, retry-on-budget. Isto **quit
 > template** (campo mentiroso = ADR-0016 §VIII). O campo só é adicionado ao loader
 > (`extra="forbid"`) **depois** da evidência do spike.
 
+**Camada EXTERNA do budget — spend limit do provider.** O teto interno (`budget_usd` +
+`max_turns` + timeout no `CliExecutor`) protege o custo NORMAL; um **spend limit mensal
+hard na conta da Anthropic** (console → Billing) é a camada que protege inclusive contra
+**bug no enforcement interno** — se o check do executor falhar, o provider corta. Mesma
+disciplina do spend limit do OpenRouter no dreno (ADR-0017). **Preparo do dono (16.7):** o
+spend limit mensal hard é configurado **ANTES** de criar a `ANTHROPIC_API_KEY` — passo
+literal no runbook §2d-style, valores nunca no chat (invariante 8). Duas camadas, uma
+externa (provider) e uma interna (executor); a externa é o backstop de último recurso.
+
 ### VI. E3 — Estrutura NUNCA vem do texto do agente
 
 Espelho de "citações nunca via LLM" (ADR-0016 §VI): URL do PR, nome do branch e todo dado
