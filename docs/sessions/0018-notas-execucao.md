@@ -92,5 +92,153 @@ API REST read-only do GitHub + leitura do registry em processo; custo zero adici
 ---
 
 **Parte A encerrada.** Parte B (0018b, marcos 18.7–18.11) pré-autorizada pelo mesmo plano —
-inclui conta-máquina `kubo-dev`, path-guard no CI, integração `github-releases.yaml`, e o
-smoke com o agente escrevendo de fato no repo principal.
+path-guard no CI, integração `github-releases.yaml`, e o smoke com o agente escrevendo de
+fato no repo principal. **D45 revertida em 2026-07-15** (commit `367b161`, ANTES da execução
+da parte B abaixo): sem conta-máquina `kubo-dev` — o agente usa o PAT fine-grained DO DONO,
+restrito a `renatobardi/kubo`, sem a permissão Workflows; PR de agente identificado por
+prefixo de branch (`agent/*`), não por autor; require-review fica desligado (o dono não
+aprova o próprio PR) — o gate humano vira disciplina do dono, nomeada como postura mais
+fraca no ADR-0021.
+
+## Parte B — marcos 18.7–18.9 (código), executados 2026-07-15
+
+| # | Marco | Estado |
+|---|-------|--------|
+| 18.7 | PAT do dono (`GITHUB_PAT_KUBO`) + envs (`KUBO_MAIN_*`) no `.env` do kubo-test; `GITHUB_TOKEN_READONLY` editado (mesmo valor) para cobrir `renatobardi/kubo` além de `kubo-forge` (ambos públicos) | ✅ feito pelo dono |
+| 18.8 | Segundo alvo do flow dev (`dev-kubo`) + path-guard CI (E3) + whitelist (E8) + `.claude/` (E6) | ✅ |
+| 18.9 | `catalogs/integrations/github-releases.yaml` + spec cravada da task do worker | ✅ |
+
+**18.8 — desenho validado pelo advisor Fable 5 antes de travar** (checkpoint obrigatório, código
+estrutural em `kubo/workers/`, `kubo/runtime/`, `catalogs/`): terceira via em vez das duas
+opções que a thread trouxe — **o alvo é função do TEMPLATE**, não de um parâmetro em runtime.
+Novo template `catalogs/flow_templates/dev-kubo.yaml` (mesmo board/gates do `dev-mini` v2,
+mirado no repo principal); `_FLOW_REGISTRY` (E4) despacha `dev-mini`→forge / `dev-kubo`→kubo
+via `functools.partial` amarrando um `_DevTarget` (env-map, classe de worker, prefixo de
+branch, integração de escrita). A whitelist E8 fica **enforced por construção**: não existe
+forma de expressar um terceiro repo sem PR novo — não há parâmetro de "alvo" pra validar
+contra uma lista. `KuboDevWorker(DevWorker)` é subclasse (não atributo de instância) — resolve
+a integração via `self.manifest.integrations[0]`, preservando `DevWorker.manifest` como
+atributo de CLASSE (load-bearing em `_validate_registered_worker`/`build_scheduler`).
+Tripwire de defesa-em-profundidade em `_reject_dev`/`_promote_dev`: o `pr_url` do deliverable
+tem que bater com owner/repo do alvo resolvido ANTES de qualquer chamada à API — fecha o
+cenário (hipotético, não disparado no smoke) de um `pr_number` colidir entre os dois repos.
+TDD completo (test-writer RED → implementer GREEN, `tests/runtime/test_flow_dev_kubo_vertical.py`
++ `tests/workers/test_dev.py`); `security-reviewer` sobre o diff completo — zero achados
+críticos/altos, duas notas BAIXO (comparação de string sem normalização no tripwire — falha
+fechado, não é bug; garantia do PAT sem Workflows é operacional, não verificável em código).
+
+**E6 (`.claude/` no workspace do agente) — decidido: worker limpa.** Clonar `renatobardi/kubo`
+(alvo `dev-kubo`) traria os hooks/settings/agents deste MESMO projeto para dentro do sandbox
+do agente — imprevisível. `DevWorker.run()` remove `.claude/` do workspace logo após o clone,
+antes do agente rodar (`shutil.rmtree(..., ignore_errors=True)` — no-op seguro quando não
+existe, como no sandbox `kubo-forge`). Testado (`test_claude_dir_removed_from_workspace_before_agent_runs`).
+
+**Duas lacunas achadas (fora do plano original) que teriam impedido QUALQUER PR de agente de
+passar CI — corrigidas junto do path-guard:**
+1. O job `pr-conventions` (já `required`) só aceitava branch `(feat|fix|chore|docs|test|refactor|ci)/slug`
+   — `agent/<flowid>` reprovaria. Adicionada segunda taxonomia válida `^agent/[a-z0-9]+$`.
+2. `_title()` do `DevWorker` produzia `[kubo dev] ...`, que não bate com o regex de título
+   convencional que `pr-conventions` também exige. Trocado para `feat(dev): ...` (TDD).
+
+**Armadilha do próprio path-guard, achada e corrigida antes de aplicar:** a primeira versão
+tinha `if:` de NÍVEL DE JOB checando `startsWith(github.head_ref, 'agent/')` — um required
+status check cujo JOB é pulado via `if:` fica "pending" pra sempre no GitHub (não conta como
+"passou"), o que teria travado TODO PR humano (branch fora de `agent/*`) indefinidamente. A
+condição de branch foi movida para DENTRO do step (`case "$BRANCH" in agent/*) ... ; *) exit 0`),
+com o job sempre rodando em `pull_request` — validado localmente contra branches/diffs reais e
+adversariais (incluindo confusão de prefixo tipo `kubo/workers-evil/`, corretamente bloqueada)
+antes de aplicar como required check.
+
+**`agent-path-guard` promovido a required status check** (autorizado explicitamente pelo dono,
+2026-07-15, com dupla confirmação: lista final `[quality, tests, pr-conventions, integration,
+agent-path-guard]` batendo exatamente com o que já existia + o novo; PR humano passa verde,
+não pending):
+```
+gh api -X PATCH repos/renatobardi/kubo/branches/main/protection/required_status_checks \
+  -F strict=false -f 'contexts[]=quality' -f 'contexts[]=tests' \
+  -f 'contexts[]=pr-conventions' -f 'contexts[]=integration' -f 'contexts[]=agent-path-guard'
+```
+
+**Gates locais completos, verdes** (equivalente ao CI): `ruff check`/`ruff format --check`/
+`pyright` limpos; `pytest -m "not integration"` 502 passed; suíte completa + cobertura
+(`--cov=kubo/store --cov=kubo/contracts --cov=kubo/runtime --cov-fail-under=85`) 696 passed,
+95.17% (gate 85%); `docker compose config` válido (com envs dummy); YAML do CI parseado com
+`yaml.safe_load`.
+
+### 18.9 — spec cravada da task do worker `github-releases` (usar literal em 18.10)
+
+Integração `catalogs/integrations/github-releases.yaml` criada — `secret_ref: env:GITHUB_TOKEN_READONLY`
+(reusa o token read-only da parte A, já editado pelo dono pra cobrir `renatobardi/kubo`, E13).
+
+Texto abaixo é o `question` a passar em `kubo flow run dev-kubo "<texto>"` no 18.10 — em
+inglês (código/identificadores/PR do projeto são em inglês; a task espelha esse registro).
+Cravado o suficiente para não deixar o agente inventar contrato, dedupe ou tratamento de
+rate-limit (E13, spec da 0018-rito-promocao.md, seção "Spec da task do worker github-releases"):
+
+```text
+Implement the `github-releases` worker (contract per ADR-0009), mirroring `kubo/workers/feed.py`
+in shape and security posture (read it first).
+
+File: kubo/workers/github_releases.py, class GithubReleasesWorker. Register in
+kubo/workers/registry.py as WORKER_REGISTRY["github-releases"] = GithubReleasesWorker (exact
+string "github-releases", matching manifest.name).
+
+Manifest: WorkerManifest(name="github-releases", version="0.1.0",
+integrations=["github-releases"], config=GithubReleasesConfig). The integration catalog file
+catalogs/integrations/github-releases.yaml already exists — do not recreate it, just declare it.
+
+Config (GithubReleasesConfig, pydantic BaseModel, extra="forbid"):
+- repos: list[str] — "owner/repo" strings to poll. This is RUNTIME/execution config (like
+  FeedConfig.feed_url in feed.py), never a catalog file. Do NOT touch schedules.yaml or wire
+  this into the scheduler — scheduling this worker is future-session work, out of scope here.
+- Validate each entry matches "owner/repo" shape (non-empty, exactly one "/", no path
+  traversal chars) at construction, same idiom as feed.py's _http_scheme_only validator.
+
+Behavior of run(ctx):
+1. Read ctx.integrations["github-releases"] for the bearer token + base_url. Missing/no
+   secret -> raise ConfigError (never silently skip).
+2. For each repo in config.repos, call GitHub REST GET /repos/{owner}/{repo}/releases. A
+   single page (default 30) is enough for v1 — upsert idempotency covers re-collection.
+3. Only draft == false releases. Exclude prerelease == true in this v1 (skip, don't error).
+4. For each qualifying release, build an ItemPayload:
+   - source = SourcePayload(kind="github-releases",
+     canonical=f"https://github.com/{owner}/{repo}", title=f"{owner}/{repo} releases")
+   - external_id = str(release["id"]) — the natural dedupe key (releases get EDITED after
+     publish; upsert_item already handles overwrite-not-duplicate, no new store code needed).
+   - content = release body (markdown), cleaned with the SAME discipline as feed.py's _clean
+     (strip control/format/surrogate chars, keep \n/\t, cap ~65536 chars) — this is
+     THIRD-PARTY UNTRUSTED markdown (CLAUDE.md: all collected content is hostile by default).
+   - url = release["html_url"] (structural, from the API).
+   - title = release["name"] or tag_name if name is empty, capped ~500 chars.
+   - metadata = {"tag_name": ..., "repo": "owner/repo"} — small structural fields only, no
+     large blobs.
+5. Rate limiting: on 403/429 for a given repo, do NOT retry (retry is the orchestrator's job,
+   never the worker's). Record a structured ErrorInfo(kind="rate_limit", message=...,
+   detail={"repo": ..., "status": ...}) and continue to the NEXT repo — one rate-limited repo
+   must not block collecting from the others. Other transport/HTTP errors (timeout, 5xx, DNS):
+   same treatment, ErrorInfo(kind="http", ...), no retry, continue. If multiple repos error,
+   return the FIRST error encountered (document this deliberate difference from feed.py, which
+   handles exactly one feed per run — this worker handles multiple repos per run).
+6. Return RunResult(payloads=[...all ItemPayloads across all repos...],
+   stats=Stats(repos_seen=N, releases_seen=N, items=N, rate_limited=N), error=...). Payloads
+   already collected before a later repo's error MUST still be returned (ADR-0009 §VII
+   partial-failure semantics, same pattern as feed.py).
+
+Tests: tests/workers/test_github_releases.py, mirroring tests/workers/test_feed.py's mocking
+style (mock httpx, no real network). UNIT-ONLY — your workspace has no database; do not write
+anything requiring SurrealDB or the `integration` pytest marker. Cover: happy path (multiple
+repos, multiple releases), draft/prerelease filtering, dedupe key stability, rate-limit on one
+repo not aborting the others, malformed/missing fields from the API not crashing.
+
+Do NOT: touch schedules.yaml, any persona catalog, or kubo/scheduler/; add a retry loop or
+backoff; fetch anything beyond the releases REST endpoint for the configured repos; add a new
+dependency (httpx is already a project dependency, reuse it exactly as feed.py does).
+
+Run ruff check, ruff format --check, and pytest -m "not integration"
+tests/workers/test_github_releases.py before finishing. Keep the diff inside
+kubo/workers/github_releases.py, the one new registry line, and
+tests/workers/test_github_releases.py.
+```
+
+**Nota para o 18.10:** ao clicar "Confirmar promoção" na UI, o dono digita `github-releases`
+(com hífen, igual ao `manifest.name`/chave do registry acima) — não `github_releases`.

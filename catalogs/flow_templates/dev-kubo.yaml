@@ -1,0 +1,24 @@
+# dev-kubo (ADR-0021 §9, E8): mesmo comportamento do dev-mini v2 (o rito de promoção é o
+# MESMO gate sequencial), mirado no repo PRINCIPAL (`renatobardi/kubo`, D41) em vez do sandbox
+# `kubo-forge`. Alvo é função do TEMPLATE (E4: binding template→comportamento hardcoded no
+# FLOW_REGISTRY) — não existe forma de expressar um terceiro repo sem PR novo. É assim que a
+# whitelist E8 ({kubo-forge, kubo}) fica enforced por construção, não por validação de campo.
+name: dev-kubo
+version: 2
+board:
+  states: [created, implementing, review, done, promoted, rejected, failed]
+  transitions:
+    - [created, implementing]
+    - [implementing, review]
+    - [implementing, failed]
+    - [review, done]
+    - [review, rejected]
+    - [done, promoted]
+  gates:
+    - [review, done]
+    - [review, rejected]
+    - [done, promoted]
+cast: [dev, humano]
+deliverable: pr
+triggers: [manual]
+budget_usd: 5.0

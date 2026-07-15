@@ -87,6 +87,15 @@ services:
       KUBO_FORGE_REPO: ${KUBO_FORGE_REPO:-}
       KUBO_FORGE_GIT_NAME: ${KUBO_FORGE_GIT_NAME:-}
       KUBO_FORGE_GIT_EMAIL: ${KUBO_FORGE_GIT_EMAIL:-}
+      # Segundo alvo do flow dev (ADR-0021 §9, E8): repo PRINCIPAL `kubo`, D41/D45 revertida.
+      # PAT DO DONO (sem conta-máquina), restrito a `renatobardi/kubo`, sem Workflows (E2).
+      # Disparo: `docker compose run --rm kubo-scheduler python -m kubo flow run dev-kubo "<tarefa>"`.
+      GITHUB_PAT_KUBO: ${GITHUB_PAT_KUBO:-}  # pragma: allowlist secret
+      KUBO_MAIN_REPO_URL: ${KUBO_MAIN_REPO_URL:-}
+      KUBO_MAIN_OWNER: ${KUBO_MAIN_OWNER:-}
+      KUBO_MAIN_REPO: ${KUBO_MAIN_REPO:-}
+      KUBO_MAIN_GIT_NAME: ${KUBO_MAIN_GIT_NAME:-}
+      KUBO_MAIN_GIT_EMAIL: ${KUBO_MAIN_GIT_EMAIL:-}
       # OpenRouter: candidato do PILOTO e modelo do DRENO one-off (ADR-0017, Trilha B da
       # 0014). SEM `:?` fail-fast — o regime diário (Groq/free) nunca usa OpenRouter; só
       # os scripts one-off `distill_pilot`/`drain_distill` a exigem, e falham no uso se
@@ -189,8 +198,17 @@ services:
       KUBO_FORGE_REPO: ${KUBO_FORGE_REPO:-}
       KUBO_FORGE_GIT_NAME: ${KUBO_FORGE_GIT_NAME:-}
       KUBO_FORGE_GIT_EMAIL: ${KUBO_FORGE_GIT_EMAIL:-}
+      # Reject do gate dev-kubo (segundo alvo, ADR-0021 §9/E8): mesma forma do forge acima,
+      # coordenadas + PAT do repo PRINCIPAL `kubo`. kubo-api resolve o alvo certo por template.
+      GITHUB_PAT_KUBO: ${GITHUB_PAT_KUBO:-}  # pragma: allowlist secret
+      KUBO_MAIN_REPO_URL: ${KUBO_MAIN_REPO_URL:-}
+      KUBO_MAIN_OWNER: ${KUBO_MAIN_OWNER:-}
+      KUBO_MAIN_REPO: ${KUBO_MAIN_REPO:-}
+      KUBO_MAIN_GIT_NAME: ${KUBO_MAIN_GIT_NAME:-}
+      KUBO_MAIN_GIT_EMAIL: ${KUBO_MAIN_GIT_EMAIL:-}
       # Confirmar promoção (ADR-0021 §9, E12/E13): token READ-ONLY, SEPARADO do PAT de escrita
-      # acima — o Confirmar só LÊ o merge (`get_pull_request`), nunca mescla/comenta/fecha. SEM
+      # acima — o Confirmar só LÊ o merge (`get_pull_request`), nunca mescla/comenta/fecha. MESMO
+      # token serve os dois alvos (kubo-forge e kubo, ambos públicos — ver .env.example). SEM
       # `:?` — ausente, o promote dá 503/erro no uso, o resto da UI segue. Setup: runbook §2e.
       GITHUB_TOKEN_READONLY: ${GITHUB_TOKEN_READONLY:-}  # pragma: allowlist secret
       TZ: ${TZ:-America/Sao_Paulo}

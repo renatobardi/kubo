@@ -12,6 +12,7 @@ sem janitor); re-execução = novo flow.
 
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ from kubo.store.flows import (
 from kubo.store.knowledge import insert_dispatch, run_status
 from kubo.workers import github_api
 from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
-from kubo.workers.dev import DevWorker
+from kubo.workers.dev import DevWorker, KuboDevWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
 _CATALOG_ROOT = Path(__file__).parents[2] / "catalogs"
@@ -82,7 +83,43 @@ _FORGE_ENV = {
     "git_name": "KUBO_FORGE_GIT_NAME",
     "git_email": "KUBO_FORGE_GIT_EMAIL",
 }
+# Env do repo PRINCIPAL (D41, ADR-0021 §9): coordenadas do `renatobardi/kubo`, o SEGUNDO alvo
+# do `dev-mini` v2 — mesmo formato do `_FORGE_ENV`, vars dedicadas (nunca reaproveitar as do
+# sandbox: um flow dev-kubo com env do forge faltando deve falhar alto, não silenciosamente
+# apontar pro repo errado).
+_MAIN_ENV = {
+    "repo_url": "KUBO_MAIN_REPO_URL",
+    "owner": "KUBO_MAIN_OWNER",
+    "repo": "KUBO_MAIN_REPO",
+    "git_name": "KUBO_MAIN_GIT_NAME",
+    "git_email": "KUBO_MAIN_GIT_EMAIL",
+}
 _log = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class _DevTarget:
+    """Um ALVO do `dev-mini`/`dev-kubo` (E4/E8): o env do sandbox, a classe de worker (resolve
+    a integração de escrita pelo próprio manifest), o prefixo de branch (identifica PRs de
+    agente por convenção — E1/E3) e o nome da integração de escrita usada por reject/promote.
+    Generalizar aqui (em vez de `if template_name == ...` espalhado) é o que deixa `_run_dev`/
+    `_reject_dev`/`_promote_dev` idênticos nos dois alvos."""
+
+    env: Mapping[str, str]
+    worker_cls: type[DevWorker]
+    branch_prefix: str
+    write_integration: str
+
+
+_FORGE_TARGET = _DevTarget(
+    env=_FORGE_ENV, worker_cls=DevWorker, branch_prefix="kubo", write_integration="github"
+)
+_KUBO_TARGET = _DevTarget(
+    env=_MAIN_ENV,
+    worker_cls=KuboDevWorker,
+    branch_prefix="agent",
+    write_integration="github-kubo",
+)
 
 
 @dataclass(frozen=True)
@@ -276,6 +313,7 @@ def _run_dev(
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
+    target: _DevTarget,
 ) -> FlowRunResult:
     """Comportamento do `dev-mini` (E4, ADR-0019): a persona dev implementa num clone efêmero do
     sandbox → PARA no gate `review` com um deliverable `kind=pr`.
@@ -287,15 +325,17 @@ def _run_dev(
     dev = personas.get(_DEV_PERSONA)
     if dev is None or _HUMAN_PERSONA not in personas:
         raise ConfigError(f"'dev-mini' exige as personas '{_DEV_PERSONA}' e '{_HUMAN_PERSONA}'")
-    _assert_permissions(dev, DevWorker.manifest)
+    _assert_permissions(dev, target.worker_cls.manifest)
     runner = _build_cli_executor(dev, template)
 
     inst = instantiate_flow(db, template=template, personas=personas, question=question)
     task = create_task(db, flow=inst.flow, persona=inst.personas[_DEV_PERSONA], state=_CREATED)
     transition_task(db, task, from_state=_CREATED, to_state=_IMPLEMENTING)
 
-    worker = DevWorker(runner, prompt=dev.prompt)
-    config = _dev_config(question, branch=_dev_branch(inst.flow))
+    worker = target.worker_cls(runner, prompt=dev.prompt)
+    config = _dev_config(
+        question, branch=_dev_branch(inst.flow, prefix=target.branch_prefix), env=target.env
+    )
     run_id = run_worker(db, worker, config=config, flow_ctx=FlowCtx(inst.flow, task))
     set_task_run(db, task, run_id)
     if not _run_succeeded(db, run_id):
@@ -327,31 +367,34 @@ def _build_cli_executor(persona: Persona, template: FlowTemplate) -> CliRunner:
     return CliExecutor(CliExecutorConfig(model=persona.model, budget_usd=template.budget_usd))
 
 
-def _dev_config(instruction: str, *, branch: str) -> dict[str, Any]:
+def _dev_config(instruction: str, *, branch: str, env: Mapping[str, str]) -> dict[str, Any]:
     """Monta a config da task dev: a instrução do dono + as coordenadas do sandbox do ENV
-    (invariante 8). O `run_worker` a valida contra o `DevConfig` do manifest."""
-    sandbox = _sandbox_from_env()
+    (invariante 8). O `run_worker` a valida contra o `DevConfig` do manifest. `env` é o mapa de
+    vars do ALVO (forge ou repo principal — `_DevTarget.env`)."""
+    sandbox = _sandbox_from_env(env)
     return {"instruction": instruction, "branch": branch, "base_branch": "main", **sandbox}
 
 
-def _sandbox_from_env() -> dict[str, str]:
-    """Coordenadas do repo sandbox (D37) só por ENV. Falta de qualquer var → ConfigError
-    legível ANTES de instanciar o flow (nunca um flow meio-formado por env faltando).
+def _sandbox_from_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Coordenadas do repo-alvo (D37/D41) só por ENV, conforme o mapa `env` do `_DevTarget`
+    (`_FORGE_ENV` ou `_MAIN_ENV`). Falta de qualquer var → ConfigError legível ANTES de
+    instanciar o flow (nunca um flow meio-formado por env faltando).
 
-    Contrato ÚNICO de env do forge: o `_reject_dev` usa só um subconjunto (owner/repo) mas exige
+    Contrato ÚNICO de env por alvo: o `_reject_dev` usa só um subconjunto (owner/repo) mas exige
     o todo — deliberado. Uma função, um fail-fast; dividir em dois subconjuntos criaria irmãs que
     divergem (a doença que a §XII diagnostica no leitor de gate paralelo). As vars não são
     segredo; exigir GIT_NAME num processo que não comita custa zero."""
-    missing = sorted(k for k in _FORGE_ENV.values() if not os.environ.get(k))
+    missing = sorted(var for var in env.values() if not os.environ.get(var))
     if missing:
         raise ConfigError(f"flow dev exige env do sandbox: {missing}")
-    return {field: os.environ[env] for field, env in _FORGE_ENV.items()}
+    return {field: os.environ[var] for field, var in env.items()}
 
 
-def _dev_branch(flow: RecordID) -> str:
+def _dev_branch(flow: RecordID, *, prefix: str) -> str:
     """Branch derivado do flow id — único por construção (E5): dois flows nunca colidem, e um
-    flow falho pós-push deixa um branch órfão de nome previsível (limpeza = runbook, não código)."""
-    return f"kubo/{str(flow).partition(':')[2]}"
+    flow falho pós-push deixa um branch órfão de nome previsível (limpeza = runbook, não código).
+    `prefix` identifica o ALVO (`kubo/*` forge, `agent/*` repo principal — E1/E3)."""
+    return f"{prefix}/{str(flow).partition(':')[2]}"
 
 
 def _resume_dev(
@@ -377,15 +420,17 @@ def _resume_dev(
     )
 
 
-def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
-    """Rejeição do `dev-mini` (D38): FECHA o PR via API com o motivo em comentário, DEPOIS decide o
-    gate → rejected. Ordem (fechar antes, decidir depois) é at-least-once, espelho do resume do
-    analysis (ADR-0019 §IX): close falho deixa o gate ABERTO e visível (o dono clica de novo);
-    decidir antes deixaria o board `rejected` com o PR aberto — divergência silenciosa.
+def _reject_dev(db: Any, *, gate_task: RecordID, reason: str, target: _DevTarget) -> None:
+    """Rejeição do `dev-mini`/`dev-kubo` (D38): FECHA o PR via API com o motivo em comentário,
+    DEPOIS decide o gate → rejected. Ordem (fechar antes, decidir depois) é at-least-once,
+    espelho do resume do analysis (ADR-0019 §IX): close falho deixa o gate ABERTO e visível (o
+    dono clica de novo); decidir antes deixaria o board `rejected` com o PR aberto — divergência
+    silenciosa.
 
     O `pr_number` vem do campo ESTRUTURAL do deliverable (E3, veio da API), nunca do `content`
-    untrusted; owner/repo do ENV; o PAT do catálogo (o runtime resolve o segredo — §8).
-    `ForgeError` (close falho) propaga: a rota reabre o board e o gate segue aberto."""
+    untrusted; owner/repo do ENV do `target`; o PAT da integração de escrita do `target`
+    (`_write_integration`, o runtime resolve o segredo — §8). `ForgeError` (close falho) propaga:
+    a rota reabre o board e o gate segue aberto."""
     ctx = read_gate_context(db, gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow")
@@ -397,8 +442,16 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
         raise StateError(f"gate em '{ctx.gate_state}' não tem transição de rejeição — irrejeitável")
     if ctx.pr_number is None:
         raise StateError("gate dev sem PR estrutural — não é rejeitável pela API")
-    sandbox = _sandbox_from_env()
-    base_url_api, pat = _forge_integration()
+    sandbox = _sandbox_from_env(target.env)
+    # E8 defesa-em-profundidade: o pr_url guardado no deliverable tem que bater com owner/repo do
+    # ALVO resolvido — barra ANTES de qualquer chamada à API (nunca fecha/comenta o PR errado).
+    expected_url = f"https://github.com/{sandbox['owner']}/{sandbox['repo']}/pull/{ctx.pr_number}"
+    if ctx.pr_url != expected_url:
+        raise StateError(
+            f"pr_url do deliverable ({ctx.pr_url!r}) não bate com o alvo resolvido "
+            f"({expected_url!r})"
+        )
+    base_url_api, pat = _write_integration(target.write_integration)
     github_api.close_pull_request(
         base_url=base_url_api,
         token=pat,
@@ -417,14 +470,17 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
     )
 
 
-def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
-    """Confirmar promoção do `dev-mini` v2 (ADR-0021 §2/§9, E10/E12) — a 3ª porta de escrita.
+def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str, target: _DevTarget) -> None:
+    """Confirmar promoção do `dev-mini`/`dev-kubo` v2 (ADR-0021 §2/§9, E10/E12) — a 3ª porta de
+    escrita.
 
     Import-oráculo: valida (a) o PR está `merged:true` na API do GitHub (aprovação ≠ merge, D38)
     com o token READ-ONLY (E12 — o confirmar NUNCA usa o PAT de escrita); (b) `worker_name`
     (informado pelo dono, que já viu o merge+deploy) resolve no `WORKER_REGISTRY` do PROCESSO
     VIVO — se resolve, a imagem contém o merge por construção (deploy não rodou → o nome não
-    resolve → `PromotionError` manda rodar `./scripts/deploy.sh`, gate SEGUE ABERTO).
+    resolve → `PromotionError` manda rodar `./scripts/deploy.sh`, gate SEGUE ABERTO). O token
+    read-only é COMPARTILHADO entre alvos (`_forge_readonly_integration`, E12/E13) — só a
+    resolução do sandbox (owner/repo) é função do `target`.
 
     Ordem I/O-externo-antes-do-commit (espelha `_reject_dev`): grava o `merge_commit_sha` (fato
     verdadeiro independente do gate, idempotente) e só ENTÃO decide o gate → `promoted`."""
@@ -435,7 +491,14 @@ def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
         raise StateError(f"gate em '{ctx.gate_state}' não tem transição de promoção")
     if ctx.pr_number is None:
         raise StateError("gate de promoção sem PR estrutural — nada para confirmar")
-    sandbox = _sandbox_from_env()
+    sandbox = _sandbox_from_env(target.env)
+    # E8 defesa-em-profundidade: mesmo tripwire do `_reject_dev`, ANTES de qualquer chamada à API.
+    expected_url = f"https://github.com/{sandbox['owner']}/{sandbox['repo']}/pull/{ctx.pr_number}"
+    if ctx.pr_url != expected_url:
+        raise StateError(
+            f"pr_url do deliverable ({ctx.pr_url!r}) não bate com o alvo resolvido "
+            f"({expected_url!r})"
+        )
     base_url_api, token = _forge_readonly_integration()
     status = github_api.get_pull_request(
         base_url=base_url_api,
@@ -486,12 +549,13 @@ def _forge_readonly_integration() -> tuple[str, str]:
     return resolved.base_url or "https://api.github.com", resolved.secret
 
 
-def _forge_integration() -> tuple[str, str]:
-    """Resolve (base_url, PAT) da integração `github` do catálogo — o runtime resolve o segredo,
-    o worker/behavior nunca lê env direto (§8). PAT ausente → ConfigError (falha de config)."""
-    resolved = resolve_integrations(["github"], load_integrations(_INTEGRATIONS_DIR))["github"]
+def _write_integration(name: str) -> tuple[str, str]:
+    """Resolve (base_url, PAT) da integração de ESCRITA `name` do catálogo (`github` do forge ou
+    `github-kubo` do repo principal, conforme `_DevTarget.write_integration`) — o runtime resolve
+    o segredo, o worker/behavior nunca lê env direto (§8). PAT ausente → ConfigError (config)."""
+    resolved = resolve_integrations([name], load_integrations(_INTEGRATIONS_DIR))[name]
     if not resolved.secret:
-        raise ConfigError("integração 'github' sem PAT resolvido (env GITHUB_PAT_FORGE)")
+        raise ConfigError(f"integração {name!r} sem PAT resolvido")
     return resolved.base_url or "https://api.github.com", resolved.secret
 
 
@@ -708,13 +772,25 @@ def _distilled_rid(raw: str) -> RecordID:
 
 # Binding template→comportamento HARDCODED (E4). Template novo = FlowBehavior novo + PR (gate
 # humano). `resume`/`reject`/`promote` só existem para templates com o gate correspondente
-# (`analysis-review` não promove; `dev-mini` v2 tem os três — ADR-0021 §9).
+# (`analysis-review` não promove; `dev-mini`/`dev-kubo` v2 têm os três — ADR-0021 §9). Os dois
+# alvos do dev compartilham `_run_dev`/`_reject_dev`/`_promote_dev`, parametrizados por
+# `target` (`_FORGE_TARGET`/`_KUBO_TARGET`) via `functools.partial`; `resume` (`_resume_dev`) é
+# idêntico nos dois (nunca toca GitHub/sandbox), fica bare.
 _FLOW_REGISTRY: dict[str, FlowBehavior] = {
     "analysis": FlowBehavior(run=_run_analysis),
     "analysis-review": FlowBehavior(
         run=_run_analysis_review, resume=_resume_review, reject=_reject_review
     ),
     "dev-mini": FlowBehavior(
-        run=_run_dev, resume=_resume_dev, reject=_reject_dev, promote=_promote_dev
+        run=functools.partial(_run_dev, target=_FORGE_TARGET),
+        resume=_resume_dev,
+        reject=functools.partial(_reject_dev, target=_FORGE_TARGET),
+        promote=functools.partial(_promote_dev, target=_FORGE_TARGET),
+    ),
+    "dev-kubo": FlowBehavior(
+        run=functools.partial(_run_dev, target=_KUBO_TARGET),
+        resume=_resume_dev,
+        reject=functools.partial(_reject_dev, target=_KUBO_TARGET),
+        promote=functools.partial(_promote_dev, target=_KUBO_TARGET),
     ),
 }

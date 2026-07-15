@@ -8,6 +8,7 @@ segundo mecanismo. As primitivas seguras vivem em `gitops` (C2), `github_api` (E
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 
@@ -97,9 +98,12 @@ class DevWorker:
             raise ContractError(
                 f"DevWorker recebeu config {type(config).__name__}, esperava DevConfig"
             )
-        github = ctx.integrations.get("github")
+        integration_name = self.manifest.integrations[0]
+        github = ctx.integrations.get(integration_name)
         if github is None or not github.secret:
-            raise ConfigError("worker dev requer a integração github com PAT resolvido")
+            raise ConfigError(
+                f"worker dev requer a integração {integration_name!r} com PAT resolvido"
+            )
         pat = github.secret
         base_url = github.base_url or "https://api.github.com"
         log = ctx.logger.bind(worker="dev", branch=config.branch)
@@ -108,6 +112,9 @@ class DevWorker:
         outcome: CliOutcome | None = None
         try:
             gitops.clone(config.repo_url, workspace)  # C2: URL sem credencial
+            # E6: um clone de renatobardi/kubo (alvo dev-kubo) carrega .claude/ (hooks/settings/
+            # agents do harness) para dentro do sandbox — removido ANTES do agente rodar.
+            shutil.rmtree(os.path.join(workspace, ".claude"), ignore_errors=True)
             gitops.configure_identity(workspace, name=config.git_name, email=config.git_email)
             base_sha = gitops.head_sha(workspace)
             gitops.create_branch(workspace, config.branch)
@@ -145,6 +152,16 @@ class DevWorker:
         return f"{self._prompt}{_OPERATIONAL}{config.instruction}"
 
 
+class KuboDevWorker(DevWorker):
+    """Mesmo comportamento do `DevWorker`, mirado no repo PRINCIPAL `renatobardi/kubo` via a
+    integração dedicada `github-kubo` (ADR-0021 §9, D41) em vez do sandbox `kubo-forge`. Alvo é
+    função do manifest (`integrations[0]`) — `run()` é herdado sem override."""
+
+    manifest = WorkerManifest(
+        name="dev-kubo", version="0.1.0", integrations=["github-kubo"], config=DevConfig
+    )
+
+
 _EMPTY = ErrorInfo(kind="empty", message="agente terminou sem diff — nada a pushar")
 
 
@@ -158,8 +175,13 @@ def _stats(outcome: CliOutcome | None) -> Stats:
 def _title(config: DevConfig) -> str:
     """Título do PR derivado da instrução do dono (que ENVIAMOS — não vem da API/agente).
 
-    `instruction` não é branca (validador `_not_blank`); o `or` é rede defensiva caso um
-    caller futuro construa `DevConfig` fora do caminho validado."""
+    Formato CONVENCIONAL (`feat(dev): ...`): o título vira o commit no squash-merge
+    (CLAUDE.md) e é exigido pelo job `pr-conventions` do CI quando o alvo é o repo
+    principal (dev-kubo). `feat` é o tipo fixo — o worker não tem como inferir
+    fix/chore/etc. da instrução freeform, e a razão de existir do flow dev é sempre
+    entregar código novo (worker novo ou extensão). `instruction` não é branca
+    (validador `_not_blank`); o `or` é rede defensiva caso um caller futuro construa
+    `DevConfig` fora do caminho validado."""
     lines = config.instruction.strip().splitlines()
     head = (lines[0] if lines else config.instruction)[:60]
-    return f"[kubo dev] {head}"
+    return f"feat(dev): {head}"

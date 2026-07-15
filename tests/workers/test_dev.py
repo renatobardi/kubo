@@ -142,6 +142,10 @@ def test_success_opens_pr_and_returns_pr_payload(
     assert opened["head"] == "kubo/flow-abc"
     assert opened["base"] == "main"
     assert opened["token"] == _PAT
+    # O título precisa ser CONVENCIONAL (feat|fix|...: mensagem) — vira o commit no squash-merge
+    # (CLAUDE.md) e é EXIGIDO pelo job `pr-conventions` do CI quando o alvo é o repo principal
+    # (dev-kubo, .github/workflows/ci.yml). Sem isso, todo PR de agente reprovaria CI.
+    assert opened["title"].startswith("feat(dev): ")
 
 
 def test_executor_error_skips_push_and_pr(
@@ -233,3 +237,37 @@ def test_config_rejects_blank_instruction() -> None:
     # " " passa min_length=1 mas _title() explodiria (splitlines()[0]) — validador barra.
     with pytest.raises(ValidationError):
         _config(instruction="   ")
+
+
+def test_claude_dir_removed_from_workspace_before_agent_runs(
+    happy_gitops: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """E6: um clone de `renatobardi/kubo` (o próprio repo do Kubo, alvo do dev-kubo) carregaria
+    `.claude/` (hooks/settings/agents do harness) para dentro do sandbox do agente —
+    indesejável e imprevisível. `DevWorker.run()` deve remover `.claude/` do workspace ANTES do
+    agente rodar. `gitops.clone` é mockado (não cria nada de verdade), então o workspace real
+    (de `tempfile.mkdtemp`, também mockado aqui) precisa vir PRÉ-POPULADO com `.claude/`."""
+    workspace_dir = tmp_path / "kubo-dev-workspace"
+    workspace_dir.mkdir()
+    claude_dir = workspace_dir / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text("{}")
+
+    monkeypatch.setattr(dev.tempfile, "mkdtemp", lambda prefix="kubo-dev-": str(workspace_dir))
+    monkeypatch.setattr(
+        github_api,
+        "open_pull_request",
+        lambda **kw: PrRef(url="https://github.com/o/r/pull/1", number=1),
+    )
+    seen: dict[str, bool] = {}
+
+    class _InspectingCli:
+        def run(self, prompt: str, *, workspace: str) -> CliOutcome:
+            seen["claude_dir_exists_at_agent_time"] = os.path.exists(
+                os.path.join(workspace, ".claude")
+            )
+            return _outcome()
+
+    DevWorker(_InspectingCli(), prompt="p").run(_ctx())
+
+    assert seen["claude_dir_exists_at_agent_time"] is False
