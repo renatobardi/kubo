@@ -23,6 +23,7 @@ from kubo.contracts.models import (
     ErrorInfo,
     ItemPayload,
     Payload,
+    PrPayload,
     ReportPayload,
     RunResult,
     WorkerManifest,
@@ -177,6 +178,8 @@ def _persist(
             )
         elif isinstance(payload, ReportPayload):
             _persist_report(db, payload, flow_ctx)
+        elif isinstance(payload, PrPayload):
+            _persist_pr(db, payload, flow_ctx)
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
     return unresolved
@@ -199,6 +202,28 @@ def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -
         kind="report",
         content=payload.content,
         consulted=[_parse_distilled_id(s) for s in payload.consulted],
+    )
+
+
+def _persist_pr(db: Any, payload: PrPayload, flow_ctx: FlowCtx | None) -> None:
+    """Grava um PrPayload como deliverable `kind="pr"` (ADR-0019 §VI), espelho exato do
+    `_persist_report`: mesma costura de proveniência via `flow_ctx`, mesmo `insert_deliverable`.
+
+    `url`/`number` vêm da API (E3), gravados como ref estrutural; `summary` (prosa untrusted
+    do agente — E4) vira o `content`. Sem `flow_ctx` é erro de config do chamador (só o flow
+    runner emite PR, sempre com ctx) → ConfigError, fechado como `kind="config"` pelo
+    `run_worker`, nunca crash. `consulted=[]`: um PR não tem fontes de distilled."""
+    if flow_ctx is None:
+        raise ConfigError("PrPayload exige flow_ctx (proveniência de flow/task)")
+    insert_deliverable(
+        db,
+        flow=flow_ctx.flow,
+        task=flow_ctx.task,
+        kind="pr",
+        content=payload.summary,
+        consulted=[],
+        pr_url=payload.url,
+        pr_number=payload.number,
     )
 
 

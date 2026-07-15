@@ -240,8 +240,25 @@ class ReportPayload(BaseModel):
         return self
 
 
+class PrPayload(BaseModel):
+    """PR aberto pelo worker dev (ADR-0019 §VI) — espelha `insert_deliverable(kind="pr")`.
+
+    `url`/`number` são ESTRUTURAIS: vêm das respostas da API do GitHub (E3), NUNCA da prosa
+    do agente — injeção num diff não forja a ref do PR. `summary` é a prosa do agente
+    (untrusted no consumo — E4), que vira o `content` do deliverable. O runner grava via
+    `insert_deliverable` usando o `FlowCtx` (flow/task); o worker NÃO conhece RecordIDs de
+    flow/task (disciplina de ref opaco). Cerca de volume em `summary` (output de LLM)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["pr"] = "pr"
+    url: str = Field(min_length=1, max_length=500)
+    number: int = Field(ge=1)
+    summary: str = Field(max_length=40000)
+
+
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload | ReportPayload,
+    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload | ReportPayload | PrPayload,
     Field(discriminator="type"),
 ]
 

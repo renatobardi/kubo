@@ -97,6 +97,17 @@ class SenderError(KuboError):
     a captura e a transforma num `dispatch(error)` estruturado, sem explodir o run."""
 
 
+class ForgeError(KuboError):
+    """Falha numa operação contra o repositório sandbox — git ou GitHub API (ADR-0019).
+
+    A mensagem NUNCA embute o PAT nem o corpo cru do erro (git/httpx): o PAT viaja no
+    header `Authorization` (open/close-PR) e no `http.extraHeader` do push (C2), e o corpo
+    de um erro poderia carregá-lo — os módulos `gitops`/`github_api` descrevem a falha por
+    status/tipo e redigem o PAT belt-and-suspenders antes de construir este erro (mesma
+    disciplina do `SenderError`). O worker dev a captura e a transforma num `RunResult`
+    estruturado, sem explodir o runtime."""
+
+
 class ContractError(KuboError):
     """Objeto não honra o contrato de worker (ADR-0009).
 

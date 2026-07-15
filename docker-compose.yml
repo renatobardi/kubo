@@ -71,6 +71,11 @@ services:
       # (busca/backfill); GROQ = chat do destilador (worker distiller + smoke, M6 8.6).
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Anthropic: paga o executor `cli` da persona dev (ADR-0019, fase 3). SEM `:?`
+      # fail-fast — o scheduler sobe sem ela (feed/distiller não usam); só o flow
+      # dev-mini a exige, e o CliExecutor levanta no uso se ausente. Segredo só do .env
+      # do servidor (invariante 8), nunca literal. Usada já no spike 16.2 (scripts.spike_cli).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # OpenRouter: candidato do PILOTO e modelo do DRENO one-off (ADR-0017, Trilha B da
       # 0014). SEM `:?` fail-fast — o regime diário (Groq/free) nunca usa OpenRouter; só
       # os scripts one-off `distill_pilot`/`drain_distill` a exigem, e falham no uso se

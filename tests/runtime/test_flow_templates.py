@@ -53,6 +53,15 @@ def _write(tmp_path: Path, body: str) -> Path:
     return path
 
 
+def test_budget_usd_optional_scalar(tmp_path: Path) -> None:
+    """budget_usd (ADR-0019 §V) é um escalar OPCIONAL: presente vira float, ausente é None.
+    Não é lógica — é um fato declarativo que o runtime consome (o executor cli corta)."""
+    with_budget = load_flow_template(_write(tmp_path, "budget_usd: 5.0\n"))
+    assert with_budget.budget_usd == pytest.approx(5.0)
+    base_only = load_flow_template(_write(tmp_path, ""))
+    assert base_only.budget_usd is None
+
+
 def test_rejects_verb_on_state(tmp_path: Path) -> None:
     """Verbo por estado (`on_enter`/`actions`/`steps`/`run`) = workflow engine → rejeitado.
     Aqui via campo espúrio no topo, que `extra="forbid"` barra."""

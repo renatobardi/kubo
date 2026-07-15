@@ -20,6 +20,7 @@ from kubo.contracts.models import (
     ErrorInfo,
     ItemPayload,
     Payload,
+    PrPayload,
     ReportPayload,
     SourcePayload,
 )
@@ -361,3 +362,30 @@ def test_report_payload_is_discriminated_in_union() -> None:
         {"type": "report", "content": "corpo", "consulted": []}
     )
     assert isinstance(parsed, ReportPayload)
+
+
+# ---------------------------------------------------------------------------
+# PrPayload (ADR-0019 §VI) — deliverable kind="pr", url/number estruturais da API (E3)
+# ---------------------------------------------------------------------------
+
+
+def test_pr_payload_resolve_pelo_discriminador() -> None:
+    """`type="pr"` roteia para PrPayload na união (emenda aditiva do ADR-0019 §VI)."""
+    parsed = TypeAdapter(Payload).validate_python(
+        {"type": "pr", "url": "https://github.com/o/r/pull/7", "number": 7, "summary": "prosa"}
+    )
+    assert isinstance(parsed, PrPayload)
+    assert parsed.url == "https://github.com/o/r/pull/7"
+    assert parsed.number == 7
+
+
+def test_pr_payload_rejeita_campo_extra_e_number_invalido() -> None:
+    """`extra="forbid"` fecha a superfície; `number` deve ser >= 1 (id de PR real)."""
+    with pytest.raises(ValidationError):
+        PrPayload.model_validate(
+            {"type": "pr", "url": "https://x/pull/1", "number": 1, "summary": "s", "sujeira": 1}
+        )
+    with pytest.raises(ValidationError):
+        PrPayload.model_validate(
+            {"type": "pr", "url": "https://x/pull/0", "number": 0, "summary": "s"}
+        )

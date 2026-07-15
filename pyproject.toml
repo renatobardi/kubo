@@ -6,6 +6,12 @@ readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
     "apscheduler>=3.10,<4",
+    # Pin por EVIDÊNCIA do spike 16.2 (ADR-0005/ADR-0019): o wheel arch-casado
+    # (manylinux_2_17_aarch64) traz um `claude` self-contained de 241MB — sem Node
+    # separado na imagem. Spawn + turno completo + custo (total_cost_usd) provados
+    # DENTRO da imagem no kubo-test (LXC aninhado). O CLI vive no wheel: pinar o wheel
+    # pina o CLI. Bump revalida o spike.
+    "claude-agent-sdk==0.2.119",
     "fastapi>=0.139.0",
     "feedparser>=6.0.11",
     "httpx>=0.28",
@@ -66,8 +72,9 @@ select = ["E", "F", "W", "I", "S", "B", "C90"]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-# Testes podem usar assert (S101) e senhas/tokens fake em fixtures (S105/S106).
-"tests/**" = ["S101", "S105", "S106"]
+# Testes podem usar assert (S101), tokens fake em fixtures (S105/S106) e shell-out para
+# git real com argv fixo (S603/S607) — o gitops end-to-end exige git de verdade.
+"tests/**" = ["S101", "S105", "S106", "S603", "S607"]
 
 [tool.pyright]
 pythonVersion = "3.12"

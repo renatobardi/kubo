@@ -84,3 +84,19 @@ def test_manifest_is_worker_manifest() -> None:
     """Sanidade: o manifest da analista declara a integração telegram (base do R6)."""
     assert isinstance(AnalystWorker.manifest, WorkerManifest)
     assert AnalystWorker.manifest.integrations == ["telegram"]
+
+
+def test_run_flow_rejects_dev_mini_without_behavior() -> None:
+    """Estado intermediário limpo (0016 parte A): `dev-mini` existe no catálogo mas ainda
+    não tem behavior no FLOW_REGISTRY (o wiring é 0016b). Disparar dá ConfigError LEGÍVEL,
+    nunca KeyError cru do registry — a falha é antes de tocar db/embedder."""
+    with pytest.raises(ConfigError, match="sem handler"):
+        run_flow(
+            db=None,
+            template_name="dev-mini",
+            question="x",
+            embedder=None,  # type: ignore[arg-type]
+            destination=None,  # type: ignore[arg-type]
+            base_url="",
+            executor=None,
+        )
