@@ -92,11 +92,20 @@ credencial**; o worker injeta o PAT **só no momento do push**, fora do alcance 
 ### IV. E1 — Env do agente por WHITELIST, nunca herança
 
 O subprocess herda o env do pai por default — e o pai carrega SURREAL passwords,
-`kubo_rw`, GEMINI, `TELEGRAM_BOT_TOKEN`, `GITHUB_PAT_FORGE`. Usar o parâmetro `env` do
-`ClaudeAgentOptions` passando **somente** `ANTHROPIC_API_KEY` + `PATH` + `HOME` apontando
-pro workspace; `cwd` pinado no workspace. `disallowed_tools` corta `WebFetch`/`WebSearch`
-(barateamento de superfície a custo zero). Teste que lê o env do subprocess prova que o
-agente não enxerga SURREAL/TELEGRAM/PAT.
+`kubo_rw`, GEMINI, `TELEGRAM_BOT_TOKEN`, `GITHUB_PAT_FORGE`.
+
+**Correção empírica (verificado no SDK pinado `==0.2.119`):** o SDK faz **MERGE** de
+`os.environ` no subprocess (`subprocess_cli.py:491`: `inherited_env = os.environ` inteiro, e
+`options.env` só **sobrepõe** por cima) — passar `options.env={...}` **NÃO basta**, o filho
+ainda herda os segredos do pai. A whitelist REAL é **scrubbar `os.environ`** para só a
+whitelist na janela do spawn, com restore integral no `finally`. Uma **fonte única**
+(`_whitelist_env`) alimenta as duas camadas: o scrub (subtração dos segredos) e o
+`options.env` (override de `HOME`→workspace, que sobrevive a drift de timing do SDK). `cwd`
+pinado no workspace; `disallowed_tools` corta `WebFetch`/`WebSearch` (barateamento de
+superfície a custo zero). O canário de env (teste que lê o env do subprocess) prova as DUAS
+direções — segredos AUSENTES e `ANTHROPIC_API_KEY` PRESENTE — e **é parte do rito de bump do
+SDK** (o timing do snapshot de env é interno não-documentado; bump revalida o canário).
+Teto (§X): o scrub process-wide só vale no processo síncrono do CLI.
 
 ### V. E2 — Budget = teto-com-overshoot, dentro do `CliExecutor`, nunca no runner
 
@@ -193,22 +202,24 @@ por capacidade**, não por disciplina (D38; padrão ADR-0018 §V-bis). O `reason
   circuito cli (task do dono + sandbox privado, escopo negativo do plano). O gatilho de
   container-irmão (§X) é a condição para isso mudar na fase 4.
 
-## Perguntas abertas (respondidas pelo spike 16.2 e pela evidência do SDK)
+## Perguntas abertas — RESOLVIDAS pelo spike 16.2
 
-> Escritas como eixo + critério, não como decisão com asterisco. O status `proposto` só
-> vira `aceito` (16.9) quando estas fecharem.
+> O spike (16.2) rodou DENTRO da imagem do Kubo no kubo-test (LXC aninhado) e fechou as três
+> por evidência: `turn_completed=True`, `num_turns=2`, `total_cost_usd=0.129413`, canário de
+> env ABSENT. O status segue `proposto` até o cravar em 16.9 (validação final do advisor +
+> reconciliação de custo do smoke), mas nenhum eixo abaixo é mais uma decisão em aberto.
 
-1. **Onde vive o subprocess.** In-container (imagem do Kubo no kubo-test) **ou**
-   container-irmão via Docker aninhado. **Critério:** o LXC aninhado é hostil ao spawn do
-   Node/Claude Code (AppArmor, namespaces)? Se o spike passar in-container, fica
-   in-container (§X nomeia o gatilho de migração). Se quebrar → consulta extraordinária ao
-   advisor; o contrato "prompt in → stream out" sobrevive à mudança de onde-vive.
-2. **O SDK pinado expõe custo utilizável no stream?** Decide se `budget_usd` entra no
-   template (§V) ou se o budget degrada para `max_turns`+timeout. **Critério:**
-   `ResultMessage.total_cost_usd` (ou equivalente) legível e confiável por turno.
-3. **Node-na-imagem: mecânica de build.** Como o Node + CLI do Claude Code entram na
-   imagem do Kubo sem inflar nem quebrar o build atual. **Critério:** o spike completa um
-   turno trivial com o CLI spawnado de dentro da imagem.
+1. **Onde vive o subprocess → IN-CONTAINER.** O LXC aninhado NÃO foi hostil ao spawn (turno
+   trivial completou). Fica in-container; o gatilho de migração para container-irmão (§X)
+   segue nomeado para a fase 4 (conteúdo de terceiros no circuito).
+2. **SDK expõe custo utilizável → SIM.** `ResultMessage.total_cost_usd` veio populado
+   (`0.129413`). `budget_usd` ENTRA no template (§V); o SDK ainda expõe `max_budget_usd`
+   nativo, usado como camada extra além do check determinístico do executor.
+3. **Node-na-imagem → NÃO precisa de Node separado.** O wheel `claude-agent-sdk==0.2.119`
+   **vendoriza** um binário `claude` self-contained (241MB), arch-casado por uv (wheel
+   `manylinux_2_17_aarch64`) — o CLI é vendorizado como binário (igual ao binário do
+   tailwind), invariante 1 intacto. Custo nomeado e aceito: +240MB de imagem. O deploy
+   buildou e o app sobe (smoke ok).
 
 ## Consequências
 
