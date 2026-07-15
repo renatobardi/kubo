@@ -67,7 +67,14 @@ class FlowTemplate(BaseModel):
     Enumera fatos (forma), nunca comportamento. `deliverable` é o KIND do artefato
     produzido (`report`); `cast` são nomes de persona (resolvidos no catálogo de
     personas na instanciação); `triggers` são gatilhos declarados (`manual` nesta
-    fase). `extra="forbid"` fecha a lista negativa no nível do template."""
+    fase). `extra="forbid"` fecha a lista negativa no nível do template.
+
+    `budget_usd` (ADR-0019 §V, E2): teto de custo declarativo do flow — um ESCALAR que
+    enumera um FATO; o runtime decide o que fazer (o `CliExecutor` corta). Opcional: só o
+    `dev-mini` (executor cli, que custa $) o declara; os demais templates o omitem (None).
+    Entra no schema só APÓS o spike provar custo utilizável (não é campo mentiroso, §VIII);
+    congela no `flow.snapshot` na instanciação (invariante 4). NÃO evoluir para budget por
+    estado/fallback/retry (lista negativa do ADR-0016 §I intacta)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -77,6 +84,7 @@ class FlowTemplate(BaseModel):
     cast: list[str]
     deliverable: str
     triggers: list[str]
+    budget_usd: float | None = None
 
 
 def load_flow_template(path: Path) -> FlowTemplate:

@@ -1,0 +1,17 @@
+name: dev-mini
+version: 1
+board:
+  states: [created, implementing, review, done, rejected, failed]
+  transitions:
+    - [created, implementing]
+    - [implementing, review]
+    - [implementing, failed]
+    - [review, done]
+    - [review, rejected]
+  gates:
+    - [review, done]
+    - [review, rejected]
+cast: [dev, humano]
+deliverable: pr
+triggers: [manual]
+budget_usd: 5.0
