@@ -27,6 +27,46 @@ class PrRef(BaseModel):
     number: int
 
 
+class PrStatus(BaseModel):
+    """Estado de MERGE de um PR lido da API (ADR-0021 §2, E10/E12) — só leitura, nunca mescla.
+
+    `merged` é a verdade do rito (aprovar ≠ merge — D38); `merge_commit_sha` é a âncora de
+    auditoria. Num PR ABERTO a API preenche `merge_commit_sha` com um test-merge NÃO confiável —
+    o chamador só usa o SHA quando `merged` é true."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    merged: bool
+    merge_commit_sha: str | None = None
+
+
+def get_pull_request(
+    *,
+    base_url: str,
+    token: str,
+    owner: str,
+    repo: str,
+    number: int,
+    transport: httpx.BaseTransport | None = None,
+) -> PrStatus:
+    """Lê o estado de merge de um PR (E10/E12) com o token READ-ONLY — jamais mescla/comenta/fecha.
+
+    Resposta sem `merged` vira `ForgeError` (sem vazar o token). O campo `merge_commit_sha` só é
+    significativo quando `merged` é true (num PR aberto é um test-merge — o consumidor ignora)."""
+    resp = _send(
+        "GET",
+        f"{base_url}/repos/{owner}/{repo}/pulls/{number}",
+        token=token,
+        json_body=None,
+        transport=transport,
+    )
+    try:
+        data = resp.json()
+        return PrStatus(merged=bool(data["merged"]), merge_commit_sha=data.get("merge_commit_sha"))
+    except (ValueError, KeyError, TypeError):
+        raise ForgeError("resposta da API do GitHub sem 'merged' esperado") from None
+
+
 def open_pull_request(
     *,
     base_url: str,
@@ -94,12 +134,13 @@ def _send(
     url: str,
     *,
     token: str,
-    json_body: dict[str, object],
+    json_body: dict[str, object] | None,
     transport: httpx.BaseTransport | None,
 ) -> httpx.Response:
     """Faz uma request autenticada; erro httpx vira `ForgeError` com o PAT redigido.
 
-    `transport` injetável para teste (httpx.MockTransport); None = transporte real."""
+    `json_body=None` (GET de leitura, E12) não envia corpo. `transport` injetável para teste
+    (httpx.MockTransport); None = transporte real."""
     try:
         with httpx.Client(timeout=_TIMEOUT, transport=transport) as client:
             resp = client.request(method, url, headers=_headers(token), json=json_body)

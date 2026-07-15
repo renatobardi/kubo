@@ -15,7 +15,13 @@ import pytest
 
 from kubo.errors import ForgeError
 from kubo.workers import github_api
-from kubo.workers.github_api import PrRef, close_pull_request, open_pull_request
+from kubo.workers.github_api import (
+    PrRef,
+    PrStatus,
+    close_pull_request,
+    get_pull_request,
+    open_pull_request,
+)
 
 _BASE = "https://api.github.com"
 _TOKEN = "fake-forge-pat-do-not-leak"  # não é um PAT real (evita o gate detect-secrets)
@@ -116,6 +122,54 @@ def test_close_pull_request_comments_reason_then_closes() -> None:
     # E8: o reason (input do dono) vai no corpo do comentário sem interpolação esquisita
     assert json.loads(reqs[0].content)["body"] == "rejected: escopo fora da task"
     assert json.loads(reqs[1].content)["state"] == "closed"
+
+
+_FAKE_SHA = "abc123def456"  # pragma: allowlist secret
+
+
+def test_get_pull_request_reads_merged_and_commit_sha() -> None:
+    """E10/E12: o Confirmar LÊ (GET) o estado de merge com o token read-only — `merged` + o SHA
+    do merge commit vêm da RESPOSTA da API; o token vai no header, nunca na URL."""
+    reqs: list[httpx.Request] = []
+    transport = _record(
+        reqs,
+        {
+            ("GET", "/repos/renatobardi/kubo/pulls/7"): httpx.Response(
+                200, json={"merged": True, "merge_commit_sha": _FAKE_SHA}
+            )
+        },
+    )
+    status = get_pull_request(
+        base_url=_BASE,
+        token=_TOKEN,
+        owner="renatobardi",
+        repo="kubo",
+        number=7,
+        transport=transport,
+    )
+    assert isinstance(status, PrStatus)
+    assert status.merged is True
+    assert status.merge_commit_sha == _FAKE_SHA
+    assert reqs[0].method == "GET"
+    assert reqs[0].headers["authorization"] == f"Bearer {_TOKEN}"
+    assert not reqs[0].content  # GET de leitura não envia corpo
+
+
+def test_get_pull_request_open_pr_reports_not_merged() -> None:
+    """Um PR ABERTO reporta `merged:false` — o rito NÃO promove (aprovar ≠ merge, D38)."""
+    transport = _record(
+        [],
+        {
+            ("GET", "/repos/o/r/pulls/9"): httpx.Response(
+                200, json={"merged": False, "merge_commit_sha": None}
+            )
+        },
+    )
+    status = get_pull_request(
+        base_url=_BASE, token=_TOKEN, owner="o", repo="r", number=9, transport=transport
+    )
+    assert status.merged is False
+    assert status.merge_commit_sha is None
 
 
 def test_no_merge_capability_by_construction() -> None:

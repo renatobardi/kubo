@@ -25,7 +25,7 @@ from kubo.contracts.models import WorkerManifest
 from kubo.distribution.destinations import ResolvedDestination
 from kubo.distribution.telegram import send_telegram
 from kubo.embedding import Embedder
-from kubo.errors import ConfigError, SenderError, StateError
+from kubo.errors import ConfigError, PromotionError, SenderError, StateError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
 from kubo.executors.cli import CliExecutor, CliExecutorConfig, CliRunner
@@ -36,9 +36,11 @@ from kubo.runtime.runner import FlowCtx, run_worker
 from kubo.store.flows import (
     create_task,
     decide_gate,
+    flow_gates,
     instantiate_flow,
     open_gate,
     read_gate_context,
+    set_merge_commit_sha,
     set_task_run,
     template_of_task,
     transition_task,
@@ -47,6 +49,7 @@ from kubo.store.knowledge import insert_dispatch, run_status
 from kubo.workers import github_api
 from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
 from kubo.workers.dev import DevWorker
+from kubo.workers.registry import WORKER_REGISTRY
 
 _CATALOG_ROOT = Path(__file__).parents[2] / "catalogs"
 _TEMPLATES_DIR = _CATALOG_ROOT / "flow_templates"
@@ -69,6 +72,8 @@ _AWAITING, _REJECTED = "awaiting_review", "rejected"
 # as duas a done|rejected. `done` é o terminal de sucesso (aprovar NÃO faz merge — D38).
 _DEV_PERSONA = "dev"
 _IMPLEMENTING, _REVIEW, _DONE = "implementing", "review", "done"
+# v2 (ADR-0021): `done` abre o gate de promoção `[done, promoted]` — `promoted` é o terminal.
+_PROMOTED = "promoted"
 # Env do sandbox (invariante 8 — nunca em YAML/código): coordenadas do repo `kubo-forge` (D37).
 _FORGE_ENV = {
     "repo_url": "KUBO_FORGE_REPO_URL",
@@ -97,12 +102,14 @@ class FlowRunResult:
 @dataclass(frozen=True)
 class FlowBehavior:
     """Binding template→comportamento (E4). `run` é o único obrigatório (o disparo); `resume`/
-    `reject` existem só para templates com gate (`analysis-review`). Template novo com gate =
-    novas funções + PR = gate humano — nunca registry dinâmico por string (DSL, §I.4)."""
+    `reject`/`promote` existem só para templates com o gate correspondente (`analysis-review`
+    não tem `promote`; `dev-mini` v2 tem os três — ADR-0021 §9, a 3ª porta de escrita). Template
+    novo com gate = novas funções + PR = gate humano — nunca registry dinâmico (DSL, §I.4)."""
 
     run: Callable[..., FlowRunResult]
     resume: Callable[..., None] | None = None
     reject: Callable[..., None] | None = None
+    promote: Callable[..., None] | None = None
 
 
 def run_flow(
@@ -382,6 +389,12 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
     ctx = read_gate_context(db, gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow")
+    # Valida o par `(gate_state, rejected)` ∈ gates ANTES de qualquer I/O (ADR-0021 §9, trap c):
+    # com dois gates no dev-mini v2, um reject roteado ao gate de PROMOÇÃO (par [done, rejected]
+    # inexistente) passaria no read_gate_context e comentaria/fecharia um PR JÁ MESCLADO antes do
+    # StateError do decide_gate. Barrar aqui mantém o PR mesclado intocado.
+    if (ctx.gate_state, _REJECTED) not in flow_gates(db, ctx.flow):
+        raise StateError(f"gate em '{ctx.gate_state}' não tem transição de rejeição — irrejeitável")
     if ctx.pr_number is None:
         raise StateError("gate dev sem PR estrutural — não é rejeitável pela API")
     sandbox = _sandbox_from_env()
@@ -402,6 +415,75 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str) -> None:
         decision="rejected",
         reason=reason,
     )
+
+
+def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+    """Confirmar promoção do `dev-mini` v2 (ADR-0021 §2/§9, E10/E12) — a 3ª porta de escrita.
+
+    Import-oráculo: valida (a) o PR está `merged:true` na API do GitHub (aprovação ≠ merge, D38)
+    com o token READ-ONLY (E12 — o confirmar NUNCA usa o PAT de escrita); (b) `worker_name`
+    (informado pelo dono, que já viu o merge+deploy) resolve no `WORKER_REGISTRY` do PROCESSO
+    VIVO — se resolve, a imagem contém o merge por construção (deploy não rodou → o nome não
+    resolve → `PromotionError` manda rodar `./scripts/deploy.sh`, gate SEGUE ABERTO).
+
+    Ordem I/O-externo-antes-do-commit (espelha `_reject_dev`): grava o `merge_commit_sha` (fato
+    verdadeiro independente do gate, idempotente) e só ENTÃO decide o gate → `promoted`."""
+    ctx = read_gate_context(db, gate_task)
+    if ctx is None:
+        raise StateError("gate não resolve um flow/deliverable")
+    if (ctx.gate_state, _PROMOTED) not in flow_gates(db, ctx.flow):
+        raise StateError(f"gate em '{ctx.gate_state}' não tem transição de promoção")
+    if ctx.pr_number is None:
+        raise StateError("gate de promoção sem PR estrutural — nada para confirmar")
+    sandbox = _sandbox_from_env()
+    base_url_api, token = _forge_readonly_integration()
+    status = github_api.get_pull_request(
+        base_url=base_url_api,
+        token=token,
+        owner=sandbox["owner"],
+        repo=sandbox["repo"],
+        number=ctx.pr_number,
+    )
+    if not status.merged or status.merge_commit_sha is None:
+        raise PromotionError("o PR ainda não foi mesclado no GitHub — aprovar não é mesclar (D38)")
+    _validate_registered_worker(worker_name)
+    set_merge_commit_sha(db, flow=ctx.flow, merge_commit_sha=status.merge_commit_sha)
+    decide_gate(
+        db,
+        analyst_task=ctx.counterpart_task,
+        gate_task=ctx.gate_task,
+        to_state=_PROMOTED,
+        decision="approved",
+    )
+
+
+def _validate_registered_worker(worker_name: str) -> WorkerManifest:
+    """O import-oráculo (E10): `worker_name` resolve no `WORKER_REGISTRY` do processo vivo com um
+    `manifest` válido. Mesmo idioma de `build_scheduler` (acessa `.manifest` como atributo de
+    CLASSE, sem instanciar — workers built-in têm construtores heterogêneos, ADR-0010)."""
+    worker_cls = WORKER_REGISTRY.get(worker_name)
+    if worker_cls is None:
+        raise PromotionError(
+            f"worker '{worker_name}' não está na imagem viva — confira o nome "
+            "ou rode ./scripts/deploy.sh"
+        )
+    manifest = getattr(worker_cls, "manifest", None)
+    if not isinstance(manifest, WorkerManifest):
+        raise PromotionError(f"worker '{worker_name}' registrado sem manifest válido")
+    return manifest
+
+
+def _forge_readonly_integration() -> tuple[str, str]:
+    """Resolve (base_url, token) da integração `github-readonly` (E12/E13) — SEPARADA do
+    `github` de escrita: o Confirmar promoção só LÊ o merge, nunca mescla/comenta/fecha."""
+    resolved = resolve_integrations(["github-readonly"], load_integrations(_INTEGRATIONS_DIR))[
+        "github-readonly"
+    ]
+    if not resolved.secret:
+        raise ConfigError(
+            "integração 'github-readonly' sem token resolvido (env GITHUB_TOKEN_READONLY)"
+        )
+    return resolved.base_url or "https://api.github.com", resolved.secret
 
 
 def _forge_integration() -> tuple[str, str]:
@@ -467,6 +549,16 @@ def reject_gate(db: Any, *, gate_task: RecordID, reason: str) -> None:
     if behavior.reject is None:
         raise ConfigError("o template deste gate não suporta rejeição")
     behavior.reject(db, gate_task=gate_task, reason=reason)
+
+
+def promote_gate(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+    """Confirma uma promoção pelo browser (ADR-0021 §9) — a 3ª porta de escrita, rota PRÓPRIA
+    (nunca sobrecarrega `resume_gate`): despacha ao comportamento do template. `worker_name` é
+    informado pelo dono (já viu merge+deploy); a validação (merge+registry) é do behavior."""
+    behavior = _behavior_for_gate(db, gate_task)
+    if behavior.promote is None:
+        raise ConfigError("o template deste gate não suporta promoção")
+    behavior.promote(db, gate_task=gate_task, worker_name=worker_name)
 
 
 def _behavior_for_gate(db: Any, gate_task: RecordID) -> FlowBehavior:
@@ -615,11 +707,14 @@ def _distilled_rid(raw: str) -> RecordID:
 
 
 # Binding template→comportamento HARDCODED (E4). Template novo = FlowBehavior novo + PR (gate
-# humano). `resume`/`reject` só existem para templates com gate (`analysis-review`).
+# humano). `resume`/`reject`/`promote` só existem para templates com o gate correspondente
+# (`analysis-review` não promove; `dev-mini` v2 tem os três — ADR-0021 §9).
 _FLOW_REGISTRY: dict[str, FlowBehavior] = {
     "analysis": FlowBehavior(run=_run_analysis),
     "analysis-review": FlowBehavior(
         run=_run_analysis_review, resume=_resume_review, reject=_reject_review
     ),
-    "dev-mini": FlowBehavior(run=_run_dev, resume=_resume_dev, reject=_reject_dev),
+    "dev-mini": FlowBehavior(
+        run=_run_dev, resume=_resume_dev, reject=_reject_dev, promote=_promote_dev
+    ),
 }

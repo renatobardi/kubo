@@ -50,7 +50,7 @@
 
 {# Rótulo humano de um estado do board (coluna). Fallback = o próprio nome. #}
 {% macro state_label(state) %}
-  {%- set labels = {"created": "Criado", "analyzing": "Analisando", "awaiting_review": "Aguardando revisão", "delivered": "Entregue", "rejected": "Rejeitado", "failed": "Falhou"} -%}
+  {%- set labels = {"created": "Criado", "analyzing": "Analisando", "awaiting_review": "Aguardando revisão", "delivered": "Entregue", "rejected": "Rejeitado", "failed": "Falhou", "promoted": "Promovido"} -%}
   {{- labels.get(state, state) -}}
 {% endmacro %}
 

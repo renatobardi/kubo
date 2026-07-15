@@ -189,6 +189,10 @@ services:
       KUBO_FORGE_REPO: ${KUBO_FORGE_REPO:-}
       KUBO_FORGE_GIT_NAME: ${KUBO_FORGE_GIT_NAME:-}
       KUBO_FORGE_GIT_EMAIL: ${KUBO_FORGE_GIT_EMAIL:-}
+      # Confirmar promoção (ADR-0021 §9, E12/E13): token READ-ONLY, SEPARADO do PAT de escrita
+      # acima — o Confirmar só LÊ o merge (`get_pull_request`), nunca mescla/comenta/fecha. SEM
+      # `:?` — ausente, o promote dá 503/erro no uso, o resto da UI segue. Setup: runbook §2e.
+      GITHUB_TOKEN_READONLY: ${GITHUB_TOKEN_READONLY:-}  # pragma: allowlist secret
       TZ: ${TZ:-America/Sao_Paulo}
     # Imagem slim não tem curl: healthcheck via python/urllib no /healthz (sem auth,
     # sem banco). localhost é sempre permitido no TrustedHost (append no código).
