@@ -27,8 +27,9 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def clone(repo_url: str, workspace: str, *, run: _Run = _run) -> None:
-    """Clona `repo_url` (SEM credencial — C2) em `workspace`."""
-    _check(run(["git", "clone", repo_url, workspace]), "clone")
+    """Clona `repo_url` (SEM credencial — C2) em `workspace`. `--` fecha fim-de-opções (o
+    `repo_url` já é validado em DevConfig, mas o marcador é defesa em profundidade barata)."""
+    _check(run(["git", "clone", "--", repo_url, workspace]), "clone")
 
 
 def configure_identity(workspace: str, *, name: str, email: str, run: _Run = _run) -> None:

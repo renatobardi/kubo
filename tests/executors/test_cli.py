@@ -13,7 +13,13 @@ import os
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, CLINotFoundError, ResultMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    CLINotFoundError,
+    ProcessError,
+    ResultMessage,
+    TextBlock,
+)
 
 from kubo.errors import ExecutorError
 from kubo.executors.cli import CliExecutor, CliExecutorConfig, CliOutcome
@@ -176,3 +182,24 @@ def test_executor_error_never_leaks_raw(monkeypatch: pytest.MonkeyPatch) -> None
         CliExecutor(_cfg(), query_fn=query).run("x", workspace="/w")
     assert "secret" not in str(excinfo.value)
     assert "leaked" not in str(excinfo.value)
+
+
+def test_process_error_never_leaks_stderr() -> None:
+    # ProcessError (saída != 0 do CLI) é irmão de ClaudeSDKError, NÃO subclasse de
+    # CLINotFoundError — precisa ser capturado, senão seu str() vaza o stderr cru até a UI.
+    raw = ProcessError("cli failed", exit_code=1, stderr="fatal: SURREAL_PASS=xyz leaked here")
+    query = _fake_query([], raises=raw)
+    with pytest.raises(ExecutorError) as excinfo:
+        CliExecutor(_cfg(), query_fn=query).run("x", workspace="/w")
+    assert "SURREAL_PASS" not in str(excinfo.value)
+    assert "leaked" not in str(excinfo.value)
+
+
+def test_scrubbed_environ_fails_fast_on_reentrancy() -> None:
+    # O scrub é process-wide (§X): reentrância concorrente corromperia o snapshot restaurado.
+    # O guard converte o teto nomeado em CONSTRUÇÃO — falha alto em vez de vazar em silêncio.
+    from kubo.executors.cli import _scrubbed_environ
+
+    with _scrubbed_environ({"HOME": "/w"}), pytest.raises(RuntimeError):
+        with _scrubbed_environ({"HOME": "/w2"}):
+            pass

@@ -219,3 +219,12 @@ def test_wrong_config_type_raises_contract_error() -> None:
 def test_manifest_declares_github_integration() -> None:
     assert dev.DevWorker.manifest.integrations == ["github"]
     assert dev.DevWorker.manifest.config is DevConfig
+
+
+def test_config_rejects_option_injection_in_repo_url_and_branch() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):  # repo_url que viraria flag do git
+        _config(repo_url="--upload-pack=/evil")
+    with pytest.raises(ValidationError):  # branch começando com '-'
+        _config(branch="-x")

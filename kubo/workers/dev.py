@@ -11,7 +11,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from kubo.contracts.models import ErrorInfo, PrPayload, RunResult, Stats, WorkerManifest
 from kubo.contracts.worker import RunContext
@@ -45,6 +45,23 @@ class DevConfig(BaseModel):
     base_branch: str = "main"
     git_name: str = Field(min_length=1, max_length=100)
     git_email: str = Field(min_length=1, max_length=200)
+
+    @field_validator("repo_url")
+    @classmethod
+    def _scheme(cls, value: str) -> str:
+        """Exige esquema `https://`/`git@` — fecha a injeção de opção do git (um `repo_url`
+        começando com `-` viraria flag em `git clone`/`push`, ex.: `--upload-pack=`)."""
+        if not (value.startswith("https://") or value.startswith("git@")):
+            raise ValueError("repo_url deve começar com https:// ou git@")
+        return value
+
+    @field_validator("branch")
+    @classmethod
+    def _no_leading_dash(cls, value: str) -> str:
+        """Branch nunca começa com `-` (mesma defesa de injeção de opção no argv do git)."""
+        if value.startswith("-"):
+            raise ValueError("branch não pode começar com '-'")
+        return value
 
 
 class DevWorker:

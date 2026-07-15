@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import aclosing, contextmanager
 from typing import Any, Protocol
@@ -30,8 +31,7 @@ from typing import Any, Protocol
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
-    CLIConnectionError,
-    CLINotFoundError,
+    ClaudeSDKError,
     ResultMessage,
     TextBlock,
 )
@@ -64,13 +64,26 @@ def _whitelist_env(workspace: str) -> dict[str, str]:
     return env
 
 
+# O scrub muta `os.environ` (global do processo): o lock torna o teto de reentrância do §X
+# CONSTRUÇÃO, não comentário — duas entradas concorrentes sobrescreveriam o `saved` uma da
+# outra e o restore devolveria um snapshot desatualizado (vazamento cruzado). Falha alto.
+_SCRUB_LOCK = threading.Lock()
+
+
 @contextmanager
 def _scrubbed_environ(env: dict[str, str]) -> Iterator[None]:
     """`os.environ` = só `env` durante o bloco; restaura INTEGRALMENTE no finally.
 
     Snapshot → clear → whitelist → yield → clear + restore (advisor condição 2): restore
     seletivo deixaria o pai com env mutilado numa exceção no meio, e o push do PAT (no
-    processo pai, depois) falharia de forma misteriosa."""
+    processo pai, depois) falharia de forma misteriosa. Reentrância (§X) FALHA ALTO — o
+    scrub só vale no processo síncrono do CLI, um flow por vez; concorrência exige
+    processo-filho com env limpo, não este swap global."""
+    if not _SCRUB_LOCK.acquire(blocking=False):
+        raise RuntimeError(
+            "_scrubbed_environ reentrado — scrub de os.environ é process-wide e só vale no "
+            "processo síncrono do CLI (ADR-0019 §X); flow dev concorrente exige processo-filho"
+        )
     saved = dict(os.environ)
     try:
         os.environ.clear()
@@ -79,6 +92,7 @@ def _scrubbed_environ(env: dict[str, str]) -> Iterator[None]:
     finally:
         os.environ.clear()
         os.environ.update(saved)
+        _SCRUB_LOCK.release()
 
 
 class CliExecutorConfig(BaseModel):
@@ -147,9 +161,12 @@ class CliExecutor:
                 num_turns=0,
                 error=ErrorInfo(kind="timeout", message=_TIMEOUT_MSG),
             )
-        except (CLINotFoundError, CLIConnectionError):
-            # Falha de infra (binário ausente, conexão) — o corpo cru do erro (com
-            # caminhos) NUNCA cruza a fronteira (§VIII): ExecutorError genérico, from None.
+        except ClaudeSDKError:
+            # QUALQUER erro do SDK (binário ausente, conexão, E **ProcessError** de saída
+            # != 0 — cujo `str()` embute o STDERR cru do CLI) vira ExecutorError genérico,
+            # `from None`: o corpo cru NUNCA cruza a fronteira (§VIII). Capturar só as
+            # subclasses de infra deixaria o ProcessError (irmão, não subclasse) escapar
+            # e vazar o stderr até `run.error`/UI (achado de security-review).
             raise ExecutorError(_SPAWN_MSG) from None
         return self._build_outcome(texts, result)
 
