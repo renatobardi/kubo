@@ -22,20 +22,22 @@ from kubo.workers import gitops
 _FAKE_PAT = "fake-forge-pat-do-not-leak"  # não é um PAT real (evita o gate detect-secrets)
 
 
-def _rec(handler: Any = None) -> tuple[Any, list[list[str]]]:
-    """`run` fake: grava cada argv e devolve (rc, stdout, stderr) do `handler` (default ok)."""
+def _rec(handler: Any = None) -> tuple[Any, list[list[str]], list[dict[str, str] | None]]:
+    """`run` fake: grava cada argv+env e devolve (rc, stdout, stderr) do `handler`."""
     calls: list[list[str]] = []
+    envs: list[dict[str, str] | None] = []
 
-    def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(argv: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         calls.append(list(argv))
+        envs.append(env)
         rc, out, err = handler(argv) if handler else (0, "", "")
         return subprocess.CompletedProcess(argv, rc, out, err)
 
-    return run, calls
+    return run, calls, envs
 
 
-def test_push_injects_pat_in_header_not_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    run, calls = _rec()
+def test_push_injects_pat_in_env_not_argv() -> None:
+    run, calls, envs = _rec()
     gitops.push(
         "/ws",
         "kubo/flow-1",
@@ -45,31 +47,37 @@ def test_push_injects_pat_in_header_not_url(monkeypatch: pytest.MonkeyPatch) -> 
     )
     argv = calls[0]
     assert argv[:3] == ["git", "-C", "/ws"]
-    # PAT vai no http.extraHeader (Basic base64("x-access-token:PAT")), NUNCA na URL
-    idx = argv.index("-c")
-    header = argv[idx + 1]
-    assert header.startswith("http.extraHeader=Authorization: Basic ")
-    creds = base64.b64decode(header.split("Basic ", 1)[1]).decode()
+    # C2/§X: o PAT vai no http.extraHeader entregue por GIT_CONFIG_* no ENV — NUNCA no argv
+    # (argv aparece em ps/log; env exige leitura dirigida de /proc do mesmo UID)
+    assert not any(_FAKE_PAT in a for a in argv)
+    assert not any("extraHeader" in a or "Authorization" in a for a in argv)
+    env = envs[0]
+    assert env is not None
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    creds = base64.b64decode(env["GIT_CONFIG_VALUE_0"].split("Basic ", 1)[1]).decode()
     assert creds == f"x-access-token:{_FAKE_PAT}"
     # a URL do push é limpa (sem credencial embutida — C2)
     url_arg = argv[argv.index("push") + 1]
     assert url_arg == "https://github.com/owner/kubo-forge.git"
-    assert _FAKE_PAT not in url_arg
     # jamais persiste credencial: sem remote set-url / credential helper
     assert not any("set-url" in a or "credential" in a for a in argv)
     # empurra o branch derivado do flow id, explícito (não `--all`, não `HEAD`)
     assert argv[-1] == "HEAD:refs/heads/kubo/flow-1"
 
 
-def test_push_error_redacts_pat() -> None:
-    run, _ = _rec(lambda argv: (128, "", f"fatal: auth failed for {_FAKE_PAT} at remote"))
+def test_push_error_redacts_pat_and_cred() -> None:
+    # Canal novo (env): git pode ecoar o valor do config (Basic <cred>) no stderr de um push
+    # que falha — o erro NÃO pode carregar nem o PAT cru nem o cred base64 (advisor cond. 2).
+    cred = base64.b64encode(f"x-access-token:{_FAKE_PAT}".encode()).decode()
+    run, _, _ = _rec(lambda argv: (128, "", f"fatal: bad header Authorization: Basic {cred}"))
     with pytest.raises(ForgeError) as excinfo:
         gitops.push("/ws", "b", repo_url="https://x/r.git", token=_FAKE_PAT, run=run)
     assert _FAKE_PAT not in str(excinfo.value)
+    assert cred not in str(excinfo.value)
 
 
 def test_configure_identity_requires_name_and_email() -> None:
-    run, _ = _rec()
+    run, _, _ = _rec()
     with pytest.raises(ConfigError):
         gitops.configure_identity("/ws", name="", email="dev@kubo.local", run=run)
     with pytest.raises(ConfigError):
@@ -77,14 +85,14 @@ def test_configure_identity_requires_name_and_email() -> None:
 
 
 def test_has_new_commits_compares_head_to_base() -> None:
-    run_moved, _ = _rec(lambda argv: (0, "newsha\n", "") if "rev-parse" in argv else (0, "", ""))
+    run_moved, _, _ = _rec(lambda a: (0, "newsha\n", "") if "rev-parse" in a else (0, "", ""))
     assert gitops.has_new_commits("/ws", "basesha", run=run_moved) is True
-    run_same, _ = _rec(lambda argv: (0, "basesha\n", ""))
+    run_same, _, _ = _rec(lambda argv: (0, "basesha\n", ""))
     assert gitops.has_new_commits("/ws", "basesha", run=run_same) is False
 
 
 def test_git_command_failure_raises_forge_error() -> None:
-    run, _ = _rec(lambda argv: (1, "", "fatal: not a git repository"))
+    run, _, _ = _rec(lambda argv: (1, "", "fatal: not a git repository"))
     with pytest.raises(ForgeError):
         gitops.head_sha("/ws", run=run)
 

@@ -180,19 +180,38 @@ por capacidade**, não por disciplina (D38; padrão ADR-0018 §V-bis). O `reason
 
 ### X. E6 — Limites honestos NOMEADOS, com gatilhos de migração
 
-- **Agente roda no MESMO container/UID do Kubo** — `/proc/<pid>/environ` do pai entrega
-  segredos a quem tiver RCE. Contenção real hoje = **conteúdo que o agente lê é do dono**
-  (sandbox privado, task do dono, sem PRs de terceiros). **Gatilho: antes de a fase 4
-  misturar conteúdo coletado/de terceiros no circuito do executor cli, o agente migra para
-  container-irmão isolado.**
+- **Agente roda no MESMO container/UID do Kubo** — o canal `/proc/<pid>` do mesmo UID
+  entrega segredos a quem tiver RCE: `/proc/<pid>/environ` do pai, E o `cmdline` (argv) de
+  qualquer subprocess. É **uma classe de canal**. Contenção real hoje = **conteúdo que o
+  agente lê é do dono** (sandbox privado, task do dono, sem PRs de terceiros). Nomeado: um
+  processo que o **agente plante sobrevive ao turno** (reparenta ao init) — a variante
+  "watcher de `ps`". NÃO se constrói process-group-kill agora: o adversário dessa classe
+  exige agente hostil, que exige input hostil, que esta fase exclui por construção.
+  **Gatilho: antes de a fase 4 misturar conteúdo coletado/de terceiros no circuito do
+  executor cli, o agente migra para container-irmão isolado.**
+- **PAT do push por env, não argv (achado de security-review #2):** o PAT vai no
+  `http.extraHeader` entregue por `GIT_CONFIG_*` no **env** do subprocess do push, escopado
+  à chamada (nunca no `os.environ` do pai), NÃO no argv. **Não é fronteira — é higiene:**
+  argv aparece em `ps`/crash-report/monitoring (superfície de LOG, colide com "nunca logar a
+  credencial"); env exige leitura dirigida de `/proc` do mesmo UID. Move o segredo de
+  "aparece em ferramenta de rotina" para "exige ataque dirigido", dentro do canal aceito
+  acima. Exige git ≥2.31 (a imagem usa ≥2.39). A redação de erro cobre o cred base64.
 - **`permission_mode` headless** (bypass de permissões no subprocess): a contenção é
   workspace+env+conteúdo-do-dono, não prompts. O **invariante 5 NÃO está arranhado** — o
   gate humano está no PR, não no turno do agente.
 - **Deps do projeto sandbox são código que executa** (`uv sync` roda postinstall de
   terceiros): sandbox minimalista, stdlib ou deps pinadas pelo dono.
-- **Node.js na imagem** = runtime vendorizado de ferramenta terceira (como um binário),
-  **não** linguagem de aplicação — **invariante 1 intacto**. Pin `claude-agent-sdk` +
-  versão do CLI com evidência (disciplina ADR-0005).
+- **CLI vendorizado no wheel** = runtime de ferramenta terceira empacotado como binário (o
+  wheel `claude-agent-sdk==0.2.119` traz um `claude` self-contained, sem Node separado),
+  **não** linguagem de aplicação — **invariante 1 intacto**. Pin com evidência do spike
+  (disciplina ADR-0005); bump revalida o spike + o canário de env (§IV).
+
+**Endurecimentos da security-review absorvidos no código (achados #1/#3/#4):** o
+`CliExecutor` captura `ClaudeSDKError` (base) → erro genérico, fechando o vazamento de
+STDERR do `ProcessError` (irmão, não subclasse de `CLINotFound`); o scrub de `os.environ`
+(§IV) ganhou lock de reentrância que FALHA ALTO (o teto vira construção, não comentário);
+`DevConfig` valida o esquema do `repo_url` e barra `-` inicial em `branch` (injeção de opção
+do git), com `--` no `clone`.
 
 ### XI. Quitações de obrigações registradas em ADRs anteriores
 
