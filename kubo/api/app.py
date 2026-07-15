@@ -37,6 +37,7 @@ from kubo.api.routes import (
     distilled,
     entities,
     flows,
+    more,
     runs,
     sources,
 )
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)
+    app.include_router(more.router)
     app.include_router(distilled.router, prefix="/distilled")
     app.include_router(flows.router, prefix="/flows")
     app.include_router(runs.router, prefix="/runs")

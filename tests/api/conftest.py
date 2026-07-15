@@ -26,6 +26,14 @@ def _fake_connect(cfg: Any = None) -> Any:
     yield object()
 
 
+def _mobile_header_block(html: str) -> str:
+    """Isola o `<header>` mobile (large-title) do resto do HTML renderizado — usado
+    pelos testes de mobile_back_href/mobile_title (sessão 0019)."""
+    start = html.find("text-[1.875rem]")
+    header_start = html.rfind("<header", 0, start)
+    return html[header_start : html.find("</header>", start) + len("</header>")]
+
+
 @pytest.fixture(autouse=True)
 def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Desacopla as rotas de página do banco real: connect falso + leituras vazias

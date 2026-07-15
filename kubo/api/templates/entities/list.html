@@ -26,7 +26,7 @@
         {% if entity.kind %}
           <span class="shrink-0 rounded-4xl px-2 py-0.5 text-2xs text-muted-foreground ring-1 ring-foreground/10">{{ entity.kind }}</span>
         {% endif %}
-        <span class="shrink-0 text-xs text-muted-foreground">{{ entity.mentions }} menções</span>
+        <span class="hidden shrink-0 text-xs text-muted-foreground md:inline">{{ entity.mentions }} menções</span>
       </a>
     {% endfor %}
   </div>

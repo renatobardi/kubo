@@ -211,7 +211,7 @@ O repo carrega um harness determinístico em `.claude/` (estilo hapai: bash puro
 - `Stop` roda a suite unit antes de encerrar o turno — turno não termina com teste quebrado.
 Os hooks são parte do repo e evoluem por PR como qualquer código. Se um hook bloquear algo legítimo, a correção é no hook (por PR), nunca contorná-lo.
 
-- **Definition of done:** ciclo TDD completo + gates de qualidade verdes + doc/ADR atualizados se comportamento ou arquitetura mudou + PR aberto com review do CodeRabbit endereçado. Telas de UI exigem adicionalmente **paridade com o mockup** (tabela de paridade + screenshots lado a lado; regra em `docs/design/README.md`).
+- **Definition of done:** ciclo TDD completo + gates de qualidade verdes + doc/ADR atualizados se comportamento ou arquitetura mudou + PR aberto com review do CodeRabbit endereçado. Telas de UI exigem adicionalmente **paridade com o mockup** (tabela de paridade + screenshots lado a lado; regra em `docs/design/README.md`) e **responsividade mobile** (norma "toda tela nasce responsiva", 2026-07-15, mesmo doc) — tela nova sem variante mobile não está pronta.
 
 ## Como trabalhar comigo (o dono)
 

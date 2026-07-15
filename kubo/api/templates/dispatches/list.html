@@ -29,7 +29,7 @@
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium">Digest</span>
-                <span class="rounded-4xl bg-transparent px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/15">{{ d.channel }}</span>
+                <span class="hidden rounded-4xl bg-transparent px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/15 md:inline-flex">{{ d.channel }}</span>
                 {% if d.status == "ok" %}
                   <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">ok</span>
                 {% else %}

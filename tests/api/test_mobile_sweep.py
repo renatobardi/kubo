@@ -1,0 +1,84 @@
+"""Varredura por tela (0019 marco 19.4): telas de detalhe usam o mecanismo
+mobile_back_href/mobile_title (provado no board, 19.3); Destilados tem busca sticky
+em mobile (único caso, sacrifício de timebox pré-declarado)."""
+
+from __future__ import annotations
+
+import pytest
+from starlette.testclient import TestClient
+from surrealdb import RecordID
+
+from kubo.store.knowledge import DistilledView, EntityView, RunRef
+from tests.api.conftest import _fake_connect, _mobile_header_block
+
+
+def test_distilled_detail_mobile_header_shows_item_title(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O header mobile do detalhe de Destilado mostra o título real (1ª linha do
+    summary aqui, sem item bruto) e chevron-voltar pra /distilled."""
+    monkeypatch.setattr("kubo.api.routes.distilled.client.connect", _fake_connect)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.related_distilled", lambda db, rid, **kw: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.read_distilled",
+        lambda db, rid: DistilledView(
+            id=RecordID("distilled", "x1"),
+            summary="Resumo do destilado sobre memória",
+            claims=[],
+            items=[],
+            runs=[RunRef(worker="feed", status="ok")],
+            entities=[],
+        ),
+    )
+    html = authed_client.get("/distilled/x1").text
+    header = _mobile_header_block(html)
+    assert "Resumo do destilado sobre memória" in header
+    assert 'href="/distilled"' in header
+
+
+def test_entity_detail_mobile_header_shows_entity_name(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O header mobile do detalhe de Entidade mostra o nome da entidade (não o rótulo
+    genérico 'Entidades') e chevron-voltar pra /entities."""
+    monkeypatch.setattr(
+        "kubo.api.routes.entities.knowledge.read_entity",
+        lambda db, eid: EntityView(
+            id=RecordID("entity", "e1"), name="Python", kind="tecnologia", mentions=3, distilled=[]
+        ),
+    )
+    html = authed_client.get("/entities/e1").text
+    header = _mobile_header_block(html)
+    assert "Python" in header
+    assert ">Entidades<" not in header
+    assert 'href="/entities"' in header
+
+
+def test_distilled_has_mobile_pills_to_entities_and_sources(authed_client: TestClient) -> None:
+    """Marco 19.5 / C3: em mobile a tab 'Saber' aponta direto pra /distilled (sem tela
+    consolidada nova) — pills no topo levam a Entidades/Fontes, únicas telas do grupo
+    Conhecimento fora do alcance de 1 toque. Só em mobile (md:hidden): desktop já tem
+    os 3 itens na sidebar."""
+    html = authed_client.get("/distilled").text
+    pills_tag_start = html.find('href="/entities" class="flex items-center gap-1.5 rounded-4xl')
+    assert pills_tag_start != -1, "pill de Entidades não encontrada no topo de Destilados"
+    row_start = html.rfind("<div", 0, pills_tag_start)
+    row_tag = html[row_start : html.find(">", row_start)]
+    assert "md:hidden" in row_tag
+    assert 'href="/sources" class="flex items-center gap-1.5 rounded-4xl' in html
+
+
+def test_distilled_search_form_is_sticky_on_mobile(authed_client: TestClient) -> None:
+    """A busca de Destilados gruda no topo em mobile (max-md:sticky) — único screen com
+    esse tratamento (sacrifício de timebox pré-declarado, marco 19.4)."""
+    html = authed_client.get("/distilled").text
+    form_start = html.find("<form")
+    form_tag = html[form_start : html.find(">", form_start)]
+    assert "max-md:sticky" in form_tag
+    assert "max-md:top-0" in form_tag
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

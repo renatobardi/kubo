@@ -282,6 +282,22 @@ Header de 72px casa com o header da sidebar (p-2 + h-14 + p-2). Bordas internas 
 ### Mapa de navegação (referência pro Kubo)
 `/app` → home (stats) · agents · chat · workflows · credentials · knowledge · llm-providers · skills · account
 
+### Mobile (`<md`)
+
+Referência autoritativa: `docs/design/v3/` — **supersede `docs/design/mvp/`** para toda implementação nova (D50, sessão 0019; norma em `docs/design/README.md`). Gramática de app mobile: `docs/design/v3/templates/kubo-mobile/KuboMobileApp.jsx`.
+
+Breakpoint **binário** `<md` (mobile) / `≥md` (desktop) — sem breakpoint intermediário. Desktop nunca muda: mobile é sempre aditivo (`max-md:` para override, `md:hidden` / `hidden md:flex` para trocar sidebar↔tab bar).
+
+- **Bottom tab bar** fixa (`md:hidden`), safe-area (`env(safe-area-inset-bottom)`), substitui a sidebar (`hidden md:flex`): **Painel · Saber · Trabalho · Distribuição · Mais**.
+- **Navegação em pilha por-tab do JSX é artefato de SPA — não replicar.** Voltar = navegação normal de página (botão do browser + chevron-voltar no header mobile). Sem `hx-boost` na v1.
+- **Header large-title**: 30px/700/tracking `-0.03em` no topo de cada tab; página de detalhe = chevron-voltar + título compacto.
+- **`h-dvh`, nunca `h-screen`**, em contexto mobile — Safari iOS quebra 100vh com a toolbar dinâmica (validar no aparelho real, não só emulação).
+- **Viewport**: `viewport-fit=cover` na meta tag + `env(safe-area-inset-bottom)` no padding da tab bar.
+- **Gate mobile** = página de detalhe full-screen comum — nunca bottom-sheet arrastável.
+- **Busca sticky**: só em Destilados na v1 (sacrifício de timebox pré-declarado).
+- Tab "Saber" aponta para `/distilled` com pills para Entidades/Fontes no topo — não replica a tela consolidada "Conhecimento" do kit (desvio pré-declarado, ver tabela de paridade da sessão 0019).
+- Tab "Mais" é página simples de links para o resto da navegação — não replica a riqueza da tela "Mais" do kit.
+
 ---
 
 ## 5. Síntese da identidade (o "porquê" do visual)

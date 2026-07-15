@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
+{% set mobile_back_href = "/flows" %}
+{% set mobile_title = board.question or "Fluxos" %}
 {% block title %}{{ board.question or "Flow" }} · Fluxos · Kubo{% endblock %}
 {% block content %}
 <div class="space-y-4">
-  {# ── cabeçalho: voltar + nome + badges + elenco ───────────────────────────── #}
+  {# ── cabeçalho: voltar + nome + badges + elenco (desktop; em mobile o shell já
+       mostra chevron-voltar + título — sem duplicar, mobile_back_href/mobile_title
+       acima) ───────────────────────────── #}
   <div class="flex items-start gap-3">
-    <a href="/flows" class="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+    <a href="/flows" class="mt-1 hidden items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground md:inline-flex">
       <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
       Fluxos
     </a>
@@ -66,7 +70,7 @@
 {# ── GateSheet: painel de decisão (nativo <dialog> = modal do design system). O relatório
    é renderizado como TEXTO PLANO (pre-wrap, autoescape) — NUNCA markdown→HTML (untrusted). #}
 {% if gate %}
-<dialog id="gatesheet" class="m-0 ml-auto h-full max-h-full w-[440px] max-w-[92vw] bg-popover text-popover-foreground backdrop:bg-black/40">
+<dialog id="gatesheet" class="m-0 h-dvh max-h-full w-full bg-popover text-popover-foreground backdrop:bg-black/40 md:ml-auto md:h-full md:w-[440px] md:max-w-[92vw]">
   <div class="flex h-full flex-col">
     <div class="flex items-start gap-2.5 border-b border-border p-5">
       <span class="mt-0.5 text-primary">{{ macros.triangle_alert("size-4") }}</span>

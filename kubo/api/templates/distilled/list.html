@@ -4,12 +4,27 @@
 {% block content %}
 <div class="space-y-6">
   {{ macros.page_header("Destilados", "Grafo consultável de destilados, com citação de origem em cada nó.") }}
+  {# Pills Saber (C3, marco 19.5): em mobile a tab "Saber" aponta direto pra /distilled
+     (sem tela "Conhecimento" consolidada nova) — Entidades/Fontes ficam a 1 toque
+     daqui. Desktop já tem os 3 na sidebar, por isso md:hidden. #}
+  <div class="flex gap-2 md:hidden">
+    <a href="/entities" class="flex items-center gap-1.5 rounded-4xl bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+      {{ macros.nav_icon("network") }}
+      Entidades
+    </a>
+    <a href="/sources" class="flex items-center gap-1.5 rounded-4xl bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+      {{ macros.nav_icon("rss") }}
+      Fontes
+    </a>
+  </div>
+  {# Busca sticky (sacrifício de timebox: só Destilados, marco 19.4). top-0 gruda
+     logo abaixo do header mobile (fora do <main> que rola) — sem offset extra. #}
   <form
     hx-get="/distilled/search"
     hx-target="#search-panel"
     hx-trigger="submit, input changed delay:400ms"
     hx-swap="innerHTML"
-    class="flex gap-2"
+    class="flex gap-2 max-md:sticky max-md:top-0 max-md:z-10 max-md:-mx-6 max-md:border-b max-md:border-border/60 max-md:bg-background max-md:px-6 max-md:py-3"
     onsubmit="return false"
   >
     <label for="q" class="sr-only">Buscar no acervo</label>
