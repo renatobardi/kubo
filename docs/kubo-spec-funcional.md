@@ -157,7 +157,7 @@ catalogs/
 ├── personas/        # 1 YAML por papel (analista.yaml, arquiteto.yaml, dev.yaml, reviewer.yaml,
 │                    #   humano.yaml, destilador.yaml, operador.yaml)
 │                    #   prompt, executor, provider/modelo, skills, permissões, emoji
-└── flow_templates/  # 1 YAML por template (dev-bmad.yaml, dev-speckit.yaml, pipeline.yaml...)
+└── flow_templates/  # 1 YAML por template (dev-aidlc.yaml, dev-speckit.yaml, pipeline.yaml...)
 ```
 
 O catálogo pode morar em repo Git próprio — o que torna os templates editáveis, no futuro, por um flow do próprio Kubo (fase 4 aplicada a si mesma).
@@ -168,12 +168,12 @@ O catálogo pode morar em repo Git próprio — o que torna os templates editáv
 
 ### 3.1 Flow — o conceito unificado
 
-Não existem "tipos de projeto" primitivos. Existe **um conceito — Flow — parametrizado por template**. "Projeto dev BMAD", "Projeto dev Spec-kit" e "Pipeline" são templates diferentes do mesmo mecanismo.
+Não existem "tipos de projeto" primitivos. Existe **um conceito — Flow — parametrizado por template**. "Projeto dev AI-DLC", "Projeto dev Spec-kit" e "Pipeline" são templates diferentes do mesmo mecanismo. (Metodologia dev = AI-DLC v1.4 do dono, ADR-0020; referência em `docs/method/fluxo-aidlc-v1.4.md`.)
 
 Um **flow template** declara:
 
 1. **State machine do board** — estados e transições válidas.
-   - `dev-bmad`: `backlog → analysis → in_progress → review → done → promoted`
+   - `dev-aidlc`: núcleo `grill → prd → dag → building → review → release → learn` (Research/Spike/QA são estados opcionais expressos por transições que os pulam — nunca por campo interpretado; ADR-0020 D39)
    - `pipeline`: `queued → collecting → distilling → stored | failed` (retry = card volta de estado)
 2. **Cast de personas** — quais papéis o flow instancia, com config completa de cada um. Todo cast inclui a persona **Humano**.
 3. **Gates** — transições que exigem task da persona Humano. O rito de promoção é *um gate declarado* no template dev (`done → promoted`), não regra hardcoded.
@@ -256,14 +256,14 @@ Query sobre o grafo → artefato → canal.
 
 *Ilustrativo do ciclo completo (a fonte X é deliberadamente hostil — API paga, scraping instável — para exercitar decisões humanas no fluxo).*
 
-1. **Dono** instancia flow do template `dev-bmad`: "coletar posts do X sobre temas Y".
-2. **Analista** entrevista o dono — tasks para a persona **Humano**, notificadas via Telegram. Descobre que a API do X é paga → devolve task de decisão: *API oficial vs. alternativa*.
-3. **Arquiteto** desenha o worker consultando **o que o sistema já sabe** sobre coleta (aresta `task -[consults]-> distilled`) — padrões dos workers feed/harvest existentes.
-4. Fluxo BMAD executa no kanban: personas **dev** (executor `cli`, Claude Code via Agent SDK) implementam em repo próprio; **reviewer** analisa; cards andam.
-5. Deliverable: worker `x-collector` sob contrato, PR aberto.
-6. **Gate de promoção** (§3.4): dono aprova via Telegram.
+1. **Dono** instancia flow do template `dev-aidlc`: "coletar posts do X sobre temas Y".
+2. **Grill:** a persona entrevistadora conduz o dono **uma pergunta por vez** (tasks da persona Humano, notificadas via Telegram, respondidas na UI) até zerar decisões em aberto — descobre que a API do X é paga → devolve decisão: *API oficial vs. alternativa*. A entrevistadora **consulta o que o sistema já sabe** sobre coleta (aresta `task -[consults]-> distilled`) para não perguntar o que o grafo responde. Saída: ata do Grill como deliverable.
+3. **PRD → DAG:** a persona redatora transforma a ata em PRD por comportamentos observáveis (também consultando o grafo — padrões dos workers feed/harvest existentes); a decompositora quebra o PRD em fatias verticais conectadas pela aresta `blocks` (o DAG no grafo, aciclicidade validada na criação). Gates do dono em cada saída.
+4. **Construção AI-DLC no kanban:** personas **dev** (executor `cli`, Claude Code via Agent SDK) implementam por TDD em repo próprio, uma task do DAG por sessão, disparadas pelo dono; **revisora** analisa em sessão independente de contexto limpo — e nunca aprova; cards andam.
+5. Deliverable: worker `x-collector` sob contrato, PR aberto (código + YAML de catálogo no mesmo PR).
+6. **Gate de promoção** (§3.4): dono aprova; o merge é do dono no GitHub.
 7. Nasce o flow `pipeline-x-collector` (template `pipeline`, trigger cron): cada execução vira card `queued → collecting → distilling → stored`; falhas ficam visíveis no board, sem abrir log.
-8. Itens coletados entram no grafo de conhecimento com proveniência `distilled -[produced_by]-> flow` — e passam a ser consultáveis pelos **próximos** flows dev.
+8. Itens coletados entram no grafo de conhecimento com proveniência `distilled -[produced_by]-> flow` — e passam a ser consultáveis pelos **próximos** flows dev. **Learn & Improve** fecha o ciclo: aprendizados da demanda viram PRs em playbooks/ADRs.
 
 ---
 
@@ -286,7 +286,7 @@ Query sobre o grafo → artefato → canal.
 - Sem autonomia de criação: dono cria tasks, agentes executam.
 
 ### Fase 4 — Auto-extensão
-- Template `dev-bmad` completo: Analista quebra necessidade em issues, personas executam, rito de promoção fecha o ciclo.
+- Template `dev-aidlc` completo (ADR-0020): Grill entrevista o dono, PRD/DAG decompõem a necessidade em fatias verticais, personas executam sob TDD e review independente, rito de promoção fecha o ciclo.
 - Cenário canônico (§4) executado de ponta a ponta como teste de aceitação.
 
 ### Fora do roadmap (registrado)

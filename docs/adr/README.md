@@ -26,4 +26,5 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0016](0016-personas-flow-minimo-analysis.md) | Personas + flow mínimo: template `analysis`, snapshot congelado | aceito |
 | [0017](0017-dreno-pago-backlog-destilacao.md) | Dreno pago one-off do backlog + `retry-after` no regime diário | aceito |
 | [0018](0018-boards-gates-ui-write-path.md) | Boards + gates + caminho de escrita da UI (gate humano no browser) | aceito |
-| [0019](0019-executor-cli-github-persona-dev.md) | Executor `cli` + GitHub: a persona dev nasce (task → PR real → gate) | proposto |
+| [0019](0019-executor-cli-github-persona-dev.md) | Executor `cli` + GitHub: a persona dev nasce (task → PR real → gate) | aceito |
+| [0020](0020-metodologia-dev-aidlc.md) | Metodologia do flow dev da fase 4: AI-DLC no lugar do BMAD | aceito |
