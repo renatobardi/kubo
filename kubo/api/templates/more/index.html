@@ -7,7 +7,8 @@
 <div class="space-y-6">
   {{ macros.page_header("Mais", "O resto da navegação do Kubo.") }}
   <ul class="space-y-1">
-    {% for item in nav if item.route not in ("/", "/distilled", "/flows", "/destinations") %}
+    {% set tab_routes = mobile_tabs | map(attribute="route") | list %}
+    {% for item in nav if item.route not in tab_routes %}
       <li>
         <a href="{{ item.route }}"
            class="flex items-center gap-3 rounded-xl bg-card px-4 py-3 text-sm ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
