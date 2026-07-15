@@ -1,0 +1,11 @@
+name: github
+kind: http
+# Fine-grained PAT restrito ao repo sandbox (D37): contents:write + pull_requests:write.
+# Bearer no header Authorization (nunca na URL) — GitHub aceita `Authorization: Bearer <PAT>`.
+# Segredo só por referência (invariante 8); o valor vive no env do servidor, nunca aqui.
+auth:
+  type: bearer
+  secret_ref: env:GITHUB_PAT_FORGE
+# API REST do GitHub (open-PR / close-PR). O push é git-over-HTTPS contra github.com, com a
+# credencial injetada só no comando (C2) — não passa por este base_url.
+base_url: https://api.github.com
