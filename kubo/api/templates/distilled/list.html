@@ -4,12 +4,14 @@
 {% block content %}
 <div class="space-y-6">
   {{ macros.page_header("Destilados", "Grafo consultável de destilados, com citação de origem em cada nó.") }}
+  {# Busca sticky (sacrifício de timebox: só Destilados, marco 19.4). top-0 gruda
+     logo abaixo do header mobile (fora do <main> que rola) — sem offset extra. #}
   <form
     hx-get="/distilled/search"
     hx-target="#search-panel"
     hx-trigger="submit, input changed delay:400ms"
     hx-swap="innerHTML"
-    class="flex gap-2"
+    class="flex gap-2 max-md:sticky max-md:top-0 max-md:z-10 max-md:-mx-6 max-md:border-b max-md:border-border/60 max-md:bg-background max-md:px-6 max-md:py-3"
     onsubmit="return false"
   >
     <label for="q" class="sr-only">Buscar no acervo</label>

@@ -1,15 +1,20 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
-{% block title %}Destilado · Kubo{% endblock %}
-{% block content %}
 {# Título: item.title (via derived_from) ou 1ª linha do summary (E3). Conteúdo
    derivado de LLM/coletado (título, summary, claims, nome de entidade, url) é hostil
-   → autoescape do Jinja, sem filtro de escape desligado. #}
+   → autoescape do Jinja, sem filtro de escape desligado.
+   Fora de qualquer block: o header mobile do shell (base.html) renderiza ANTES do
+   block content — um {% set %} de dentro do content chegaria tarde demais. #}
 {% set item0 = view.items[0] if view.items else none %}
 {% set run0 = view.runs[0] if view.runs else none %}
 {% set title = (item0.title if (item0 and item0.title) else (view.summary.splitlines()[0] if view.summary else "Destilado")) %}
+{% set mobile_back_href = "/distilled" %}
+{% set mobile_back_label = "Destilados" %}
+{% set mobile_title = title %}
+{% block title %}Destilado · Kubo{% endblock %}
+{% block content %}
 <div class="space-y-6">
-  <a href="/distilled" class="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+  <a href="/distilled" class="hidden items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground md:inline-flex">
     <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
     Voltar aos destilados
   </a>

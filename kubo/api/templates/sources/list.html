@@ -30,7 +30,7 @@
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
             <span class="truncate text-sm font-medium">{{ source.title or source.canonical }}</span>
-            <span class="shrink-0 rounded-4xl px-2 py-0.5 text-2xs text-muted-foreground ring-1 ring-foreground/10">{{ source.kind }}</span>
+            <span class="hidden shrink-0 rounded-4xl px-2 py-0.5 text-2xs text-muted-foreground ring-1 ring-foreground/10 md:inline-flex">{{ source.kind }}</span>
           </div>
           <p class="mt-0.5 truncate text-xs text-muted-foreground">
             {% if source.title %}{{ source.canonical }} · {% endif %}{{ source.items }} itens acumulados

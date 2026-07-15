@@ -18,7 +18,7 @@
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
             <span class="truncate text-sm font-semibold">{{ f.question or "(sem pergunta)" }}</span>
-            <span class="rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">{{ f.template }}</span>
+            <span class="hidden rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground md:inline-flex">{{ f.template }}</span>
             {% if f.gate_open %}<span class="inline-flex items-center gap-1 rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">{{ macros.triangle_alert("size-3") }} gate</span>{% endif %}
             {{ macros.flow_status_badge(f.status) }}
           </div>

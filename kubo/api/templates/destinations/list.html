@@ -58,7 +58,7 @@
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-sm font-medium">{{ r.name }}</span>
             <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">{{ "dono" if r.kind == "pessoa" else r.kind }}</span>
-            <span class="inline-flex items-center gap-1 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+            <span class="hidden items-center gap-1 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground md:inline-flex">
               <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
               {{ r.channel }}
             </span>
