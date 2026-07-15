@@ -550,6 +550,8 @@ def insert_deliverable(
     kind: str,
     content: str,
     consulted: Sequence[RecordID],
+    pr_url: str | None = None,
+    pr_number: int | None = None,
 ) -> RecordID:
     """Grava o deliverable e sua proveniência numa ÚNICA transação atômica: o registro
     (`kind` + `content` markdown), a aresta `flow->produces->deliverable`, e uma aresta
@@ -557,12 +559,13 @@ def insert_deliverable(
 
     `consulted` vem do RETRIEVAL (nunca da saída do LLM — regra das citações, §VI): a
     proveniência não é forjável por injeção. O deliverable NÃO ganha chunks/embedding —
-    fica fora do acervo buscável por design (E2)."""
+    fica fora do acervo buscável por design (E2).
+
+    `pr_url`/`pr_number` (ADR-0019 §VI): a ref ESTRUTURAL do deliverable `kind="pr"`, vinda
+    da API do GitHub (E3) — campos `option<...>` (migration 0007) só preenchidos para PR; o
+    report não os carrega. `content` segue sendo o resumo untrusted do agente (E4)."""
     deliverable = _fresh("deliverable")
-    stmts = [
-        "CREATE $d SET kind = $kind, content = $content",
-        "RELATE $f->produces->$d",
-    ]
+    create = "CREATE $d SET kind = $kind, content = $content"
     params: dict[str, Any] = {
         "d": deliverable,
         "kind": kind,
@@ -570,6 +573,11 @@ def insert_deliverable(
         "f": flow,
         "t": task,
     }
+    if pr_url is not None:
+        create += ", pr_url = $pr_url, pr_number = $pr_number"
+        params["pr_url"] = pr_url
+        params["pr_number"] = pr_number
+    stmts = [create, "RELATE $f->produces->$d"]
     for i, distilled in enumerate(consulted):
         stmts.append(f"RELATE $t->consults->$c{i}")
         params[f"c{i}"] = distilled

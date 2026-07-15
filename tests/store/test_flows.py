@@ -196,6 +196,31 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
     assert {str(x) for x in consulted} == {str(d1), str(d2)}
 
 
+def test_insert_deliverable_pr_stores_typed_url_and_number(db: Any, tmp_path: Path) -> None:
+    """insert_deliverable(kind="pr") grava url/number como campos ESTRUTURAIS (ADR-0019 §VI,
+    migration 0007): a ref vem da API (E3), separada do `content` (resumo untrusted do agente,
+    E4). Prova que os campos option<...> aceitam o PR e ficam ausentes fora dele."""
+    inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
+    task = create_task(db, flow=inst.flow, persona=inst.personas["analista"], state="created")
+
+    deliverable = insert_deliverable(
+        db,
+        flow=inst.flow,
+        task=task,
+        kind="pr",
+        content="resumo do agente",
+        consulted=[],
+        pr_url="https://github.com/owner/kubo-forge/pull/7",
+        pr_number=7,
+    )
+
+    body = db.query("SELECT kind, content, pr_url, pr_number FROM $d;", {"d": deliverable})[0]
+    assert body["kind"] == "pr"
+    assert body["content"] == "resumo do agente"
+    assert body["pr_url"] == "https://github.com/owner/kubo-forge/pull/7"
+    assert body["pr_number"] == 7
+
+
 _ANALYSIS_REVIEW = (
     "name: analysis-review\nversion: 1\n"
     "board:\n"

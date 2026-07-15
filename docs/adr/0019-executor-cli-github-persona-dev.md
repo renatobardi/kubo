@@ -135,6 +135,19 @@ Espelho de "citações nunca via LLM" (ADR-0016 §VI): URL do PR, nome do branch
 estrutural vêm das **respostas da API do GitHub**; o agente contribui **só prosa**. O
 deliverable `kind=pr` guarda a URL que a API devolveu. Com teste.
 
+**Emenda aditiva ao contrato (decisão do dono):** o `PrPayload` (url + number, tipados da
+API — E3) ENTRA na união discriminada de payloads do ADR-0009 (`kubo/contracts/models.py`),
+como **terceiro uso do idioma `DispatchPayload`/`ReportPayload`**: o payload espelha um
+insert da store, e `runner._persist` ganha um case novo que mapeia `PrPayload` →
+`insert_deliverable(kind="pr")`. O worker dev é um **Worker de contrato pleno** (manifest +
+`run(ctx) -> RunResult`), e o PR volta como payload no `RunResult` — a persistência passa
+pelo MESMO caminho do contrato. **Rejeitado:** o behavior persistir `kind="pr"` direto no
+store (fora do `_persist`) — persistência fora do caminho do contrato é **segundo
+mecanismo** (ADR-0016 §III). A emenda a `kubo/contracts/` é validada pelo advisor antes de
+implementar. **Acoplamento 16.5↔16.6 aceito por desenho:** o critério do corte pós-16.5 é
+**repo coerente e testado**, não rodável ponta a ponta — o end-to-end (`kubo flow run`,
+gate, deliverable persistido) é a 0016b.
+
 ### VII. E4 — Relatório do agente no gate = untrusted no consumo
 
 Saída de LLM que leu um filesystem inteiro. Renderizado como **texto plano, `pre-wrap`,
@@ -224,3 +237,13 @@ por capacidade**, não por disciplina (D38; padrão ADR-0018 §V-bis). O `reason
   por whitelist explícita (§IV).
 - **Container-irmão isolado JÁ nesta sessão** — custo/complexidade sem necessidade enquanto
   o conteúdo lido é do dono; o gatilho de migração (§X) é a condição, não a data.
+- **DevWorker fora do contrato ADR-0009 (orquestrador próprio com `DevOutcome`)** — seria o
+  **segundo mecanismo** do ADR-0016 §III: reimplementa fora do `run_worker` o registro `run`
+  (auditoria de execução de minutos que custa dólares), a fronteira exceção→`ErrorInfo` (E5
+  cai de graça), a revalidação anti-TOCTOU do `RunResult` e o least-privilege R6 (PAT como
+  `ResolvedIntegration` `repr=False` → C2 de graça). E erode o invariante 6 (contrato
+  obrigatório) exatamente onde a fase 4 vai precisar — a máquina que PRODUZ workers da fase 4
+  veste o contrato que os produtos vestirão (D35). Rejeitada.
+- **`PrRef` por canal paralelo, `RunResult(payloads=[])` no sucesso (opção B)** — `RunResult`
+  que mente + produto viajando fora do `payloads` + behavior escrevendo o deliverable direto
+  = **dois escritores para um fato** (alternativa (b) já rejeitada no ADR-0016). Rejeitada.
