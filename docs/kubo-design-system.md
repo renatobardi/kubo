@@ -288,7 +288,7 @@ Referência autoritativa: `docs/design/v3/` — **supersede `docs/design/mvp/`**
 
 Breakpoint **binário** `<md` (mobile) / `≥md` (desktop) — sem breakpoint intermediário. Desktop nunca muda: mobile é sempre aditivo (`max-md:` para override, `md:hidden` / `hidden md:flex` para trocar sidebar↔tab bar).
 
-- **Bottom tab bar** fixa (`md:hidden`), safe-area (`env(safe-area-inset-bottom)`), substitui a sidebar (`hidden max-md:flex`): **Painel · Saber · Trabalho · Distribuição · Mais**.
+- **Bottom tab bar** fixa (`md:hidden`), safe-area (`env(safe-area-inset-bottom)`), substitui a sidebar (`hidden md:flex`): **Painel · Saber · Trabalho · Distribuição · Mais**.
 - **Navegação em pilha por-tab do JSX é artefato de SPA — não replicar.** Voltar = navegação normal de página (botão do browser + chevron-voltar no header mobile). Sem `hx-boost` na v1.
 - **Header large-title**: 30px/700/tracking `-0.03em` no topo de cada tab; página de detalhe = chevron-voltar + título compacto.
 - **`h-dvh`, nunca `h-screen`**, em contexto mobile — Safari iOS quebra 100vh com a toolbar dinâmica (validar no aparelho real, não só emulação).

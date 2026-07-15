@@ -15,7 +15,7 @@
 | 19.6 | Paridade + screenshots | ✅ este documento + smoke visual local (abaixo) |
 | 19.7 | Deploy + validação física | ⏸ gated — aguarda "pode executar" do dono |
 
-**Suite:** 499 testes unit verdes (30 novos desta sessão: `test_mobile_shell.py`,
+**Suite:** 500 testes unit verdes (30 novos desta sessão: `test_mobile_shell.py`,
 `test_mobile_gates.py`, `test_mobile_sweep.py`), `ruff`/`ruff format`/`pyright` verdes.
 Zero teste de layout quebrado — os testes pré-existentes (`test_shell.py`,
 `test_dashboard.py`, `test_flows.py`...) continuam verdes sem alteração, o que é em si a
@@ -65,7 +65,7 @@ antes ou durante o 19.7.
 | `LargeHeader` (título 30px + subtítulo) | Header mobile do shell (`base.html`), título = `crumb.label` ou `mobile_title` opt-in | Igual — mesma tipografia/peso; subtítulo omitido (o kit usa subtítulo só no Painel, que já tem descrição própria no conteúdo) |
 | Navegação em pilha por-tab (`push`/`pop`, `stacks` no state) | Navegação normal de página + botão do browser | **Desvio pré-declarado (C2, advisor):** artefato de SPA, não replicado — chevron-voltar (`mobile_back_href`) substitui o `pop()` |
 | `Conhecimento` (tela consolidada com pills internas) | Tab "Saber" → `/distilled` direto, pills Entidades/Fontes no topo | **Desvio pré-declarado (C3):** sem tela nova; pills cobrem o mesmo caso de uso com o dado real já existente em Destilados |
-| `GateDetail` (página de detalhe na pilha) | `<dialog>` nativo, full-screen abaixo de `md` (mesmo mecanismo do desktop, só a moldura muda) | Equivalente funcional — full-screen, sem bottom-sheet arrastável (escopo negativo), aprovar/rejeitar/confirmar-promoção operáveis com o dedo |
+| `GateDetail` (página de detalhe na pilha) | `<dialog>` nativo, full-screen abaixo de `md` (mesmo mecanismo do desktop, só a moldura muda) | Equivalente funcional — full-screen, sem bottom-sheet arrastável (escopo negativo). Smoke cobriu aprovar/rejeitar (report gate) operáveis com o dedo; a variante "confirmar promoção" **herda a mesma moldura** (é o mesmo `<dialog>`, mudança só de conteúdo interno) mas não foi smoked diretamente — validação real fica pro 19.7 |
 | `Card` (full-width, `p-16`) | Cards existentes do desktop (`rounded-xl`/`rounded-2xl`, `ring-1 ring-foreground/10`) já são full-width em mobile por herança do layout de lista | Igual em efeito; token de raio segue o valor do desktop (não o do kit) — divergência de token pré-existente, fora do escopo desta sessão |
 | `SearchField` (sticky, usada em várias telas) | Sticky só em Destilados | **Sacrifício de timebox pré-declarado (plano, item 2):** as demais listas mantêm busca não-sticky |
 | `Mais` (links + toggle de tema + conta) | `/more`: lista simples de links (Entidades/Fontes/Execuções/Envios) | **Desvio pré-declarado (C3):** riqueza do kit (tema/conta) não replicada — toggle de tema já vive na topbar desktop, ausente do header mobile (gap conhecido, não bloqueante) |

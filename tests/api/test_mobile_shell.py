@@ -7,7 +7,15 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from kubo.api.rendering import _current_mobile_tab_key, _current_nav_item
+from kubo.api.nav import NAV
+from kubo.api.rendering import _GROUP_TO_MOBILE_TAB, _current_mobile_tab_key, _current_nav_item
+
+
+def test_every_nav_group_maps_to_a_mobile_tab() -> None:
+    """Blindagem contra desalinhamento futuro: um grupo novo em NAV sem entrada
+    correspondente em _GROUP_TO_MOBILE_TAB cairia silenciosamente em 'mais'."""
+    groups = {item["group"] for item in NAV if item["group"] is not None}
+    assert groups <= _GROUP_TO_MOBILE_TAB.keys()
 
 
 def test_current_mobile_tab_key_maps_nav_groups_to_tabs() -> None:
