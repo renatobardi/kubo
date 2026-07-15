@@ -83,7 +83,7 @@ minutos** — o gatilho (b) do ADR-0018 (processo executor) é a saída futura n
 
 ### III. C2 — Clone SEM credencial no workspace; PAT injetado só no push
 
-Clonar com `https://x-access-token:PAT@github.com/...` grava o PAT em `.git/config` —
+Clonar com `https://x-access-token:PAT@github.com/...` grava o PAT em `.git/config` — <!-- pragma: allowlist secret (URL de exemplo, sem credencial real) -->
 legível pelo agente com `cat`. Regra: o remote do workspace é **sempre URL sem
 credencial**; o worker injeta o PAT **só no momento do push**, fora do alcance do agente
 (credential helper efêmero ou header por comando), e **nunca loga a URL autenticada**
