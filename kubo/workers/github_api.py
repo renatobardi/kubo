@@ -9,7 +9,7 @@ não tem capacidade de merge (anti-bypass por construção). O PAT viaja no head
 from __future__ import annotations
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from kubo.errors import ForgeError
 
@@ -53,7 +53,8 @@ def open_pull_request(
     try:
         data = resp.json()
         return PrRef(url=data["html_url"], number=data["number"])
-    except (ValueError, KeyError, TypeError, ValidationError):
+    except (ValueError, KeyError, TypeError):
+        # ValidationError (do PrRef) é subclasse de ValueError — já coberta, sem listar.
         raise ForgeError("resposta da API do GitHub sem html_url/number esperados") from None
 
 

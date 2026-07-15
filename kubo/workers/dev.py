@@ -51,8 +51,17 @@ class DevConfig(BaseModel):
     def _scheme(cls, value: str) -> str:
         """Exige esquema `https://`/`git@` — fecha a injeção de opção do git (um `repo_url`
         começando com `-` viraria flag em `git clone`/`push`, ex.: `--upload-pack=`)."""
-        if not (value.startswith("https://") or value.startswith("git@")):
+        if not value.startswith(("https://", "git@")):
             raise ValueError("repo_url deve começar com https:// ou git@")
+        return value
+
+    @field_validator("instruction")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Instrução não pode ser só espaços: `min_length=1` deixa `" "` passar, e daí
+        `_title` (`.splitlines()[0]`) explodiria com IndexError fora do `except ForgeError`."""
+        if not value.strip():
+            raise ValueError("instruction não pode ser só espaços em branco")
         return value
 
     @field_validator("branch")
@@ -147,6 +156,10 @@ def _stats(outcome: CliOutcome | None) -> Stats:
 
 
 def _title(config: DevConfig) -> str:
-    """Título do PR derivado da instrução do dono (que ENVIAMOS — não vem da API/agente)."""
-    head = config.instruction.strip().splitlines()[0][:60]
+    """Título do PR derivado da instrução do dono (que ENVIAMOS — não vem da API/agente).
+
+    `instruction` não é branca (validador `_not_blank`); o `or` é rede defensiva caso um
+    caller futuro construa `DevConfig` fora do caminho validado."""
+    lines = config.instruction.strip().splitlines()
+    head = (lines[0] if lines else config.instruction)[:60]
     return f"[kubo dev] {head}"

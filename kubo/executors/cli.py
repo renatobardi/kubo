@@ -184,13 +184,15 @@ class CliExecutor:
             env=env,
         )
 
-    async def _collect(self, prompt: str, options: ClaudeAgentOptions) -> tuple[list[str], Any]:
+    async def _collect(
+        self, prompt: str, options: ClaudeAgentOptions
+    ) -> tuple[list[str], ResultMessage | None]:
         """Consome o stream: acumula a prosa (TextBlocks) e guarda o ResultMessage final.
 
         `aclosing` garante o `aclose` do gerador em qualquer saída (fim, exceção, cancel do
         timeout) — sem isso, um timeout deixaria o subprocess do CLI órfão."""
         texts: list[str] = []
-        result: Any = None
+        result: ResultMessage | None = None
         async with aclosing(self._query(prompt=prompt, options=options)) as stream:
             async for message in stream:
                 if isinstance(message, AssistantMessage):
@@ -199,7 +201,7 @@ class CliExecutor:
                     result = message
         return texts, result
 
-    def _build_outcome(self, texts: list[str], result: Any) -> CliOutcome:
+    def _build_outcome(self, texts: list[str], result: ResultMessage | None) -> CliOutcome:
         """Mapeia (prosa, ResultMessage) → CliOutcome, com o check DETERMINÍSTICO de budget.
 
         Budget: check próprio pós-turno (`total_cost_usd > budget_usd`) — 5 linhas,

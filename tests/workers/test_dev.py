@@ -208,9 +208,6 @@ def test_workspace_is_removed_after_run(
 
 
 def test_wrong_config_type_raises_contract_error() -> None:
-    class _Other(DevConfig):
-        pass
-
     ctx = _Ctx(config="not a config", integrations={})  # type: ignore[arg-type]
     with pytest.raises(ContractError):
         DevWorker(_FakeCli(_outcome()), prompt="p").run(ctx)
@@ -228,3 +225,11 @@ def test_config_rejects_option_injection_in_repo_url_and_branch() -> None:
         _config(repo_url="--upload-pack=/evil")
     with pytest.raises(ValidationError):  # branch começando com '-'
         _config(branch="-x")
+
+
+def test_config_rejects_blank_instruction() -> None:
+    from pydantic import ValidationError
+
+    # " " passa min_length=1 mas _title() explodiria (splitlines()[0]) — validador barra.
+    with pytest.raises(ValidationError):
+        _config(instruction="   ")
