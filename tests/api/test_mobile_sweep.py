@@ -69,6 +69,20 @@ def test_entity_detail_mobile_header_shows_entity_name(
     assert 'href="/entities"' in header
 
 
+def test_distilled_has_mobile_pills_to_entities_and_sources(authed_client: TestClient) -> None:
+    """Marco 19.5 / C3: em mobile a tab 'Saber' aponta direto pra /distilled (sem tela
+    consolidada nova) — pills no topo levam a Entidades/Fontes, únicas telas do grupo
+    Conhecimento fora do alcance de 1 toque. Só em mobile (md:hidden): desktop já tem
+    os 3 itens na sidebar."""
+    html = authed_client.get("/distilled").text
+    pills_tag_start = html.find('href="/entities" class="flex items-center gap-1.5 rounded-4xl')
+    assert pills_tag_start != -1, "pill de Entidades não encontrada no topo de Destilados"
+    row_start = html.rfind("<div", 0, pills_tag_start)
+    row_tag = html[row_start : html.find(">", row_start)]
+    assert "md:hidden" in row_tag
+    assert 'href="/sources" class="flex items-center gap-1.5 rounded-4xl' in html
+
+
 def test_distilled_search_form_is_sticky_on_mobile(authed_client: TestClient) -> None:
     """A busca de Destilados gruda no topo em mobile (max-md:sticky) — único screen com
     esse tratamento (sacrifício de timebox pré-declarado, marco 19.4)."""
