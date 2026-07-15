@@ -61,11 +61,13 @@ produção (kubo-test), não só em teste.
 ## Escopo NÃO coberto pelo smoke físico (nomeado, não silencioso)
 
 - **Caminho negativo do registry** ("worker não está na imagem viva; confira o nome ou rode
-  `./scripts/deploy.sh`"): não é fisicamente disparável usando um worker JÁ existente (`feed`
-  sempre resolve, deployado ou não). Coberto por teste de integração
-  (`test_promote_rejects_unknown_worker_name`), não pelo smoke físico. O caso genuíno (worker
-  realmente ausente da imagem) só existe quando o agente introduz um worker NOVO — isso é o
-  smoke da parte B (18.10, `github_releases`), fora do escopo desta sessão por desenho.
+  `./scripts/deploy.sh`"): o erro MECÂNICO (digitar um nome inexistente, ex. `banana`) seria
+  disparável em segundos e não foi exercitado no smoke — coberto só por teste de integração
+  (`test_promote_rejects_unknown_worker_name`). O que genuinamente não é disparável com `feed`
+  é o cenário SEMÂNTICO (worker mesclado mas ainda não deployado) — esse exige um worker
+  realmente novo, e é o objeto do smoke da parte B (18.10, `github_releases`). Ação barata
+  registrada: incorporar um clique com nome errado ANTES do confirm real no roteiro do 18.10
+  (custo zero — o flow já estará com o gate aberto), fechando também o caso mecânico ao vivo.
 - **Autoria do agente no repo principal** (D41): o smoke usou `kubo-forge` (sandbox existente,
   ADR-0019) e um worker JÁ registrado (`feed`) para confirmar — cerimônia conscientemente
   encenada (nomeada no ADR-0021 antes do smoke rodar), não o rito completo com PR no
