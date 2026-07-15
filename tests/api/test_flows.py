@@ -258,6 +258,42 @@ def test_promote_failure_reopens_board_with_message(
     assert "deploy.sh" in resp.text
 
 
+def test_promote_forge_failure_reopens_board_with_502(
+    monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
+) -> None:
+    """Achado CodeRabbit: `ForgeError` (falha ao consultar o GitHub, ex. rede/HTTP) do
+    `promote_gate` REABRE o board com aviso (502), nunca um 500 não tratado — o gate segue
+    aberto (at-least-once), espelhando o tratamento de `ForgeError` no reject."""
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+
+    from kubo.errors import ForgeError
+
+    @contextmanager
+    def _fake_rw(cfg: object = None) -> Iterator[object]:
+        yield object()
+
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+
+    def _boom(db: object, *, gate_task: object, worker_name: str) -> None:
+        raise ForgeError("GitHub respondeu HTTP 500")
+
+    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _boom)
+    csrf = _csrf_from(authed_client.get("/flows/d1").text)
+
+    resp = authed_client.post(
+        "/flows/gate/promote",
+        data={"task": "task:h2", "csrf": csrf, "worker_name": "feed"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 502
+    assert "GitHub" in resp.text
+
+
 def test_reject_pr_close_failure_reopens_board(
     monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
 ) -> None:

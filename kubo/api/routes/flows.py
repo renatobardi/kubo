@@ -151,6 +151,15 @@ def _apply_promotion(
         promote_gate(db, gate_task=gate_task, worker_name=worker_name)
     except PromotionError as exc:
         return _reopen_board(request, gate_task, notice=str(exc), status=422, db=db)
+    except ForgeError:
+        _log.warning("flows.promote_forge_unavailable")
+        return _reopen_board(
+            request,
+            gate_task,
+            notice="Não foi possível consultar o GitHub. Tente novamente.",
+            status=502,
+            db=db,
+        )
     except ConfigError:
         _log.warning("flows.promote_config_unavailable")
         return _reopen_board(

@@ -273,6 +273,7 @@ def test_promote_rejects_unknown_worker_name(db: Any, monkeypatch: pytest.Monkey
         promote_gate(db, gate_task=promo, worker_name="does-not-exist")
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
+    assert read_gate_context(db, promo) is not None  # ainda um gate aberto
 
 
 def test_agent_failure_fails_flow_without_gate_or_pr(

@@ -34,7 +34,10 @@ class PrStatus(BaseModel):
     auditoria. Num PR ABERTO a API preenche `merge_commit_sha` com um test-merge NÃO confiável —
     o chamador só usa o SHA quando `merged` é true."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # strict=True (achado CodeRabbit, crítico): `bool()` coagiria uma string truthy ("false")
+    # a True — `merged` é o campo que decide o rito inteiro (E10/E12); um valor não-canônico
+    # deve falhar a validação (→ ForgeError), nunca ser adivinhado.
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     merged: bool
     merge_commit_sha: str | None = None
@@ -62,7 +65,7 @@ def get_pull_request(
     )
     try:
         data = resp.json()
-        return PrStatus(merged=bool(data["merged"]), merge_commit_sha=data.get("merge_commit_sha"))
+        return PrStatus(merged=data["merged"], merge_commit_sha=data.get("merge_commit_sha"))
     except (ValueError, KeyError, TypeError):
         raise ForgeError("resposta da API do GitHub sem 'merged' esperado") from None
 

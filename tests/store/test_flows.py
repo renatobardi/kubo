@@ -723,7 +723,7 @@ def test_read_gate_context_ignores_decided_gate(db: Any, tmp_path: Path) -> None
     """A task de gate `review` JÁ DECIDIDA fica parada em `done` (gate-from de [done,promoted])
     mas NÃO é gate aberto — read_gate_context retorna None nela; só o gate de promoção resolve,
     com `gate_state='done'` e a dev como counterpart (única não-humana)."""
-    inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     promo = decide_gate(
         db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
     )
@@ -763,7 +763,7 @@ def test_list_flows_v2_awaiting_promotion_then_promoted(db: Any, tmp_path: Path)
     """Status derivado no v2: após aprovar review→done, 'aguardando' (promoção pendente); após
     confirmar done→promoted, 'entregue', sem gate aberto e tasks_open=0 — a review-human decidida
     parada em `done` (não-terminal) conta como FECHADA (closed = terminal ∨ decidida)."""
-    inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     promo = decide_gate(
         db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
     )
