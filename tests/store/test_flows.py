@@ -25,6 +25,7 @@ from kubo.store.flows import (
     create_task,
     decide_gate,
     flow_board,
+    flow_gates,
     insert_deliverable,
     instantiate_flow,
     list_flows,
@@ -621,11 +622,168 @@ def test_list_flows_dev_gate_open_and_status(db: Any, tmp_path: Path) -> None:
 
 
 def test_list_flows_dev_done_status(db: Any, tmp_path: Path) -> None:
-    """Após aprovar o gate dev (→`done`), o status derivado é 'entregue' e sem gate aberto —
-    `done` conta como terminal de sucesso, como `delivered`."""
+    """Flow dev-mini v1 LEGADO (snapshot com `done` terminal): aprovar o gate (→`done`) dá
+    'entregue', sem gate aberto — prova a compatibilidade retroativa (invariante 4): a
+    terminal-ness deriva do snapshot ANTIGO, não do catálogo v2 (onde `done` abre promoção)."""
     _inst, dev, gate = _dev_flow(db, tmp_path)
     decide_gate(db, analyst_task=dev, gate_task=gate, to_state="done", decision="approved")
     row = list_flows(db, limit=20, start=0)[0]
     assert row.status == "entregue"
     assert row.gate_open is False
     assert row.tasks_open == 0
+
+
+# dev-mini v2 (ADR-0021): `done` NÃO é terminal — abre o gate de promoção `[done, promoted]`.
+_DEV_MINI_V2 = (
+    "name: dev-mini\nversion: 2\n"
+    "board:\n"
+    "  states: [created, implementing, review, done, promoted, rejected, failed]\n"
+    "  transitions:\n"
+    "    - [created, implementing]\n    - [implementing, review]\n"
+    "    - [implementing, failed]\n"
+    "    - [review, done]\n    - [review, rejected]\n"
+    "    - [done, promoted]\n"
+    "  gates:\n    - [review, done]\n    - [review, rejected]\n    - [done, promoted]\n"
+    "cast: [dev, humano]\ndeliverable: pr\ntriggers: [manual]\nbudget_usd: 5.0\n"
+)
+
+
+def _dev_flow_v2(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
+    """Instancia um flow `dev-mini` v2 levado ao gate `review`: (inst, dev_task, review_gate)."""
+    path = tmp_path / "dev-mini.yaml"
+    path.write_text(_DEV_MINI_V2, encoding="utf-8")
+    template = load_flow_template(path)
+    inst = instantiate_flow(db, template=template, personas=_PERSONAS, question="add worker X")
+    dev = create_task(db, flow=inst.flow, persona=inst.personas["dev"], state="created")
+    transition_task(db, dev, from_state="created", to_state="implementing")
+    transition_task(db, dev, from_state="implementing", to_state="review")
+    gate = create_task(db, flow=inst.flow, persona=inst.personas["humano"], state="review")
+    return inst, dev, gate
+
+
+def _open_human_gates(db: Any, flow: Any, state: str) -> list[Any]:
+    """Tasks humanas ABERTAS (sem decisão) num estado — o gate real vs a task decidida parada."""
+    return db.query(
+        "SELECT VALUE id FROM $f<-belongs_to<-task WHERE state = $s AND decision IS NONE "
+        "AND (->assigned_to->persona.catalog_name)[0] = 'humano';",
+        {"f": flow, "s": state},
+    )
+
+
+def test_dev_v2_approve_auto_opens_promotion_gate(db: Any, tmp_path: Path) -> None:
+    """v2: aprovar `review→done` NÃO termina o flow — a MESMA decisão cria a próxima task humana
+    (o gate de promoção) em `done`, sem decisão. `done` tem saída (→promoted) no snapshot. A
+    persona da nova task deriva do próprio gate task (humano), sem parâmetro."""
+    inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    next_gate = decide_gate(
+        db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
+    )
+    assert next_gate is not None
+    assert db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
+    rg = db.query("SELECT state, decision FROM $t;", {"t": review_gate})[0]
+    assert rg == {"state": "done", "decision": "approved"}
+    ng = db.query(
+        "SELECT state, decision, (->assigned_to->persona.catalog_name)[0] AS p FROM $t;",
+        {"t": next_gate},
+    )[0]
+    assert ng["state"] == "done"
+    assert ng["decision"] is None
+    assert ng["p"] == "humano"
+    assert _open_human_gates(db, inst.flow, "done") == [next_gate]
+
+
+def test_decide_gate_no_auto_open_when_target_is_terminal(db: Any, tmp_path: Path) -> None:
+    """Rejeitar (`review→rejected`, terminal) NÃO abre gate nenhum — o auto-open só dispara
+    quando o destino é um estado gate-from do snapshot."""
+    _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    result = decide_gate(
+        db,
+        analyst_task=dev,
+        gate_task=review_gate,
+        to_state="rejected",
+        decision="rejected",
+        reason="escopo",
+    )
+    assert result is None
+
+
+def test_decide_gate_stale_second_decide_keeps_single_promotion(db: Any, tmp_path: Path) -> None:
+    """Corrida double-decide: a 2ª decisão (gate já em `done`) falha alto (StateError) e NÃO
+    cria um 2º gate de promoção — auto-open condicionado ao UPDATE do gate mover a linha."""
+    inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    decide_gate(db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved")
+    with pytest.raises(StateError):
+        decide_gate(
+            db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
+        )
+    assert len(_open_human_gates(db, inst.flow, "done")) == 1
+
+
+def test_read_gate_context_ignores_decided_gate(db: Any, tmp_path: Path) -> None:
+    """A task de gate `review` JÁ DECIDIDA fica parada em `done` (gate-from de [done,promoted])
+    mas NÃO é gate aberto — read_gate_context retorna None nela; só o gate de promoção resolve,
+    com `gate_state='done'` e a dev como counterpart (única não-humana)."""
+    _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    promo = decide_gate(
+        db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
+    )
+    assert promo is not None
+    assert read_gate_context(db, review_gate) is None
+    ctx = read_gate_context(db, promo)
+    assert ctx is not None
+    assert ctx.gate_state == "done"
+    assert ctx.counterpart_task == dev
+
+
+def test_read_gate_context_exposes_gate_state(db: Any, tmp_path: Path) -> None:
+    """gate_state expõe o estado gate-from da decisão (para o behavior validar o par antes de
+    qualquer I/O externo — trap c: rejeitar um gate de promoção não pode tocar o PR mesclado)."""
+    _inst, _dev, review_gate = _dev_flow_v2(db, tmp_path)
+    ctx = read_gate_context(db, review_gate)
+    assert ctx is not None
+    assert ctx.gate_state == "review"
+
+
+def test_flow_board_v2_promotion_open_and_review_decided(db: Any, tmp_path: Path) -> None:
+    """is_gate distingue o gate ABERTO do DECIDIDO: a promoção (humano, done, sem decisão) é gate;
+    a review-human decidida (done, com decisão) NÃO; a dev (não-humana) NÃO."""
+    inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    promo = decide_gate(
+        db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
+    )
+    board = flow_board(db, inst.flow)
+    assert board is not None
+    by_id = {c.id: c for c in board.tasks}
+    assert by_id[str(promo)].is_gate is True
+    assert by_id[str(review_gate)].is_gate is False
+    assert by_id[str(dev)].is_gate is False
+
+
+def test_list_flows_v2_awaiting_promotion_then_promoted(db: Any, tmp_path: Path) -> None:
+    """Status derivado no v2: após aprovar review→done, 'aguardando' (promoção pendente); após
+    confirmar done→promoted, 'entregue', sem gate aberto e tasks_open=0 — a review-human decidida
+    parada em `done` (não-terminal) conta como FECHADA (closed = terminal ∨ decidida)."""
+    _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
+    promo = decide_gate(
+        db, analyst_task=dev, gate_task=review_gate, to_state="done", decision="approved"
+    )
+    assert promo is not None
+    row = list_flows(db, limit=20, start=0)[0]
+    assert row.gate_open is True
+    assert row.status == "aguardando"
+
+    decide_gate(db, analyst_task=dev, gate_task=promo, to_state="promoted", decision="approved")
+    row = list_flows(db, limit=20, start=0)[0]
+    assert row.status == "entregue"
+    assert row.gate_open is False
+    assert row.tasks_open == 0
+
+
+def test_flow_gates_reads_snapshot_pairs(db: Any, tmp_path: Path) -> None:
+    """flow_gates expõe os pares de gate do snapshot congelado (para o behavior validar o par
+    pretendido antes de I/O externo). `[done, rejected]` NÃO é gate do dev-mini v2."""
+    inst, _dev, _review_gate = _dev_flow_v2(db, tmp_path)
+    gates = flow_gates(db, inst.flow)
+    assert ("review", "done") in gates
+    assert ("done", "promoted") in gates
+    assert ("done", "rejected") not in gates

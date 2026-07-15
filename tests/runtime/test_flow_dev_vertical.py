@@ -19,12 +19,14 @@ from typing import Any
 import pytest
 
 from kubo.distribution.destinations import ResolvedDestination
+from kubo.errors import PromotionError, StateError
 from kubo.executors.cli import CliOutcome
 from kubo.runtime import flow_runner
-from kubo.runtime.flow_runner import reject_gate, resume_gate, run_flow
+from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate, run_flow
 from kubo.store import client, migrations
+from kubo.store.flows import read_gate_context
 from kubo.workers import github_api, gitops
-from kubo.workers.github_api import PrRef
+from kubo.workers.github_api import PrRef, PrStatus
 
 pytestmark = pytest.mark.integration
 
@@ -34,6 +36,7 @@ _DEST = ResolvedDestination(
 )
 _BASE = "https://kubo.example"
 _PAT = "fake-forge-pat-do-not-leak"
+_RO_TOKEN = "fake-readonly-token-do-not-leak"
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +44,7 @@ def _forge_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env do sandbox (D37) + PAT (§8): o worker/behavior resolve tudo daqui, o git/GitHub são
     falsos e ignoram os valores. Sem isto o flow dev falha alto na montagem (ConfigError)."""
     monkeypatch.setenv("GITHUB_PAT_FORGE", _PAT)
+    monkeypatch.setenv("GITHUB_TOKEN_READONLY", _RO_TOKEN)
     monkeypatch.setenv("KUBO_FORGE_REPO_URL", "https://github.com/owner/kubo-forge.git")
     monkeypatch.setenv("KUBO_FORGE_OWNER", "owner")
     monkeypatch.setenv("KUBO_FORGE_REPO", "kubo-forge")
@@ -159,6 +163,117 @@ def test_reject_closes_pr_via_api_and_archives(db: Any, monkeypatch: pytest.Monk
     gate = db.query("SELECT state, decision, reason FROM $t;", {"t": result.gate_task})[0]
     assert gate["state"] == "rejected"
     assert gate["reason"] == "escopo errado"
+
+
+def _promotion_gate(db: Any, flow: Any) -> Any:
+    """O gate de promoção auto-aberto: a task humana ABERTA (sem decisão) em `done` (v2)."""
+    rows = db.query(
+        "SELECT VALUE id FROM $f<-belongs_to<-task WHERE state = 'done' AND decision IS NONE "
+        "AND (->assigned_to->persona.catalog_name)[0] = 'humano';",
+        {"f": flow},
+    )
+    return rows[0] if rows else None
+
+
+def test_approve_auto_opens_promotion_gate_v2(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """v2 (ADR-0021): aprovar o gate `review` abre AUTOMATICAMENTE o gate de promoção — nova task
+    humana em `done`, sem decisão, resolvível como gate aberto (`gate_state='done'`)."""
+    result, _ = _run_to_gate(db, monkeypatch)
+    monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
+
+    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+
+    promo = _promotion_gate(db, result.flow)
+    assert promo is not None
+    ctx = read_gate_context(db, promo)
+    assert ctx is not None
+    assert ctx.gate_state == "done"
+    assert ctx.counterpart_task == result.task  # a dev, única não-humana
+
+
+def test_reject_on_promotion_gate_leaves_merged_pr_untouched(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trap c (ADR-0021 §9): rejeitar o gate de PROMOÇÃO (par [done, rejected] inexistente) falha
+    ANTES de qualquer I/O — o PR JÁ MESCLADO não é comentado nem fechado."""
+    result, _ = _run_to_gate(db, monkeypatch)
+    closed: dict[str, Any] = {}
+    monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
+    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    promo = _promotion_gate(db, result.flow)
+
+    with pytest.raises(StateError):
+        reject_gate(db, gate_task=promo, reason="não quero promover")
+
+    assert closed == {}  # nenhuma chamada à API do GitHub
+
+
+def _approved_to_promotion(db: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
+    """Roda o dev-mini até o gate de promoção ABERTO (review aprovado). Devolve (result, promo)."""
+    result, _ = _run_to_gate(db, monkeypatch)
+    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    promo = _promotion_gate(db, result.flow)
+    return result, promo
+
+
+def test_promote_confirms_merged_pr_and_registered_worker(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E10/E12: `promote_gate` lê o merge com o token READ-ONLY (nunca o PAT de escrita),
+    valida `worker_name` no `WORKER_REGISTRY` real (`feed`, sempre presente), grava o
+    `merge_commit_sha` no deliverable e move as 2 tasks a `promoted` (terminal v2)."""
+    result, promo = _approved_to_promotion(db, monkeypatch)
+    seen: dict[str, Any] = {}
+
+    def _get(**kw: Any) -> PrStatus:
+        seen.update(kw)
+        return PrStatus(merged=True, merge_commit_sha="deadbeef123")
+
+    monkeypatch.setattr(github_api, "get_pull_request", _get)
+
+    promote_gate(db, gate_task=promo, worker_name="feed")
+
+    assert seen["token"] == _RO_TOKEN  # NUNCA o PAT de escrita
+    assert seen["number"] == 9
+    assert db.query("SELECT VALUE state FROM $t;", {"t": result.task})[0] == "promoted"
+    gate = db.query("SELECT state, decision FROM $t;", {"t": promo})[0]
+    assert gate == {"state": "promoted", "decision": "approved"}
+    deliv = db.query(
+        "SELECT VALUE merge_commit_sha FROM $f->produces->deliverable;", {"f": result.flow}
+    )
+    assert deliv == ["deadbeef123"]
+
+
+def test_promote_rejects_when_pr_not_merged(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aprovar no board ≠ mesclar no GitHub (D38): se a API diz `merged:false`, o Confirmar
+    falha com `PromotionError` e o gate SEGUE ABERTO (o dono relê e reclica)."""
+    _result, promo = _approved_to_promotion(db, monkeypatch)
+    monkeypatch.setattr(
+        github_api, "get_pull_request", lambda **kw: PrStatus(merged=False, merge_commit_sha=None)
+    )
+
+    with pytest.raises(PromotionError):
+        promote_gate(db, gate_task=promo, worker_name="feed")
+
+    assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
+    assert read_gate_context(db, promo) is not None  # ainda um gate aberto
+
+
+def test_promote_rejects_unknown_worker_name(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Import-oráculo (E10/E14): merge confirmado mas `worker_name` NÃO resolve no registry do
+    processo vivo (deploy não rodou) → `PromotionError`, gate segue aberto."""
+    _result, promo = _approved_to_promotion(db, monkeypatch)
+    monkeypatch.setattr(
+        github_api,
+        "get_pull_request",
+        lambda **kw: PrStatus(merged=True, merge_commit_sha="sha123"),
+    )
+
+    with pytest.raises(PromotionError):
+        promote_gate(db, gate_task=promo, worker_name="does-not-exist")
+
+    assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
+    assert read_gate_context(db, promo) is not None  # ainda um gate aberto
 
 
 def test_agent_failure_fails_flow_without_gate_or_pr(

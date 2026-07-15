@@ -28,8 +28,8 @@ from kubo.distribution.destinations import (
     resolve_base_url,
     resolve_destinations,
 )
-from kubo.errors import ConfigError, ForgeError, SenderError, StateError
-from kubo.runtime.flow_runner import reject_gate, resume_gate
+from kubo.errors import ConfigError, ForgeError, PromotionError, SenderError, StateError
+from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate
 from kubo.store import client
 from kubo.store.flows import (
     FlowBoardView,
@@ -105,6 +105,76 @@ def reject(
     """Rejeita o gate (D38) com MOTIVO obrigatório: arquiva o flow (2 tasks → rejected). CSRF +
     staleness + fail-fast 503. Motivo vazio → 400 com o board reaberto."""
     return _decide(request, task=task, csrf=csrf, approve=False, reason=reason)
+
+
+@router.post("/gate/promote")
+def promote(
+    request: Request,
+    task: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+    worker_name: Annotated[str, Form()] = "",
+) -> Response:
+    """Confirma a promoção (ADR-0021 §9) — a 3ª porta de escrita da UI, rota PRÓPRIA (a validação
+    de segurança do import-oráculo não fica escondida atrás de um `if` no approve genérico). CSRF
+    + staleness + fail-fast 503. `worker_name` vazio → 400 com o board reaberto."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    gate_task = _parse_task_id(task)
+    if gate_task is None:
+        return PlainTextResponse("id de task inválido.", status_code=400)
+    if not worker_name.strip():
+        return PlainTextResponse("Nome do worker é obrigatório.", status_code=400)
+    try:
+        with client.connect_rw() as db:
+            return _apply_promotion(request, db, gate_task, worker_name=worker_name.strip())
+    except ConfigError:
+        _log.warning("flows.write_unavailable")
+        return PlainTextResponse("Escrita indisponível por erro de configuração.", status_code=503)
+
+
+def _apply_promotion(
+    request: Request, db: object, gate_task: RecordID, *, worker_name: str
+) -> Response:
+    """Com a conexão de ESCRITA aberta: staleness (409) → `promote_gate` → redirect ao board.
+    `PromotionError` (PR não mesclado / worker fora do registry — E10) reabre o board com aviso
+    LEGÍVEL do próprio erro; o gate segue aberto (at-least-once, o dono relê e reclica).
+
+    `ConfigError` do `promote_gate` (token read-only ausente — env do sandbox, ADR-0021 §9) é
+    capturado AQUI, distinto do `ConfigError` de `connect_rw` na rota: aquele é "escrita
+    indisponível", este é "falta o token de LEITURA" — mensagens diferentes evitam depurar no
+    escuro (achado do advisor antes do smoke)."""
+    if read_gate_context(db, gate_task) is None:
+        return _reopen_board(
+            request, gate_task, notice="Esta decisão já foi tomada.", status=409, db=db
+        )
+    try:
+        promote_gate(db, gate_task=gate_task, worker_name=worker_name)
+    except PromotionError as exc:
+        return _reopen_board(request, gate_task, notice=str(exc), status=422, db=db)
+    except ForgeError:
+        _log.warning("flows.promote_forge_unavailable")
+        return _reopen_board(
+            request,
+            gate_task,
+            notice="Não foi possível consultar o GitHub. Tente novamente.",
+            status=502,
+            db=db,
+        )
+    except ConfigError:
+        _log.warning("flows.promote_config_unavailable")
+        return _reopen_board(
+            request,
+            gate_task,
+            notice="Confirmação indisponível: falta configuração (token read-only do GitHub "
+            "ou coordenadas do sandbox).",
+            status=503,
+            db=db,
+        )
+    except StateError:
+        return _reopen_board(
+            request, gate_task, notice="Esta decisão já foi tomada.", status=409, db=db
+        )
+    return RedirectResponse(f"/flows/{_flow_key(db, gate_task)}", status_code=303)
 
 
 def _decide(request: Request, *, task: str, csrf: str, approve: bool, reason: str = "") -> Response:

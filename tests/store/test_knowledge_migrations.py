@@ -73,6 +73,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0005_flow_execution.surql",
         "0006_gate_decision.surql",
         "0007_deliverable_pr.surql",
+        "0008_deliverable_merge_sha.surql",
     }
 
 

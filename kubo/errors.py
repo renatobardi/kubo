@@ -108,6 +108,16 @@ class ForgeError(KuboError):
     estruturado, sem explodir o runtime."""
 
 
+class PromotionError(KuboError):
+    """A confirmação de promoção falhou uma validação do rito (ADR-0021 §2/§9).
+
+    Duas causas, ambas com o gate SEGUINDO ABERTO (o dono relê e reclica): o PR ainda NÃO está
+    mesclado na API do GitHub (aprovação ≠ merge — D38), ou o worker informado NÃO resolve no
+    `WORKER_REGISTRY` do processo vivo (import-oráculo — o deploy não rodou; a mensagem manda
+    rodar `./scripts/deploy.sh`). Distinta de `StateError` (board) e `ForgeError` (I/O de rede):
+    é a fronteira do rito, traduzida pela rota num aviso visível, sem efeito colateral."""
+
+
 class ContractError(KuboError):
     """Objeto não honra o contrato de worker (ADR-0009).
 
