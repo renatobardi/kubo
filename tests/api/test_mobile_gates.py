@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.store.flows import FlowBoardView, FlowTaskCard, GateContext, GateSource
+from tests.api.conftest import _mobile_header_block
 
 _BOARD = FlowBoardView(
     id="flow:f1",
@@ -30,12 +31,6 @@ _GATE = GateContext(
     deliverable_kind="report",
     sources=[GateSource(id="distilled:d1", title="Rust ownership")],
 )
-
-
-def _mobile_header_block(html: str) -> str:
-    start = html.find("text-[1.875rem]")
-    header_start = html.rfind("<header", 0, start)
-    return html[header_start : html.find("</header>", start) + len("</header>")]
 
 
 def test_board_mobile_header_shows_flow_question_not_generic_label(

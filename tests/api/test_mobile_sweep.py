@@ -4,25 +4,12 @@ em mobile (único caso, sacrifício de timebox pré-declarado)."""
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Any
-
 import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.store.knowledge import DistilledView, EntityView, RunRef
-
-
-@contextmanager
-def _fake_connect(cfg: Any = None) -> Any:
-    yield object()
-
-
-def _mobile_header_block(html: str) -> str:
-    start = html.find("text-[1.875rem]")
-    header_start = html.rfind("<header", 0, start)
-    return html[header_start : html.find("</header>", start) + len("</header>")]
+from tests.api.conftest import _fake_connect, _mobile_header_block
 
 
 def test_distilled_detail_mobile_header_shows_item_title(
