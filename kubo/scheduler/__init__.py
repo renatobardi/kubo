@@ -28,20 +28,12 @@ from kubo.runtime.runner import run_worker
 from kubo.store import client
 from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
-from kubo.workers.feed import FeedWorker
+from kubo.workers.registry import WORKER_REGISTRY
 
 _REPO_ROOT = Path(__file__).parents[2]
 _SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
 _DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
 _log = structlog.get_logger()
-
-# Mapa nome→classe HARDCODED (ADR-0010): sem registry/plugin/entry-point dinâmico
-# (seria DSL disfarçada). Ativar um worker novo = editar este dict + PR (gate humano).
-WORKER_REGISTRY: dict[str, type[Any]] = {
-    "feed": FeedWorker,
-    "distiller": DistillerWorker,
-    "digest": DigestWorker,
-}
 
 # Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
 # 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
