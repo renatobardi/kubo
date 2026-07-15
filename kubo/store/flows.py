@@ -44,7 +44,9 @@ _HUMAN_CATALOG = "humano"
 _LIST_FLOWS_SQL = (
     "SELECT id, template_name, question, created_at, "
     "<-belongs_to<-task.state AS task_states, "
+    "<-belongs_to<-task.decision AS task_decisions, "
     "snapshot.board.gates AS gate_pairs, "
+    "snapshot.board.transitions AS transition_pairs, "
     "array::distinct(<-belongs_to<-task->assigned_to->persona.catalog_name) AS cast "
     "FROM flow ORDER BY created_at DESC LIMIT {limit} START {start};"
 )
@@ -145,6 +147,15 @@ def _snapshot_board(db: Any, flow: RecordID) -> tuple[set[tuple[str, str]], set[
     )
     row: dict[str, Any] = rows[0] if rows else {}
     return _pairs(row.get("transitions")), _pairs(row.get("gates"))
+
+
+def flow_gates(db: Any, flow: RecordID) -> set[tuple[str, str]]:
+    """Pares de gate do snapshot congelado de um flow (invariante 4). Serve o behavior que precisa
+    validar o par de decisão PRETENDIDO antes de qualquer I/O externo (ADR-0021 §9, trap c:
+    rejeitar um gate de promoção — par `[done, rejected]` inexistente — não pode tocar o PR já
+    mesclado). Leitura pela store (invariante 2), nunca `db.query` no runtime."""
+    _, gates = _snapshot_board(db, flow)
+    return gates
 
 
 def transition_task(db: Any, task: RecordID, *, from_state: str, to_state: str) -> None:
@@ -249,6 +260,16 @@ def _task_state_and_flow(db: Any, task: RecordID) -> tuple[str, RecordID]:
     return rows[0]["state"], flow_id
 
 
+def _gate_persona(db: Any, task: RecordID) -> RecordID:
+    """Persona (materializada) a que um task está `assigned_to`; StateError se a aresta falta.
+    Serve o auto-open: a PRÓXIMA task humana herda a persona do próprio gate task decidido."""
+    rows = db.query("SELECT VALUE (->assigned_to->persona)[0] FROM $t;", {"t": task})
+    persona: RecordID | None = rows[0] if rows and rows[0] is not None else None
+    if persona is None:
+        raise StateError(f"task {task} sem persona (assigned_to ausente)")
+    return persona
+
+
 def decide_gate(
     db: Any,
     *,
@@ -257,16 +278,23 @@ def decide_gate(
     to_state: str,
     decision: str,
     reason: str | None = None,
-) -> None:
+) -> RecordID | None:
     """Decide um gate: transiciona a task da analista E a task do gate JUNTAS para `to_state`
-    (`delivered`|`rejected`) numa ÚNICA transação, gravando a decisão na task do gate
-    (ADR-0018 §IV). É a ÚNICA porta que atravessa um par gated — `transition_task` recusa.
+    numa ÚNICA transação, gravando a decisão na task do gate (ADR-0018 §IV). É a ÚNICA porta que
+    atravessa um par gated — `transition_task` recusa.
+
+    **Gate sequencial (ADR-0021 §8):** se `to_state` é um estado gate-from do snapshot (abre OUTRO
+    gate — ex.: aprovar `review→done` no dev-mini v2, onde `done` abre `[done, promoted]`), a MESMA
+    transação cria a PRÓXIMA task humana em `to_state`, assinada à persona do próprio gate task.
+    Devolve o id dessa task (ou `None` quando `to_state` é terminal). O CREATE é CONDICIONADO ao
+    UPDATE do gate ter movido a linha (`IF array::len($moved) > 0`): uma corrida double-decide
+    (duas conexões passando o pré-check) degrada para no-op sem DUPLICAR o próximo gate.
 
     Valida (StateError, antes da transação, para erro legível): motivo obrigatório na
     rejeição; ambas as tasks no MESMO estado de partida e no MESMO flow; e o par
     `(from, to)` ∈ gates do snapshot congelado. O UPDATE é condicional (`WHERE state =
-    $from`): uma corrida double-decide (duas abas passando o pré-check) degrada para no-op
-    total, nunca para decisão sobrescrita nem board incoerente (TOCTOU residual nomeado)."""
+    $from`): uma corrida double-decide degrada para no-op total, nunca para decisão sobrescrita
+    nem board incoerente (TOCTOU residual nomeado)."""
     reason = (reason or "").strip()
     if decision not in ("approved", "rejected"):
         raise StateError(f"decisão '{decision}' inválida (só approved|rejected)")
@@ -294,22 +322,51 @@ def decide_gate(
     if (gate_from, to_state) not in gates:
         raise StateError(f"({gate_from}, {to_state}) não é uma transição de gate do snapshot")
 
+    params: dict[str, Any] = {
+        "at": analyst_task,
+        "gt": gate_task,
+        "to": to_state,
+        "from": gate_from,
+        "dec": decision,
+        "rsn": reason or None,
+    }
+    gate_move = (
+        "UPDATE $gt SET state = $to, decision = $dec, reason = $rsn, "
+        "decided_at = time::now() WHERE state = $from"
+    )
+    if to_state not in {src for src, _ in gates}:
+        run_transaction(db, ["UPDATE $at SET state = $to WHERE state = $from", gate_move], params)
+        return None
+    next_gate = _fresh("task")
+    params |= {"ng": next_gate, "flow": gate_flow, "persona": _gate_persona(db, gate_task)}
     run_transaction(
         db,
         [
+            f"LET $moved = ({gate_move} RETURN AFTER)",
             "UPDATE $at SET state = $to WHERE state = $from",
-            "UPDATE $gt SET state = $to, decision = $dec, reason = $rsn, "
-            "decided_at = time::now() WHERE state = $from",
+            "IF array::len($moved) > 0 { CREATE $ng SET state = $to; "
+            "RELATE $ng->belongs_to->$flow; RELATE $ng->assigned_to->$persona }",
         ],
-        {
-            "at": analyst_task,
-            "gt": gate_task,
-            "to": to_state,
-            "from": gate_from,
-            "dec": decision,
-            "rsn": reason or None,
-        },
+        params,
     )
+    # Corrida TOCTOU genuína (dois decides concorrentes passam o pré-check ANTES de qualquer
+    # transação commitar): o CREATE condicional pode não ter rodado nesta chamada, e devolver
+    # `next_gate` sem confirmar existência seria um id FANTASMA (nunca criado) para o chamador.
+    # Leitura extra barata pós-transação fecha o caso.
+    created = db.query("SELECT VALUE id FROM $ng;", {"ng": next_gate})
+    return next_gate if created else None
+
+
+def set_merge_commit_sha(db: Any, *, flow: RecordID, merge_commit_sha: str) -> None:
+    """Grava o `merge_commit_sha` no deliverable de PR do flow (ADR-0021 §2): a âncora estrutural
+    "este código foi mesclado por este commit", escrita no Confirmar promoção ANTES de decidir o
+    gate e FORA da transação do gate — "o PR está mesclado" é fato verdadeiro independente do
+    desfecho do gate; se o decide falhar, o SHA gravado é inofensivo e o retry é idempotente."""
+    rows = db.query("SELECT VALUE (->produces->deliverable)[0] FROM $f;", {"f": flow})
+    deliverable: RecordID | None = rows[0] if rows and rows[0] is not None else None
+    if deliverable is None:
+        raise StateError(f"flow {flow} sem deliverable — nada onde gravar merge_commit_sha")
+    db.query("UPDATE $d SET merge_commit_sha = $sha;", {"d": deliverable, "sha": merge_commit_sha})
 
 
 def set_task_run(db: Any, task: RecordID, run: RecordID) -> None:
@@ -365,6 +422,7 @@ class GateContext:
     flow: RecordID
     counterpart_task: RecordID
     gate_task: RecordID
+    gate_state: str
     question: str
     content: str
     deliverable_kind: str
@@ -404,6 +462,7 @@ def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
         "pr_number: (->belongs_to->flow->produces->deliverable.pr_number)[0], "
         "gates: (->belongs_to->flow.snapshot.board.gates)[0], "
         "state: state, "
+        "decision: decision, "
         "persona: (->assigned_to->persona.catalog_name)[0]"
         "} FROM $g;",
         {"g": gate_task},
@@ -411,7 +470,16 @@ def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
     row: dict[str, Any] = head[0] if head else {}
     flow = row.get("flow")
     gate_from = {pair[0] for pair in _pairs(row.get("gates"))}
-    if flow is None or row.get("persona") != _HUMAN_CATALOG or row.get("state") not in gate_from:
+    state = row.get("state")
+    # Gate ABERTO = humano, em estado gate-from E SEM decisão (ADR-0021 §7). A task de gate JÁ
+    # DECIDIDA fica parada num estado gate-from não-terminal (a review-human em `done` no v2) —
+    # excluí-la aqui é o que impede um reject roteado a ela de tocar um PR mesclado (trap c).
+    if (
+        flow is None
+        or row.get("persona") != _HUMAN_CATALOG
+        or state not in gate_from
+        or row.get("decision") is not None
+    ):
         return None
     counterpart = db.query(
         "SELECT VALUE id FROM $flow<-belongs_to<-task "
@@ -433,6 +501,7 @@ def read_gate_context(db: Any, gate_task: RecordID) -> GateContext | None:
         flow=flow,
         counterpart_task=counterpart_task,
         gate_task=gate_task,
+        gate_state=str(state),
         question=str(row.get("question") or ""),
         content=str(row.get("content") or ""),
         deliverable_kind=str(row.get("kind") or ""),
@@ -482,26 +551,38 @@ class FlowBoardView:
     tasks: list[FlowTaskCard]
 
 
-# `done` (dev-mini) e `delivered` (analysis) são os terminais de SUCESSO; `rejected`/`failed`,
-# os de falha. União literal barata (rótulos são cosméticos, ADR-0019 §VII); a detecção de gate
-# aberto NÃO é literal — deriva do snapshot.
-_SUCCESS_TERMINAL = frozenset({"delivered", "done"})
-_TERMINAL = _SUCCESS_TERMINAL | frozenset({"rejected", "failed"})
+# `rejected`/`failed` são NOMES RESERVADOS de falha-terminal (convenção §VII, rótulos cosméticos);
+# os terminais de SUCESSO NÃO são literais — derivam do snapshot (estado sem transição de saída,
+# ADR-0021 §6). Só a derivação serve v1 (`done` terminal) e v2 (`done` abre promoção) do MESMO
+# catálogo dev-mini, e há flows das duas versões no banco.
+def _closed(state: str, decision: Any, sources: set[str]) -> bool:
+    """Uma task está FECHADA se está num estado TERMINAL do snapshot (não é `from` de nenhuma
+    transição) OU já foi DECIDIDA (ADR-0021 §7). A review-human decidida fica parada em `done`
+    (não-terminal no v2); sem contar a decisão como fechamento, o flow apareceria 'rodando' para
+    sempre. `sources` = os `from` das transições do snapshot."""
+    return decision is not None or state not in sources
 
 
-def _flow_status(states: list[str], gate_from: set[str]) -> str:
-    """Status DERIVADO dos estados dos tasks (o flow não tem máquina própria, ADR-0016 §II).
-    Precedência: gate aberto > falhou > rejeitado > entregue > rodando. `gate_from` vem do
-    snapshot (os `from` dos pares de gate) — a "espera de gate" não hardcoda `awaiting_review`."""
-    if any(s in gate_from for s in states):
-        return "aguardando"
+def _flow_status(
+    tasks: list[tuple[str, Any]], transitions: set[tuple[str, str]], gates: set[tuple[str, str]]
+) -> tuple[str, bool]:
+    """(status, gate_open) DERIVADOS das tasks (o flow não tem máquina própria, ADR-0016 §II).
+    Precedência: gate aberto > falhou > rejeitado > entregue > rodando. Gate ABERTO = alguma task
+    num estado gate-from SEM decisão (a task de gate JÁ DECIDIDA parada num gate-from não conta —
+    ADR-0021 §7); tudo derivado do snapshot, nenhum nome de estado hardcoded fora dos reservados."""
+    gate_from = {src for src, _ in gates}
+    sources = {src for src, _ in transitions}
+    gate_open = any(state in gate_from and decision is None for state, decision in tasks)
+    if gate_open:
+        return "aguardando", True
+    states = [state for state, _ in tasks]
     if "failed" in states:
-        return "falhou"
+        return "falhou", False
     if "rejected" in states:
-        return "rejeitado"
-    if states and all(s in _SUCCESS_TERMINAL for s in states):
-        return "entregue"
-    return "rodando"
+        return "rejeitado", False
+    if tasks and all(_closed(state, decision, sources) for state, decision in tasks):
+        return "entregue", False
+    return "rodando", False
 
 
 def list_flows(db: Any, *, limit: int, start: int) -> list[FlowListRow]:
@@ -512,16 +593,23 @@ def list_flows(db: Any, *, limit: int, start: int) -> list[FlowListRow]:
     result: list[FlowListRow] = []
     for r in rows:
         states = [str(s) for s in _as_list(r.get("task_states"))]
-        gate_from = {pair[0] for pair in _pairs(r.get("gate_pairs"))}
+        # `.state` e `.decision` traversam a MESMA aresta `belongs_to` do MESMO flow → mesma ordem
+        # por construção (arrays paralelos). A cobertura do zip é o teste de integração v2 (a
+        # review-human decidida só conta como fechada se o "approved" alinhar com o estado `done`).
+        decisions = _as_list(r.get("task_decisions"))
+        tasks = list(zip(states, decisions, strict=False))
+        transitions = _pairs(r.get("transition_pairs"))
+        status, gate_open = _flow_status(tasks, transitions, _pairs(r.get("gate_pairs")))
+        sources = {src for src, _ in transitions}
         result.append(
             FlowListRow(
                 id=str(r["id"]),
                 question=str(r.get("question") or ""),
                 template=str(r.get("template_name") or ""),
-                status=_flow_status(states, gate_from),
-                gate_open=any(s in gate_from for s in states),
+                status=status,
+                gate_open=gate_open,
                 cast=[str(c) for c in _as_list(r.get("cast"))],
-                tasks_open=sum(1 for s in states if s not in _TERMINAL),
+                tasks_open=sum(1 for s, d in tasks if not _closed(s, d, sources)),
                 created_at=str(r.get("created_at") or ""),
             )
         )
@@ -547,8 +635,8 @@ def flow_board(db: Any, flow: RecordID) -> FlowBoardView | None:
     row: dict[str, Any] = head[0]
     gate_from = {pair[0] for pair in _pairs(row.get("gates"))}
     task_rows = db.query(
-        "SELECT id, state, created_at, (->assigned_to->persona.catalog_name)[0] AS persona "
-        "FROM $f<-belongs_to<-task ORDER BY created_at;",  # created_at na projeção: quirk v3
+        "SELECT id, state, decision, created_at, (->assigned_to->persona.catalog_name)[0] "
+        "AS persona FROM $f<-belongs_to<-task ORDER BY created_at;",  # created_at: quirk v3
         {"f": flow},
     )
     cards = [
@@ -557,8 +645,11 @@ def flow_board(db: Any, flow: RecordID) -> FlowBoardView | None:
             state=str(t["state"]),
             persona=str(t.get("persona") or ""),
             # is_gate GENÉRICO: humano num estado gate-from do snapshot (não o literal
-            # `awaiting_review`) — serve report e dev-mini (`review`) sem nome fixo.
-            is_gate=t.get("persona") == _HUMAN and str(t.get("state")) in gate_from,
+            # `awaiting_review`) E SEM decisão — a review-human decidida parada em `done` (v2)
+            # não ganha botões (ADR-0021 §7); serve report/dev-mini/promoção sem nome fixo.
+            is_gate=t.get("persona") == _HUMAN
+            and str(t.get("state")) in gate_from
+            and t.get("decision") is None,
         )
         for t in task_rows
     ]
