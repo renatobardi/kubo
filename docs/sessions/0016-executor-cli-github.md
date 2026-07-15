@@ -25,7 +25,7 @@ Fechar a fase 3 da spec (§5): o dono cria uma task dev → persona **dev** (exe
 Agente Claude Code roda **minutos**; disparo síncrono no request da UI dispararia o gatilho (b) do ADR-0018 ("executor cli de minutos → o desenho síncrono morre, vira processo executor, ADR próprio + dono na mesa"). O **gate continua na UI** (já existe). Assimetria com o `analysis` (que tem botão) é consciente e registrada no ADR-0019 — até existir "processo executor" com ADR próprio.
 
 ### C2 — Clone SEM credencial no workspace
-Clonar com `https://x-access-token:PAT@github.com/...` grava o PAT em `.git/config` — legível pelo agente com `cat`. Regra: o remote do workspace é **sempre URL sem credencial**; o worker injeta o PAT **só no momento do push**, fora do alcance do agente (credential helper efêmero ou header por comando), e **nunca loga a URL autenticada** (mesma disciplina da redação do token do bot, ADR-0015).
+Clonar com `https://x-access-token:PAT@github.com/...` grava o PAT em `.git/config` — legível pelo agente com `cat`. Regra: o remote do workspace é **sempre URL sem credencial**; o worker injeta o PAT **só no momento do push**, fora do alcance do agente (credential helper efêmero ou header por comando), e **nunca loga a URL autenticada** (mesma disciplina da redação do token do bot, ADR-0015). <!-- pragma: allowlist secret (URL de exemplo, sem credencial real) -->
 
 ### C3 — Dois cliques manuais do dono no sandbox (runbook, pré-smoke)
 1. **Desabilitar GitHub Actions** no repo sandbox — agente que escreva `.github/workflows/x.yml` num branch pushed executaria código com o `GITHUB_TOKEN` do repo: canal real de exfil/mischief.
