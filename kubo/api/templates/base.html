@@ -79,7 +79,9 @@
 
     <div class="flex min-w-0 flex-1 flex-col">
       {# Header mobile — large-title (§ Mobile, kubo-design-system.md). Chevron-voltar
-         é opt-in por tela (`mobile_back_href`), aplicado na varredura 19.4. #}
+         (`mobile_back_href`) e título (`mobile_title`) são opt-in por tela — default
+         é sem chevron e crumb.label; telas de detalhe sobrescrevem (19.3 GateSheet
+         é a prova de conceito, 19.4 estende às demais). #}
       <header class="flex shrink-0 flex-col gap-1 border-b border-border/60 px-5 pb-3 pt-3 md:hidden">
         {% if mobile_back_href %}
           <a href="{{ mobile_back_href }}" class="flex items-center gap-1 text-sm text-muted-foreground">
@@ -87,7 +89,7 @@
             {{ mobile_back_label or "Voltar" }}
           </a>
         {% endif %}
-        <h1 class="font-heading text-[1.875rem] font-bold leading-tight tracking-tight text-foreground">{{ crumb.label if crumb else "Kubo" }}</h1>
+        <h1 class="font-heading text-[1.875rem] font-bold leading-tight tracking-tight text-foreground">{{ mobile_title or (crumb.label if crumb else "Kubo") }}</h1>
       </header>
       <header class="hidden h-[72px] shrink-0 items-center gap-3 border-b border-border/60 px-6 md:flex">
         {# Recolher a sidebar (só ícones) [S2] — paridade com o ▢ do topo do mockup. #}
