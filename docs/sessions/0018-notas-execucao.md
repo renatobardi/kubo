@@ -37,7 +37,8 @@ Deploy via `./scripts/deploy.sh` (build `e5400c5-20260715T185428Z`, migration
 | **Confirmar COM merge**, `worker_name=feed` | Import-oráculo: merge via API read-only + registry no processo vivo | Board mostrou **Promovido**; `decide_gate(done→promoted)` transacionado |
 
 **Read-back do grafo (root, pós-smoke):**
-```
+
+```yaml
 tasks:
   dev      @ promoted   (terminal de sucesso, sem decisão — contraparte não-humana)
   humano   @ done       (decision=approved, decided_at=19:01:10 — gate `review`, FECHADA por decisão)
@@ -55,8 +56,8 @@ gravado pelo Confirmar. `mergedBy = renatobardi`, `mergedAt = 2026-07-15T19:04:1
 Prova ao vivo, de ponta a ponta: terminal-ness derivada do snapshot (v1 e v2 coexistindo),
 `closed = terminal ∨ decidida` (a task `humano@done` decidida conta como fechada mesmo não
 sendo terminal no v2), auto-open atômico do gate de promoção, import-oráculo com token
-read-only separado do PAT de escrita — todos comportamentos de código, agora confirmados em
-produção (kubo-test), não só em teste.
+read-only separado do PAT de escrita — estes quatro comportamentos, agora confirmados em
+produção (kubo-test), não só em teste (o escopo NÃO coberto está nomeado abaixo).
 
 ## Escopo NÃO coberto pelo smoke físico (nomeado, não silencioso)
 
