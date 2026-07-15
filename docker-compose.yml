@@ -76,6 +76,17 @@ services:
       # dev-mini a exige, e o CliExecutor levanta no uso se ausente. Segredo só do .env
       # do servidor (invariante 8), nunca literal. Usada já no spike 16.2 (scripts.spike_cli).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Sandbox do flow dev (ADR-0019 §X, D37): coordenadas do repo `kubo-forge` (não são
+      # segredo) + o PAT fine-grained restrito a esse repo (contents+PR, ESSE sim segredo,
+      # invariante 8). O disparo é por CLI aqui: `docker compose run --rm kubo-scheduler
+      # python -m kubo flow run dev-mini "<tarefa>"`. SEM `:?` — só o dev-mini exige, e o
+      # runtime levanta ConfigError legível no uso se faltar. Setup no runbook §2e.
+      GITHUB_PAT_FORGE: ${GITHUB_PAT_FORGE:-}  # pragma: allowlist secret
+      KUBO_FORGE_REPO_URL: ${KUBO_FORGE_REPO_URL:-}
+      KUBO_FORGE_OWNER: ${KUBO_FORGE_OWNER:-}
+      KUBO_FORGE_REPO: ${KUBO_FORGE_REPO:-}
+      KUBO_FORGE_GIT_NAME: ${KUBO_FORGE_GIT_NAME:-}
+      KUBO_FORGE_GIT_EMAIL: ${KUBO_FORGE_GIT_EMAIL:-}
       # OpenRouter: candidato do PILOTO e modelo do DRENO one-off (ADR-0017, Trilha B da
       # 0014). SEM `:?` fail-fast — o regime diário (Groq/free) nunca usa OpenRouter; só
       # os scripts one-off `distill_pilot`/`drain_distill` a exigem, e falham no uso se
@@ -168,6 +179,16 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       KUBO_OWNER_TELEGRAM_CHAT_ID: ${KUBO_OWNER_TELEGRAM_CHAT_ID:-}
       KUBO_BASE_URL: ${KUBO_BASE_URL:-}
+      # Reject do gate dev (ADR-0019 §IX): a UI FECHA o PR via API na rejeição, logo carrega
+      # o PAT do forge + as coordenadas do sandbox. Custo de superfície NOMEADO (§X): a
+      # kubo-api NÃO roda o executor cli (sem scrub, sem agente) — só a chamada REST de close.
+      # SEM `:?` — ausente, o reject dá 503/erro no uso, o resto da UI segue. Setup runbook §2e.
+      GITHUB_PAT_FORGE: ${GITHUB_PAT_FORGE:-}  # pragma: allowlist secret
+      KUBO_FORGE_REPO_URL: ${KUBO_FORGE_REPO_URL:-}
+      KUBO_FORGE_OWNER: ${KUBO_FORGE_OWNER:-}
+      KUBO_FORGE_REPO: ${KUBO_FORGE_REPO:-}
+      KUBO_FORGE_GIT_NAME: ${KUBO_FORGE_GIT_NAME:-}
+      KUBO_FORGE_GIT_EMAIL: ${KUBO_FORGE_GIT_EMAIL:-}
       TZ: ${TZ:-America/Sao_Paulo}
     # Imagem slim não tem curl: healthcheck via python/urllib no /healthz (sem auth,
     # sem banco). localhost é sempre permitido no TrustedHost (append no código).

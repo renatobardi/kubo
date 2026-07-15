@@ -312,6 +312,89 @@ ROOT;` (os 2 handlers caem em 503; o resto da UI segue).
 
 ---
 
+## 2e. Flow dev / executor cli — sandbox GitHub (ADR-0019, fase 3) — passo one-time
+
+O flow `dev-mini` faz a persona dev IMPLEMENTAR num clone efêmero de um repo sandbox e
+abrir um **PR real**; o gate humano na UI aprova (o **dono** mescla no GitHub — o Kubo
+NÃO mescla, D38) ou rejeita (o PR fecha via API com o motivo). Antes do primeiro disparo,
+o dono faz **quatro preparos manuais** — todos com valores que NUNCA aparecem no chat/log.
+
+### (a) Repo sandbox privado + duas travas de contenção (C3)
+
+1. Crie um repo **privado** só para isto (ex.: `kubo-forge`) — nunca aponte para o repo do
+   Kubo nem para qualquer repo real (escopo negativo: o agente só trabalha no sandbox).
+2. **Desabilite GitHub Actions** nesse repo: *Settings → Actions → General → Disable actions*.
+   Sem isto, um agente que escreva `.github/workflows/x.yml` num branch pushed executaria
+   código com o `GITHUB_TOKEN` do repo — canal real de exfil (C3.1).
+3. **Proteja o branch `main`**: *Settings → Branches → Add rule → `main` → Require a pull
+   request before merging* (e bloqueie push direto). Isso torna "o worker só abre PR"
+   verdade **por construção**: mesmo com `contents:write`, o PAT não empurra em `main` (C3.2).
+
+### (b) Anthropic — SPEND LIMIT ANTES da key
+
+O `budget_usd` do template (`dev-mini.yaml`, 5.0) corta **por flow** dentro do Kubo, mas a
+cerca de plataforma é o **spend limit da conta Anthropic**. Configure-o ANTES de gerar a key:
+
+1. No console da Anthropic: *Settings → Limits* (ou *Billing → Usage limits*) → defina um
+   **limite mensal HARD** (um teto que, atingido, PARA as chamadas — não só alerta).
+2. SÓ DEPOIS gere a **API key** dedicada a este uso. Guarde o valor para o `.env` (passo d).
+
+> Por quê nesta ordem: a key criada antes do limite já pode gastar antes de você voltar
+> para configurá-lo. O budget do flow é a 1ª cerca; o spend limit é a que não depende do
+> nosso código estar correto.
+
+### (c) PAT fine-grained restrito ao sandbox (D37)
+
+*GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token*:
+
+- **Resource owner** = sua conta; **Repository access = Only select repositories → só o
+  `kubo-forge`** (NUNCA "All repositories").
+- **Permissions → Repository**: `Contents` = **Read and write**; `Pull requests` = **Read
+  and write**. Nada mais.
+- Expiração curta (renovável). Guarde o valor para o `.env`.
+
+### (d) `.env` do servidor + subir os serviços
+
+No `.env` do servidor (nunca no repo — invariante 8), preencha (veja `.env.example`):
+
+```
+ANTHROPIC_API_KEY=<a key do passo b>            # pragma: allowlist secret
+GITHUB_PAT_FORGE=<o PAT do passo c>             # pragma: allowlist secret
+KUBO_FORGE_REPO_URL=https://github.com/<owner>/kubo-forge.git
+KUBO_FORGE_OWNER=<owner>
+KUBO_FORGE_REPO=kubo-forge
+KUBO_FORGE_GIT_NAME=Kubo Dev
+KUBO_FORGE_GIT_EMAIL=dev@kubo.local
+```
+
+Depois `./scripts/deploy.sh` (ou `docker compose up -d`) — o `kubo-scheduler` (que dispara o
+flow) e o `kubo-api` (que fecha o PR na rejeição) recebem essas envs pelo compose. O binário
+`git` já vem na imagem (Dockerfile); o `claude` é vendorizado pelo `claude-agent-sdk` (§X).
+
+### (e) Disparar e decidir
+
+O disparo do flow dev é **por CLI** (roda minutos — nunca botão na UI, C1). Do servidor:
+
+```bash
+docker compose run --rm kubo-scheduler python -m kubo flow run dev-mini "<instrução da task>"
+# → imprime: flow flow:<id> — review (run run:<id>)   [exit 0 = gate aberto; failed = exit 1]
+```
+
+Abra o board na UI (`/flows`), abra o card de gate (`review`) e decida:
+
+- **Aprovar** → o flow vai a `done`; **você** abre o PR no GitHub e faz o merge (o Kubo não
+  mescla). O board fica `entregue`.
+- **Rejeitar** (motivo obrigatório) → o Kubo **fecha o PR** via API com o motivo em
+  comentário e o flow vai a `rejected`. Nada é mesclado.
+
+> **Nota de superfície (ADR-0019 §X):** com o reject, a `kubo-api` carrega `GITHUB_PAT_FORGE`
+> + `KUBO_FORGE_*`. A UI **não** roda o executor cli (sem agente, sem scrub) — só a chamada
+> REST de close. Aceito por Tailscale-only + auth + dono único + PAT restrito ao sandbox;
+> antes de a fase 4 misturar conteúdo de terceiros no circuito, o agente migra para
+> container-irmão isolado (gatilho registrado no ADR-0019 §XI).
+
+---
+
 ## 3. Observabilidade
 
 Fase 1 = logs, não dashboard. Scheduler sem porta não tem healthcheck honesto; a

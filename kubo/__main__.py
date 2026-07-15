@@ -171,6 +171,7 @@ def run_flow_command(
     o usam) falha alto (ConfigError). O flow runner faz o resto."""
     embedder: Embedder | None = None
     dest = None
+    base_url = ""  # dev ignora base_url; resolvê-lo aqui acoplaria o disparo a KUBO_BASE_URL
     if template not in _DEV_TEMPLATES:
         raw = next(
             (d for d in load_destinations(_DESTINATIONS_PATH) if d.id == destination_id), None
@@ -181,13 +182,14 @@ def run_flow_command(
         # faltar; um e-mail sem env não pode quebrar um `flow run` para o Telegram (CodeRabbit).
         dest = resolve_destinations([raw])[0]
         embedder = GeminiEmbedder.from_env()
+        base_url = resolve_base_url()
     return run_flow(
         db,
         template_name=template,
         question=question,
         embedder=embedder,
         destination=dest,
-        base_url=resolve_base_url(),
+        base_url=base_url,
     )
 
 
