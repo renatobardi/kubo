@@ -1,5 +1,7 @@
 # Sessão 0020 — Exposição: kubo.oute.pro na internet
 
+> **⚠️ ADIADA PARA PRODUÇÃO (2026-07-15):** o recon do VPC (scripts/recon-*.sh) revelou que o oute-server roda em MODO PARANOIA (firewall tailnet-only para os ~11 apps *.oute.pro). O dono decidiu que `kubo.oute.pro` pertence ao **ambiente de PRODUÇÃO (OCI, ainda não construído)** — expor o kubo-test (DEV) publicamente era erro de categoria. Acesso do amigo AGORA = Tailscale node-share do oute-server (superfície pública zero). Este plano migra para o trabalho de PRD futuro; o desenho vencedor lá foi Cloudflare Tunnel (preserva o firewall fechado; ver consulta ao advisor de 2026-07-15). Auth (OAuth allowlist + guest read-only) e hardening abaixo permanecem válidos para PRD.
+>
 > **Status:** aprovado pelo dono (2026-07-15, planejamento no Cowork); advisor GO com desenho fixado
 > **Ambiente de execução:** Claude Code CLI — **sessão de FRONTEIRA** (muda a fronteira de segurança do sistema)
 > **Política de modelo (custo-benefício, regra do dono):** Opus na thread até fixar abordagem dos marcos de auth (PR2); implementação sobre desenho validado pode ir a Sonnet com compensações (advisor por marco, checkpoints, travou 2x → para).
