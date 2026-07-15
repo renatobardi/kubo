@@ -15,7 +15,8 @@
 > acima do `budget_usd` de §V, ou o subprocess falhando numa task não-trivial (o spike foi um
 > turno trivial) — o ADR reabre por emenda, com o motivo registrado. (Nota: a versão `proposto`
 > prometia cravar "após a reconciliação de custo do smoke"; o advisor recomendou crave-on-decisions
-> com a pendência nomeada, ratificado pelo dono no checkpoint da 0016b.)
+> com a pendência nomeada, **ratificado pelo dono no checkpoint da 0016b** — mesmo precedente do
+> ADR-0018, aceito na mesma condição de smoke físico owner-gated pendente.)
 
 ## Contexto
 
