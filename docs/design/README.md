@@ -43,6 +43,20 @@ A inconsistência de emoji apontada na v1 foi **resolvida no export v2** ("nunca
 
 Toda tela implementada no produto tem como critério de aceite uma **tabela de paridade** com a tela correspondente do mockup (`mvp/ui_kits/kubo-app/`): cada elemento estrutural (seções, campos por card, ações, estados vazios, navegação) recebe status *igual* / *desvio declarado + motivo* (backend inexistente | dado inexistente | limitação técnica | sacrifício de timebox registrado) / *fora de escopo*. A tabela nasce **no plano da sessão** — desvios são pré-declarados, nunca descobertos no PR. A regra corta nos dois sentidos: adicionar o que o mockup não tem também é desvio. Equivalência é estrutural/de token — nunca pixel, spacing ou inline-style do React. Aceite final: screenshot lado a lado no smoke. Origem: dívida de fidelidade da sessão 0009 (Painel/Destilados entregues empobrecidos com tokens corretos — "usar tokens" não substitui "seguir a tela").
 
+## v3 supersede mvp/ (norma permanente, 2026-07-15)
+
+`docs/design/v3/` — extraído da Valmis, tokens Inter/mono-preto da Direção B v2 já nativos — passa a ser a **referência autoritativa de design para todas as futuras implementações** (D50, sessão 0019). `mvp/` (Direção B v2, export original) fica **histórico**: continua valendo para o que já foi implementado a partir dele (não força retrofit), mas nenhuma tela nova consulta `mvp/` — consulta `v3/`. Divergência entre os dois documentos resolve a favor de `v3/`.
+
+## Norma: toda tela nasce responsiva (permanente, 2026-07-15)
+
+A partir da sessão 0019 (UI mobile), **toda tela nova do Kubo nasce com variante mobile** — não é um retrofit posterior. Regras:
+
+- **Desktop nunca muda** por causa de mobile: variantes são aditivas (`max-md:` para override mobile, `md:hidden` / `hidden md:flex` para mostrar/esconder por breakpoint). Nenhuma classe desktop existente é removida para acomodar mobile.
+- **Breakpoint binário `<md` / `≥md`** — sem breakpoint intermediário (tablet fora de escopo por definição).
+- **Gramática mobile** segue `docs/design/v3/templates/kubo-mobile/` (bottom tab bar, header large-title, busca sticky, cards full-width, detalhe como página cheia) — ver § Mobile em `kubo-design-system.md` §4.
+- **Critério de aceite:** DoD de UI (CLAUDE.md) passa a exigir screenshot mobile (device emulation) junto do desktop antes/depois, além da tabela de paridade já exigida.
+- Gates humanos (task da Humano) são **sempre** operáveis em mobile — nunca cortável por timebox.
+
 ## Arrumações
 
 - `mvp/uploads/kobo-design-system.md` é cópia com nome antigo do doc canônico — **remover** (vai divergir; o canônico é `docs/kubo-design-system.md` após a sessão 0001).
