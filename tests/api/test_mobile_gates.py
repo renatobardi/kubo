@@ -6,31 +6,9 @@ from __future__ import annotations
 
 import pytest
 from starlette.testclient import TestClient
-from surrealdb import RecordID
 
-from kubo.store.flows import FlowBoardView, FlowTaskCard, GateContext, GateSource
 from tests.api.conftest import _mobile_header_block
-
-_BOARD = FlowBoardView(
-    id="flow:f1",
-    question="O que dizem sobre memória?",
-    template="analysis-review",
-    states=["created", "analyzing", "awaiting_review", "delivered", "rejected", "failed"],
-    tasks=[
-        FlowTaskCard(id="task:a1", state="awaiting_review", persona="analista", is_gate=False),
-        FlowTaskCard(id="task:g1", state="awaiting_review", persona="humano", is_gate=True),
-    ],
-)
-_GATE = GateContext(
-    flow=RecordID("flow", "f1"),
-    counterpart_task=RecordID("task", "a1"),
-    gate_task=RecordID("task", "g1"),
-    gate_state="awaiting_review",
-    question="O que dizem sobre memória?",
-    content="Relatório sem tag hostil.",
-    deliverable_kind="report",
-    sources=[GateSource(id="distilled:d1", title="Rust ownership")],
-)
+from tests.api.test_flows import _BOARD, _GATE
 
 
 def test_board_mobile_header_shows_flow_question_not_generic_label(
