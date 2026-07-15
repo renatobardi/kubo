@@ -10,8 +10,7 @@ pr_url-vs-target (E8 defesa-em-profundidade contra colisão de número de PR ent
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import replace
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -21,9 +20,9 @@ from kubo.errors import StateError
 from kubo.executors.cli import CliOutcome
 from kubo.runtime import flow_runner
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate, run_flow
-from kubo.store import client, migrations
-from kubo.workers import github_api, gitops
+from kubo.workers import github_api
 from kubo.workers.github_api import PrRef, PrStatus
+from tests.runtime.conftest import FakeCli, fake_gitops, promotion_gate
 
 pytestmark = pytest.mark.integration
 
@@ -52,35 +51,9 @@ def _kubo_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def db() -> Iterator[Any]:
-    """Database próprio do teste, removido antes e depois — schema aplicado do zero."""
-    cfg = replace(client.config(), database=_DB)
-    with client.connect(cfg) as conn:
-        conn.query(f"REMOVE DATABASE IF EXISTS {_DB};")
-        conn.use(cfg.namespace, cfg.database)
-        migrations.apply_migrations(conn)
-        yield conn
-        conn.query(f"REMOVE DATABASE IF EXISTS {_DB};")
-
-
-class _FakeCli:
-    """CliRunner fake: devolve um CliOutcome preset (a prosa untrusted do agente)."""
-
-    def __init__(self, outcome: CliOutcome) -> None:
-        self._outcome = outcome
-
-    def run(self, prompt: str, *, workspace: str) -> CliOutcome:
-        return self._outcome
-
-
-def _fake_gitops(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutraliza o git real: clone/identity/branch/push viram no-ops; o HEAD "avança" (E5)."""
-    monkeypatch.setattr(gitops, "clone", lambda url, ws: None)
-    monkeypatch.setattr(gitops, "configure_identity", lambda ws, **kw: None)
-    monkeypatch.setattr(gitops, "head_sha", lambda ws: "base-sha-000")
-    monkeypatch.setattr(gitops, "create_branch", lambda ws, br: None)
-    monkeypatch.setattr(gitops, "has_new_commits", lambda ws, base: True)
-    monkeypatch.setattr(gitops, "push", lambda ws, br, *, repo_url, token: None)
+def db(make_db: Callable[[str], Any]) -> Iterator[Any]:
+    """Database próprio do teste (`make_db`, tests/runtime/conftest.py) — schema do zero."""
+    yield make_db(_DB)
 
 
 def _run_to_gate(
@@ -96,9 +69,9 @@ def _run_to_gate(
     `pr_url`/`pr_number` são injetáveis: os testes de tripwire simulam um deliverable que NÃO
     pertence ao alvo `dev-kubo` (ex.: uma PrRef devolvida sob `kubo-forge`) para provar que
     `reject_gate`/`promote_gate` barram ANTES de qualquer I/O contra a API."""
-    _fake_gitops(monkeypatch)
+    fake_gitops(monkeypatch)
     out = outcome or CliOutcome(text="implementei feature X", cost_usd=0.37, num_turns=2)
-    monkeypatch.setattr(flow_runner, "_build_cli_executor", lambda p, t: _FakeCli(out))
+    monkeypatch.setattr(flow_runner, "_build_cli_executor", lambda p, t: FakeCli(out))
     opened: dict[str, Any] = {}
 
     def _open(**kw: Any) -> PrRef:
@@ -151,16 +124,6 @@ def test_reject_closes_pr_via_api_with_kubo_pat(db: Any, monkeypatch: pytest.Mon
     assert db.query("SELECT VALUE state FROM $t;", {"t": result.task})[0] == "rejected"
 
 
-def _promotion_gate(db: Any, flow: Any) -> Any:
-    """O gate de promoção auto-aberto: a task humana ABERTA (sem decisão) em `done` (v2)."""
-    rows = db.query(
-        "SELECT VALUE id FROM $f<-belongs_to<-task WHERE state = 'done' AND decision IS NONE "
-        "AND (->assigned_to->persona.catalog_name)[0] = 'humano';",
-        {"f": flow},
-    )
-    return rows[0] if rows else None
-
-
 def test_promote_still_uses_shared_readonly_token(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Confirmar promoção do dev-kubo lê o merge com o MESMO token READ-ONLY compartilhado do
     forge (E12/E13 — o PAT read-only já cobre os dois repos operacionalmente, não é preocupação
@@ -168,7 +131,7 @@ def test_promote_still_uses_shared_readonly_token(db: Any, monkeypatch: pytest.M
     result, _ = _run_to_gate(db, monkeypatch)
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
     resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
-    promo = _promotion_gate(db, result.flow)
+    promo = promotion_gate(db, result.flow)
     assert promo is not None
     seen: dict[str, Any] = {}
 
@@ -222,7 +185,7 @@ def test_promote_tripwire_blocks_pr_url_mismatch_before_any_api_call(
     )
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
     resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
-    promo = _promotion_gate(db, result.flow)
+    promo = promotion_gate(db, result.flow)
     assert promo is not None
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
