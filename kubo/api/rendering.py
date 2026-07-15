@@ -22,6 +22,7 @@ from kubo.api.nav import (
     GROUP_WORK,
     MOBILE_TABS,
     NAV,
+    MobileTabKey,
     NavItem,
 )
 
@@ -41,22 +42,22 @@ def _current_nav_item(path: str) -> NavItem | None:
     return max(candidates, key=lambda i: len(i["route"]), default=None)
 
 
-_GROUP_TO_MOBILE_TAB = {
-    GROUP_KNOWLEDGE: "saber",
-    GROUP_WORK: "trabalho",
-    GROUP_DISTRIBUTION: "distribuicao",
+_GROUP_TO_MOBILE_TAB: dict[str, MobileTabKey] = {
+    GROUP_KNOWLEDGE: "knowledge",
+    GROUP_WORK: "work",
+    GROUP_DISTRIBUTION: "distribution",
 }
 
 
-def _current_mobile_tab_key(crumb: NavItem | None) -> str:
+def _current_mobile_tab_key(crumb: NavItem | None) -> MobileTabKey:
     """Mapeia o item de nav atual (já resolvido por `_current_nav_item`) pra uma das 5
-    tabs mobile (sessão 0019). Sem item casado (ex.: `/more`, 404) cai em 'mais' —
+    tabs mobile (sessão 0019). Sem item casado (ex.: `/more`, 404) cai em 'more' —
     fallback deliberado, não uma tab própria pra cada rota desconhecida."""
     if crumb is None:
-        return "mais"
+        return "more"
     if crumb["route"] == "/":
-        return "painel"
-    return _GROUP_TO_MOBILE_TAB.get(crumb["group"] or "", "mais")
+        return "dashboard"
+    return _GROUP_TO_MOBILE_TAB.get(crumb["group"] or "", "more")
 
 
 def _nav_context(request: Request) -> dict[str, Any]:

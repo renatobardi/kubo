@@ -13,24 +13,25 @@ from kubo.api.rendering import _GROUP_TO_MOBILE_TAB, _current_mobile_tab_key, _c
 
 def test_every_nav_group_maps_to_a_mobile_tab() -> None:
     """Blindagem contra desalinhamento futuro: um grupo novo em NAV sem entrada
-    correspondente em _GROUP_TO_MOBILE_TAB cairia silenciosamente em 'mais'."""
+    correspondente em _GROUP_TO_MOBILE_TAB cairia silenciosamente em 'more'."""
     groups = {item["group"] for item in NAV if item["group"] is not None}
     assert groups <= _GROUP_TO_MOBILE_TAB.keys()
 
 
 def test_current_mobile_tab_key_maps_nav_groups_to_tabs() -> None:
-    """Painel (grupo None, rota '/') → painel; Conhecimento → saber; Trabalho → trabalho;
-    Distribuição → distribuicao; path sem item de nav (ex.: '/more') → mais (fallback)."""
-    assert _current_mobile_tab_key(_current_nav_item("/")) == "painel"
-    assert _current_mobile_tab_key(_current_nav_item("/distilled")) == "saber"
-    assert _current_mobile_tab_key(_current_nav_item("/entities/abc123")) == "saber"
-    assert _current_mobile_tab_key(_current_nav_item("/sources")) == "saber"
-    assert _current_mobile_tab_key(_current_nav_item("/flows")) == "trabalho"
-    assert _current_mobile_tab_key(_current_nav_item("/runs")) == "trabalho"
-    assert _current_mobile_tab_key(_current_nav_item("/destinations")) == "distribuicao"
-    assert _current_mobile_tab_key(_current_nav_item("/dispatches")) == "distribuicao"
-    assert _current_mobile_tab_key(_current_nav_item("/more")) == "mais"
-    assert _current_mobile_tab_key(_current_nav_item("/nope")) == "mais"
+    """Painel (grupo None, rota '/') → dashboard; Conhecimento → knowledge; Trabalho →
+    work; Distribuição → distribution; path sem item de nav (ex.: '/more') → more
+    (fallback). Chaves em inglês (identificador — regra de idioma do projeto)."""
+    assert _current_mobile_tab_key(_current_nav_item("/")) == "dashboard"
+    assert _current_mobile_tab_key(_current_nav_item("/distilled")) == "knowledge"
+    assert _current_mobile_tab_key(_current_nav_item("/entities/abc123")) == "knowledge"
+    assert _current_mobile_tab_key(_current_nav_item("/sources")) == "knowledge"
+    assert _current_mobile_tab_key(_current_nav_item("/flows")) == "work"
+    assert _current_mobile_tab_key(_current_nav_item("/runs")) == "work"
+    assert _current_mobile_tab_key(_current_nav_item("/destinations")) == "distribution"
+    assert _current_mobile_tab_key(_current_nav_item("/dispatches")) == "distribution"
+    assert _current_mobile_tab_key(_current_nav_item("/more")) == "more"
+    assert _current_mobile_tab_key(_current_nav_item("/nope")) == "more"
 
 
 def test_tab_bar_renders_five_tabs_with_routes(authed_client: TestClient) -> None:

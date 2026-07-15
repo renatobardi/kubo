@@ -10,7 +10,7 @@ do design system. `group` agrupa na sidebar; `None` = item de topo.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 
 class NavItem(TypedDict):
@@ -43,12 +43,16 @@ NAV: list[NavItem] = [
 ]
 
 
-class MobileTab(TypedDict):
-    """Item da bottom tab bar mobile (sessão 0019). `key` casa com o retorno de
-    `rendering._current_mobile_tab_key`; rótulo/rota podem divergir do grupo da
-    sidebar (ex.: 'Saber' é o grupo 'Conhecimento' rotulado diferente — C3)."""
+MobileTabKey = Literal["dashboard", "knowledge", "work", "distribution", "more"]
 
-    key: str
+
+class MobileTab(TypedDict):
+    """Item da bottom tab bar mobile (sessão 0019). `key` (identificador, EN — regra
+    de idioma) casa com o retorno de `rendering._current_mobile_tab_key`; rótulo/rota
+    podem divergir do grupo da sidebar (ex.: 'Saber' é o grupo 'Conhecimento'
+    rotulado diferente — C3)."""
+
+    key: MobileTabKey
     label: str
     route: str
     icon: str
@@ -58,9 +62,9 @@ class MobileTab(TypedDict):
 # Cada tab de grupo aponta pro 1º item do grupo correspondente na NAV; "Mais" é
 # página própria (resto da nav) — não existe item de NAV equivalente.
 MOBILE_TABS: list[MobileTab] = [
-    {"key": "painel", "label": "Painel", "route": "/", "icon": "home"},
-    {"key": "saber", "label": "Saber", "route": "/distilled", "icon": "book-open"},
-    {"key": "trabalho", "label": GROUP_WORK, "route": "/flows", "icon": "workflow"},
-    {"key": "distribuicao", "label": GROUP_DISTRIBUTION, "route": "/destinations", "icon": "send"},
-    {"key": "mais", "label": "Mais", "route": "/more", "icon": "ellipsis"},
+    {"key": "dashboard", "label": "Painel", "route": "/", "icon": "home"},
+    {"key": "knowledge", "label": "Saber", "route": "/distilled", "icon": "book-open"},
+    {"key": "work", "label": GROUP_WORK, "route": "/flows", "icon": "workflow"},
+    {"key": "distribution", "label": GROUP_DISTRIBUTION, "route": "/destinations", "icon": "send"},
+    {"key": "more", "label": "Mais", "route": "/more", "icon": "ellipsis"},
 ]
