@@ -18,6 +18,15 @@
 > com a pendência nomeada, **ratificado pelo dono no checkpoint da 0016b** — mesmo precedente do
 > ADR-0018, aceito na mesma condição de smoke físico owner-gated pendente.)
 
+> **Smoke 16.8 EXECUTADO (2026-07-15) — pendência DISCHARGED, gatilho NÃO disparou.** Deploy
+> no kubo-test (imagem com git + `claude-agent-sdk`, migration 0007) + duas tasks reais no
+> sandbox `renatobardi/kubo-forge`: **aprovar** (PR #1 → flow `done`; PR fica **OPEN**, `mergedAt:
+> null` — o Kubo NÃO mesclou, D38 por construção; o dono mescla) e **rejeitar** (PR #2 → fechado
+> via API com o motivo em comentário, `mergedAt: null`, flow `rejected`). Ambos os caminhos
+> provados FISICAMENTE no browser (GateSheet ramificado por kind: link `#N no GitHub` estrutural +
+> resumo untrusted). **Custo real por flow: $0.141 / $0.138 (6 turns cada)** — ~35× ABAIXO do
+> `budget_usd` 5.0 de §V, na ordem do spike ($0.13). Nenhuma decisão contradita → sem reabertura.
+
 ## Contexto
 
 A fase 2 fez o Trabalho nascer (ADR-0016) e o gate humano no browser (ADR-0018). Esta
