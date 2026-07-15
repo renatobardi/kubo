@@ -1,0 +1,56 @@
+<!-- @dsCard group="Components" viewport="700x300" name="Surfaces" subtitle="Flat ring cards · dialog · tooltip · skeleton" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--background)}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const K = window.KoboDesignSystem_6efae6;
+const { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent, Button, Badge, Dialog, Tooltip, Skeleton, Separator } = K;
+function Demo() {
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,alignItems:'start'}}>
+      <Card>
+        <CardHeader>
+          <CardTitle>Your agents</CardTitle>
+          <CardDescription>3 agents · pick one to start chatting</CardDescription>
+          <CardAction><Button variant="outline" size="sm" icon="plus">New agent</Button></CardAction>
+        </CardHeader>
+        <CardContent>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <Badge variant="secondary" icon="bot">Research</Badge>
+            <Badge variant="secondary" icon="bot">Ops</Badge>
+          </div>
+        </CardContent>
+      </Card>
+      <Card size="sm">
+        <CardHeader><CardTitle>Loading</CardTitle></CardHeader>
+        <CardContent>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <Skeleton style={{height:14,width:'80%'}} />
+            <Skeleton style={{height:14,width:'55%'}} />
+          </div>
+        </CardContent>
+      </Card>
+      <div style={{display:'flex',gap:12,alignItems:'center',gridColumn:'1 / -1'}}>
+        <Dialog trigger={<Button variant="outline">Open dialog</Button>}
+          title="Rename conversation" description="Give this session a memorable title."
+          footer={<><Button variant="ghost">Cancel</Button><Button>Save</Button></>} />
+        <Tooltip label="Dark Mode" side="right"><Button size="icon" variant="ghost" icon="moon" /></Tooltip>
+        <span style={{fontSize:12,color:'var(--muted-foreground)'}}>hover the moon →</span>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script>
+</body>
+</html>

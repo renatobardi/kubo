@@ -1,0 +1,19 @@
+<!-- @dsCard group="Foundations" viewport="700x170" name="Ring vs shadow" subtitle="Cards are defined by a 1px ring, not a drop shadow" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+body{margin:0;padding:24px;background:var(--background);font-family:var(--font-sans)}
+.row{display:flex;gap:24px;align-items:stretch}
+.demo{flex:1;background:var(--card);border-radius:var(--radius-2xl);padding:18px;color:var(--foreground)}
+.ring{box-shadow:0 0 0 1px color-mix(in oklab,var(--foreground) 10%,transparent)}
+.shadow{box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.t{font-family:var(--font-heading);font-size:14px;font-weight:500;margin:0}
+.d{font-size:11px;color:var(--muted-foreground);margin:4px 0 0}
+</style></head>
+<body>
+<div class="row">
+  <div class="demo ring"><p class="t">Default card</p><p class="d">ring-1 ring-foreground/10 — flat, works in both themes. No border, no shadow.</p></div>
+  <div class="demo shadow" style="border:1px solid var(--border)"><p class="t">Small card (stat / agent)</p><p class="d">border + shadow-sm — the one place a real shadow is used, with hover shadow-md.</p></div>
+</div>
+</body></html>

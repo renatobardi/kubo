@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Kubo — bot avatar</title>
+<style>
+  @font-face {
+    font-family: 'Inter Variable';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: block;
+    src: url('../fonts/InterVariable.woff2') format('woff2-variations'), local('Inter');
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #4b4b4b; }
+  .frame {
+    width: 512px; height: 512px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 28px;
+    font-family: 'Inter Variable', sans-serif;
+  }
+  .wordmark {
+    font-weight: 600;
+    font-size: 132px;
+    letter-spacing: -0.045em;
+    line-height: 1;
+  }
+  /* Dark tile — app-icon treatment (pink outline sakura + near-white Kubo) */
+  #dark { background: #1c1917; }
+  #dark .wordmark { color: #fafaf9; }
+  /* Light — cream bg, pink-filled petals + near-black ink + near-black Kubo */
+  #light { background: #faf9f7; }
+  #light .wordmark { color: #1c1917; }
+</style>
+</head>
+<body>
+<div class="frame" id="dark">
+  <svg width="216" height="216" viewBox="0 0 100 100" fill="none">
+    <g fill="none" stroke="#f4c9d4" stroke-width="6" stroke-linejoin="round">
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(0 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(72 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(144 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(216 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(288 50 50)"/>
+    </g>
+    <g stroke="#f4c9d4" stroke-width="3.3" stroke-linecap="round">
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(36 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(108 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(180 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(252 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(324 50 50)"/>
+    </g>
+    <g fill="#f4c9d4">
+      <circle cx="50" cy="33" r="3" transform="rotate(36 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(108 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(180 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(252 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(324 50 50)"/>
+      <circle cx="50" cy="50" r="5.4"/>
+    </g>
+  </svg>
+  <span class="wordmark">Kubo</span>
+</div>
+
+<div class="frame" id="light" style="display:none">
+  <svg width="216" height="216" viewBox="0 0 100 100" fill="none">
+    <g fill="#f4c9d4" stroke="#1c1917" stroke-width="6" stroke-linejoin="round">
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(0 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(72 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(144 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(216 50 50)"/>
+      <path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 C53,10 58,8 61,15 C67,27 62,43 50,50 Z" transform="rotate(288 50 50)"/>
+    </g>
+    <g stroke="#1c1917" stroke-width="3.3" stroke-linecap="round">
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(36 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(108 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(180 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(252 50 50)"/>
+      <line x1="50" y1="50" x2="50" y2="34" transform="rotate(324 50 50)"/>
+    </g>
+    <g fill="#1c1917">
+      <circle cx="50" cy="33" r="3" transform="rotate(36 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(108 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(180 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(252 50 50)"/>
+      <circle cx="50" cy="33" r="3" transform="rotate(324 50 50)"/>
+      <circle cx="50" cy="50" r="5.4"/>
+    </g>
+  </svg>
+  <span class="wordmark">Kubo</span>
+</div>
+</body>
+</html>

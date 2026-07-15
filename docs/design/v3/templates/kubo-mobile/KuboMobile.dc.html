@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<!-- @template name="Kubo Mobile" description="App mobile do ateliê Kubo — tab bar inferior, busca por aba e detalhe em pilha. Mesmo vocabulário da versão web." -->
+<helmet>
+<script src="./ds-base.js"></script>
+<script src="../../ui_kits/kubo-app/data.js"></script>
+</helmet>
+<div style="display:flex;align-items:flex-start;justify-content:center;padding:32px 24px;background:#e7e7ea;min-height:100vh;box-sizing:border-box">
+<x-import component-from-global-scope="KuboMobileApp" from="./ios-frame.jsx ./KuboMobileApp.jsx" dark="{{ dark }}" hint-size="402px,874px"></x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:450,&quot;height&quot;:940},&quot;dark&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Aparência&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return { dark: this.props.dark ?? false };
+  }
+}
+</script>
+</body>
+</html>
