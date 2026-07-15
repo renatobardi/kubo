@@ -23,17 +23,23 @@ class NavItem(TypedDict):
     icon: str
 
 
+# Nomes de grupo — constantes (SonarCloud S1192: literal repetido 3x+ entre NAV e
+# MOBILE_TABS). Também a fonte única que o mapeamento de tabs mobile referencia.
+GROUP_KNOWLEDGE = "Conhecimento"
+GROUP_WORK = "Trabalho"
+GROUP_DISTRIBUTION = "Distribuição"
+
 # Ordem = ordem de exibição; itens do mesmo grupo ficam CONSECUTIVOS (o header do
 # grupo é renderizado na 1ª ocorrência). Só o implementado (D27: zero link morto).
 NAV: list[NavItem] = [
     {"label": "Painel", "route": "/", "group": None, "icon": "home"},
-    {"label": "Destilados", "route": "/distilled", "group": "Conhecimento", "icon": "book-open"},
-    {"label": "Entidades", "route": "/entities", "group": "Conhecimento", "icon": "network"},
-    {"label": "Fontes", "route": "/sources", "group": "Conhecimento", "icon": "rss"},
-    {"label": "Fluxos", "route": "/flows", "group": "Trabalho", "icon": "workflow"},
-    {"label": "Execuções", "route": "/runs", "group": "Trabalho", "icon": "activity"},
-    {"label": "Destinos", "route": "/destinations", "group": "Distribuição", "icon": "send"},
-    {"label": "Envios", "route": "/dispatches", "group": "Distribuição", "icon": "mail"},
+    {"label": "Destilados", "route": "/distilled", "group": GROUP_KNOWLEDGE, "icon": "book-open"},
+    {"label": "Entidades", "route": "/entities", "group": GROUP_KNOWLEDGE, "icon": "network"},
+    {"label": "Fontes", "route": "/sources", "group": GROUP_KNOWLEDGE, "icon": "rss"},
+    {"label": "Fluxos", "route": "/flows", "group": GROUP_WORK, "icon": "workflow"},
+    {"label": "Execuções", "route": "/runs", "group": GROUP_WORK, "icon": "activity"},
+    {"label": "Destinos", "route": "/destinations", "group": GROUP_DISTRIBUTION, "icon": "send"},
+    {"label": "Envios", "route": "/dispatches", "group": GROUP_DISTRIBUTION, "icon": "mail"},
 ]
 
 
@@ -54,7 +60,7 @@ class MobileTab(TypedDict):
 MOBILE_TABS: list[MobileTab] = [
     {"key": "painel", "label": "Painel", "route": "/", "icon": "home"},
     {"key": "saber", "label": "Saber", "route": "/distilled", "icon": "book-open"},
-    {"key": "trabalho", "label": "Trabalho", "route": "/flows", "icon": "workflow"},
-    {"key": "distribuicao", "label": "Distribuição", "route": "/destinations", "icon": "send"},
+    {"key": "trabalho", "label": GROUP_WORK, "route": "/flows", "icon": "workflow"},
+    {"key": "distribuicao", "label": GROUP_DISTRIBUTION, "route": "/destinations", "icon": "send"},
     {"key": "mais", "label": "Mais", "route": "/more", "icon": "ellipsis"},
 ]

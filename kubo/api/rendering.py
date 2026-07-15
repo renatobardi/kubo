@@ -16,7 +16,14 @@ from zoneinfo import ZoneInfo
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from kubo.api.nav import MOBILE_TABS, NAV, NavItem
+from kubo.api.nav import (
+    GROUP_DISTRIBUTION,
+    GROUP_KNOWLEDGE,
+    GROUP_WORK,
+    MOBILE_TABS,
+    NAV,
+    NavItem,
+)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -35,9 +42,9 @@ def _current_nav_item(path: str) -> NavItem | None:
 
 
 _GROUP_TO_MOBILE_TAB = {
-    "Conhecimento": "saber",
-    "Trabalho": "trabalho",
-    "Distribuição": "distribuicao",
+    GROUP_KNOWLEDGE: "saber",
+    GROUP_WORK: "trabalho",
+    GROUP_DISTRIBUTION: "distribuicao",
 }
 
 
