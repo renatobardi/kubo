@@ -39,7 +39,7 @@
               {% if c.is_gate %}
                 <div class="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-primary">{{ macros.triangle_alert("size-3") }} aguardando você</div>
               {% endif %}
-              <p class="text-sm leading-snug">{% if c.persona == "humano" %}Revisar e decidir{% else %}Sintetizar relatório{% endif %}</p>
+              <p class="text-sm leading-snug">{% if c.persona == "humano" %}Revisar e decidir{% elif c.persona == "dev" %}Implementar mudança{% else %}Sintetizar relatório{% endif %}</p>
               <div class="mt-2.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span>{{ macros.persona_glyph(c.persona, "size-4") }}</span>
                 <span class="flex-1">{{ c.persona }}</span>
@@ -75,9 +75,18 @@
     </div>
 
     <div class="flex-1 space-y-4 overflow-y-auto p-5">
+      {% if gate.deliverable_kind == "pr" and gate.pr_url %}
+      {# Link ESTRUTURAL do PR (vindo da API — E3), nunca extraído do content untrusted. #}
       <div>
-        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">O que a analista produziu</div>
-        <p class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{{ gate.content or "(relatório vazio)" }}</p>
+        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">Pull request</div>
+        <a href="{{ gate.pr_url }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
+          {{ macros.triangle_alert("size-3.5") }} #{{ gate.pr_number }} no GitHub
+        </a>
+      </div>
+      {% endif %}
+      <div>
+        <div class="mb-1.5 text-xs font-semibold text-muted-foreground">{% if gate.deliverable_kind == "pr" %}Resumo do agente{% else %}O que a analista produziu{% endif %}</div>
+        <p class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{{ gate.content or "(sem resumo)" }}</p>
       </div>
       {% if gate.sources %}
       <div>
@@ -104,7 +113,7 @@
         <form method="post" action="/flows/gate/approve" class="flex-1">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <input type="hidden" name="task" value="{{ gate.gate_task }}">
-          <button class="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">Aprovar e entregar</button>
+          <button class="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">{% if gate.deliverable_kind == "pr" %}Aprovar — você mescla no GitHub{% else %}Aprovar e entregar{% endif %}</button>
         </form>
         <button form="reject-form" class="flex-1 rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-white hover:opacity-90">Confirmar rejeição</button>
       </div>

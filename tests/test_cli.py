@@ -390,3 +390,46 @@ def test_run_flow_command_rejects_unknown_destination(monkeypatch: pytest.Monkey
     )
     with pytest.raises(ConfigError, match="não existe"):
         run_flow_command(object(), template="analysis", question="q", destination_id="fantasma")
+
+
+def test_handle_flow_review_state_is_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """O gate aberto do dev (`review`) é sucesso (exit 0) — o PR espera a decisão no board, como
+    `awaiting_review` no analysis. Só `failed` é exit 1."""
+    monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("review"))
+    args = argparse.Namespace(
+        flow_command="run",
+        template="dev-mini",
+        question="add hello()",
+        destination="owner-telegram",
+    )
+    assert _handle_flow(object(), args) == 0
+    assert "review" in capsys.readouterr().out
+
+
+def test_run_flow_command_dev_skips_embedder_and_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`kubo flow run dev-mini` NÃO constrói embedder Gemini nem resolve destino Telegram (C1:
+    disparo por CLI, gate na UI) — passa embedder=None/destination=None ao run_flow."""
+
+    def _boom_embedder() -> None:
+        raise AssertionError("dev-mini não deve construir GeminiEmbedder")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("kubo.__main__.GeminiEmbedder.from_env", staticmethod(_boom_embedder))
+    monkeypatch.setattr("kubo.__main__.resolve_base_url", lambda: "https://kubo.example")
+    monkeypatch.setattr("kubo.__main__.run_flow", lambda db, **kw: captured.update(kw) or _FLOW)
+
+    run_flow_command(object(), template="dev-mini", question="add hello()", destination_id="x")
+
+    assert captured["template_name"] == "dev-mini"
+    assert captured["question"] == "add hello()"
+    assert captured["embedder"] is None
+    assert captured["destination"] is None
+
+
+_FLOW = FlowRunResult(
+    flow=RecordID("flow", "1"), task=RecordID("task", "1"), run=RecordID("run", "1"), state="review"
+)
