@@ -125,23 +125,32 @@ escopo desta ADR de RITO).
 
 ### XI. Gate automático + revisor-LLM-como-serviço são NECESSÁRIOS, NÃO SUFICIENTES (achado central)
 
-O worker do PR #49 (`agent/s7v7s5wgb3wr2e64afrc`) passou **todos** os gates automáticos — CI
-verde (ruff/pyright/tests/integration/cobertura) — e o CodeRabbit rodou de verdade nele (sem
-rate limit) sem encontrar NADA. Mesmo assim, o passe adversarial dedicado (`security-reviewer`,
-thread principal invocando fora do circuito de CI, sobre o MESMO código do #49 — reaproveitado
-~integralmente no #50 antes de qualquer correção) achou um **ALTO** real: `tag_name` gravado cru
-em `metadata` — um surrogate solto sobreviveria até o encoder CBOR estrito do SDK SurrealDB
-(ADR-0005) e abortaria a persistência do **batch inteiro** (não só o item), o oposto da
-falha-parcial que o próprio docstring do worker promete (ADR-0009 §VII). A evidência fica
-ancorada no #49: o #50 não atesta nada sobre o ALTO — já estava corrigido quando o CodeRabbit
-rodou nele. (Na revisão do dono/Cowork sobre o #50 já corrigido, apareceram mais dois achados
-menores, registrados no D51 — não repetidos aqui.)
+**Os fatos** (checados contra check-runs/reviews reais, não memória — ver "Nota de método"
+abaixo): no PR #49 (`agent/s7v7s5wgb3wr2e64afrc`), `quality` (pyright) **FALHOU**, pegando um
+bug de type-narrowing no teste do próprio agente (`.payloads[0].external_id` sem `isinstance`)
+— MECÂNICO, sem relação com segurança. O CodeRabbit **NUNCA rodou** no #49 (rate limit da
+plataforma — o check-run reporta `success` porque é só o bot confirmando que TENTOU, não
+evidência de revisão real). Dos automatismos que de fato EXAMINARAM o código (ruff, pyright,
+tests, integration, SonarCloud), **nenhum é desenhado para pegar sanitização de campo
+ausente** — não é a classe de bug que essas ferramentas endereçam (`quality` pegou UM bug real,
+só que o bug errado para este achado). Mesmo assim, o passe adversarial dedicado
+(`security-reviewer`, thread principal invocando fora do circuito de CI, sobre o MESMO código
+do #49 — reaproveitado ~integralmente no #50 antes de qualquer correção) achou um **ALTO**
+real: `tag_name` gravado cru em `metadata` — um surrogate solto sobreviveria até o encoder CBOR
+estrito do SDK SurrealDB (ADR-0005) e abortaria a persistência do **batch inteiro** (não só o
+item), o oposto da falha-parcial que o próprio docstring do worker promete (ADR-0009 §VII). A
+evidência fica ancorada no #49: o #50 não atesta nada sobre o ALTO — já estava corrigido
+quando o CodeRabbit finalmente rodou (pela primeira vez neste ciclo, sem rate limit), achando
+**3 itens diferentes** (403≠rate-limit, teste de streaming, nit de validador — D51), nenhum
+deles o ALTO.
 
 **Duas afirmações distintas, duas cargas de prova distintas:**
 
-1. **"CI verde + CodeRabbit limpo não é evidência suficiente de segurança"** — afirmação de
-   INSUFICIÊNCIA, provada por contraexemplo único: um ALTO real atravessou os dois gates. N=1
-   basta; a questão fica logicamente encerrada.
+1. **"O que de fato rodou sobre o #49 não foi suficiente para pegar um bug de segurança
+   real"** — afirmação de INSUFICIÊNCIA, provada por observação direta (não amostragem): dos
+   mecanismos automáticos que EXAMINARAM o código, nenhum é do tipo que endereça esta classe de
+   bug; o mecanismo que poderia (CodeRabbit) não rodou por falha operacional real. N=1 basta —
+   a questão fica encerrada pela observação, não por estatística.
 2. **"Security-reviewer é peça estrutural do rito"** — isto é PRESCRIÇÃO, e N=1 não prova
    prescrição sozinho. A prescrição se sustenta por custo assimétrico: um passe de subagent por
    promoção é barato; um batch-abort silencioso na persistência — ou pior, na fase 4, com
@@ -157,17 +166,24 @@ revisor LLM qualquer" (que falharia pelo mesmo motivo do CodeRabbit); é **passe
 os invariantes do projeto no contexto** — o mesmo padrão que já rege `security-reviewer` em
 `kubo/store/`, `kubo/contracts/`, `kubo/executors/`, `kubo/workers/` no CLAUDE.md.
 
-**Segunda insuficiência, independente da primeira, sem conserto por contexto:** a explicação
-acima cobre o ALTO do CBOR, mas não cobre outro dado do mesmo smoke — o CodeRabbit não achou
-NADA no PR #49 e achou o `403≠rate-limit` (D51 #1) no PR #50, sobre o MESMO trecho de código de
-agente, inalterado entre os dois PRs. Esse bug não exige contexto de invariante nenhum (é
-semântica geral da API do GitHub, não deste projeto); mesmo assim uma rodada do revisor-serviço
-o achou e a outra não, sobre o código idêntico. Isto é INCONSISTÊNCIA entre rodadas do MESMO
-revisor-serviço, não explicável por falta de contexto — e "dar mais contexto ao passe
-adversarial" (a correção da insuficiência acima) não resolve esta, porque o alvo aqui é o
-revisor terceirizado, não o passe dedicado. Duas insuficiências independentes reforçam a mesma
-conclusão prescritiva (o passe dedicado é peça estrutural), mas por razões distintas — uma
-razão não cobre a outra, e futuras reavaliações da XI devem checar as duas.
+**Segunda insuficiência — de DISPONIBILIDADE, não de acerto.** O CodeRabbit NUNCA rodou no #49
+(rate limit da org, "couldn't start this review"). O revisor-serviço esteve ausente exatamente
+no PR que continha o ALTO: não há evidência de que o teria achado, nem de que não. O que se
+prova aqui não é cegueira dele — é que **a disponibilidade dele não é contável**. Um gate que
+pode silenciosamente não rodar não sustenta uma decisão de promoção; falha ABERTO. Quando rodou
+(no #50, código já corrigido), achou 3 itens acionáveis reais — tem valor quando roda; o
+problema é que "quando" não é garantia. Isto não substitui o argumento de custo assimétrico da
+prescrição, soma com uma alternativa: "é só confiar no revisor-serviço" não é opção, porque ele
+não está sempre lá.
+
+**Nota de método — achado sobre o PRÓPRIO ADR (registrado por ser o mais barato de esquecer):**
+a primeira redação desta seção afirmava que o #49 passou todos os gates automáticos e que o
+CodeRabbit o revisou limpo. As DUAS coisas eram falsas: o `quality`/pyright FALHOU no #49 (foi o
+motivo do reject) e o CodeRabbit não rodou. O erro foi escrito de memória e só caiu quando se
+foi buscar os check-runs do commit. É o E3 do ADR-0019 ("estrutura nunca vem do texto do agente
+— URL, SHA e todo dado estrutural vêm da resposta da API") aplicado ao próprio documento:
+**resultado de gate é dado estrutural. Vem do check-run, nunca da lembrança de quem escreve o
+ADR.**
 
 **Endereço operacional (o slot, não só o mandato):** no caminho de EXCEÇÃO (D44, este smoke), o
 passe rodou dentro do fallback, antes de reabrir o PR. No caminho NORMAL (PR de agente sem
