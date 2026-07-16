@@ -64,25 +64,37 @@ SELECT worker, status, stats, error, started_at, finished_at FROM run ORDER BY s
 
 ## PAT `GITHUB_TOKEN_WATCH` (worker github-releases v0.2.0, D54, sessão 0021)
 
-O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions`. Dois PATs
-funcionam — **prefira o fine-grained** (least-privilege):
+O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions`.
 
-**Opção A — fine-grained (preferida, menor privilégio):**
+**Opção A (USE ESTA) — PAT clássico, escopo `notifications`.** PROVADO fisicamente na sessão
+0021: HTTP 200 contra `api.github.com/user/subscriptions` — é o token que está no `.env` do
+kubo-test hoje.
 
-1. *GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token.*
-2. **Permissions → Account permissions → Watching = Read-only.** A doc oficial da API (REST,
-   seção "Watching") lista `GET /user/subscriptions` sob esta permissão — só leitura, sem o
-   escopo mais largo `notifications` do PAT clássico abaixo.
+1. *GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) →
+   Generate new token (classic)*.
+2. Escopo: **`notifications`**. **Atenção:** este escopo **NÃO é read-only** — permite marcar
+   notificação como lida e inscrever/desinscrever watches, além de ler a lista. É escrita de
+   baixo risco, mas não documente nem trate este token como "leitura".
 3. Expiração curta (renovável). O valor NUNCA passa pelo chat/log — cole direto no `.env`
    do servidor (`GITHUB_TOKEN_WATCH=`, ver `.env.example`), invariante 8.
 4. Redeploy (`./scripts/deploy.sh`) pra o `kubo-scheduler` pegar a env nova.
 
-**Opção B — PAT clássico (fallback provado fisicamente, sessão 0021/D51):** escopo
-`notifications`. **Atenção:** este escopo **NÃO é read-only** — permite marcar notificação
-como lida e inscrever/desinscrever watches, além de ler a lista. É escrita de baixo risco, mas
-não documente nem trate este token como "leitura". Use se a opção A não funcionar no seu caso
-(watches de conta/org podem ter comportamento diferente — não testado à exaustão) — os mesmos
-passos 3-4 acima se aplicam.
+**Opção B (NÃO PROVADA — não seguir sem testar antes) — fine-grained, Account permissions →
+Watching: Read-only.** A doc oficial da API do GitHub (REST, seção "Watching") lista
+`GET /user/subscriptions` sob esta permissão — menor privilégio que o escopo `notifications`
+do PAT clássico. Mas a tentativa real (2026-07-16, token recém-criado) devolveu **HTTP 503**
+com a página de erro "Unicorn" do GitHub — inclusive em `GET /user`, o endpoint mais básico
+que existe. No mesmo instante: `githubstatus.com` reportava "All Systems Operational", e o
+MESMO Mac fez 200 em `api.github.com/rate_limit` sem token nenhum. Causa NÃO diagnosticada.
+**Dívida nomeada:** fechar essa folga de least-privilege exige diagnosticar o 503 primeiro —
+não repetir a tentativa em produção sem isso.
+
+**Nota de método (o valor durável deste achado):** sobre a mesma pergunta — "fine-grained cobre
+`/user/subscriptions`?" — houve TRÊS respostas diferentes ao longo da sessão 0021: o advisor
+afirmou que não cobria (sem evidência anexada); a doc oficial do GitHub afirmou que cobria
+(evidência documental); a API real quebrou com 503 ao testar (evidência empírica). Nenhuma das
+duas primeiras acertou sozinha. Capacidade de API é fato empírico — doc oficial é hipótese até
+o `curl` responder.
 
 Sem este PAT, o worker levanta `ConfigError` no run (integração `github-watch` sem secret
 resolvido) — falha legível, não silenciosa; o resto do scheduler segue rodando.
