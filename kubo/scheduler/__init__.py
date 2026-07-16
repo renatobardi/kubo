@@ -57,7 +57,7 @@ class WorkerEntry(BaseModel):
 
 
 class FlowEntry(BaseModel):
-    """Uma entrada agendada de FLOW (sessão 0021, marco 21.4, ADR-0021 §21.3/21.4): dispara
+    """Uma entrada agendada de FLOW (sessão 0021, marco 21.4, ADR-0022): dispara
     `run_flow(template_name=flow, question=question, worker_config=config)` no cron. `question`
     é obrigatória (é o que `run_flow` grava em `flow.question`) — sem gate/executor/destination,
     o flow `pipeline` não precisa de nenhum dos três."""
@@ -73,7 +73,7 @@ class Schedules(BaseModel):
     """Config validada de `schedules.yaml`: timezone obrigatória + lista de entries — cada
     entry é `WorkerEntry` OU `FlowEntry` (união em modo smart do Pydantic v2: os campos
     obrigatórios disjuntos `worker` vs `flow`+`question` bastam para desambiguar sem
-    `discriminator=` explícito, ADR-0021 §21.3/21.4)."""
+    `discriminator=` explícito, ADR-0022)."""
 
     model_config = ConfigDict(extra="forbid")
     timezone: str

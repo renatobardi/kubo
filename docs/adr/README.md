@@ -28,3 +28,5 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0018](0018-boards-gates-ui-write-path.md) | Boards + gates + caminho de escrita da UI (gate humano no browser) | aceito |
 | [0019](0019-executor-cli-github-persona-dev.md) | Executor `cli` + GitHub: a persona dev nasce (task → PR real → gate) | aceito |
 | [0020](0020-metodologia-dev-aidlc.md) | Metodologia do flow dev da fase 4: AI-DLC no lugar do BMAD | aceito |
+| [0021](0021-rito-promocao.md) | Rito de promoção: worker → grafo (deploy-gap, import-oráculo, gate sequencial) | aceito |
+| [0022](0022-pipeline-agendado.md) | Pipeline agendado: watch list, flow por cron, agendamento de flow | aceito |

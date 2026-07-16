@@ -93,7 +93,16 @@ O GitHub modela subscription como binário (`subscribed`/`ignored`); watch **cus
 
 **Erro de método registrado (custou duas reversões):** declarei "watch morreu, estrela ganha" com base na REST apenas; o dono empurrou → testei GraphQL (também 0) e declarei de novo; o dono empurrou de novo → a hipótese certa (Custom vs All Activity) só apareceu na terceira. As duas primeiras conclusões vieram de **parar de procurar cedo demais**, não de dado errado. O instinto do dono ("watch é a palavra certa") estava certo o tempo todo; foi a exploração da API que estava incompleta. **Conclusão só depois de esgotar a explicação chata** — mesma lição de [[verificar-fato-na-fonte]] e do E3/ADR-0019.
 
-**Tarefa do dono antes da 0021 (substitui a faxina do `/watching`):** os 136 Custom já foram convertidos a All Activity nesta migração one-time (tabela acima) — **essa parte está feita, não se repete**. O que falta é curadoria: estrelar os repos que ele realmente quer no digest, dentre os 260 já inscritos. A lista de watch tem entulho visível (repos de 0 estrela, forks alheios de uma linha) e 260 × até 30 releases na estreia é a enxurrada nomeada no item 4 abaixo. Herdar o acúmulo sem filtrar é copiar o problema; selecionar agora é a chance de fazer a curadoria de verdade.
+**Correção (achado do advisor, sessão 0021 — este parágrafo ficava órfão e mentindo em 6 meses):**
+a migração dos 136 Custom para All Activity está FEITA, não é mais tarefa pendente — a lista de
+watch é 260 repos, e é isso que o worker `github-releases` v0.2.0 lê (ADR-0022). A ideia original
+deste parágrafo (estrelar os repos desejados como filtro de curadoria) NÃO foi implementada — a
+0021 decidiu (D52) neutralizar a enxurrada de estreia com `since` congelado, sem camada de
+curadoria por estrela. A curadoria dos 260 continua uma dívida real e nomeada (ADR-0022,
+consequências): a lista tem entulho visível (forks alheios, repos de 0 estrela) e o custo — tempo
+de leitura do dono — só aparece depois de medir a primeira semana de digest. O mecanismo de poda,
+se a curadoria mostrar necessidade, é `unwatch` no próprio GitHub (o produto funcionando como
+desenhado, não manutenção do Kubo).
 
 ### Dívida herdada do worker (achados da revisão do PR #50 pelo dono/Cowork, 2026-07-15 — mergeados conscientemente, a 18b prova o RITO, não a perfeição do worker)
 
