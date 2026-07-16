@@ -268,6 +268,32 @@ fechada de campos não é. As duas seções se reforçam.
   texto ("D44 fallback: the `dev-kubo` agent run (PR #49)..."). Regra nomeada daqui pra frente:
   **todo PR de fallback D44 DEVE declarar a origem (número do run/PR do agente) no corpo do
   PR** — texto livre, não campo estrutural, mas obrigatório por disciplina.
+- **Reject e promote são MUTUAMENTE EXCLUSIVOS por smoke — propriedade estrutural do
+  desenho, não falha de execução.** Um flow tem UM PR. Se o agente tropeça, o smoke prova o
+  reject (o flow morre em `rejected`, terminal — nunca abre o gate `[done, promoted]`) e o
+  worker que acaba promovido entra por um PR `feat/*` do fallback D44, fora do rito (nenhum
+  flow/deliverable/gate por trás). Se o agente NÃO tropeça, o smoke prova o promote e nunca
+  exercita o reject. Não existe smoke ÚNICO que cubra os dois ramos do gate `[review, done]`
+  (`review → done` E `review → rejected`) para o MESMO flow — são transições mutuamente
+  exclusivas por construção (`decide_gate` decide uma vez). O 18.10 disparou uma vez: comprou
+  a prova do reject (real, contra o repo principal, com `GITHUB_PAT_KUBO`) e — como
+  consequência estrutural, não como omissão — não pagou a prova do promote sobre um PR de
+  agente genuíno. Custo não nomeado até agora; nomeado aqui.
+- **O import-oráculo contra worker NOVO segue sem prova física (residual da parte A, não
+  fechado pela parte B).** No smoke da parte A (18.6), o Confirmar promoção resolveu `feed`
+  — um worker JÁ registrado antes do smoke — cerimônia que a própria ADR já nomeava como
+  "conscientemente encenada" (nota da seção X). O caso que de fato importa — um `worker_name`
+  que NÃO existia na imagem viva antes do deploy, deploy ainda não rodou, `WORKER_REGISTRY`
+  não resolve, `PromotionError` legível, gate `done` segue ABERTO — está provado só por teste
+  de integração (`test_promote_rejects_unknown_worker_name`), nunca fisicamente contra
+  produção. A 18b tinha o worker novo certo (`github-releases`) para fechar isso, mas não
+  fechou: o D44 disparou primeiro (o agente tropeçou no `review`, antes de chegar perto do
+  gate de promoção com um worker genuinamente novo) — mesma causa-raiz do item anterior.
+  **Não se fecha forçando:** fabricar um worker só para exercitar o botão de promoção é dívida
+  permanente num repo de mantenedor solo, e exigiria uma decisão de produto (querer aquele
+  worker) só para servir de fixture de teste — inversão de prioridade. A lacuna fecha sozinha
+  no primeiro worker de agente que nascer SEM tropeçar no `review` — evento real da fase 4,
+  não smoke fabricado.
 
 ## Consequências
 
