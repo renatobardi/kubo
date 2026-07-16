@@ -157,6 +157,18 @@ revisor LLM qualquer" (que falharia pelo mesmo motivo do CodeRabbit); é **passe
 os invariantes do projeto no contexto** — o mesmo padrão que já rege `security-reviewer` em
 `kubo/store/`, `kubo/contracts/`, `kubo/executors/`, `kubo/workers/` no CLAUDE.md.
 
+**Segunda insuficiência, independente da primeira, sem conserto por contexto:** a explicação
+acima cobre o ALTO do CBOR, mas não cobre outro dado do mesmo smoke — o CodeRabbit não achou
+NADA no PR #49 e achou o `403≠rate-limit` (D51 #1) no PR #50, sobre o MESMO trecho de código de
+agente, inalterado entre os dois PRs. Esse bug não exige contexto de invariante nenhum (é
+semântica geral da API do GitHub, não deste projeto); mesmo assim uma rodada do revisor-serviço
+o achou e a outra não, sobre o código idêntico. Isto é INCONSISTÊNCIA entre rodadas do MESMO
+revisor-serviço, não explicável por falta de contexto — e "dar mais contexto ao passe
+adversarial" (a correção da insuficiência acima) não resolve esta, porque o alvo aqui é o
+revisor terceirizado, não o passe dedicado. Duas insuficiências independentes reforçam a mesma
+conclusão prescritiva (o passe dedicado é peça estrutural), mas por razões distintas — uma
+razão não cobre a outra, e futuras reavaliações da XI devem checar as duas.
+
 **Endereço operacional (o slot, não só o mandato):** no caminho de EXCEÇÃO (D44, este smoke), o
 passe rodou dentro do fallback, antes de reabrir o PR. No caminho NORMAL (PR de agente sem
 tropeço), o slot é: o passe roda sobre o diff do PR do agente **ANTES da decisão do gate do
