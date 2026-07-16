@@ -157,7 +157,7 @@ def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
 
 # Templates cujo flow é dev (executor cli): NÃO usam retrieval (embedder Gemini) nem destino
 # Telegram — disparo por CLI, gate na UI (C1, ADR-0019). Template dev novo = entrada aqui + PR.
-_DEV_TEMPLATES = frozenset({"dev-mini"})
+_DEV_TEMPLATES = frozenset({"dev-mini", "dev-kubo"})
 
 
 def run_flow_command(

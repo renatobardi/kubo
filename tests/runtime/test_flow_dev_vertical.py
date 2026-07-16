@@ -12,8 +12,7 @@ SDK); gitops/github_api são monkeypatchados no módulo do worker (mesmo idioma 
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import replace
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -23,10 +22,10 @@ from kubo.errors import PromotionError, StateError
 from kubo.executors.cli import CliOutcome
 from kubo.runtime import flow_runner
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate, run_flow
-from kubo.store import client, migrations
 from kubo.store.flows import read_gate_context
-from kubo.workers import github_api, gitops
+from kubo.workers import github_api
 from kubo.workers.github_api import PrRef, PrStatus
+from tests.runtime.conftest import FakeCli, fake_gitops, promotion_gate
 
 pytestmark = pytest.mark.integration
 
@@ -53,44 +52,18 @@ def _forge_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def db() -> Iterator[Any]:
-    """Database próprio do teste, removido antes e depois — schema aplicado do zero."""
-    cfg = replace(client.config(), database=_DB)
-    with client.connect(cfg) as conn:
-        conn.query(f"REMOVE DATABASE IF EXISTS {_DB};")
-        conn.use(cfg.namespace, cfg.database)
-        migrations.apply_migrations(conn)
-        yield conn
-        conn.query(f"REMOVE DATABASE IF EXISTS {_DB};")
-
-
-class _FakeCli:
-    """CliRunner fake: devolve um CliOutcome preset (a prosa untrusted do agente)."""
-
-    def __init__(self, outcome: CliOutcome) -> None:
-        self._outcome = outcome
-
-    def run(self, prompt: str, *, workspace: str) -> CliOutcome:
-        return self._outcome
-
-
-def _fake_gitops(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutraliza o git real: clone/identity/branch/push viram no-ops; o HEAD "avança" (E5)."""
-    monkeypatch.setattr(gitops, "clone", lambda url, ws: None)
-    monkeypatch.setattr(gitops, "configure_identity", lambda ws, **kw: None)
-    monkeypatch.setattr(gitops, "head_sha", lambda ws: "base-sha-000")
-    monkeypatch.setattr(gitops, "create_branch", lambda ws, br: None)
-    monkeypatch.setattr(gitops, "has_new_commits", lambda ws, base: True)
-    monkeypatch.setattr(gitops, "push", lambda ws, br, *, repo_url, token: None)
+def db(make_db: Callable[[str], Any]) -> Iterator[Any]:
+    """Database próprio do teste (`make_db`, tests/runtime/conftest.py) — schema do zero."""
+    yield make_db(_DB)
 
 
 def _run_to_gate(
     db: Any, monkeypatch: pytest.MonkeyPatch, *, outcome: CliOutcome | None = None
 ) -> tuple[Any, dict[str, Any]]:
     """Instancia e roda o dev-mini até o gate (ou até falhar). Devolve (result, open_pr_kwargs)."""
-    _fake_gitops(monkeypatch)
+    fake_gitops(monkeypatch)
     out = outcome or CliOutcome(text="implementei hello()", cost_usd=0.42, num_turns=3)
-    monkeypatch.setattr(flow_runner, "_build_cli_executor", lambda p, t: _FakeCli(out))
+    monkeypatch.setattr(flow_runner, "_build_cli_executor", lambda p, t: FakeCli(out))
     opened: dict[str, Any] = {}
 
     def _open(**kw: Any) -> PrRef:
@@ -165,16 +138,6 @@ def test_reject_closes_pr_via_api_and_archives(db: Any, monkeypatch: pytest.Monk
     assert gate["reason"] == "escopo errado"
 
 
-def _promotion_gate(db: Any, flow: Any) -> Any:
-    """O gate de promoção auto-aberto: a task humana ABERTA (sem decisão) em `done` (v2)."""
-    rows = db.query(
-        "SELECT VALUE id FROM $f<-belongs_to<-task WHERE state = 'done' AND decision IS NONE "
-        "AND (->assigned_to->persona.catalog_name)[0] = 'humano';",
-        {"f": flow},
-    )
-    return rows[0] if rows else None
-
-
 def test_approve_auto_opens_promotion_gate_v2(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """v2 (ADR-0021): aprovar o gate `review` abre AUTOMATICAMENTE o gate de promoção — nova task
     humana em `done`, sem decisão, resolvível como gate aberto (`gate_state='done'`)."""
@@ -183,7 +146,7 @@ def test_approve_auto_opens_promotion_gate_v2(db: Any, monkeypatch: pytest.Monke
 
     resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
 
-    promo = _promotion_gate(db, result.flow)
+    promo = promotion_gate(db, result.flow)
     assert promo is not None
     ctx = read_gate_context(db, promo)
     assert ctx is not None
@@ -200,7 +163,7 @@ def test_reject_on_promotion_gate_leaves_merged_pr_untouched(
     closed: dict[str, Any] = {}
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
     resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
-    promo = _promotion_gate(db, result.flow)
+    promo = promotion_gate(db, result.flow)
 
     with pytest.raises(StateError):
         reject_gate(db, gate_task=promo, reason="não quero promover")
@@ -212,7 +175,7 @@ def _approved_to_promotion(db: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[An
     """Roda o dev-mini até o gate de promoção ABERTO (review aprovado). Devolve (result, promo)."""
     result, _ = _run_to_gate(db, monkeypatch)
     resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
-    promo = _promotion_gate(db, result.flow)
+    promo = promotion_gate(db, result.flow)
     return result, promo
 
 

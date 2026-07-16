@@ -11,3 +11,4 @@ prompt: >
   fora do seu turno.
 permissions:
   - github
+  - github-kubo

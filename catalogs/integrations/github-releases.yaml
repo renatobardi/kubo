@@ -1,0 +1,12 @@
+name: github-releases
+kind: http
+# Integração DEDICADA (E13, ADR-0021 §9): o worker `github_releases` (fase 4, primeiro worker
+# de agente no repo principal, D42/D43) só LÊ releases de repos configurados — a credencial de
+# ESCRITA do `github`/`github-kubo` violaria least-privilege num coletor. Reusa o MESMO env do
+# token read-only já usado pelo Confirmar promoção (`GITHUB_TOKEN_READONLY`, E12) — o token
+# read-only cobre os repos públicos que o dono configurar como fonte (não é preocupação de
+# escopo por-integração, é preocupação de escopo do PAT em si, resolvida no runbook).
+auth:
+  type: bearer
+  secret_ref: env:GITHUB_TOKEN_READONLY  # pragma: allowlist secret
+base_url: https://api.github.com

@@ -1,0 +1,12 @@
+name: github-kubo
+kind: http
+# Fine-grained PAT DO DONO (D45 revertida — sem conta-máquina), restrito ao repo PRINCIPAL
+# `renatobardi/kubo`: contents:write + pull_requests:write, SEM a permissão Workflows (E2 — o
+# GitHub rejeita push que toque .github/workflows/, protegendo o CI de ser neutralizado pelo
+# próprio PR). PRs de agente são identificados por PREFIXO DE BRANCH (`agent/*`), não por autor
+# (E1) — require-review fica desligado; o gate humano é disciplina do dono (ADR-0021).
+# Bearer no header Authorization (nunca na URL). Segredo só por referência (invariante 8).
+auth:
+  type: bearer
+  secret_ref: env:GITHUB_PAT_KUBO  # pragma: allowlist secret
+base_url: https://api.github.com

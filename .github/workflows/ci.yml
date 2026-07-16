@@ -37,8 +37,13 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           echo "branch: $BRANCH"
-          echo "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9-]+$' \
-            || { echo "::error::branch '$BRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug (kebab-case)"; exit 1; }
+          # `agent/<flowid>` (ADR-0021 §9, E1/E3) é a SEGUNDA taxonomia válida — PRs do
+          # flow dev-kubo, branch derivado do RecordID do flow (minúsculo alfanumérico
+          # SurrealDB), nunca escolhido pelo agente (ver kubo/runtime/flow_runner.py
+          # `_dev_branch`). Sem esta alternativa, todo PR de agente reprovaria aqui e
+          # NUNCA passaria CI — o gate ficaria impossível de satisfazer, não só rígido.
+          echo "$BRANCH" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)/[a-z0-9-]+$|^agent/[a-z0-9]+$' \
+            || { echo "::error::branch '$BRANCH' fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug ou agent/<flowid>"; exit 1; }
       - name: Título de PR convencional
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -46,6 +51,58 @@ jobs:
           echo "title: $PR_TITLE"
           echo "$PR_TITLE" | grep -Eq '^(feat|fix|chore|docs|test|refactor|ci)(\([a-z0-9._-]+\))?!?: .+' \
             || { echo "::error::título de PR não-convencional: '$PR_TITLE' (ex.: 'feat: add X')"; exit 1; }
+
+  # Path-guard do flow dev-kubo (ADR-0021 §9, E3) — a proteção ESTRUTURAL que substitui o
+  # require-review perdido (D45 revertida: o agente usa o PAT DO DONO, sem conta-máquina,
+  # `required_approving_review_count: 0` na proteção do branch). PR de agente é identificado
+  # por PREFIXO DE BRANCH (`agent/*`, nunca `github.actor` — o autor é sempre o dono). Diff
+  # tem que caber no allowlist de worker; fora dele, bloqueado por required status check.
+  #
+  # Lógica 100% INLINE aqui, nunca um script do repo (mesmo um dentro do allowlist) — defesa
+  # em profundidade além do E2 (o PAT de escrita do agente NÃO tem a permissão Workflows; o
+  # GitHub REJEITA qualquer push que toque .github/workflows/, então este arquivo já é
+  # inatingível pelo PAT por construção — mas a lógica fica inline mesmo assim, para não
+  # depender de nenhum caminho de arquivo estar correto).
+  #
+  # A condição de branch fica DENTRO do step, nunca no `if:` do job: um required status check
+  # cujo JOB é pulado via `if:` fica "pending" pra sempre em PRs onde a condição é falsa — o
+  # GitHub não trata job-level skip como "passou" (gotcha conhecido). Como job required, isso
+  # travaria TODO PR humano (branch fora de `agent/*`) pra sempre. O job sempre RODA em
+  # pull_request; só a ENFORCEMENT é condicional (sai 0 cedo quando não é branch de agente).
+  agent-path-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # precisa do histórico completo pra `git diff` entre base e head SHA
+      - name: Diff contido no allowlist de worker (só PRs de branch agent/*)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          case "$BRANCH" in
+            agent/*) ;;
+            *) echo "branch '$BRANCH' não é agent/* — path-guard não se aplica"; exit 0 ;;
+          esac
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed.txt
+          echo "arquivos alterados:"; cat /tmp/changed.txt
+          if [ ! -s /tmp/changed.txt ]; then
+            echo "::error::PR de branch agent/* sem arquivos alterados — nada para validar"
+            exit 1
+          fi
+          # Allowlist (E9/E3): worker novo = kubo/workers/x.py + linha no registry + testes +
+          # opcionalmente um YAML de integração/config em catalogs/. Nada fora disso.
+          outside=$(grep -Ev '^(kubo/workers/|tests/workers/|catalogs/)' /tmp/changed.txt || true)
+          if [ -n "$outside" ]; then
+            echo "::error::PR de branch agent/* tocou arquivo(s) fora do allowlist (kubo/workers/**, tests/workers/**, catalogs/**):"
+            echo "$outside"
+            exit 1
+          fi
+          echo "ok: diff inteiro contido no allowlist"
 
   quality:
     runs-on: ubuntu-latest
