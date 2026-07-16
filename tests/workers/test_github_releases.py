@@ -174,9 +174,42 @@ def test_rate_limit_on_one_repo_does_not_abort_others() -> None:
 
 
 @respx.mock
-def test_forbidden_status_is_also_rate_limit_kind() -> None:
-    """403 (além de 429) também é tratado como rate_limit (item 5 do enunciado)."""
+def test_forbidden_without_rate_limit_headers_is_http_kind() -> None:
+    """403 SEM header de rate limit é permission-denied puro (ex.: PAT sem escopo) —
+    NUNCA rate_limit, senão o operador espera uma janela que nunca vai abrir (D55)."""
     respx.get(_releases_url("acme", "widget")).mock(return_value=httpx.Response(403))
+    config = GithubReleasesConfig(repos=["acme/widget"])
+
+    result = GithubReleasesWorker().run(_ctx(config))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+
+
+@respx.mock
+def test_forbidden_with_ratelimit_remaining_zero_is_rate_limit_kind() -> None:
+    """403 COM `x-ratelimit-remaining: 0` é o sinal primário de rate limit do GitHub ->
+    kind=rate_limit (D55)."""
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(403, headers={"x-ratelimit-remaining": "0"})
+    )
+    config = GithubReleasesConfig(repos=["acme/widget"])
+
+    result = GithubReleasesWorker().run(_ctx(config))
+
+    assert result.error is not None
+    assert result.error.kind == "rate_limit"
+    assert result.payloads == []
+
+
+@respx.mock
+def test_forbidden_with_retry_after_is_rate_limit_kind() -> None:
+    """403 COM `retry-after` é o sinal de rate limit secundário (abuse detection) do GitHub
+    -> kind=rate_limit, mesmo sem `x-ratelimit-remaining` (D55)."""
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(403, headers={"retry-after": "60"})
+    )
     config = GithubReleasesConfig(repos=["acme/widget"])
 
     result = GithubReleasesWorker().run(_ctx(config))
