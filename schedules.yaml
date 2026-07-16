@@ -85,4 +85,4 @@ schedules:
     cron: "0 7 * * *"
     question: "coleta diária da watch list"
     config:
-      since: "2026-07-16T00:00:00Z"
+      since: "2026-07-17T00:00:00Z"
