@@ -292,6 +292,29 @@ lacunas/decisões em aberto nomeadas (catálogo pré-colocado vs. PR autossufici
 path-guard mais largo que `catalogs/integrations/`); `agent-path-guard ✅` no #50 é vácuo como
 evidência (branch `feat/*`) — a evidência real do guard é o #49.
 
-**Falta para fechar 18.10/18b:** deploy do kubo-test com `main` pós-#50 + "Confirmar promoção"
-(`github-releases`, com hífen) na UI pelo dono — ação humana por construção (D38), não
-delegável ao CLI.
+**Achado de fechamento (18.10, pós-deploy):** não há gate de promoção pra clicar — confirmado
+no board. Não é erro, é propriedade estrutural: **reject e promote são MUTUAMENTE EXCLUSIVOS
+por smoke** (um flow tem um PR; o reject do #49 levou o flow a `rejected`, terminal, nunca
+abriu `[done, promoted]`; o worker que de fato foi promovido — `github-releases`, via #50 —
+entrou por um PR `feat/*` do fallback D44, fora do rito, sem flow/deliverable/gate por trás).
+O D44 disparar comprou a prova do reject e cobrou a prova do promote — custo nomeado
+retroativamente na ADR-0021 §XIII (dois bullets novos, PR próprio, sem `--admin`).
+
+**18.10/18b FECHADO com o que foi provado fisicamente** (não com o roteiro original — o
+roteiro assumia poder disparar o promote no mesmo smoke, e essa suposição caiu):
+- agente escreveu de fato no repo principal (`renatobardi/kubo`), PR real (#49);
+- `agent-path-guard` e `pr-conventions` seguraram o diff/branch/título legitimamente (E3/E8);
+- reject provado fisicamente no repo principal com `GITHUB_PAT_KUBO` (não só no sandbox da
+  parte A);
+- passe adversarial dedicado achou o ALTO real que CI + CodeRabbit não pegaram (achado
+  central, §XI);
+- fallback D44 provado (CLI reescreve, reaproveitando ~100% do código correto do agente);
+- ADR-0021 cravado (`aceito`), §XI-XIII validadas pelo advisor em duas rodadas + uma correção
+  factual do próprio CodeRabbit (ver `verify-gate-facts-from-api-kubo` na memória).
+
+**Residual nomeado, não fechado — fecha sozinho no primeiro worker de agente sem tropeço:** o
+import-oráculo contra um `worker_name` genuinamente NOVO (nunca antes na imagem) segue sem
+prova física — só teste de integração (`test_promote_rejects_unknown_worker_name`). O caso da
+parte A (18.6) usou `feed`, já registrado, cerimônia conscientemente encenada; a 18b tinha o
+worker certo pra fechar isso mas o D44 disparou primeiro. Não fabricar um worker só pra
+exercitar o botão (dívida permanente pior que a lacuna). Ver ADR-0021 §XIII.
