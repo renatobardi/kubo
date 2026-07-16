@@ -1,0 +1,13 @@
+name: github-watch
+kind: http
+# Integração DEDICADA do worker github-releases v0.2.0 (D54, sessão 0021): PAT PRÓPRIO
+# (GITHUB_TOKEN_WATCH), separado do github-readonly/GITHUB_TOKEN_READONLY do rito de
+# promoção — alargar aquele token pra cobrir /user/subscriptions violaria least-privilege
+# (escopo de um processo não deveria crescer pra servir outro). Cobre os DOIS endpoints
+# que o worker usa (GET /user/subscriptions e GET /repos/{owner}/{repo}/releases) com o
+# MESMO token — não há razão pra dois PATs quando ambos são leitura pura e o mesmo PAT
+# autentica os dois. Runbook de criação do PAT: docs/runbook.md.
+auth:
+  type: bearer
+  secret_ref: env:GITHUB_TOKEN_WATCH  # pragma: allowlist secret
+base_url: https://api.github.com
