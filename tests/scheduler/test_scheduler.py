@@ -22,7 +22,9 @@ from typing import Any
 from unittest.mock import MagicMock
 from urllib.parse import urlsplit
 
+import httpx
 import pytest
+import respx
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ValidationError
@@ -187,13 +189,13 @@ def test_load_schedules_reads_real_repo_config() -> None:
 
 
 def test_distiller_entry_config_validates() -> None:
-    """O entry ATIVO do destilador (`max_items: 20`) valida contra o schema do
+    """O entry ATIVO do destilador (`max_items: 50`, D56) valida contra o schema do
     DistillerWorker — o config declarado no schedules.yaml casa com o contrato do
     worker, então o scheduler o instancia sem surpresa em runtime."""
     from kubo.scheduler import WorkerEntry
     from kubo.workers.distiller import DistillerConfig, DistillerWorker
 
-    entry = WorkerEntry(worker="distiller", cron="0 9 * * *", config={"max_items": 20})
+    entry = WorkerEntry(worker="distiller", cron="0 9 * * *", config={"max_items": 50})
 
     assert DistillerWorker.manifest.config is DistillerConfig
     DistillerWorker.manifest.config.model_validate(entry.config)  # não levanta = válido
@@ -591,3 +593,65 @@ def test_build_scheduler_wires_flow_entry_to_execute_flow_job() -> None:
         "question": "coleta diária",
         "worker_config": {"since": "2026-07-16T00:00:00Z"},
     }
+
+
+@pytest.mark.integration
+@respx.mock
+def test_execute_flow_job_opens_own_connection_and_drives_run_flow(
+    scheduler_db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Achado do CodeRabbit (PR #57): a fiação (`test_build_scheduler_wires_flow_entry_to_
+    execute_flow_job` acima) só prova QUE `execute_flow_job` é o alvo do job, nunca CHAMA a
+    função de verdade. Este teste espelha `test_execute_job_opens_own_connection_and_drives_
+    run_worker`: chama `execute_flow_job` diretamente contra o template `pipeline` REAL, com
+    a rede do GitHub mockada (respx) — prova que abre a PRÓPRIA conexão (ADR-0010 item V) e
+    que `run_flow` recebe `template_name`/`question`/`base_url`/`worker_config` corretos ao
+    ponto de completar o flow de ponta a ponta (flow/task/run persistidos, task em `stored`)."""
+    from kubo import scheduler
+
+    monkeypatch.setenv("GITHUB_TOKEN_WATCH", "fake-watch-token")  # pragma: allowlist secret
+    job_cfg = replace(client.config(), database=_JOB_DB)
+    monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
+
+    respx.get("https://api.github.com/user/subscriptions").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "full_name": "acme/widget"}])
+    )
+    respx.get("https://api.github.com/repos/acme/widget/releases").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "tag_name": "v1.0.0",
+                    "draft": False,
+                    "prerelease": False,
+                    "published_at": "2026-07-01T00:00:00Z",
+                }
+            ],
+        )
+    )
+
+    scheduler.execute_flow_job("pipeline", "coleta diária", {"since": "2026-06-01T00:00:00Z"})
+
+    tasks = scheduler_db.query("SELECT state FROM task;")
+    assert len(tasks) == 1
+    assert tasks[0]["state"] == "stored"
+    runs = scheduler_db.query("SELECT status FROM run;")
+    assert len(runs) == 1
+    assert runs[0]["status"] == "ok"
+
+
+@pytest.mark.integration
+def test_execute_flow_job_reraises_and_logs_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`execute_flow_job` NÃO engole falha de setup (template inexistente, aqui) — repropaga
+    depois de logar, mesmo tratamento de `execute_job` (`scheduler_flow_job_failed`). Marcado
+    integration: `client.connect(client.config())` abre conexão real ANTES do `run_flow`
+    levantar `ConfigError` (o guard de template inexistente não toca `db`, mas a conexão em
+    si já foi aberta pelo `with`)."""
+    from kubo import scheduler
+
+    job_cfg = replace(client.config(), database=_JOB_DB)
+    monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
+
+    with pytest.raises(ConfigError, match="não existe no catálogo"):
+        scheduler.execute_flow_job("ghost-template", "q", {})

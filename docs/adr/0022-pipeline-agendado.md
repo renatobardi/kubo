@@ -24,8 +24,8 @@ diretamente:
 
 Consultei o advisor (Fable 5) duas vezes nesta sessão antes de fixar a forma: uma vez sobre o
 discriminador da entry em `schedules.yaml` e o canal de config `schedules.yaml → run_flow →
-worker`, e este draft de ADR está passando pela terceira consulta (obrigatória, CLAUDE.md) antes
-de cravar.
+worker`, e este ADR passou pela terceira consulta (obrigatória, CLAUDE.md) antes de ser cravado —
+as 4 correções que ela pediu já estão incorporadas no texto abaixo.
 
 ## Decisão
 
