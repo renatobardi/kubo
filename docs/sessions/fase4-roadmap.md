@@ -43,11 +43,57 @@
 
 O worker promovido na 0018 nasce com **lista estática** (o smoke prova o RITO de promoção, não o worker). O uso real entra na **0021**:
 
-- **Sinal = watch** (`/user/subscriptions`), não fork, não estrela. Watch é a palavra certa no vocabulário do dono e do GitHub; estrela significa "gostei". Fork foi descartado: obriga a resolver `parent` (N+1) e paga uma cópia de repo pelo preço de um marcador — fork volta a ser o que é, "quis mexer".
+- **Sinal = WATCH** (`GET /user/subscriptions`, REST — sem GraphQL), **confirmado por evidência em 2026-07-16** (ver "Veredito" abaixo). Watch é a palavra certa no vocabulário do dono e do GitHub; estrela significa "gostei". **Pré-condição não-óbvia: os repos têm de estar em `All Activity`, não em `Custom`** — Custom é invisível para as duas APIs. Estrela ficou como plano B descartado. Fork foi descartado antes: obriga a resolver `parent` (N+1) e paga uma cópia de repo pelo preço de um marcador — fork volta a ser o que é, "quis mexer".
 - **Pré-condição do dono: faxina ÚNICA em [github.com/watching](https://github.com/watching)** — sem desligar nada. O GitHub **removeu o auto-watch em 2025-05-22** ([changelog](https://github.blog/changelog/2025-05-22-sunset-of-automatic-watching-of-repositories-and-teams/), [discussão #157470](https://github.com/orgs/community/discussions/157470)): a feature não existe mais, a torneira já está fechada na origem. MAS o sunset **não foi retroativo** — inscrições acumuladas na era do auto-watch persistem (relatos de 900k+). Contas antigas têm entulho: faxina única resolve, não é imposto recorrente.
 - **Correção de premissa (erro registrado no planejamento):** participar de uma conversa (comentar/@mention) inscreve na **thread**, NÃO no repositório — thread subscription ≠ repo subscription. A lista de watches de repo nunca foi poluída por participação. O argumento "watch é gesto misturado, estrela é gesto puro" era FALSO; watch é tão deliberado quanto estrela, e é a palavra certa.
-- **Verificação por evidência antes de QUALQUER código** (disciplina ADR-0005), primeiro passo da 0021 — **risco de matar o desenho**: se o *Custom → Releases only* fizer o repo reportar `subscribed: false` em `GET /repos/{owner}/{repo}/subscription`, os repos configurados do jeito MAIS CERTO podem não aparecer em `/user/subscriptions` e o worker estreia lendo lista vazia. Confirmar: (a) `/user/subscriptions` devolve lista utilizável; (b) o nível *"releases only"* é legível via API; (c) custom não esconde o repo da listagem. **API decepcionou → estrela volta pra mesa** (aponta direto pro upstream, sem resolver pai).
+- **Verificação por evidência antes de QUALQUER código** (disciplina ADR-0005) — **CONCLUÍDA em 2026-07-16** (ver "Veredito" abaixo): o risco era real, mas não do jeito hipotetizado. `Custom → Releases only` não faz o repo reportar `subscribed: false` — faz o endpoint de subscription devolver **404**, e some das DUAS APIs (REST e GraphQL), não só de uma. Decisão resultante para a 0021: coletar via `All Activity` (a API enxerga) e mover a curadoria de entrega para `settings/notifications`, nunca para o nível de subscription.
 - **Descoberta ≠ curadoria (não misturar):** "top repos do mês" fica em item PRÓPRIO na fila (ver abaixo). Envenenar a curadoria com descoberta é o jeito clássico de matar o digest.
+
+### Veredito da verificação — WATCH CONFIRMADO (executado 2026-07-16, evidência do dono no Mac)
+
+**O sinal é watch (`/user/subscriptions`). Estrela descartada.** A verificação rodou ANTES de qualquer código, como a disciplina exige — e, no caminho, produziu duas conclusões erradas que só caíram porque o dono insistiu. Ambas registradas abaixo: o processo importa mais que o veredito.
+
+**O achado real: `Custom` é invisível para a API; só `All Activity` aparece.**
+
+| Fonte | Custom (releases-only) | All Activity |
+|---|---|---|
+| `github.com/watching` (UI) | `Custom 136` | idem |
+| `gh api user/subscriptions` (REST) | `[]` | **136** |
+| `gh api graphql viewer.watching` | `totalCount: 0` | **conta certo** |
+| `gh api repos/{o}/{r}/subscription` | `404 Not Found` | `{"subscribed": true}` |
+
+O GitHub modela subscription como binário (`subscribed`/`ignored`); watch **customizado** não cabe nesse modelo e some das DUAS APIs. Um repo listado na UI dá 404 no endpoint de subscription. Não é bug do desenho do Kubo — é o modelo da API.
+
+**A saída, que é o desenho mais honesto: inscrição ≠ entrega.** Marcar `All Activity` inscreve (a API enxerga); o barulho se mata em `settings/notifications`, desmarcando a entrega da linha **Watching** — que **não** desinscreve. A linha **Participating** é independente e segue avisando @menção/resposta. Usar `Custom` para filtrar era terceirizar ao GitHub a curadoria que o Kubo faz — e foi exatamente isso que cegou a API. **A inscrição vira SINAL (o Kubo lê); a notificação é entrega, e quem entrega é o Kubo.**
+
+**Migração executada (one-time, 2026-07-16) — a lista da 0021 tem 260 repos:**
+
+| Etapa | Número |
+|---|---|
+| Watches em Custom, convertidos a All Activity (`PUT .../subscription -F subscribed=true`) | **136** (136/136 ok) |
+| Forks do dono → `parent` deduplicado | **348** |
+| Desses, com release publicada nos últimos 90 dias (**filtro de vivo**) | **196** (56%) |
+| União (196 ativos ∪ 136 watches), inscritos os que faltavam | **260** (+124) |
+
+**Fork ENTROU como fonte, mas só o parent e só se vivo.** Os 152 fork-parents sem release em 90 dias ficaram de fora: custariam uma chamada por rodada para devolver vazio. Fork morto continua fork; ressuscitou, o dono inscreve. Isto NÃO reabre "fork é o sinal" — o sinal continua sendo a watch list; o fork foi só o **material de origem** de uma migração one-time, resolvendo `parent` uma vez, na mão do dono, não a cada rodada do worker.
+
+**Ovo-e-galinha nomeado:** a API **não lista** o que não enxerga, então os 136 nomes do Custom tiveram de sair do HTML das 6 páginas de `github.com/watching` — não há caminho por `gh`/GraphQL para essa extração. Os forks, ao contrário, a API lista (`gh repo list --fork --json parent`) — mas **`parent` não tem `nameWithOwner`**, só `name` + `owner.login`: pedir o campo errado devolve `null` silencioso em todos, e o `sort -u` colapsa 348 em 1 linha que parece um resultado. Terceira falha silenciosa da noite.
+
+**Regressão futura silenciosa:** se o dono voltar um repo a Custom, ele some do coletor **sem erro**. O worker não tem como distinguir "desinscrito" de "customizado".
+
+**Volume esperado (estimativa, medir na 0021):** 260 repos vivos → ordem de 7-15 releases/dia. Custo de destilação irrelevante; o custo real é o tempo de leitura do dono. **Isto torna a decisão de backfill (item 4 abaixo) crítica, não cosmética:** com `per_page=30` e backfill, a estreia destila até 7.800 releases. Começar do zero mantém a estreia vazia e o regime permanente no número acima.
+
+**Custo remanescente (real, aceito):** ler a watch list exige token com escopo **`notifications`** — mais largo que "ler release de repo público", que é tudo que o `GITHUB_TOKEN_READONLY` faz hoje. `/user/starred` não pediria isso. **Item da 0021:** decidir se o coletor ganha `notifications` no PAT existente ou um PAT próprio (least-privilege, invariante 8).
+
+**Três falhas silenciosas encontradas no caminho (o mais valioso deste bloco — registrar):**
+
+1. **Sem o escopo `notifications`, `/user/subscriptions` devolve `[]` SEM ERRO.** A primeira rodada parecia confirmar o defeito do desenho e só refletia o token. Foi o `gh` avisando ("This API operation needs the `notifications` scope") que separou as causas.
+2. **`gh api -f subscribed=true` manda a STRING `"true"` → `422 Validation Failed`.** O correto é `-F` (tipado). A primeira versão do script escondia stderr com `2>/dev/null` e imprimiu 12 `FALHA` seguidas — que pareciam confirmar "watch não dá", quando era erro de sintaxe. **Falha silenciosa mascarada de evidência** — o mesmo pecado apontado no D51 #2 (teste do teto de bytes), cometido duas horas depois por quem apontou.
+3. **Pedir `parent.nameWithOwner` devolve `null` silencioso** (o campo não existe em `parent`, só `name` + `owner.login`) — os 348 forks colapsaram num `sort -u` de 1 linha que parecia um resultado válido. Sem erro, sem stderr: só um número errado que passaria batido sem conferência manual.
+
+**Erro de método registrado (custou duas reversões):** declarei "watch morreu, estrela ganha" com base na REST apenas; o dono empurrou → testei GraphQL (também 0) e declarei de novo; o dono empurrou de novo → a hipótese certa (Custom vs All Activity) só apareceu na terceira. As duas primeiras conclusões vieram de **parar de procurar cedo demais**, não de dado errado. O instinto do dono ("watch é a palavra certa") estava certo o tempo todo; foi a exploração da API que estava incompleta. **Conclusão só depois de esgotar a explicação chata** — mesma lição de [[verificar-fato-na-fonte]] e do E3/ADR-0019.
+
+**Tarefa do dono antes da 0021 (substitui a faxina do `/watching`):** os 136 Custom já foram convertidos a All Activity nesta migração one-time (tabela acima) — **essa parte está feita, não se repete**. O que falta é curadoria: estrelar os repos que ele realmente quer no digest, dentre os 260 já inscritos. A lista de watch tem entulho visível (repos de 0 estrela, forks alheios de uma linha) e 260 × até 30 releases na estreia é a enxurrada nomeada no item 4 abaixo. Herdar o acúmulo sem filtrar é copiar o problema; selecionar agora é a chance de fazer a curadoria de verdade.
 
 ### Dívida herdada do worker (achados da revisão do PR #50 pelo dono/Cowork, 2026-07-15 — mergeados conscientemente, a 18b prova o RITO, não a perfeição do worker)
 
