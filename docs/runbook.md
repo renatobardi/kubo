@@ -62,6 +62,25 @@ execute_job('feed', {'feed_url': 'https://example.com/feed.xml', 'title': 'Teste
 SELECT worker, status, stats, error, started_at, finished_at FROM run ORDER BY started_at DESC LIMIT 1;
 ```
 
+## PAT `GITHUB_TOKEN_WATCH` (worker github-releases v0.2.0, D54, sessão 0021)
+
+O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions` — só
+funciona com um **PAT CLÁSSICO**, nunca fine-grained: fine-grained tokens não cobrem
+`/user/subscriptions` (limitação da própria API do GitHub, não do Kubo — não tem workaround,
+não "melhorar" depois trocando de tipo).
+
+1. *GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) →
+   Generate new token (classic)*.
+2. Escopo: **`notifications`** apenas. **Atenção:** este escopo **NÃO é read-only** — ele
+   permite marcar notificação como lida e inscrever/desinscrever watches, além de ler a
+   lista. É escrita de baixo risco, mas não documente nem trate este token como "leitura".
+3. Expiração curta (renovável). O valor NUNCA passa pelo chat/log — cole direto no `.env`
+   do servidor (`GITHUB_TOKEN_WATCH=`, ver `.env.example`), invariante 8.
+4. Redeploy (`./scripts/deploy.sh`) pra o `kubo-scheduler` pegar a env nova.
+
+Sem este PAT, o worker levanta `ConfigError` no run (integração `github-watch` sem secret
+resolvido) — falha legível, não silenciosa; o resto do scheduler segue rodando.
+
 ## Pendências de operação (a reconciliar antes do deploy)
 
 - As 6 URLs de feed em `schedules.yaml` são os endpoints RSS canônicos conhecidos; **reconciliar com as URLs exatas do legado (NeonDB `feed_sources`) antes do deploy real** — o CI não toca a internet, então uma URL errada não quebra teste, só a coleta.
