@@ -117,8 +117,9 @@ def test_config_requires_since() -> None:
 def test_config_rejects_naive_since() -> None:
     """`since` sem tzinfo (naive) é rejeitado -- comparação com `published_at` (sempre
     tz-aware na API do GitHub) exige tz-aware dos dois lados."""
+    naive_since = datetime(2026, 7, 1)  # noqa: DTZ001 -- naive é o ponto do teste
     with pytest.raises(ValidationError):
-        GithubReleasesConfig(since=datetime(2026, 7, 1))  # noqa: DTZ001 -- naive é o ponto do teste
+        GithubReleasesConfig(since=naive_since)
 
 
 def test_config_accepts_aware_since() -> None:
@@ -131,8 +132,8 @@ def test_config_accepts_aware_since() -> None:
 def test_config_rejects_leftover_repos_key() -> None:
     """`extra=\"forbid\"` permanece -- uma chave `repos` remanescente (do contrato v1) é
     rejeitada na construção, não ignorada silenciosamente."""
+    since = datetime(2026, 7, 1, tzinfo=UTC)
     with pytest.raises(ValidationError):
-        since = datetime(2026, 7, 1, tzinfo=UTC)
         GithubReleasesConfig(since=since, repos=["acme/widget"])  # type: ignore[call-arg]
 
 
@@ -209,6 +210,29 @@ def test_subscriptions_pagination_hard_cap_stops_after_ten_pages() -> None:
 
     assert isinstance(result, RunResult)
     assert route.call_count <= 10
+
+
+@respx.mock
+def test_pagination_link_off_origin_is_not_followed() -> None:
+    """Achado do CodeRabbit + security-reviewer (defesa em profundidade, não explorável no
+    modelo de ameaça atual, mas barata): um `Link: rel="next"` apontando pra outro host não
+    é seguido -- a paginação simplesmente para ali, sem erro, sem mandar o token pra fora."""
+    page1 = httpx.Response(
+        200,
+        json=[_subscription("acme/widget", sub_id=1)],
+        headers={"Link": '<https://evil.example.com/user/subscriptions?page=2>; rel="next"'},
+    )
+    route = respx.get(_SUBSCRIPTIONS_URL).mock(return_value=page1)
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    assert route.call_count == 1  # NUNCA chamou evil.example.com
+    stats = result.stats.model_dump()
+    assert stats["repos_seen"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +395,32 @@ def test_repos_seen_reflects_watch_list_size_across_pages() -> None:
     assert result.error is None
     stats = result.stats.model_dump()
     assert stats["repos_seen"] == 3
+
+
+@respx.mock
+def test_duplicate_repo_across_pages_is_deduped_and_fetched_once() -> None:
+    """Achado do CodeRabbit (PR #57): o mesmo repo aparecendo em 2 páginas da watch list
+    não pode gerar 2 fetches de releases -- dedup por ordem de primeira aparição, sem
+    inflar `repos_seen` nem os stats."""
+    page1 = httpx.Response(
+        200,
+        json=[_subscription("acme/widget", sub_id=1)],
+        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=2>; rel="next"'},
+    )
+    page2 = httpx.Response(200, json=[_subscription("acme/widget", sub_id=1)])
+    respx.get(_SUBSCRIPTIONS_URL).mock(side_effect=[page1, page2])
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    assert releases_route.call_count == 1
+    stats = result.stats.model_dump()
+    assert stats["repos_seen"] == 1
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
 
 
 # ---------------------------------------------------------------------------

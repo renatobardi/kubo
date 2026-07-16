@@ -1,0 +1,17 @@
+# Template pipeline v1 (sessão 0021, marco 21.3, C6): board mínimo sem gate humano e
+# sem estado `distilling` — o runner é SÍNCRONO (flow_runner.py), então um segundo
+# `run_worker` na mesma task exigiria schema novo (2ª run por task) fora de orçamento.
+# A destilação continua no cron das 09:00 (mecanismo existente, idempotente). Desvio
+# nomeado no ADR-0022: gatilho de reabertura é "distiller entra no flow quando houver
+# consumidor de card por-estágio".
+name: pipeline
+version: 1
+board:
+  states: [queued, collecting, stored, failed]
+  transitions:
+    - [queued, collecting]
+    - [collecting, stored]
+    - [collecting, failed]
+cast: [coletor]
+deliverable: releases
+triggers: [scheduled]

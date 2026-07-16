@@ -64,19 +64,25 @@ SELECT worker, status, stats, error, started_at, finished_at FROM run ORDER BY s
 
 ## PAT `GITHUB_TOKEN_WATCH` (worker github-releases v0.2.0, D54, sessão 0021)
 
-O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions` — só
-funciona com um **PAT CLÁSSICO**, nunca fine-grained: fine-grained tokens não cobrem
-`/user/subscriptions` (limitação da própria API do GitHub, não do Kubo — não tem workaround,
-não "melhorar" depois trocando de tipo).
+O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions`. Dois PATs
+funcionam — **prefira o fine-grained** (least-privilege):
 
-1. *GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) →
-   Generate new token (classic)*.
-2. Escopo: **`notifications`** apenas. **Atenção:** este escopo **NÃO é read-only** — ele
-   permite marcar notificação como lida e inscrever/desinscrever watches, além de ler a
-   lista. É escrita de baixo risco, mas não documente nem trate este token como "leitura".
+**Opção A — fine-grained (preferida, menor privilégio):**
+
+1. *GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token.*
+2. **Permissions → Account permissions → Watching = Read-only.** A doc oficial da API (REST,
+   seção "Watching") lista `GET /user/subscriptions` sob esta permissão — só leitura, sem o
+   escopo mais largo `notifications` do PAT clássico abaixo.
 3. Expiração curta (renovável). O valor NUNCA passa pelo chat/log — cole direto no `.env`
    do servidor (`GITHUB_TOKEN_WATCH=`, ver `.env.example`), invariante 8.
 4. Redeploy (`./scripts/deploy.sh`) pra o `kubo-scheduler` pegar a env nova.
+
+**Opção B — PAT clássico (fallback provado fisicamente, sessão 0021/D51):** escopo
+`notifications`. **Atenção:** este escopo **NÃO é read-only** — permite marcar notificação
+como lida e inscrever/desinscrever watches, além de ler a lista. É escrita de baixo risco, mas
+não documente nem trate este token como "leitura". Use se a opção A não funcionar no seu caso
+(watches de conta/org podem ter comportamento diferente — não testado à exaustão) — os mesmos
+passos 3-4 acima se aplicam.
 
 Sem este PAT, o worker levanta `ConfigError` no run (integração `github-watch` sem secret
 resolvido) — falha legível, não silenciosa; o resto do scheduler segue rodando.

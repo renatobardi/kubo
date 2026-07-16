@@ -43,7 +43,7 @@
               {% if c.is_gate %}
                 <div class="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-primary">{{ macros.triangle_alert("size-3") }} aguardando você</div>
               {% endif %}
-              <p class="text-sm leading-snug">{% if c.is_gate and c.state == "done" %}Confirmar promoção{% elif c.persona == "humano" %}Revisar e decidir{% elif c.persona == "dev" %}Implementar mudança{% else %}Sintetizar relatório{% endif %}</p>
+              <p class="text-sm leading-snug">{% if c.is_gate and c.state == "done" %}Confirmar promoção{% elif c.persona == "humano" %}Revisar e decidir{% elif c.persona == "dev" %}Implementar mudança{% elif c.persona == "coletor" %}Coletar releases{% else %}Sintetizar relatório{% endif %}</p>
               <div class="mt-2.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span>{{ macros.persona_glyph(c.persona, "size-4") }}</span>
                 <span class="flex-1">{{ c.persona }}</span>

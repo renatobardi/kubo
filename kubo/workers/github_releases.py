@@ -74,6 +74,7 @@ import time
 import unicodedata
 from datetime import datetime
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -235,6 +236,17 @@ def _fetch_releases(base_url: str, token: str, owner: str, repo: str) -> list[di
     return data
 
 
+def _is_same_origin(url: str, base_url: str) -> bool:
+    """`url` deve ter o MESMO esquema+host de `base_url` (https, mesmo netloc) — defesa em
+    profundidade (achado convergente do security-reviewer e do CodeRabbit, PR #57): a URL de
+    `Link: rel="next"` vem de um header de resposta, não de `base_url` (config confiável).
+    Não é explorável no modelo de ameaça atual (resposta de 1ª parte do GitHub, TLS) mas o
+    guard é barato e fecha por construção qualquer futuro onde isso deixe de ser verdade."""
+    parsed = urlsplit(url)
+    base = urlsplit(base_url)
+    return parsed.scheme == "https" and parsed.netloc == base.netloc
+
+
 def _fetch_subscriptions(base_url: str, token: str) -> list[dict[str, Any]]:
     """Busca a watch list do operador (`GET /user/subscriptions`), paginada via `Link:
     rel="next"` (RFC 5988) até esgotar as páginas OU até `_MAX_SUBSCRIPTION_PAGES` (C4).
@@ -253,7 +265,10 @@ def _fetch_subscriptions(base_url: str, token: str) -> list[dict[str, Any]]:
                 break
             data, resp = _stream_json_list(client, url, headers, params)
             subscriptions.extend(data)
-            url = resp.links.get("next", {}).get("url")
+            next_url = resp.links.get("next", {}).get("url")
+            if next_url is not None and not _is_same_origin(next_url, base_url):
+                break  # Link fora da origem esperada -- para a paginação, sem erro
+            url = next_url
             params = None  # a URL do Link já traz os query params completos
     return subscriptions
 
@@ -284,7 +299,12 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
 
     `full_name` malformado (sem exatamente uma `/`, parte vazia, ou `..`) é filtrado ANTES
     de virar repo a processar — dado de API externa, não confiado por padrão — e contado
-    em `skipped_bad_repo_shape`, nunca vira erro nem aborta a descoberta dos demais."""
+    em `skipped_bad_repo_shape`, nunca vira erro nem aborta a descoberta dos demais.
+
+    Deduplica por ordem de primeira aparição (achado do CodeRabbit, PR #57): o mesmo repo
+    pode aparecer em mais de uma página (overlap de paginação, ou o mesmo repo assistido por
+    conta pessoal E organização) — sem isso, `repos_seen`/fetches de release dobrariam por
+    repo repetido."""
     try:
         subscriptions = _fetch_subscriptions(base_url, token)
     except _FetchError as exc:
@@ -303,6 +323,7 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
         return [], 0, RunResult(payloads=[], stats=stats, error=error)
 
     repos: list[str] = []
+    seen: set[str] = set()
     skipped_bad_repo_shape = 0
     for sub in subscriptions:
         full_name = sub.get("full_name")
@@ -312,6 +333,9 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
             skipped_bad_repo_shape += 1
             log.warning("github_watch_full_name_malformed", full_name=full_name)
             continue
+        if full_name in seen:
+            continue
+        seen.add(full_name)
         repos.append(full_name)
 
     if not repos:
