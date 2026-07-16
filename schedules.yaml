@@ -57,12 +57,14 @@ schedules:
   # Precondição cumprida: o filtro de itens `content=""` está em
   # kubo.store.knowledge.items_without_distilled (link-posts sem corpo nunca vão
   # ao LLM). 09:00 = após a coleta dos feeds (08:00-08:50); ADR-0013 §VIII: itens
-  # que chegam depois esperam o dia seguinte, idempotente. `max_items` conservador
-  # (20/dia) por ora — o ritmo do backlog é decisão da fase 2.
+  # que chegam depois esperam o dia seguinte, idempotente. `max_items` subiu de
+  # 20 para 50 (D56, sessão 0021): o pipeline abaixo soma 7-15 releases/dia ao
+  # funil — sem o teto mais folgado, o funil represaria por motivo estrutural,
+  # não pelo pipeline em si.
   - worker: distiller
     cron: "0 9 * * *"
     config:
-      max_items: 20
+      max_items: 50
   # ── DIGEST DIÁRIO — 09:30, após a destilação das 09:00 (ADR-0015 D30) ──────────
   # Envia aos destinos do destinations.yaml os destilados novos desde o último
   # envio (por destino, watermark). Dia sem novidade = sem mensagem (só-se-novidade,
@@ -72,3 +74,15 @@ schedules:
     cron: "30 9 * * *"
     config:
       max_items: 50
+  # ── PIPELINE github-releases — watch list do dono (D51/D52/D54, sessão 0021) ──
+  # Fora do trem 08:00-09:30 (feeds + destilador + digest) — 07:00, antes de tudo.
+  # ATENÇÃO (dono): `since` abaixo é o piso de estreia (D52 — começar do zero, sem
+  # backfill). Congelado PARA SEMPRE (não avança — dívida nomeada e aceita no
+  # roadmap: recupera outage de graça, upsert é last-wins). AJUSTE para a data
+  # real do primeiro disparo em produção ANTES do deploy — se ficar com a data
+  # deste PR, a estreia pode coletar releases de dias que já passaram.
+  - flow: pipeline
+    cron: "0 7 * * *"
+    question: "coleta diária da watch list"
+    config:
+      since: "2026-07-16T00:00:00Z"

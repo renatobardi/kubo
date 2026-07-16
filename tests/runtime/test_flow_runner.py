@@ -99,3 +99,53 @@ def test_dev_mini_is_wired_with_run_resume_reject() -> None:
     # Template desconhecido ainda falha alto e legível (nunca KeyError cru), antes de tocar db.
     with pytest.raises(ConfigError, match="não existe no catálogo"):
         run_flow(db=None, template_name="ghost-template", question="x", base_url="")
+
+
+def test_run_flow_accepts_worker_config_kwarg_without_breaking_existing_callers() -> None:
+    """`worker_config` (sessão 0021, marco 21.3/21.4) é um novo kwarg keyword-only opcional
+    (default None) de `run_flow` — puramente aditivo. Chamando com ele presente, o guard de
+    template desconhecido (E4) ainda dispara a MESMA ConfigError, provando que o parâmetro
+    novo não desloca a semântica dos kwargs já obrigatórios (question/base_url)."""
+    with pytest.raises(ConfigError, match="não existe"):
+        run_flow(
+            db=object(),
+            template_name="inexistente",
+            question="q",
+            worker_config={"since": "2026-07-16T00:00:00Z"},  # type: ignore[call-arg]
+            base_url="",
+        )
+
+
+def test_pipeline_is_registered_with_github_releases_config_model() -> None:
+    """`pipeline` (ADR-0021 §21.3/21.4) declara `config_model=GithubReleasesConfig` no
+    FlowBehavior — é o que permite `build_scheduler` validar eagerly a `config` de um
+    `FlowEntry` no boot, no mesmo espírito de `worker_cls.manifest.config.model_validate`
+    já feito para workers."""
+    from kubo.runtime.flow_runner import _FLOW_REGISTRY
+    from kubo.workers.github_releases import GithubReleasesConfig
+
+    behavior = _FLOW_REGISTRY["pipeline"]
+
+    assert behavior.config_model is GithubReleasesConfig  # type: ignore[attr-defined]
+
+
+def test_dev_mini_config_model_defaults_to_none() -> None:
+    """Regressão: os 4 behaviors pré-existentes (`analysis`/`analysis-review`/`dev-mini`/
+    `dev-kubo`) NÃO ganharam `config_model` de graça — só `pipeline` precisa dele (os
+    outros são disparados por CLI/browser, nunca por `build_scheduler`)."""
+    from kubo.runtime.flow_runner import _FLOW_REGISTRY
+
+    assert _FLOW_REGISTRY["dev-mini"].config_model is None  # type: ignore[attr-defined]
+
+
+def test_pipeline_behavior_has_no_gate_wiring() -> None:
+    """`pipeline` v1 não tem gate humano (o template não declara `gates` — C6, board
+    `queued→collecting→stored|failed`): resume/reject/promote continuam None, igual ao
+    `analysis` sem review."""
+    from kubo.runtime.flow_runner import _FLOW_REGISTRY
+
+    behavior = _FLOW_REGISTRY["pipeline"]
+
+    assert behavior.resume is None
+    assert behavior.reject is None
+    assert behavior.promote is None
