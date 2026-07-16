@@ -1,10 +1,10 @@
 # ADR-0021 — Rito de promoção: worker → grafo (deploy-gap, import-oráculo, gate sequencial)
 
-> Status: **proposto** (DRAFT p/ validação do advisor Fable 5 antes do marco 18.11)
-> Data: 2026-07-15 (sessão 0018, parte A)
+> Status: **aceito** (cravado no checkpoint 18.11, 2026-07-15, após validação do advisor Fable 5)
+> Data: 2026-07-15 (sessão 0018, partes A e B)
 > Estende ADR-0009 (contrato de worker), ADR-0016 (spec §3.1 fabricação), ADR-0018 (gate humano), ADR-0019 (executor cli).
 >
-> **Notas de execução:** as 10 decisões abaixo foram validadas pelo advisor Fable 5 no planejamento da 0018. Este ADR registra cada uma com seu racional. Crave somente após aprovação do advisor no checkpoint 18.11.
+> **Notas de execução:** as 10 decisões I-X foram validadas pelo advisor Fable 5 no planejamento da 0018 (parte A) e provadas fisicamente no smoke da parte A (18.6). As seções XI-XIII são achados do smoke físico da parte B (18.10, fallback D44) e passaram por rodada própria de validação do advisor no checkpoint 18.11 antes de cravar.
 
 ## Contexto
 
@@ -110,6 +110,137 @@ Propriedade, não acidente: o processo valida a si mesmo (registry local, import
 
 **Nota sobre o smoke da parte A (18.6, achado do advisor pré-smoke):** `./scripts/deploy.sh` deploya a WORKING TREE do Mac (rsync, não `git HEAD` — comentário do próprio script), não o repo `kubo-forge` (sandbox onde o `dev-mini` abre PR). Logo o worker que o Confirmar promove PRECISA estar no repo `kubo` local, não no PR do sandbox — os dois são repos DISTINTOS. Para o smoke da parte A, a cerimônia fica **conscientemente encenada**: o PR/gate/merge no `kubo-forge` prova a MECÂNICA da UI (review→gate→GateSheet); o worker confirmado usa um nome JÁ registrado (`feed`) em vez de um worker novo — evita a dança de escrever+registrar+re-deployar código só para o smoke. O primeiro worker gerado de fato pelo agente, com PR no repo CERTO (`renatobardi/kubo`, D41), é o smoke da parte B (18.10, `github_releases`) — ali a cerimônia deixa de ser encenada.
 
+## Achados do smoke físico (18.10, D44 fallback — parte B)
+
+O smoke da parte B rodou o `dev-kubo` de verdade contra `renatobardi/kubo` (D41): PR #49
+(`agent/s7v7s5wgb3wr2e64afrc`, US$1.2685, 30 turnos) tropeçou uma vez (bug de type-narrowing
+pyright no próprio teste do agente) — rejeitado pela UI com `GITHUB_PAT_KUBO`, provando o
+caminho de reject no repo PRINCIPAL, não só no sandbox `kubo-forge` (D44: tropeço 1 → CLI
+assume a escrita). CLI reescreveu (reaproveitando ~integralmente o código do agente, que já
+batia com o enunciado), abriu PR #50 (`feat/github-releases-worker`), mesclado após revisão do
+dono. Três achados deste ciclo entram no ADR — não os achados TÉCNICOS do worker em si
+(403/rate-limit, cobertura do streaming, nit do validador, backfill, `published_at`), que
+ficam registrados em `docs/sessions/fase4-roadmap.md` D51 (dívida de produto/worker, fora do
+escopo desta ADR de RITO).
+
+### XI. Gate automático + revisor-LLM-como-serviço são NECESSÁRIOS, NÃO SUFICIENTES (achado central)
+
+O worker do PR #49 (`agent/s7v7s5wgb3wr2e64afrc`) passou **todos** os gates automáticos — CI
+verde (ruff/pyright/tests/integration/cobertura) — e o CodeRabbit rodou de verdade nele (sem
+rate limit) sem encontrar NADA. Mesmo assim, o passe adversarial dedicado (`security-reviewer`,
+thread principal invocando fora do circuito de CI, sobre o MESMO código do #49 — reaproveitado
+~integralmente no #50 antes de qualquer correção) achou um **ALTO** real: `tag_name` gravado cru
+em `metadata` — um surrogate solto sobreviveria até o encoder CBOR estrito do SDK SurrealDB
+(ADR-0005) e abortaria a persistência do **batch inteiro** (não só o item), o oposto da
+falha-parcial que o próprio docstring do worker promete (ADR-0009 §VII). A evidência fica
+ancorada no #49: o #50 não atesta nada sobre o ALTO — já estava corrigido quando o CodeRabbit
+rodou nele. (Na revisão do dono/Cowork sobre o #50 já corrigido, apareceram mais dois achados
+menores, registrados no D51 — não repetidos aqui.)
+
+**Duas afirmações distintas, duas cargas de prova distintas:**
+
+1. **"CI verde + CodeRabbit limpo não é evidência suficiente de segurança"** — afirmação de
+   INSUFICIÊNCIA, provada por contraexemplo único: um ALTO real atravessou os dois gates. N=1
+   basta; a questão fica logicamente encerrada.
+2. **"Security-reviewer é peça estrutural do rito"** — isto é PRESCRIÇÃO, e N=1 não prova
+   prescrição sozinho. A prescrição se sustenta por custo assimétrico: um passe de subagent por
+   promoção é barato; um batch-abort silencioso na persistência — ou pior, na fase 4, com
+   conteúdo hostil de terceiro já fluindo pelo sistema — é caro. A amostra prova que a
+   alternativa mais barata (CI + revisor-serviço genérico) falha; o custo assimétrico é o
+   argumento que justifica pagar pela mais cara.
+
+**Por que o passe achou o que o CodeRabbit não achou (o mecanismo, não só o resultado):** o
+passe dedicado carregava CONTEXTO DE INVARIANTE DO PROJETO — a promessa de falha-parcial do
+ADR-0009 §VII e a estritude CBOR do SDK SurrealDB pinado (ADR-0005) — que um revisor-serviço
+genérico não tem por que conhecer. O requisito estrutural correto não é "rode um segundo
+revisor LLM qualquer" (que falharia pelo mesmo motivo do CodeRabbit); é **passe adversarial COM
+os invariantes do projeto no contexto** — o mesmo padrão que já rege `security-reviewer` em
+`kubo/store/`, `kubo/contracts/`, `kubo/executors/`, `kubo/workers/` no CLAUDE.md.
+
+**Endereço operacional (o slot, não só o mandato):** no caminho de EXCEÇÃO (D44, este smoke), o
+passe rodou dentro do fallback, antes de reabrir o PR. No caminho NORMAL (PR de agente sem
+tropeço), o slot é: o passe roda sobre o diff do PR do agente **ANTES da decisão do gate do
+dono na UI**, e seus achados são insumo dessa decisão — mecânica de disparo (automático no CI?
+manual pela thread principal antes de notificar o dono?) fica como dívida nomeada no roadmap,
+mas o SLOT (quando, sobre o quê, alimentando qual decisão) já está fixado aqui.
+
+Isto ESTENDE E CONFIRMA EMPIRICAMENTE o §IX (E5, "a qualidade da revisão do dono é componente de
+segurança, não só de qualidade") desta mesma ADR: revisão automatizada (CI + CodeRabbit) sozinha
+não basta; precisa da camada adversarial dedicada antes do merge, não como rede pós-merge.
+
+**Reavaliação futura:** se nas próximas 2-3 promoções de worker o passe não produzir achado que
+sobreviva a triagem, "peça estrutural" pode ser rebaixado a "amostragem periódica" — registrar
+os resultados dos próximos passes para essa reavaliação ser possível.
+
+### XII. Corolário: não se pode CONTAR que o agente generalize princípio a partir da letra do enunciado
+
+O 403-como-rate-limit (D51 #1) não é um bug que o agente inventou — o enunciado da task
+(craveado pela thread principal no 18.9) dizia literalmente "rate limiting: on 403/429...";
+o agente seguiu a LETRA. Mesmo padrão do lado bom: o agente tratou `body`/`name` do release
+como markdown hostil porque o enunciado mandou explicitamente — mas deixou `tag_name` cru
+porque o enunciado enumerou campos a limpar sem incluí-lo por nome.
+
+Dois data points correlacionados (mesmo enunciado, mesma sessão) NÃO estabelecem uma lei geral
+de comportamento de agente — LLMs às vezes generalizam corretamente, às vezes generalizam
+demais (inventam). A afirmação correta não é comportamental-universal; é de CONFIABILIDADE:
+**não se pode contar que o agente generalize o princípio de segurança sozinho**, e para essa
+afirmação mais fraca, N=1 basta (mesmo raciocínio de contraexemplo da XI). A implicação prática
+fica de pé independente de o agente às vezes generalizar: **spec de segurança não pode depender
+de generalização espontânea.**
+
+**A responsabilidade pela completude do enunciado é de quem o escreve.** A disciplina "cravar
+TUDO, senão o agente inventa" (plano 0018, marco 18.9) fica validada empiricamente por este
+achado — mas na direção inversa da intuição: aqui o problema não foi o agente inventar, foi o
+enunciado sub-especificar um campo dentro de uma lista fechada. Implicação prática para specs
+futuras de worker: enumerar o PRINCÍPIO de segurança ("todo campo string vindo da API de
+terceiro passa por `_clean`", não uma lista fechada de nomes de campo) é mais robusto contra
+esta classe de gap — e tem um bônus barato: princípio enumerado é VERIFICÁVEL pelo passe da XI
+("todo campo string de terceiro passa por `_clean`?" é pergunta checável mecanicamente); lista
+fechada de campos não é. As duas seções se reforçam.
+
+### XIII. Lacunas e decisões em aberto, nomeadas (não resolvidas agora)
+
+- **Decisão em aberto (não é dívida, e não pré-comprometer): quem deve escrever o catálogo de
+  integração — dono ou agente?** `catalogs/integrations/github-releases.yaml` já estava em
+  `main` antes do disparo do agente — colocado pela thread principal no 18.9 como **escolha
+  consciente de escopo da sessão**, não omissão. O caminho "PR de agente autossuficiente
+  incluindo catálogo" fica sem evidência de smoke — mas VERIFICADO: não está bloqueado (o
+  allowlist do `agent-path-guard` inclui `catalogs/` inteiro, `.github/workflows/ci.yml:99`),
+  então é lacuna de COBERTURA de smoke, não lacuna estrutural. Mais: há uma pergunta de
+  desenho por trás da lacuna de cobertura, que este ADR NÃO resolve agora — `catalogs/
+  integrations/` declara a fronteira de least-privilege do projeto; "humano declara a
+  superfície de integração, agente escreve código dentro dela" é postura de segurança
+  defensável, possivelmente MELHOR que o PR autossuficiente. Duas opções nomeadas para decisão
+  futura: (a) PR de agente pode incluir `catalogs/integrations/` quando o worker precisa de
+  integração nova; (b) catálogo de integração é sempre pré-colocado pelo dono/thread principal,
+  o agente só recebe a integração já declarada. Resolve com evidência de smoke futuro +
+  preferência explícita do dono — não antes.
+- **Allowlist do `agent-path-guard` é mais larga do que o necessário.** `catalogs/` inteiro
+  está permitido para PR de agente — incluindo `catalogs/personas/` (o mecanismo de
+  least-privilege do projeto: permissões de integração por persona) e `catalogs/
+  flow_templates/`. Um PR de agente editando permissões de uma persona passa no path-guard
+  hoje. O gate humano na UI ainda vê o diff antes de aprovar — mas o guard existe como DEFESA
+  EM PROFUNDIDADE, e apertar o allowlist para `catalogs/integrations/` especificamente é uma
+  linha de CI. Não bloqueia cravar este ADR (é mudança de CI, não de arquitetura) — nomeado
+  aqui e como item no roadmap para não ficar esquecido.
+- **`agent-path-guard ✅` no PR #50 é VÁCUO — não conta como evidência do guard.** #50 é
+  `feat/github-releases-worker` (autoria CLI/dono, D44), não `agent/*`; a lógica do guard
+  (18.8) sai `exit 0` cedo pra qualquer branch fora de `agent/*` — desenho DELIBERADO (um
+  required check cujo JOB é pulado via `if:` fica pending pra sempre; a condição vive DENTRO
+  do step para que PRs humanos sempre reportem sucesso). A evidência REAL de que o path-guard
+  funciona é o **PR #49** (`agent/s7v7s5wgb3wr2e64afrc`), que passou a checagem de allowlist
+  legitimamente contra um diff de verdade. Auditorias futuras do rito devem citar #49, não #50,
+  como prova do guard.
+- **Proveniência do código de agente sob fallback D44 fica fora da trilha `agent/*`.** O #50 é
+  código ~100% de autoria de agente (reaproveitado do #49) que entrou em `main` por um branch
+  `feat/*` comum — fora do path-guard E fora de qualquer marcador estrutural de "isto veio de
+  um agente". Uma auditoria futura que confie só em "todo código de agente passou por
+  `agent/*` + guard" vai **silenciosamente não ver** PRs assim. Mitigação já aplicada neste
+  smoke (conferido, não é tarefa pendente): a descrição do PR #50 declara a proveniência em
+  texto ("D44 fallback: the `dev-kubo` agent run (PR #49)..."). Regra nomeada daqui pra frente:
+  **todo PR de fallback D44 DEVE declarar a origem (número do run/PR do agente) no corpo do
+  PR** — texto livre, não campo estrutural, mas obrigatório por disciplina.
+
 ## Consequências
 
 - **Positivo:** promoção é mecânica provada ponta a ponta; gate humano segue **por construção** (D38, D42); worker code+registry localizados (`kubo/workers/`); dev-mini v2 generaliza gate sequencial (reutilizável em outras transições futuras).
@@ -129,4 +260,7 @@ Propriedade, não acidente: o processo valida a si mesmo (registry local, import
 
 ---
 
-**Próxima etapa:** checkpoint 18.11 — advisor valida cada decisão; thread principal crava versão final após aprovação e integra à sessão de execução.
+**Checkpoint 18.11 fechado (2026-07-15):** advisor validou as seções XI-XIII (achados do smoke
+físico, uma rodada de correções aplicada — ver histórico do PR); status cravado como aceito.
+Dívidas nomeadas nas seções XIII e nos itens correspondentes de `docs/sessions/
+fase4-roadmap.md` (Fila) ficam para sessão futura — nomeadas, não resolvidas aqui.

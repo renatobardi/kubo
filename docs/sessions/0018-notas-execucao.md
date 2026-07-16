@@ -242,3 +242,56 @@ tests/workers/test_github_releases.py.
 
 **Nota para o 18.10:** ao clicar "Confirmar promoção" na UI, o dono digita `github-releases`
 (com hífen, igual ao `manifest.name`/chave do registry acima) — não `github_releases`.
+
+## 18.10 — smoke físico, executado 2026-07-15 (os DOIS caminhos do D44)
+
+**Disparo:** `docker compose run --rm kubo-scheduler python -m kubo flow run dev-kubo "<spec
+acima>"` contra o kubo-test já deployado no `main` do 18.7-18.9 (build `7bd73ef-20260716T002016Z`,
+`/healthz` ok, `dev-kubo`/`dev-mini` confirmados no `_FLOW_REGISTRY` do processo vivo antes do
+disparo).
+
+**Run 1 (agente):** `flow:s7v7s5wgb3wr2e64afrc`, `run:87d4f5df3efcac355d9dd00db6822739` —
+US$1.2685, 30 turnos, status `ok`. Abriu **PR #49** (`agent/s7v7s5wgb3wr2e64afrc`,
+`renatobardi/kubo`, autor `renatobardi` — D45 revertida, sem conta-máquina), 3 arquivos
+(`kubo/workers/github_releases.py`, `kubo/workers/registry.py`,
+`tests/workers/test_github_releases.py`), +533/-0. `agent-path-guard` e `pr-conventions`
+PASSARAM legitimamente (branch `agent/*`, título `feat(dev): ...` — as duas correções do 18.8
+provadas em produção). `quality` FALHOU: pyright achou um bug de type-narrowing no próprio
+teste do agente (`.payloads[0].external_id` acessado sem `isinstance`, diferente de todo resto
+do arquivo, que usava o idioma correto). CodeRabbit rodou de verdade (sem rate limit) e não
+achou nada.
+
+**Decisão do dono:** rejeitar via UI (`reject_gate`), motivo registrado no PR, provando o
+caminho de reject no repo PRINCIPAL com `GITHUB_PAT_KUBO` (não só no sandbox `kubo-forge` da
+parte A) — `test_reject_closes_pr_via_api_with_kubo_pat` (18.8) é a mesma asserção, agora
+confirmada fisicamente. Board foi a `rejected`.
+
+**Fallback D44 (tropeço 1 → CLI assume a escrita):** thread principal buscou o commit do PR
+fechado (`81284ee`, branch já auto-deletado pelo GitHub), reaproveitou o código do agente
+quase integralmente (era correto, batia com o enunciado), corrigiu o bug de type-narrowing, e
+ANTES de reabrir rodou um passe de `security-reviewer` dedicado (fora do CI) — achou 1 ALTO
+(`tag_name` cru em `metadata`, abortaria o batch inteiro no encoder CBOR estrito do SDK
+SurrealDB) + 2 achados menores (streaming sem cap de bytes, `follow_redirects` implícito).
+Todos corrigidos + 2 testes novos, suite local completa verde (521 unit + 19 do worker),
+`ruff`/`pyright`/`format` limpos.
+
+**PR #50** (`feat/github-releases-worker`, CLI/dono, D44): CI verde (5 required + SonarCloud),
+CodeRabbit rodou de verdade e achou 3 itens acionáveis (403≠rate-limit real, teste de streaming
+cobre só o caminho fácil, nit do validador — **não é o mesmo achado do security-reviewer**,
+são achados INDEPENDENTES, registrados em `docs/sessions/fase4-roadmap.md` D51). Revisão do
+dono/Cowork (repo público, leu o diff) aprovou o merge sabendo dos achados do D51.
+`reviewDecision` do PR ficou `CHANGES_REQUESTED` (CodeRabbit formal review, não só o check) —
+mergeado com `gh pr merge --admin` por autorização explícita do dono, que já tinha triado os 3
+achados. Squash-merged em `main` como `ff38c18`.
+
+**Achados registrados no ADR-0021 (seções XI-XIII, validadas pelo advisor no 18.11):** gate
+automático + revisor-LLM-como-serviço são necessários mas não suficientes (o ALTO só apareceu
+no passe adversarial dedicado, fora do CI); o agente segue a letra do enunciado, não generaliza
+princípio para campo não-enumerado (responsabilidade do enunciado é de quem escreve); duas
+lacunas/decisões em aberto nomeadas (catálogo pré-colocado vs. PR autossuficiente; allowlist do
+path-guard mais largo que `catalogs/integrations/`); `agent-path-guard ✅` no #50 é vácuo como
+evidência (branch `feat/*`) — a evidência real do guard é o #49.
+
+**Falta para fechar 18.10/18b:** deploy do kubo-test com `main` pós-#50 + "Confirmar promoção"
+(`github-releases`, com hífen) na UI pelo dono — ação humana por construção (D38), não
+delegável ao CLI.
