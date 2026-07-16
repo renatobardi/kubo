@@ -9,7 +9,9 @@ padrão) — limpos com a MESMA disciplina de `_clean` do `FeedWorker` antes de 
 `ItemPayload`. `url`/`external_id` são ESTRUTURAIS: vêm da resposta da API (`html_url`/`id`),
 nunca de heurística do worker (item 4).
 
-Rate limit (403/429) e qualquer outro erro de transporte/HTTP NÃO são retriados aqui — retry é
+Rate limit (429 sempre; 403 só COM `x-ratelimit-remaining: 0` ou `retry-after` — um 403 puro é
+permission-denied, ex.: PAT sem escopo, e NUNCA deve virar rate_limit, D55) e qualquer outro erro
+de transporte/HTTP NÃO são retriados aqui — retry é
 trabalho do orquestrador, nunca do worker (item 5). Um repo com erro não aborta os demais: o
 loop registra o `ErrorInfo` e segue para o próximo repo, devolvendo os payloads já coletados
 (ADR-0009 §VII, o mesmo padrão de falha-parcial do `FeedWorker`). Diferença DELIBERADA do
@@ -44,7 +46,6 @@ _MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — teto de bytes de FIO (iter_raw), mes
 _TIMEOUT = httpx.Timeout(15.0)
 _PER_PAGE = 30  # uma página basta na v1 — upsert idempotente cobre re-coleta
 _API_VERSION = "2022-11-28"
-_RATE_LIMIT_STATUSES = frozenset({403, 429})
 
 
 def _owner_repo_shape(v: str) -> str:
@@ -88,11 +89,30 @@ def _clean(text: object, cap: int) -> str:
 
 
 class _FetchError(Exception):
-    """Erro interno de fetch por repo — mensagem SEM corpo de resposta, status estruturado."""
+    """Erro interno de fetch por repo — mensagem SEM corpo de resposta, status estruturado.
 
-    def __init__(self, message: str, status: int | None) -> None:
+    `headers` carrega os headers da resposta HTTP (quando existe uma) para o chamador
+    decidir `kind` distinguindo rate-limit de permission-denied em 403 (D55) — nunca o
+    corpo, só os headers estruturais."""
+
+    def __init__(
+        self, message: str, status: int | None, headers: httpx.Headers | None = None
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.headers = headers
+
+
+def _is_rate_limit(status: int | None, headers: httpx.Headers | None) -> bool:
+    """429 é sempre rate limit. 403 só é rate limit COM `x-ratelimit-remaining: 0`
+    (sinal primário) ou `retry-after` presente (sinal secundário, abuse detection) —
+    um 403 puro é permission-denied (ex.: PAT sem escopo) e nunca deve virar rate_limit,
+    senão o operador espera uma janela que nunca vai abrir (D55)."""
+    if status == 429:
+        return True
+    if status == 403 and headers is not None:
+        return headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers
+    return False
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -132,7 +152,9 @@ def _fetch_releases(base_url: str, token: str, owner: str, repo: str) -> list[di
                     chunks.append(chunk)
     except httpx.HTTPStatusError as exc:
         raise _FetchError(
-            f"GitHub respondeu HTTP {exc.response.status_code}", exc.response.status_code
+            f"GitHub respondeu HTTP {exc.response.status_code}",
+            exc.response.status_code,
+            exc.response.headers,
         ) from None
     except httpx.HTTPError as exc:
         raise _FetchError(f"falha de transporte ({type(exc).__name__})", None) from None
@@ -225,7 +247,7 @@ class GithubReleasesWorker:
             try:
                 releases = _fetch_releases(base_url, token, owner, name)
             except _FetchError as exc:
-                is_rate_limit = exc.status in _RATE_LIMIT_STATUSES
+                is_rate_limit = _is_rate_limit(exc.status, exc.headers)
                 kind = "rate_limit" if is_rate_limit else "http"
                 rate_limited += 1 if is_rate_limit else 0
                 log.warning("github_releases_fetch_failed", repo=repo, kind=kind)
