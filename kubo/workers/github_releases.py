@@ -60,11 +60,19 @@ próximo repo, devolvendo os payloads já coletados (mesmo padrão de falha-parc
 devolve-se o PRIMEIRO encontrado, e os stats (`rate_limited`) contam quantos repos bateram em
 rate limit.
 
-Prazo total do run (D51, não exercido por teste de wall-clock — flaky por natureza): um
-`BlockingScheduler` job segura os demais jobs de cron enquanto roda, e até ~260 repos
-sequenciais com timeout de 15s cada poderiam, sem teto, rodar por dezenas de minutos. Um
-`_RUN_DEADLINE` de 5 minutos interrompe o loop principal (não o fetch em curso) e sinaliza
-`kind="timeout"` se nenhum erro anterior já tiver sido registrado.
+Prazo total do run (D51, exercido por teste com deadline minúsculo + resposta lenta —
+não wall-clock real, mas exercita a checagem): um `BlockingScheduler` job segura os demais
+jobs de cron enquanto roda, e até ~260 repos sequenciais com timeout de 15s cada poderiam,
+sem teto, rodar por dezenas de minutos. Um `_RUN_DEADLINE` de 5 minutos é checado tanto
+ENTRE repos quanto ENTRE páginas da paginação de descoberta (dívida do PR #57 item 1,
+fechada aqui — antes só o loop de repos checava, deixando até 150s de paginação inteiramente
+fora do orçamento). O gap estrutural que sobra é o mesmo em ambos os pontos: uma chamada de
+rede já em voo quando o relógio cruza o deadline não é cancelável de forma síncrona, só a
+decisão de começar a PRÓXIMA é interrompida — por isso o pior caso real é `_RUN_DEADLINE +
+_TIMEOUT` (~315s), não os 300s exatos que o nome da constante sugere. Descoberta que estoura
+o deadline em plena paginação vira falha estruturada `kind="timeout"` IMEDIATA (nunca um
+retorno parcial com os repos já vistos, que recriaria a subcontagem silenciosa do D57); o
+loop de repos, ao contrário, mantém os itens já coletados e só para de iniciar novos repos.
 
 v0.3.0 (D57): a descoberta da watch list migra de REST (`GET /user/subscriptions`) para
 GraphQL (`POST /graphql`, `viewer.watching`, paginação por cursor) — o REST estava
@@ -88,6 +96,7 @@ explicitamente em cada nível, nunca um `{}`/`None` silencioso mascarando shape 
 from __future__ import annotations
 
 import json
+import re
 import time
 import unicodedata
 from datetime import datetime
@@ -116,7 +125,9 @@ _WATCHING_PAGE_SIZE = 100  # página maior pra watch list — menos POSTs de pag
 _MAX_WATCHING_PAGES = 10  # teto duro contra paginação por cursor patológica/infinita (C4)
 _API_VERSION = "2022-11-28"
 # 5 min: um BlockingScheduler job segura os demais enquanto roda; sem teto, até ~260 repos
-# sequenciais com timeout de 15s cada poderiam rodar por dezenas de minutos.
+# sequenciais com timeout de 15s cada poderiam rodar por dezenas de minutos. Checado ENTRE
+# repos E entre páginas da descoberta (PR #57 item 1) -- pior caso real ~315s
+# (_RUN_DEADLINE + _TIMEOUT), não os 300s exatos: uma chamada em voo não é cancelável.
 _RUN_DEADLINE = 300.0
 
 
@@ -159,7 +170,9 @@ class _FetchError(Exception):
     decidir `kind` distinguindo rate-limit de permission-denied em 403 (D55) — nunca o
     corpo, só os headers estruturais. `graphql_error_type` cobre o caso GraphQL (D57):
     erro no NÍVEL DO CORPO com HTTP 200 (`errors[].type`) — não há headers relevantes pra
-    classificar esse caso, só o campo estruturado do próprio corpo."""
+    classificar esse caso, só o campo estruturado do próprio corpo. `deadline_exceeded`
+    (dívida do roadmap item 1) marca o corte do `_RUN_DEADLINE` DENTRO da paginação de
+    descoberta — nunca `kind="http"` (mentira semântica), sempre `kind="timeout"`."""
 
     def __init__(
         self,
@@ -167,11 +180,13 @@ class _FetchError(Exception):
         status: int | None,
         headers: httpx.Headers | None = None,
         graphql_error_type: str | None = None,
+        deadline_exceeded: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.headers = headers
         self.graphql_error_type = graphql_error_type
+        self.deadline_exceeded = deadline_exceeded
 
 
 def _is_rate_limit(status: int | None, headers: httpx.Headers | None) -> bool:
@@ -191,12 +206,17 @@ def _classify_fetch_error(exc: _FetchError, repo: str | None = None) -> tuple[Er
     dois pontos de falha de `run()` (watching e por-repo, D55), diferindo só em incluir
     `repo` no `detail` estruturado quando presente (fetch por-repo).
 
-    Classificação é estruturada em DOIS eixos, nunca por casar texto de mensagem (D57,
-    mesma disciplina do D55): status/headers HTTP pro caso REST, `errors[].type` do corpo
-    pro caso GraphQL (HTTP 200, falha só visível no corpo) — `graphql_error_type ==
-    "RATE_LIMITED"` classifica como rate_limit direto, sem passar por `_is_rate_limit`
-    (que só entende headers HTTP, ausentes/irrelevantes numa falha de corpo GraphQL)."""
-    if exc.graphql_error_type == "RATE_LIMITED":
+    Classificação é estruturada em TRÊS eixos, nunca por casar texto de mensagem (D57,
+    mesma disciplina do D55): `deadline_exceeded` pro corte do `_RUN_DEADLINE` dentro da
+    paginação de descoberta (roadmap item 1, checado ANTES dos outros dois — nunca deve
+    cair em `rate_limit`/`http` por acidente), status/headers HTTP pro caso REST,
+    `errors[].type` do corpo pro caso GraphQL (HTTP 200, falha só visível no corpo) —
+    `graphql_error_type == "RATE_LIMITED"` classifica como rate_limit direto, sem passar
+    por `_is_rate_limit` (que só entende headers HTTP, ausentes/irrelevantes numa falha de
+    corpo GraphQL)."""
+    if exc.deadline_exceeded:
+        kind, is_rate_limit = "timeout", False
+    elif exc.graphql_error_type == "RATE_LIMITED":
         kind, is_rate_limit = "rate_limit", True
     else:
         is_rate_limit = _is_rate_limit(exc.status, exc.headers)
@@ -304,12 +324,35 @@ _WATCHING_QUERY = (
 )
 
 
-def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
+def _raise_if_deadline_exceeded(deadline: float) -> None:
+    """Extraído de `_fetch_watched_repos` só pra manter a complexidade ciclomática do loop
+    de paginação sob o teto do lint (C901 ≤ 10) — mesmo corte, uma ramificação a menos na
+    função chamadora."""
+    if time.monotonic() > deadline:
+        raise _FetchError(
+            "prazo total do run excedido durante a paginação de descoberta",
+            None,
+            deadline_exceeded=True,
+        )
+
+
+def _fetch_watched_repos(base_url: str, token: str, deadline: float) -> list[dict[str, Any]]:
     """Busca a watch list do operador via GraphQL `viewer.watching` (D57 — substitui REST
     `/user/subscriptions`, que sub-contava silenciosamente: 243 vs 261 repos reais, mesmo
     PAT, mecanismo não diagnosticado, achado 2026-07-16). Pagina por cursor
     (`pageInfo.hasNextPage`/`endCursor`) até esgotar OU até `_MAX_WATCHING_PAGES` (C4,
     mesma disciplina de teto duro que a paginação REST tinha).
+
+    `deadline` (dívida do roadmap item 1) é checado no TOPO de cada iteração, ANTES de
+    disparar o próximo POST — mesmo padrão que o loop de repos de `run()` já usava, agora
+    espelhado aqui: sem isso, até `_MAX_WATCHING_PAGES × _TIMEOUT` (150s) de paginação
+    corriam inteiramente fora do `_RUN_DEADLINE`. Estourar o deadline em PLENA descoberta
+    vira `_FetchError(deadline_exceeded=True)` — nunca um retorno parcial com os repos já
+    vistos: `_discover_repos` devolveria isso como lista COMPLETA, recriando a mesma
+    subcontagem silenciosa que motivou o D57 (só `hasNextPage=False` é encerramento
+    legítimo, ver acima). A chamada de rede já em voo quando o relógio cruza o deadline
+    não é cancelável de forma síncrona — o gap estrutural aceito é justo esse (até
+    `_TIMEOUT` de overrun), não os até 150s que este parâmetro fecha.
 
     A query é uma CONSTANTE de módulo (`_WATCHING_QUERY`) — o cursor entra SOMENTE via
     `variables`, nunca interpolado na string da query (fecha por construção qualquer
@@ -335,6 +378,7 @@ def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
     cursor: str | None = None
     with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
         for _page in range(_MAX_WATCHING_PAGES):
+            _raise_if_deadline_exceeded(deadline)
             variables = {"cursor": cursor, "first": _WATCHING_PAGE_SIZE}
             data, _resp = _stream_json(
                 client,
@@ -397,9 +441,16 @@ def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
     )
 
 
+_REPO_PART_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 def _is_valid_repo_shape(full_name: str) -> bool:
     """Shape mínimo de `owner/repo`: exatamente uma `/`, partes não-vazias dos dois lados,
-    sem `..` em nenhuma delas.
+    cada parte restrita ao whitelist `[A-Za-z0-9._-]` (dívida do roadmap item 4: só checar
+    "uma barra, sem `..`" deixava passar `acme/widget?x=1` — query string vazando pra URL
+    montada em `_fetch_releases`), sem `..` em nenhuma delas (whitelist sozinho não barra
+    `..`, que é feito só de caracteres permitidos — path traversal continua exigindo a
+    checagem explícita).
 
     `full_name` vem de `/user/subscriptions` — entrada externa hostil por padrão (CLAUDE.md
     §Segurança), não config do operador (por isso filtro em runtime, não validador pydantic
@@ -408,13 +459,13 @@ def _is_valid_repo_shape(full_name: str) -> bool:
     owner, sep, repo = full_name.partition("/")
     if not sep or "/" in repo:
         return False
-    if not owner or not repo:
+    if not _REPO_PART_RE.fullmatch(owner) or not _REPO_PART_RE.fullmatch(repo):
         return False
     return ".." not in owner and ".." not in repo
 
 
 def _discover_repos(
-    base_url: str, token: str, log: Any
+    base_url: str, token: str, log: Any, deadline: float
 ) -> tuple[list[str], int, int, RunResult | None]:
     """Descobre a watch list do operador (`_fetch_watched_repos`, GraphQL D57) e resolve os
     dois casos de encerramento antecipado de `run()`: falha ao buscar `viewer.watching`, e
@@ -427,16 +478,19 @@ def _discover_repos(
     ANTES de validar shape/dedup) — computado logo após o fetch ter sucesso; uma falha de
     fetch nunca chegou a descobrir nada, então `repos_total=0` nesse caminho.
 
-    `full_name` malformado (sem exatamente uma `/`, parte vazia, ou `..`) é filtrado ANTES
-    de virar repo a processar — dado de API externa, não confiado por padrão — e contado
-    em `skipped_bad_repo_shape`, nunca vira erro nem aborta a descoberta dos demais.
+    `full_name` malformado — ausente, vazio, não-string, ou shape inválido (sem exatamente
+    uma `/`, parte vazia, caractere fora do whitelist, ou `..`) — é filtrado ANTES de virar
+    repo a processar — dado de API externa, não confiado por padrão — e SEMPRE contado em
+    `skipped_bad_repo_shape` (mesmo contador para os dois casos, mesma família de registro
+    malformado; dívida do PR #57 item 2: a ausência total ficava fora da contagem, indistinguível
+    de "watch list limpa" nos stats), nunca vira erro nem aborta a descoberta dos demais.
 
     Deduplica por ordem de primeira aparição (achado do CodeRabbit, PR #57): o mesmo repo
     pode aparecer em mais de uma página (overlap de paginação, ou o mesmo repo assistido por
     conta pessoal E organização) — sem isso, `repos_seen`/fetches de release dobrariam por
     repo repetido."""
     try:
-        subscriptions = _fetch_watched_repos(base_url, token)
+        subscriptions = _fetch_watched_repos(base_url, token, deadline)
     except _FetchError as exc:
         error, is_rate_limit = _classify_fetch_error(exc)
         log.warning("github_watching_fetch_failed", kind=error.kind)
@@ -460,9 +514,7 @@ def _discover_repos(
     skipped_bad_repo_shape = 0
     for sub in subscriptions:
         full_name = sub.get("full_name")
-        if not isinstance(full_name, str) or not full_name:
-            continue
-        if not _is_valid_repo_shape(full_name):
+        if not isinstance(full_name, str) or not full_name or not _is_valid_repo_shape(full_name):
             skipped_bad_repo_shape += 1
             log.warning("github_watch_full_name_malformed", full_name=full_name)
             continue
@@ -645,7 +697,7 @@ class GithubReleasesWorker:
         deadline = time.monotonic() + _RUN_DEADLINE
 
         repos, skipped_bad_repo_shape, repos_total, early_result = _discover_repos(
-            base_url, token, log
+            base_url, token, log, deadline
         )
         if early_result is not None:
             return early_result
