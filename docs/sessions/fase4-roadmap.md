@@ -150,12 +150,33 @@ mudou o estado do mundo que aquele teste media. "GraphQL não serve" era fato à
 sendo repetido como fato às 21:00, quando já não era. Detalhe completo (tabela comparando os dois
 achados) na emenda 2026-07-16b do ADR-0022 — não duplicar aqui.
 
+### Os três estados do sinal de curadoria — Ignore ≠ Custom (achado 2026-07-17, evidência do dono)
+
+Medição direta do dono, dois pontos: `viewer.watching` = 261 → marcou UM repo como `Ignore` no
+GitHub → `viewer.watching` = 260. **`Ignore` tira o repo da descoberta do Kubo — e isso é
+correto, não um bug.** Diferente de `Custom` (D57 acima): `Custom` é watching de verdade e some
+da API por DEFEITO do modelo (binário `subscribed`/`ignored`, não enxerga granularidade);
+`Ignore` significa "não me fale desse repo" e ser excluído é o comportamento CERTO dele.
+Construir sobre `Custom` é depender de um bug; construir sobre `Ignore` não é.
+
+Os três estados do sinal, para referência:
+
+| Estado no GitHub | Efeito no Kubo |
+|---|---|
+| **All Activity** | coleta — é o que a migração one-time do D51 fez pros 260 |
+| **Ignore** | pula — o repo fica na lista, visível e reversível ("o mudo") |
+| **Unwatch** | sai de tudo — nem lista, nem coleta |
+
+Gatilho nomeado: se o GitHub um dia consertar o bug do `Custom` (D57), repos em `Custom` voltam
+a aparecer em `viewer.watching` e entram no digest em silêncio — `Ignore` não é afetado por essa
+mudança, `Custom` é (issue própria, `debt-nomeada`).
+
 ## Fila (itens nomeados, sem sessão ainda)
 
 - **Worker de trending (descoberta).** Intenção do dono: acompanhar o que está bombando. Achados do planejamento: "top 100 por estrelas" *all-time* é lista praticamente ESTÁTICA (linux, react, freeCodeCamp) — o que se quer é **trending** (estrelas GANHAS no período), que o GitHub **não expõe em API oficial** (a página `/trending` é HTML). Proxy honesto via search API: repos criados recentemente ordenados por estrelas. **Produto certo NÃO é coletar releases de 100 repos** (custo de API + custo de destilação por item, digest vira firehose): é um **digest de descoberta**, do qual o dono promove ao watch o que interessar — descoberta alimenta curadoria pela MÃO do dono, nunca pelo cano. Decisão + advisor próprios.
 - **Mecânica de disparo do passe adversarial no caminho normal do rito (ADR-0021 §XI).** O smoke da 18b só exercitou o passe de `security-reviewer` dentro do fallback D44 (exceção, antes de reabrir o PR). Falta decidir COMO ele dispara quando o agente NÃO tropeça: automático como job do CI sobre o diff do PR do agente, ou manual pela thread principal antes de notificar o dono do gate aberto? O slot já está fixado na ADR (roda sobre o diff, antes da decisão do gate); a mecânica de disparo é o que falta.
 - **Apertar o allowlist do `agent-path-guard` para `catalogs/integrations/`** (ADR-0021 §XIII). Hoje o allowlist libera `catalogs/` inteiro pra PR de branch `agent/*` — inclui `catalogs/personas/` (least-privilege do projeto) e `catalogs/flow_templates/`. Mudança de CI, não de arquitetura; o gate humano na UI ainda vê o diff antes de aprovar, mas apertar fecha uma folga de defesa-em-profundidade barata.
-- **Guard-bash não bloqueia commit direto em `main`** (achado da sessão 0018b: um commit acidental do ADR-0021 foi parar em `main` local, pego por disciplina — checar `git log`/`git status` antes de prosseguir —, não por trava). O CLAUDE.md promete "duas camadas de enforce: guard-bash barra localmente" pro fluxo de branch, mas a camada local hoje só cobre CRIAÇÃO de branch fora da taxonomia — não cobre `git commit` com `HEAD` já em `main`. Conserto por PR no hook: checar `git rev-parse --abbrev-ref HEAD` e negar o commit se for `main`. Nunca contornar (nem com `--no-verify`, que a política do harness já proíbe por padrão).
+- **RESOLVIDO (issue #81, 2026-07-17).** Guard-bash não bloqueava commit direto em `main` (achado da sessão 0018b: um commit acidental do ADR-0021 foi parar em `main` local, pego por disciplina — checar `git log`/`git status` antes de prosseguir —, não por trava). O hook agora checa `git rev-parse --abbrev-ref HEAD` e nega `git commit` se `HEAD` for `main`/`master`.
 
 ## Guardas anti-DSL (do advisor — valem para TODAS as sessões)
 

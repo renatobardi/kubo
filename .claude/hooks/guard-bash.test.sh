@@ -41,6 +41,12 @@ expect BLOCK 'deploy && git push -f main'
 expect BLOCK 'cat .env'
 expect BLOCK 'git checkout -b feat/ok && git checkout -b hack'   # 1 válida não absolve a inválida
 
+# Commit direto em main (fase4-roadmap.md, achado 0018b) — override só pro teste,
+# produção lê a branch real via git rev-parse.
+GUARD_BASH_TEST_BRANCH=main expect BLOCK 'git commit -m "oops"'
+GUARD_BASH_TEST_BRANCH=main expect BLOCK 'git commit --amend'
+GUARD_BASH_TEST_BRANCH=feat/ok expect ALLOW 'git commit -m "fine"'
+
 # Strings que citam comandos, ou leitura legítima -> não bloqueiam
 expect ALLOW 'git commit -m "guard blocks checkout -b outside taxonomy"'
 expect ALLOW 'git commit -m "explain git push --force to main danger"'

@@ -150,6 +150,23 @@ def test_reject_without_reason_is_400(
     assert resp.status_code == 400
 
 
+def test_reject_reason_over_cap_is_422(
+    monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
+) -> None:
+    """Rejeição com motivo além do cap (ADR-0018 §VI: "cap na borda pydantic") → 422, nunca
+    truncado em silêncio nem escrito na store."""
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _GATE)
+    csrf = _csrf_from(authed_client.get("/flows/f1").text)
+
+    resp = authed_client.post(
+        "/flows/gate/reject",
+        data={"task": "task:g1", "csrf": csrf, "reason": "x" * 2001},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 422
+
+
 def test_write_routes_require_login(client: TestClient) -> None:
     """Sem sessão, os POSTs de escrita caem no guard de login (redirect 303 a /login)."""
     resp = client.post("/flows/gate/approve", data={"task": "task:g1"}, follow_redirects=False)

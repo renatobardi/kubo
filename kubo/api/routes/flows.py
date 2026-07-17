@@ -100,10 +100,11 @@ def reject(
     request: Request,
     task: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
-    reason: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form(max_length=2000)] = "",
 ) -> Response:
     """Rejeita o gate (D38) com MOTIVO obrigatório: arquiva o flow (2 tasks → rejected). CSRF +
-    staleness + fail-fast 503. Motivo vazio → 400 com o board reaberto."""
+    staleness + fail-fast 503. Motivo vazio → 400 com o board reaberto; motivo além do cap (ADR-0018
+    §VI, borda pydantic) → 422 antes de qualquer escrita."""
     return _decide(request, task=task, csrf=csrf, approve=False, reason=reason)
 
 
