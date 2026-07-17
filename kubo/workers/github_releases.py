@@ -343,15 +343,13 @@ def _classify_graphql_error_type(errors: object) -> str | None:
     Todos os tipos presentes, não só o primeiro (achado do CodeRabbit, PR #61):
     `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que classificar como
     rate_limit, não como http só porque `RATE_LIMITED` veio depois."""
-    error_types = (
-        [
-            item["type"]
-            for item in errors
-            if isinstance(item, dict) and isinstance(item.get("type"), str)
-        ]
-        if isinstance(errors, list)
-        else []
-    )
+    if not isinstance(errors, list):
+        return None
+    error_types = [
+        item["type"]
+        for item in errors
+        if isinstance(item, dict) and isinstance(item.get("type"), str)
+    ]
     if "RATE_LIMITED" in error_types:
         return "RATE_LIMITED"
     return error_types[0] if error_types else None
