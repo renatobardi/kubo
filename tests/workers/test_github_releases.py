@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import gzip
 import json as jsonlib
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 
 import httpx
@@ -269,6 +270,42 @@ def test_watching_pagination_walks_every_page_and_threads_cursor() -> None:
     assert bodies[0]["variables"]["cursor"] is None
     assert bodies[1]["variables"]["cursor"] == "cursor-1"
     assert bodies[2]["variables"]["cursor"] == "cursor-2"
+
+
+@respx.mock
+def test_watching_pagination_checks_deadline_between_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dívida do roadmap item 1: `_RUN_DEADLINE` só era checado ENTRE repos -- a paginação
+    da descoberta podia estourar o orçamento inteira sem interrupção (até
+    `_MAX_WATCHING_PAGES × _TIMEOUT` = 150s fora de qualquer checagem). `_RUN_DEADLINE`
+    reduzido a um valor minúsculo + a PRIMEIRA página deliberadamente lenta -> o relógio já
+    cruzou o deadline quando o loop chega na SEGUNDA página -> falha estruturada
+    `kind=\"timeout\"` ANTES do segundo POST, nunca os repos da primeira página devolvidos
+    como se fossem a lista completa (a mesma subcontagem silenciosa que motivou o D57)."""
+    monkeypatch.setattr(_github_releases_module, "_RUN_DEADLINE", 0.05)
+
+    def _slow_first_page(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.15)  # ultrapassa o deadline minúsculo antes da 2ª página
+        return httpx.Response(
+            200,
+            json=_graphql_response(
+                [_watching_node("acme/widget")], has_next=True, end_cursor="cursor-1"
+            ),
+        )
+
+    route = respx.post(_GRAPHQL_URL).mock(side_effect=_slow_first_page)
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert route.call_count == 1  # nunca tenta a 2ª página
+    assert result.error is not None
+    assert result.error.kind == "timeout"
+    assert result.payloads == []
+    assert releases_route.call_count == 0
 
 
 @respx.mock
@@ -524,6 +561,67 @@ def test_watching_response_missing_page_info_fails_structured() -> None:
         return_value=httpx.Response(
             200,
             json={"data": {"viewer": {"watching": {"nodes": [_watching_node("acme/widget")]}}}},
+        )
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+
+
+@respx.mock
+def test_watching_missing_has_next_page_fails_structured() -> None:
+    """Achado do CodeRabbit (PR #62): `pageInfo` sem `hasNextPage` (chave ausente) NÃO pode
+    ser coagido pra `False` -- isso faria um `pageInfo` malformado encerrar a paginação como
+    sucesso (`hasNextPage=False` legítimo), recriando a subcontagem silenciosa que motivou o
+    D57. FALHA estruturada, nenhum repo processado."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {
+                        "watching": {
+                            "nodes": [_watching_node("acme/widget")],
+                            "pageInfo": {"endCursor": None},
+                        }
+                    }
+                }
+            },
+        )
+    )
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+    assert releases_route.call_count == 0
+
+
+@respx.mock
+def test_watching_non_bool_has_next_page_fails_structured() -> None:
+    """`hasNextPage` presente mas não-bool (ex.: `0`, string) NÃO pode ser coagido -- mesma
+    disciplina do teste acima, cobrindo o caso "presente com tipo errado" em vez de
+    "ausente"."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {
+                        "watching": {
+                            "nodes": [_watching_node("acme/widget")],
+                            "pageInfo": {"hasNextPage": 0, "endCursor": None},
+                        }
+                    }
+                }
+            },
         )
     )
 
@@ -931,6 +1029,34 @@ def test_watching_response_exceeding_byte_cap_is_rejected_without_buffering() ->
 
 
 @respx.mock
+def test_streaming_byte_cap_is_rejected_without_content_length_header() -> None:
+    """Dívida do roadmap item 3: o teste de teto de bytes acima cobria só o pré-check de
+    `Content-Length` DECLARADO -- o laço `iter_raw` + acumulador corrido (a defesa real
+    contra chunked transfer sem `Content-Length` honesto, justo o caminho de ataque) seguia
+    sem teste. Corpo construído via GENERATOR (não bytes prontos): httpx não computa
+    `Content-Length` pra conteúdo streamado, então o pré-check nem dispara -- só o
+    acumulador do laço pode cortar."""
+    _mock_watch_list("acme/widget")
+
+    def _oversized_chunks() -> Iterator[bytes]:
+        chunk = b"a" * (1024 * 1024)
+        for _ in range(11):  # 11 MiB > _MAX_BYTES (10 MiB)
+            yield chunk
+
+    route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, content=_oversized_chunks())
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert "content-length" not in route.calls.last.response.headers
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert "teto de bytes" in result.error.message
+    assert result.payloads == []
+
+
+@respx.mock
 def test_other_http_error_is_http_kind_and_does_not_abort_others() -> None:
     """5xx num repo -> kind=http (não rate_limit), sem abortar o próximo repo."""
     _mock_watch_list("acme/widget", "acme/gizmo")
@@ -1045,6 +1171,65 @@ def test_malformed_watching_full_name_is_skipped_and_counted() -> None:
     assert stats["skipped_bad_repo_shape"] == 1
     assert stats["repos_seen"] == 1
     assert stats["repos_total"] == 2
+    assert stats["repos_discovered"] == 1
+    assert releases_route.call_count == 1
+
+
+@respx.mock
+def test_full_name_with_query_string_is_counted_as_bad_shape() -> None:
+    """Dívida do PR #57/roadmap item 4: `_is_valid_repo_shape` validava só "uma barra, sem
+    `..`", deixando passar `acme/widget?x=1` -- query string vazando pra URL montada em
+    `_fetch_releases`. Whitelist de caracteres por parte (`[A-Za-z0-9._-]`) fecha isso:
+    `?`, `#`, espaço etc. viram `skipped_bad_repo_shape`, nunca um repo processado."""
+    _mock_watching("acme/widget", "acme/widget?x=1")
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
+    stats = result.stats.model_dump()
+    assert stats["skipped_bad_repo_shape"] == 1
+    assert releases_route.call_count == 1
+
+
+@respx.mock
+def test_missing_or_blank_full_name_is_counted_as_bad_shape() -> None:
+    """`nameWithOwner` ausente, vazio ou não-string num node de `viewer.watching` (dívida
+    do PR #57, item 2: essa forma de malformação era descartada em SILÊNCIO, sem contar
+    em `skipped_bad_repo_shape` -- só a forma "sem barra" contava) agora entra no MESMO
+    contador que a forma errada -- é a mesma família de registro malformado, e o operador
+    olhando os stats não tem como distinguir "watch list limpa" de "alguns registros sem
+    `full_name` sumiram sem rastro" se só um dos dois casos for contado."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_graphql_response(
+                [
+                    _watching_node("acme/widget"),
+                    {},  # chave ausente
+                    _watching_node(""),  # vazio
+                    _watching_node(123),  # não-string
+                ],
+                has_next=False,
+            ),
+        )
+    )
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
+    stats = result.stats.model_dump()
+    assert stats["skipped_bad_repo_shape"] == 3
+    assert stats["repos_total"] == 4
     assert stats["repos_discovered"] == 1
     assert releases_route.call_count == 1
 
