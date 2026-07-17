@@ -18,6 +18,8 @@ def _run(**kw: object) -> RunListItem:
         "error_kind": None,
         "error": None,
         "items": None,
+        "repos_total": None,
+        "repos_discovered": None,
         "started_at": "2026-07-12T09:00:00+00:00",
         "finished_at": "2026-07-12T09:00:05+00:00",
     }
@@ -48,6 +50,37 @@ def test_runs_renders_worker_status_and_items(
     html = authed_client.get("/runs").text
     assert "feed" in html
     assert "5 itens" in html
+
+
+def test_runs_renders_repo_discovery_counts(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D57: `repos_discovered`/`repos_total` (github-releases) aparecem no card como
+    'N/M repos' quando presentes -- o instrumento de verificação da migração REST->GraphQL.
+    Achado do CodeRabbit (PR #61): os defaults do fixture `_run` só mantinham a assinatura
+    compatível, sem provar que a tela renderiza os contadores."""
+    monkeypatch.setattr(
+        "kubo.api.routes.runs.knowledge.list_runs",
+        lambda db, **kw: [
+            _run(worker="github-releases", status="ok", repos_total=261, repos_discovered=259)
+        ],
+    )
+    html = authed_client.get("/runs").text
+    assert "259/261 repos" in html
+
+
+def test_runs_omits_repo_discovery_counts_when_absent(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Workers sem descoberta de repos (feed, distiller) não têm `repos_total` em stats --
+    o card não mostra 'None/None repos' nem qualquer contagem (fallback gracioso)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.runs.knowledge.list_runs",
+        lambda db, **kw: [_run(worker="feed", status="ok", items=5)],
+    )
+    html = authed_client.get("/runs").text
+    assert "5 itens" in html
+    assert "repos" not in html
 
 
 def test_runs_quota_badge_does_not_reclassify_error(

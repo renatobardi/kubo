@@ -65,6 +65,24 @@ Prazo total do run (D51, não exercido por teste de wall-clock — flaky por nat
 sequenciais com timeout de 15s cada poderiam, sem teto, rodar por dezenas de minutos. Um
 `_RUN_DEADLINE` de 5 minutos interrompe o loop principal (não o fetch em curso) e sinaliza
 `kind="timeout"` se nenhum erro anterior já tiver sido registrado.
+
+v0.3.0 (D57): a descoberta da watch list migra de REST (`GET /user/subscriptions`) para
+GraphQL (`POST /graphql`, `viewer.watching`, paginação por cursor) — o REST estava
+silenciosamente sub-contando (243 repos vs. 261 reais, mesmo PAT, mecanismo não
+diagnosticado, achado 2026-07-16). A busca de releases por repo continua REST, inalterada.
+Este é o primeiro cliente GraphQL do repositório: um único endpoint fixo (`POST /graphql`),
+paginação por cursor opaco em `variables` (nunca interpolado na query, que é uma constante
+de módulo), e um formato de erro diferente do REST — HTTP 200 com um array `errors[]` no
+corpo é um modo de falha válido, classificado pelo campo estruturado `errors[].type`, nunca
+por casar texto de mensagem (mesma disciplina do D55 contra inferir `kind` de prosa).
+
+Diferente do REST original (onde estourar `_MAX_SUBSCRIPTION_PAGES`/paginação malformada NÃO
+era erro, só parava de coletar), a paginação GraphQL trata qualquer encerramento que não seja
+`hasNextPage=False` — teto de páginas esgotado, ou `hasNextPage=True` sem `endCursor` válido —
+como FALHA estruturada (achado do CodeRabbit, PR #61): devolver os repos já vistos como se
+fossem a lista COMPLETA recriaria a subcontagem silenciosa que motivou esta migração. O
+envelope da resposta (`data`/`viewer`/`watching`/`nodes`/`pageInfo`) também é validado
+explicitamente em cada nível, nunca um `{}`/`None` silencioso mascarando shape inesperado.
 """
 
 from __future__ import annotations
@@ -74,7 +92,6 @@ import time
 import unicodedata
 from datetime import datetime
 from typing import Any, NamedTuple
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -95,8 +112,8 @@ _TITLE_CAP = 500  # título é rótulo, não corpo
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MiB — teto de bytes de FIO (iter_raw), mesmo valor do FeedWorker
 _TIMEOUT = httpx.Timeout(15.0)
 _PER_PAGE = 30  # uma página basta pra releases — upsert idempotente cobre re-coleta
-_SUBSCRIPTIONS_PER_PAGE = 100  # página maior pra watch list — menos GETs de paginação
-_MAX_SUBSCRIPTION_PAGES = 10  # teto duro contra Link: rel="next" patológico/infinito (C4)
+_WATCHING_PAGE_SIZE = 100  # página maior pra watch list — menos POSTs de paginação
+_MAX_WATCHING_PAGES = 10  # teto duro contra paginação por cursor patológica/infinita (C4)
 _API_VERSION = "2022-11-28"
 # 5 min: um BlockingScheduler job segura os demais enquanto roda; sem teto, até ~260 repos
 # sequenciais com timeout de 15s cada poderiam rodar por dezenas de minutos.
@@ -135,19 +152,26 @@ def _clean(text: object, cap: int) -> str:
 
 
 class _FetchError(Exception):
-    """Erro interno de fetch (releases OU subscriptions) — mensagem SEM corpo de resposta,
-    status estruturado.
+    """Erro interno de fetch (releases REST OU watching GraphQL) — mensagem SEM corpo de
+    resposta, status estruturado.
 
     `headers` carrega os headers da resposta HTTP (quando existe uma) para o chamador
     decidir `kind` distinguindo rate-limit de permission-denied em 403 (D55) — nunca o
-    corpo, só os headers estruturais."""
+    corpo, só os headers estruturais. `graphql_error_type` cobre o caso GraphQL (D57):
+    erro no NÍVEL DO CORPO com HTTP 200 (`errors[].type`) — não há headers relevantes pra
+    classificar esse caso, só o campo estruturado do próprio corpo."""
 
     def __init__(
-        self, message: str, status: int | None, headers: httpx.Headers | None = None
+        self,
+        message: str,
+        status: int | None,
+        headers: httpx.Headers | None = None,
+        graphql_error_type: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.headers = headers
+        self.graphql_error_type = graphql_error_type
 
 
 def _is_rate_limit(status: int | None, headers: httpx.Headers | None) -> bool:
@@ -164,13 +188,24 @@ def _is_rate_limit(status: int | None, headers: httpx.Headers | None) -> bool:
 
 def _classify_fetch_error(exc: _FetchError, repo: str | None = None) -> tuple[ErrorInfo, bool]:
     """Classifica um `_FetchError` em `(ErrorInfo, is_rate_limit)` — mesma lógica usada nos
-    dois pontos de falha de `run()` (subscriptions e por-repo, D55), diferindo só em incluir
-    `repo` no `detail` estruturado quando presente (fetch por-repo)."""
-    is_rate_limit = _is_rate_limit(exc.status, exc.headers)
-    kind = "rate_limit" if is_rate_limit else "http"
+    dois pontos de falha de `run()` (watching e por-repo, D55), diferindo só em incluir
+    `repo` no `detail` estruturado quando presente (fetch por-repo).
+
+    Classificação é estruturada em DOIS eixos, nunca por casar texto de mensagem (D57,
+    mesma disciplina do D55): status/headers HTTP pro caso REST, `errors[].type` do corpo
+    pro caso GraphQL (HTTP 200, falha só visível no corpo) — `graphql_error_type ==
+    "RATE_LIMITED"` classifica como rate_limit direto, sem passar por `_is_rate_limit`
+    (que só entende headers HTTP, ausentes/irrelevantes numa falha de corpo GraphQL)."""
+    if exc.graphql_error_type == "RATE_LIMITED":
+        kind, is_rate_limit = "rate_limit", True
+    else:
+        is_rate_limit = _is_rate_limit(exc.status, exc.headers)
+        kind = "rate_limit" if is_rate_limit else "http"
     detail: dict[str, Any] = {"repo": repo} if repo is not None else {}
     if exc.status is not None:
         detail["status"] = exc.status
+    if exc.graphql_error_type is not None:
+        detail["graphql_error_type"] = exc.graphql_error_type
     return ErrorInfo(kind=kind, message=str(exc)[:500], detail=detail), is_rate_limit
 
 
@@ -191,18 +226,24 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
-def _stream_json_list(
-    client: httpx.Client, url: str, headers: dict[str, str], params: dict[str, Any] | None
-) -> tuple[list[dict[str, Any]], httpx.Response]:
-    """Streaming + teto de bytes compartilhado por releases e subscriptions: baixa `url`,
-    aplica o mesmo pré-check de `Content-Length` e o mesmo teto corrido de `iter_raw` (achado
-    do security-reviewer — nunca bufferizar uma resposta gigante inteira antes de cortar),
-    parseia como JSON e valida que o topo é uma lista. Devolve a resposta (fechada, mas com
-    `.headers`/`.links` ainda acessíveis) pro chamador ler `Link: rel="next"`."""
+def _stream_json(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    *,
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+) -> tuple[Any, httpx.Response]:
+    """Streaming + teto de bytes compartilhado por releases (GET) e watching (POST GraphQL):
+    baixa `url`, aplica o mesmo pré-check de `Content-Length` e o mesmo teto corrido de
+    `iter_raw` (achado do security-reviewer — nunca bufferizar uma resposta gigante inteira
+    antes de cortar), parseia como JSON. Devolve o valor parseado (list OU dict, o chamador
+    valida o shape) e a resposta (fechada, mas com `.headers` ainda acessível)."""
     total = 0
     chunks: list[bytes] = []
     try:
-        with client.stream("GET", url, headers=headers, params=params) as resp:
+        with client.stream(method, url, headers=headers, params=params, json=json_body) as resp:
             resp.raise_for_status()
             declared = resp.headers.get("content-length")
             if declared is not None and declared.isdigit() and int(declared) > _MAX_BYTES:
@@ -212,8 +253,6 @@ def _stream_json_list(
                 if total > _MAX_BYTES:
                     raise _FetchError("resposta da API excede o teto de bytes", None)
                 chunks.append(chunk)
-            # `.links` parseia o header `Link` (não o corpo) — acessível fora do `with`
-            # mesmo com o stream já consumido via `iter_raw` acima.
     except httpx.HTTPStatusError as exc:
         raise _FetchError(
             f"GitHub respondeu HTTP {exc.response.status_code}",
@@ -226,6 +265,15 @@ def _stream_json_list(
         data = json.loads(bytes(b"".join(chunks)))
     except ValueError:
         raise _FetchError("resposta da API não é JSON válido", None) from None
+    return data, resp
+
+
+def _stream_json_list(
+    client: httpx.Client, url: str, headers: dict[str, str], params: dict[str, Any] | None
+) -> tuple[list[dict[str, Any]], httpx.Response]:
+    """Wrapper de `_stream_json` pro caso GET/lista (releases, hoje o único chamador REST) —
+    valida que o topo do JSON parseado é uma lista."""
+    data, resp = _stream_json(client, "GET", url, headers, params=params)
     if not isinstance(data, list):
         raise _FetchError("resposta da API não é uma lista", None)
     return [item for item in data if isinstance(item, dict)], resp
@@ -244,41 +292,109 @@ def _fetch_releases(base_url: str, token: str, owner: str, repo: str) -> list[di
     return data
 
 
-def _is_same_origin(url: str, base_url: str) -> bool:
-    """`url` deve ter o MESMO esquema+host de `base_url` (https, mesmo netloc) — defesa em
-    profundidade (achado convergente do security-reviewer e do CodeRabbit, PR #57): a URL de
-    `Link: rel="next"` vem de um header de resposta, não de `base_url` (config confiável).
-    Não é explorável no modelo de ameaça atual (resposta de 1ª parte do GitHub, TLS) mas o
-    guard é barato e fecha por construção qualquer futuro onde isso deixe de ser verdade."""
-    parsed = urlsplit(url)
-    base = urlsplit(base_url)
-    return parsed.scheme == "https" and parsed.netloc == base.netloc
+_WATCHING_QUERY = (
+    "query($cursor: String, $first: Int!) {"
+    " viewer {"
+    " watching(first: $first, after: $cursor) {"
+    " nodes { nameWithOwner }"
+    " pageInfo { hasNextPage endCursor }"
+    " }"
+    " }"
+    "}"
+)
 
 
-def _fetch_subscriptions(base_url: str, token: str) -> list[dict[str, Any]]:
-    """Busca a watch list do operador (`GET /user/subscriptions`), paginada via `Link:
-    rel="next"` (RFC 5988) até esgotar as páginas OU até `_MAX_SUBSCRIPTION_PAGES` (C4).
+def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Busca a watch list do operador via GraphQL `viewer.watching` (D57 — substitui REST
+    `/user/subscriptions`, que sub-contava silenciosamente: 243 vs 261 repos reais, mesmo
+    PAT, mecanismo não diagnosticado, achado 2026-07-16). Pagina por cursor
+    (`pageInfo.hasNextPage`/`endCursor`) até esgotar OU até `_MAX_WATCHING_PAGES` (C4,
+    mesma disciplina de teto duro que a paginação REST tinha).
 
-    Segue a URL EXATA que o header `Link` do GitHub devolve pra próxima página, nunca
-    re-derivando `?page=N` à mão — é a maneira correta de consumir paginação RFC 5988 e é
-    literalmente o que os testes mockam. Estourar o teto de páginas NÃO é erro: só para de
-    coletar mais e segue com o que já tem (guarda contra `Link` patológico/infinito)."""
+    A query é uma CONSTANTE de módulo (`_WATCHING_QUERY`) — o cursor entra SOMENTE via
+    `variables`, nunca interpolado na string da query (fecha por construção qualquer
+    classe de injection-em-query).
+
+    Envelope validado EXPLICITAMENTE em cada nível (`data`, `viewer.watching`, `nodes`,
+    `pageInfo`) — achado do CodeRabbit (PR #61): um shape inesperado nunca vira `{}`/`None`
+    silencioso, sempre `_FetchError` estruturado (mesma disciplina de `_stream_json_list`
+    pro REST, nunca um novo padrão). `hasNextPage=True` sem `endCursor` válido, OU o teto
+    de páginas esgotado com mais dados prometidos, também são FALHA (não sucesso parcial):
+    devolver os repos já vistos como se fossem a lista COMPLETA recriaria exatamente a
+    subcontagem silenciosa que motivou a migração D57 — só `hasNextPage=False` é
+    encerramento legítimo.
+
+    Devolve `full_name` (não `nameWithOwner`, pro resto de `_discover_repos` continuar
+    tratando ambos exatamente igual): cada node vira `{"full_name": node.get("nameWithOwner")}`
+    -- filtra só nodes que não são dict (null nodes, semântica GraphQL válida); um
+    `nameWithOwner` ausente/vazio/não-string dentro de um node válido é responsabilidade de
+    `_discover_repos` (mesmo tratamento que já existia pro shape malformado de REST)."""
     subscriptions: list[dict[str, Any]] = []
-    url: str | None = f"{base_url}/user/subscriptions"
-    params: dict[str, Any] | None = {"per_page": _SUBSCRIPTIONS_PER_PAGE}
+    url = f"{base_url}/graphql"
     headers = _headers(token)
+    cursor: str | None = None
     with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
-        for _page in range(_MAX_SUBSCRIPTION_PAGES):
-            if url is None:
-                break
-            data, resp = _stream_json_list(client, url, headers, params)
-            subscriptions.extend(data)
-            next_url = resp.links.get("next", {}).get("url")
-            if next_url is not None and not _is_same_origin(next_url, base_url):
-                break  # Link fora da origem esperada -- para a paginação, sem erro
-            url = next_url
-            params = None  # a URL do Link já traz os query params completos
-    return subscriptions
+        for _page in range(_MAX_WATCHING_PAGES):
+            variables = {"cursor": cursor, "first": _WATCHING_PAGE_SIZE}
+            data, _resp = _stream_json(
+                client,
+                "POST",
+                url,
+                headers,
+                json_body={"query": _WATCHING_QUERY, "variables": variables},
+            )
+            if not isinstance(data, dict):
+                raise _FetchError("resposta da API GraphQL não é um objeto", None)
+            errors = data.get("errors")
+            if errors:
+                # Todos os tipos de `errors[]`, não só o primeiro (achado do CodeRabbit,
+                # PR #61): `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que
+                # classificar como rate_limit, não como http só porque veio depois.
+                error_types = (
+                    [
+                        item["type"]
+                        for item in errors
+                        if isinstance(item, dict) and isinstance(item.get("type"), str)
+                    ]
+                    if isinstance(errors, list)
+                    else []
+                )
+                error_type = (
+                    "RATE_LIMITED"
+                    if "RATE_LIMITED" in error_types
+                    else (error_types[0] if error_types else None)
+                )
+                raise _FetchError(
+                    "GitHub GraphQL devolveu erro(s)", 200, graphql_error_type=error_type
+                )
+            data_field = data.get("data")
+            if not isinstance(data_field, dict):
+                raise _FetchError("resposta da API GraphQL sem campo 'data' válido", None)
+            viewer = data_field.get("viewer")
+            watching = viewer.get("watching") if isinstance(viewer, dict) else None
+            if not isinstance(watching, dict):
+                raise _FetchError("resposta da API GraphQL sem 'viewer.watching' válido", None)
+            nodes = watching.get("nodes")
+            if not isinstance(nodes, list):
+                raise _FetchError("resposta da API GraphQL sem 'nodes' válido em watching", None)
+            subscriptions.extend(
+                {"full_name": node.get("nameWithOwner")} for node in nodes if isinstance(node, dict)
+            )
+            page_info = watching.get("pageInfo")
+            if not isinstance(page_info, dict):
+                raise _FetchError("resposta da API GraphQL sem 'pageInfo' válido em watching", None)
+            if not bool(page_info.get("hasNextPage")):
+                return subscriptions
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise _FetchError(
+                    "paginação GraphQL indica mais páginas (hasNextPage) sem endCursor válido",
+                    None,
+                )
+            cursor = next_cursor
+    raise _FetchError(
+        f"paginação GraphQL excedeu o teto de {_MAX_WATCHING_PAGES} páginas sem terminar", None
+    )
 
 
 def _is_valid_repo_shape(full_name: str) -> bool:
@@ -297,13 +413,19 @@ def _is_valid_repo_shape(full_name: str) -> bool:
     return ".." not in owner and ".." not in repo
 
 
-def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int, RunResult | None]:
-    """Descobre a watch list do operador (`_fetch_subscriptions`) e resolve os dois casos
-    de encerramento antecipado de `run()`: falha ao buscar subscriptions, e watch list
-    vazia após paginar tudo (`ErrorInfo(kind="config")` IMEDIATO, C3 CRITICAL — nunca run
-    limpo). Devolve `(repos, skipped_bad_repo_shape, None)` no caminho feliz, ou
-    `([], skipped_bad_repo_shape, <RunResult>)` — o resultado que `run()` deve devolver
-    imediatamente — quando a descoberta encerra o run cedo.
+def _discover_repos(
+    base_url: str, token: str, log: Any
+) -> tuple[list[str], int, int, RunResult | None]:
+    """Descobre a watch list do operador (`_fetch_watched_repos`, GraphQL D57) e resolve os
+    dois casos de encerramento antecipado de `run()`: falha ao buscar `viewer.watching`, e
+    watch list vazia após paginar tudo (`ErrorInfo(kind="config")` IMEDIATO, C3 CRITICAL —
+    nunca run limpo). Devolve `(repos, skipped_bad_repo_shape, repos_total, None)` no caminho
+    feliz, ou `([], skipped_bad_repo_shape, repos_total, <RunResult>)` — o resultado que
+    `run()` deve devolver imediatamente — quando a descoberta encerra o run cedo.
+
+    `repos_total` é o BRUTO devolvido pela paginação (nodes já filtrados de `None`, mas
+    ANTES de validar shape/dedup) — computado logo após o fetch ter sucesso; uma falha de
+    fetch nunca chegou a descobrir nada, então `repos_total=0` nesse caminho.
 
     `full_name` malformado (sem exatamente uma `/`, parte vazia, ou `..`) é filtrado ANTES
     de virar repo a processar — dado de API externa, não confiado por padrão — e contado
@@ -314,10 +436,10 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
     conta pessoal E organização) — sem isso, `repos_seen`/fetches de release dobrariam por
     repo repetido."""
     try:
-        subscriptions = _fetch_subscriptions(base_url, token)
+        subscriptions = _fetch_watched_repos(base_url, token)
     except _FetchError as exc:
         error, is_rate_limit = _classify_fetch_error(exc)
-        log.warning("github_subscriptions_fetch_failed", kind=error.kind)
+        log.warning("github_watching_fetch_failed", kind=error.kind)
         stats = Stats.model_validate(
             {
                 "repos_seen": 0,
@@ -326,10 +448,13 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
                 "rate_limited": 1 if is_rate_limit else 0,
                 "skipped_no_date": 0,
                 "skipped_bad_repo_shape": 0,
+                "repos_total": 0,
+                "repos_discovered": 0,
             }
         )
-        return [], 0, RunResult(payloads=[], stats=stats, error=error)
+        return [], 0, 0, RunResult(payloads=[], stats=stats, error=error)
 
+    repos_total = len(subscriptions)
     repos: list[str] = []
     seen: set[str] = set()
     skipped_bad_repo_shape = 0
@@ -356,11 +481,14 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
                 "rate_limited": 0,
                 "skipped_no_date": 0,
                 "skipped_bad_repo_shape": skipped_bad_repo_shape,
+                "repos_total": repos_total,
+                "repos_discovered": 0,
             }
         )
         return (
             [],
             skipped_bad_repo_shape,
+            repos_total,
             RunResult(
                 payloads=[],
                 stats=stats,
@@ -374,7 +502,7 @@ def _discover_repos(base_url: str, token: str, log: Any) -> tuple[list[str], int
             ),
         )
 
-    return repos, skipped_bad_repo_shape, None
+    return repos, skipped_bad_repo_shape, repos_total, None
 
 
 def _html_url(value: Any) -> str | None:
@@ -480,12 +608,12 @@ def _process_repo(base_url: str, token: str, repo: str, since: datetime, log: An
 
 class GithubReleasesWorker:
     """Coleta releases publicadas (`draft == false`) dos repos da watch list do operador,
-    descoberta dinamicamente via `/user/subscriptions` (D51), filtradas por `since` (C1). Não
-    fala com a store: devolve `RunResult`, o runtime persiste."""
+    descoberta dinamicamente via GraphQL `viewer.watching` (D51/D57), filtradas por `since`
+    (C1). Não fala com a store: devolve `RunResult`, o runtime persiste."""
 
     manifest = WorkerManifest(
         name="github-releases",
-        version="0.2.0",
+        version="0.3.0",
         integrations=["github-watch"],
         config=GithubReleasesConfig,
     )
@@ -516,7 +644,9 @@ class GithubReleasesWorker:
         log = ctx.logger.bind(worker="github-releases")
         deadline = time.monotonic() + _RUN_DEADLINE
 
-        repos, skipped_bad_repo_shape, early_result = _discover_repos(base_url, token, log)
+        repos, skipped_bad_repo_shape, repos_total, early_result = _discover_repos(
+            base_url, token, log
+        )
         if early_result is not None:
             return early_result
 
@@ -552,6 +682,8 @@ class GithubReleasesWorker:
                 "rate_limited": rate_limited,
                 "skipped_no_date": skipped_no_date,
                 "skipped_bad_repo_shape": skipped_bad_repo_shape,
+                "repos_total": repos_total,
+                "repos_discovered": len(repos),
             }
         )
         log.info("github_releases_collected", repos_seen=repos_seen, items=len(items))

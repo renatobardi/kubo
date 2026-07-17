@@ -197,3 +197,58 @@ dois" além do que a união Pydantic já garante estruturalmente.
   (D53) não cobre; a reutilização de `executor: human` é o desvio documentado em seu lugar.
 - **Backfill completo na estreia** (260 repos × todas as releases históricas) — ~7.800
   destilações de estreia, inaceitável (D52).
+
+## Emenda (2026-07-16b) — D57: descoberta migra de REST para GraphQL
+
+Achado pós-deploy: `GET /user/subscriptions` (REST, o mecanismo original deste ADR) sub-conta
+silenciosamente — 243 repos devolvidos contra 261 reais, mesmo PAT, testado com 3 credenciais
+diferentes (PAT clássico, PAT fine-grained, OAuth do `gh`) e confirmado por comparação direta
+com `viewer.watching` (GraphQL), que devolve os 261. O mecanismo do undercount do REST não foi
+diagnosticado — só evidenciado empiricamente. **Decisão do dono (D57): a descoberta migra de
+REST para GraphQL `viewer.watching`, paginado por cursor** (`pageInfo.hasNextPage`/`endCursor`);
+a busca de releases por repo continua REST, inalterada. Implementado em
+`kubo/workers/github_releases.py` v0.3.0 (era 0.2.0) — primeiro cliente GraphQL do repositório.
+
+**Isto NÃO contradiz o "Veredito da verificação" registrado em `docs/sessions/fase4-roadmap.md`
+(D51, 2026-07-16 ~03:00), que testou `gh api graphql viewer.watching` e obteve `totalCount: 0`.**
+São dois achados diferentes, sobre pontos cegos diferentes, em momentos diferentes:
+
+| Achado | Quando | O que media | Resultado |
+|---|---|---|---|
+| D51 (roadmap, ~03:00) | ANTES da migração Custom→All Activity | os 136 repos em modo `Custom` | REST e GraphQL cegos IGUALMENTE (`[]`/`totalCount: 0`) |
+| D57 (este ADR, ~21:00) | DEPOIS da migração (260 repos, todos `All Activity`) | a lista inteira, já migrada | REST sub-conta (243); GraphQL correto (261) |
+
+À 03:00 não existia nada em `All Activity` pra comparar — o teste de GraphQL daquele momento
+mediu exatamente o mesmo ponto cego do REST (achado D51, tabela "Custom vs All Activity" já
+registrada), não um ponto cego adicional. O ponto cego do D57 (REST sub-contando especificamente
+o universo `All Activity`) só ficou observável DEPOIS da migração, quando passou a existir massa
+de comparação — e ninguém re-testou GraphQL nesse novo estado até hoje. 260→261 no meio disso é
+ruído (um repo assistido a mais entre os dois momentos), não sinal do achado.
+
+**Nota de método (a lição, não o detalhe):** um teste negativo tem PRAZO DE VALIDADE — vale para
+o estado do mundo no instante em que rodou. A migração Custom→All Activity mudou esse estado às
+03:00 e ninguém re-executou o teste de GraphQL que a própria migração invalidava. "GraphQL não
+serve" era verdade às 03:00 e mentira às 21:00. Ver `[[verificar-fato-na-fonte]]`.
+
+**Quinta ocorrência da família de falha silenciosa** já nomeada em
+`docs/sessions/fase4-roadmap.md` (D51 + dívida do PR #57, quatro ocorrências registradas) — ver
+detalhe lá.
+
+**Custo honesto da migração** (avaliado antes de decidir, não depois): escrever o primeiro
+cliente GraphQL do Kubo — POST + laço de cursor (`pageInfo`/`endCursor`) + shape de erro novo
+(HTTP 200 com `errors[]` no corpo) — é ~40 linhas de `httpx`, não um framework. Alternativa
+descartada (`extra_repos` como lista estática de reforço pro REST): custa menos hoje, mas cobra
+cegueira permanente amanhã — um repo novo assistido nos orgs afetados pelo undercount some em
+silêncio, e `unwatch` deixa de podar de verdade. D57 aceita o custo maior porque fecha o buraco
+por construção em vez de por lista mantida à mão (mesmo raciocínio de D51 contra config estática).
+
+**C4 (índice deste ADR) muda de sentido, não de número:** era "REST `/user/subscriptions` pagina
+com teto de 10 páginas"; agora é "GraphQL `viewer.watching` pagina por cursor com o MESMO teto
+duro de 10 páginas" — o mecanismo de página muda (`Link: rel="next"` → cursor opaco), o teto
+sobrevive. **Correção (revisão do CodeRabbit, PR #61 — endureceu, não sobreviveu intacta):** no
+REST, estourar o teto (ou uma página malformada) NÃO era erro, só parava de coletar e seguia com
+o que já tinha — comportamento herdado sem questionar na primeira versão do GraphQL. Isso
+recriaria a MESMA subcontagem silenciosa que motivou D57: devolver repos parciais como se fossem
+a lista completa. Corrigido antes do merge: no GraphQL, qualquer encerramento que não seja
+`hasNextPage=False` (teto esgotado, ou `hasNextPage=True` sem `endCursor` válido) é FALHA
+estruturada (`kind="http"`), nunca sucesso parcial silencioso.

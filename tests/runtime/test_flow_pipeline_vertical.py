@@ -54,8 +54,19 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_DB};")
 
 
-def _subscription(full_name: str) -> dict[str, Any]:
-    return {"id": 1, "full_name": full_name, "private": False}
+def _graphql_watching_response(*full_names: str) -> dict[str, Any]:
+    """Corpo de `viewer.watching` (D57 — descoberta migrou de REST pra GraphQL), uma
+    página só (sem `hasNextPage`)."""
+    return {
+        "data": {
+            "viewer": {
+                "watching": {
+                    "nodes": [{"nameWithOwner": name} for name in full_names],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+    }
 
 
 def _release(release_id: int, *, published_at: str) -> dict[str, Any]:
@@ -75,8 +86,8 @@ def _release(release_id: int, *, published_at: str) -> dict[str, Any]:
 def test_pipeline_collects_release_and_lands_in_stored(db: Any) -> None:
     """Caminho feliz: um repo assistido com uma release publicada após `since` → o run
     fecha `ok`, o task termina em `stored` (sem gate) e o run fica linkado (`set_task_run`)."""
-    respx.get(f"{_GITHUB}/user/subscriptions").mock(
-        return_value=httpx.Response(200, json=[_subscription("acme/widget")])
+    respx.post(f"{_GITHUB}/graphql").mock(
+        return_value=httpx.Response(200, json=_graphql_watching_response("acme/widget"))
     )
     respx.get(f"{_GITHUB}/repos/acme/widget/releases").mock(
         return_value=httpx.Response(200, json=[_release(42, published_at="2026-07-10T00:00:00Z")])
@@ -103,7 +114,7 @@ def test_pipeline_collects_release_and_lands_in_stored(db: Any) -> None:
 def test_pipeline_subscriptions_failure_lands_in_failed(db: Any) -> None:
     """A busca da watch list falha (500) — não "aprendi que não há watches", mas "não
     consegui nem perguntar" (D55): o run fecha em erro e o task termina em `failed`."""
-    respx.get(f"{_GITHUB}/user/subscriptions").mock(return_value=httpx.Response(500))
+    respx.post(f"{_GITHUB}/graphql").mock(return_value=httpx.Response(500))
 
     result = run_flow(
         db,
@@ -123,7 +134,9 @@ def test_pipeline_empty_watch_list_is_config_error_and_still_lands_in_failed(db:
     """Watch list vazia é ERRO, nunca run limpo (C3 CRITICAL): `error.kind == "config"` no
     run, e o task ainda pousa em `failed` — pipeline v1 só tem `stored|failed`, sem gate
     pra rotear um erro de config pra um terceiro estado."""
-    respx.get(f"{_GITHUB}/user/subscriptions").mock(return_value=httpx.Response(200, json=[]))
+    respx.post(f"{_GITHUB}/graphql").mock(
+        return_value=httpx.Response(200, json=_graphql_watching_response())
+    )
 
     result = run_flow(
         db,
@@ -150,7 +163,7 @@ def test_pipeline_bad_worker_config_does_not_crash_and_lands_in_failed(db: Any) 
     Este teste é de REGRESSÃO DE SHAPE, não uma decisão de design nova: `run_flow` não deve
     crashar, e o task deve pousar em `failed` (pipeline v1 não tem rota alternativa pra erro
     de config malformado, só `stored|failed` — sem gate pra desviar). Nenhuma chamada de rede
-    ocorre: a validação de config falha ANTES do worker tentar `/user/subscriptions`."""
+    ocorre: a validação de config falha ANTES do worker tentar `viewer.watching` (D57)."""
     result = run_flow(
         db,
         template_name="pipeline",
