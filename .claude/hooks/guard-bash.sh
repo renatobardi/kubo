@@ -69,4 +69,14 @@ if [ -n "$NEWBRANCH" ]; then
     && deny "branch fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug kebab-case — ver ADR-0004: $NEWBRANCH"
 fi
 
+# Commit direto em main (achado 0018b, fase4-roadmap.md): CLAUDE.md promete "duas camadas de
+# enforce", esta cobria só criação de branch. GUARD_BASH_TEST_BRANCH é override só de teste;
+# produção sempre lê a branch real do repo.
+echo "$CMD" | grep -Eq "$CP"'git[[:space:]]+commit\b' && {
+  CURBRANCH="${GUARD_BASH_TEST_BRANCH:-$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
+  case "$CURBRANCH" in
+    main|master) deny "commit direto em $CURBRANCH — crie uma branch (feat|fix|chore|docs|test|refactor|ci)/slug primeiro" ;;
+  esac
+}
+
 exit 0
