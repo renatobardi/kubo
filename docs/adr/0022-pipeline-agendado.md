@@ -244,6 +244,11 @@ por construção em vez de por lista mantida à mão (mesmo raciocínio de D51 c
 
 **C4 (índice deste ADR) muda de sentido, não de número:** era "REST `/user/subscriptions` pagina
 com teto de 10 páginas"; agora é "GraphQL `viewer.watching` pagina por cursor com o MESMO teto
-duro de 10 páginas" — a disciplina (proteção contra paginação patológica/infinita) sobrevive
-intacta à troca de transporte, só o mecanismo de página muda (`Link: rel="next"` → cursor
-opaco).
+duro de 10 páginas" — o mecanismo de página muda (`Link: rel="next"` → cursor opaco), o teto
+sobrevive. **Correção (revisão do CodeRabbit, PR #61 — endureceu, não sobreviveu intacta):** no
+REST, estourar o teto (ou uma página malformada) NÃO era erro, só parava de coletar e seguia com
+o que já tinha — comportamento herdado sem questionar na primeira versão do GraphQL. Isso
+recriaria a MESMA subcontagem silenciosa que motivou D57: devolver repos parciais como se fossem
+a lista completa. Corrigido antes do merge: no GraphQL, qualquer encerramento que não seja
+`hasNextPage=False` (teto esgotado, ou `hasNextPage=True` sem `endCursor` válido) é FALHA
+estruturada (`kind="http"`), nunca sucesso parcial silencioso.

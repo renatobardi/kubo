@@ -133,9 +133,11 @@ comparar. As quatro anteriores (lista vazia sem erro; `-f` vs `-F` mascarado; `p
 nameWithOwner` nulo; `full_name` ausente sem contagem) eram todas AUSÊNCIA total ou malformação
 de campo — esta é a primeira da família que é sub-contagem PARCIAL de um endpoint que responde
 normalmente. Mitigação de instrumento, não de causa (a causa segue não-diagnosticada): o card de
-run na UI passa a mostrar `repos_discovered`/`repos_total` lado a lado (E6) — se as duas fontes
-um dia divergirem nesse número de novo, fica visível no card, não só numa comparação manual de
-madrugada.
+run na UI passa a mostrar `repos_discovered`/`repos_total` lado a lado (E6) — **achado do
+CodeRabbit (PR #61): não apresentar isto como comparação entre fontes** — as duas contagens vêm
+da MESMA resposta GraphQL (bruto vs. validado/deduplicado), então revelam descartes internos
+(shape malformado, dedup), não uma nova subcontagem da própria API. Detectar isso de novo ainda
+exige uma referência externa (outra fonte, ou comparação manual como a que achou o 243-vs-261).
 
 **Nota de método (a lição desta, além da lista de ocorrências):** um teste negativo tem PRAZO DE
 VALIDADE. O "Veredito da verificação" no D51 acima testou GraphQL às ~03:00 e concluiu

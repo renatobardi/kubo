@@ -32,7 +32,7 @@ import respx
 import structlog
 from pydantic import ValidationError
 
-from kubo.contracts.models import ItemPayload, RunResult
+from kubo.contracts.models import ItemPayload
 from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import ResolvedIntegration
 from kubo.workers import github_releases as _github_releases_module
@@ -272,10 +272,13 @@ def test_watching_pagination_walks_every_page_and_threads_cursor() -> None:
 
 
 @respx.mock
-def test_watching_pagination_hard_cap_stops_after_ten_pages() -> None:
+def test_watching_pagination_hard_cap_exceeded_fails_structured() -> None:
     """`hasNextPage=True` SEMPRE presente, com `endCursor` sempre novo (paginação
-    patológica/infinita) -> o worker para depois de um teto fixo de páginas (10), sem
-    travar, e ainda devolve `RunResult`."""
+    patológica/infinita, ou watch list real acima de `_MAX_WATCHING_PAGES` páginas) -> o
+    worker para depois de um teto fixo de páginas (10), sem travar, mas FALHA estruturada
+    (achado do CodeRabbit, PR #61: devolver os repos já vistos como se fossem a lista
+    COMPLETA recriaria exatamente a subcontagem silenciosa que motivou a migração D57).
+    Nenhum repo é processado -- a descoberta nunca fechou com sucesso."""
     counter = {"n": 0}
 
     def _endless_response(request: httpx.Request) -> httpx.Response:
@@ -290,32 +293,38 @@ def test_watching_pagination_hard_cap_stops_after_ten_pages() -> None:
         )
 
     route = respx.post(_GRAPHQL_URL).mock(side_effect=_endless_response)
-    respx.get(_releases_url("acme", "widget")).mock(
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
         return_value=httpx.Response(200, json=[_release(1)])
     )
 
     result = GithubReleasesWorker().run(_ctx(_config()))
 
-    assert isinstance(result, RunResult)
-    assert route.call_count <= 10
+    assert route.call_count == 10
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert "teto" in result.error.message
+    assert result.payloads == []
+    assert releases_route.call_count == 0
 
 
 @respx.mock
-def test_watching_has_next_page_true_with_null_cursor_stops_immediately() -> None:
-    """`hasNextPage=True` mas `endCursor=None` (resposta malformada -- sem cursor válido
-    pra pedir a próxima página) -> a paginação para IMEDIATAMENTE, sem crash/loop infinito,
-    e os repos da única página já buscada seguem processados normalmente."""
+def test_watching_has_next_page_true_with_null_cursor_fails_structured() -> None:
+    """`hasNextPage=True` mas `endCursor=None` (resposta malformada -- a API promete mais
+    páginas sem dar como pedir a próxima) -> FALHA estruturada, nunca sucesso silencioso com
+    só os repos já vistos até ali (achado do CodeRabbit, PR #61: tratar isto como sucesso
+    parcial recriaria a subcontagem silenciosa que motivou a migração D57)."""
     route = _mock_watching("acme/widget", has_next=True, end_cursor=None)
-    respx.get(_releases_url("acme", "widget")).mock(
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
         return_value=httpx.Response(200, json=[_release(1)])
     )
 
     result = GithubReleasesWorker().run(_ctx(_config()))
 
     assert route.call_count == 1
-    assert isinstance(result, RunResult)
-    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
-    assert len(items) == 1
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+    assert releases_route.call_count == 0
 
 
 @respx.mock
@@ -465,6 +474,64 @@ def test_graphql_error_forbidden_classifies_as_http_not_config_not_rate_limit() 
     assert result.error.kind == "http"
     assert result.error.detail is not None
     assert result.error.detail.get("graphql_error_type") == "FORBIDDEN"
+
+
+@respx.mock
+def test_graphql_errors_multiple_types_prefers_rate_limited() -> None:
+    """`errors` com VÁRIOS itens (`[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]`) --
+    achado do CodeRabbit (PR #61): inspecionar só `errors[0]` classificaria isto como
+    `http`, escondendo o rate limit real que também está na lista. `RATE_LIMITED` em
+    QUALQUER posição vence, não só na primeira."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "errors": [
+                    {"type": "FORBIDDEN", "message": "acesso negado"},
+                    {"type": "RATE_LIMITED", "message": "API rate limit exceeded"},
+                ]
+            },
+        )
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "rate_limit"
+    assert result.error.detail is not None
+    assert result.error.detail.get("graphql_error_type") == "RATE_LIMITED"
+
+
+@respx.mock
+def test_watching_response_missing_data_field_fails_structured() -> None:
+    """Corpo `{}` (sem `data` nem `errors`) -- resposta GraphQL malformada -- FALHA
+    estruturada explícita, nunca um `{}` silencioso tratado como "zero repos encontrados"
+    (achado do CodeRabbit, PR #61: o envelope precisa ser validado, não assumido)."""
+    respx.post(_GRAPHQL_URL).mock(return_value=httpx.Response(200, json={}))
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+
+
+@respx.mock
+def test_watching_response_missing_page_info_fails_structured() -> None:
+    """`watching.pageInfo` ausente -- envelope malformado além de `nodes` -- FALHA
+    estruturada, mesma disciplina que `data` ausente."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"viewer": {"watching": {"nodes": [_watching_node("acme/widget")]}}}},
+        )
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
 
 
 @respx.mock

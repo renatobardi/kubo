@@ -75,6 +75,14 @@ paginação por cursor opaco em `variables` (nunca interpolado na query, que é 
 de módulo), e um formato de erro diferente do REST — HTTP 200 com um array `errors[]` no
 corpo é um modo de falha válido, classificado pelo campo estruturado `errors[].type`, nunca
 por casar texto de mensagem (mesma disciplina do D55 contra inferir `kind` de prosa).
+
+Diferente do REST original (onde estourar `_MAX_SUBSCRIPTION_PAGES`/paginação malformada NÃO
+era erro, só parava de coletar), a paginação GraphQL trata qualquer encerramento que não seja
+`hasNextPage=False` — teto de páginas esgotado, ou `hasNextPage=True` sem `endCursor` válido —
+como FALHA estruturada (achado do CodeRabbit, PR #61): devolver os repos já vistos como se
+fossem a lista COMPLETA recriaria a subcontagem silenciosa que motivou esta migração. O
+envelope da resposta (`data`/`viewer`/`watching`/`nodes`/`pageInfo`) também é validado
+explicitamente em cada nível, nunca um `{}`/`None` silencioso mascarando shape inesperado.
 """
 
 from __future__ import annotations
@@ -305,9 +313,16 @@ def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
 
     A query é uma CONSTANTE de módulo (`_WATCHING_QUERY`) — o cursor entra SOMENTE via
     `variables`, nunca interpolado na string da query (fecha por construção qualquer
-    classe de injection-em-query). `hasNextPage=True` com `endCursor` nulo/vazio é
-    resposta malformada -- para a paginação sem erro, não tenta mais uma página com
-    cursor inválido.
+    classe de injection-em-query).
+
+    Envelope validado EXPLICITAMENTE em cada nível (`data`, `viewer.watching`, `nodes`,
+    `pageInfo`) — achado do CodeRabbit (PR #61): um shape inesperado nunca vira `{}`/`None`
+    silencioso, sempre `_FetchError` estruturado (mesma disciplina de `_stream_json_list`
+    pro REST, nunca um novo padrão). `hasNextPage=True` sem `endCursor` válido, OU o teto
+    de páginas esgotado com mais dados prometidos, também são FALHA (não sucesso parcial):
+    devolver os repos já vistos como se fossem a lista COMPLETA recriaria exatamente a
+    subcontagem silenciosa que motivou a migração D57 — só `hasNextPage=False` é
+    encerramento legítimo.
 
     Devolve `full_name` (não `nameWithOwner`, pro resto de `_discover_repos` continuar
     tratando ambos exatamente igual): cada node vira `{"full_name": node.get("nameWithOwner")}`
@@ -332,33 +347,54 @@ def _fetch_watched_repos(base_url: str, token: str) -> list[dict[str, Any]]:
                 raise _FetchError("resposta da API GraphQL não é um objeto", None)
             errors = data.get("errors")
             if errors:
-                error_type: str | None = None
-                if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-                    candidate = errors[0].get("type")
-                    error_type = candidate if isinstance(candidate, str) else None
+                # Todos os tipos de `errors[]`, não só o primeiro (achado do CodeRabbit,
+                # PR #61): `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que
+                # classificar como rate_limit, não como http só porque veio depois.
+                error_types = (
+                    [
+                        item["type"]
+                        for item in errors
+                        if isinstance(item, dict) and isinstance(item.get("type"), str)
+                    ]
+                    if isinstance(errors, list)
+                    else []
+                )
+                error_type = (
+                    "RATE_LIMITED"
+                    if "RATE_LIMITED" in error_types
+                    else (error_types[0] if error_types else None)
+                )
                 raise _FetchError(
                     "GitHub GraphQL devolveu erro(s)", 200, graphql_error_type=error_type
                 )
-            data_field = data.get("data", {})
-            watching = (
-                data_field.get("viewer", {}).get("watching", {})
-                if isinstance(data_field, dict)
-                else {}
+            data_field = data.get("data")
+            if not isinstance(data_field, dict):
+                raise _FetchError("resposta da API GraphQL sem campo 'data' válido", None)
+            viewer = data_field.get("viewer")
+            watching = viewer.get("watching") if isinstance(viewer, dict) else None
+            if not isinstance(watching, dict):
+                raise _FetchError("resposta da API GraphQL sem 'viewer.watching' válido", None)
+            nodes = watching.get("nodes")
+            if not isinstance(nodes, list):
+                raise _FetchError("resposta da API GraphQL sem 'nodes' válido em watching", None)
+            subscriptions.extend(
+                {"full_name": node.get("nameWithOwner")} for node in nodes if isinstance(node, dict)
             )
-            nodes = watching.get("nodes") if isinstance(watching, dict) else None
-            if isinstance(nodes, list):
-                subscriptions.extend(
-                    {"full_name": node.get("nameWithOwner")}
-                    for node in nodes
-                    if isinstance(node, dict)
+            page_info = watching.get("pageInfo")
+            if not isinstance(page_info, dict):
+                raise _FetchError("resposta da API GraphQL sem 'pageInfo' válido em watching", None)
+            if not bool(page_info.get("hasNextPage")):
+                return subscriptions
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise _FetchError(
+                    "paginação GraphQL indica mais páginas (hasNextPage) sem endCursor válido",
+                    None,
                 )
-            page_info = watching.get("pageInfo") if isinstance(watching, dict) else None
-            has_next = bool(page_info.get("hasNextPage")) if isinstance(page_info, dict) else False
-            next_cursor = page_info.get("endCursor") if isinstance(page_info, dict) else None
-            if not has_next or not isinstance(next_cursor, str) or not next_cursor:
-                break
             cursor = next_cursor
-    return subscriptions
+    raise _FetchError(
+        f"paginação GraphQL excedeu o teto de {_MAX_WATCHING_PAGES} páginas sem terminar", None
+    )
 
 
 def _is_valid_repo_shape(full_name: str) -> bool:
