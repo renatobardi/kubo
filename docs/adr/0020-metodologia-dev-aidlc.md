@@ -42,7 +42,7 @@ O dono usa profissionalmente um fluxo próprio — **AI-DLC v1.4** (base Matt Po
 - A fase 4 executa o fluxo que o dono domina — menos atrito, mais fidelidade de supervisão.
 - O cenário canônico da spec §4 é reescrito nos passos do AI-DLC (mesma essência: fonte hostil, decisões humanas no meio, promoção no fim).
 - `docs/method/` passa a existir como casa de metodologia (distinta de `docs/design/`, que é UI).
-- Sessões da fase 4 (roadmap): 0017 docs (esta emenda) → 0018 promoção → 0019 pipeline → 0020 Grill interativo → 0021–0023 dev-aidlc em três fatias → 0024 cenário canônico + Learn.
+- Sessões da fase 4: sequência e numeração vivem em `docs/sessions/fase4-roadmap.md` (fonte de verdade, evita apodrecer número de sessão a cada renumeração).
 
 ## Alternativas rejeitadas
 
