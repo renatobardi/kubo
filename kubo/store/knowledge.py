@@ -561,19 +561,31 @@ def _run_items(stats: dict[str, Any]) -> int | None:
     return None
 
 
+def _stat_int(stats: dict[str, Any], key: str) -> int | None:
+    """Extrai `stats[key]` se for `int` (0 incluso — diferente de `_run_items`, aqui
+    zero é um valor válido, não "sem contador"), senão None (fallback gracioso —
+    worker que não grava essa chave, ex.: `repos_total` só existe pro github-releases,
+    D57)."""
+    value = stats.get(key)
+    return value if isinstance(value, int) else None
+
+
 @dataclass(frozen=True)
 class RunListItem:
     """Linha da tela de Execuções (E6): worker, status e — quando falha — o erro
     ESTRUTURADO completo (kind + objeto para o painel expansível). `error_kind` é o
     atalho para o badge que discrimina `quota` de falha real, SEM reclassificar o
-    `status` armazenado. `items` vem de `stats` (fallback gracioso). Sem coluna de
-    fluxo (desvio E6: `flow` não existe na fase 1)."""
+    `status` armazenado. `items` vem de `stats` (fallback gracioso). `repos_total`/
+    `repos_discovered` (D57): contadores de descoberta do github-releases, None pros
+    demais workers. Sem coluna de fluxo (desvio E6: `flow` não existe na fase 1)."""
 
     worker: str
     status: str
     error_kind: str | None
     error: dict[str, Any] | None
     items: int | None
+    repos_total: int | None
+    repos_discovered: int | None
     started_at: str
     finished_at: str | None
 
@@ -614,6 +626,8 @@ def list_runs(db: Any, *, limit: int, start: int, query: str | None = None) -> l
             error_kind=r.get("error_kind"),
             error=r.get("error"),
             items=_run_items(r.get("stats") or {}),
+            repos_total=_stat_int(r.get("stats") or {}, "repos_total"),
+            repos_discovered=_stat_int(r.get("stats") or {}, "repos_discovered"),
             started_at=str(r["started_at"]),
             finished_at=str(r["finished_at"]) if r.get("finished_at") is not None else None,
         )

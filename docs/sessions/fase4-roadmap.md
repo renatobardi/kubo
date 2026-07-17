@@ -43,7 +43,7 @@
 
 O worker promovido na 0018 nasce com **lista estática** (o smoke prova o RITO de promoção, não o worker). O uso real entra na **0021**:
 
-- **Sinal = WATCH** (`GET /user/subscriptions`, REST — sem GraphQL), **confirmado por evidência em 2026-07-16** (ver "Veredito" abaixo). Watch é a palavra certa no vocabulário do dono e do GitHub; estrela significa "gostei". **Pré-condição não-óbvia: os repos têm de estar em `All Activity`, não em `Custom`** — Custom é invisível para as duas APIs. Estrela ficou como plano B descartado. Fork foi descartado antes: obriga a resolver `parent` (N+1) e paga uma cópia de repo pelo preço de um marcador — fork volta a ser o que é, "quis mexer".
+- **Sinal = WATCH**, **confirmado por evidência em 2026-07-16** (ver "Veredito" abaixo). Watch é a palavra certa no vocabulário do dono e do GitHub; estrela significa "gostei". **Pré-condição não-óbvia: os repos têm de estar em `All Activity`, não em `Custom`** — Custom é invisível para as duas APIs. Estrela ficou como plano B descartado. Fork foi descartado antes: obriga a resolver `parent` (N+1) e paga uma cópia de repo pelo preço de um marcador — fork volta a ser o que é, "quis mexer". **Correção (D57, mesmo dia, ~21:00 — este bullet mentia sobre o transporte):** a descoberta nasceu em REST (`GET /user/subscriptions`) e migrou pra GraphQL (`viewer.watching`, paginado por cursor) horas depois, ao se descobrir que o REST sub-contava silenciosamente (243 vs 261 repos reais) — ver "Quinta falha silenciosa" abaixo e a emenda 2026-07-16b do ADR-0022. "Sem GraphQL" descrevia uma decisão que não sobreviveu ao mesmo dia.
 - **Pré-condição do dono: faxina ÚNICA em [github.com/watching](https://github.com/watching)** — sem desligar nada. O GitHub **removeu o auto-watch em 2025-05-22** ([changelog](https://github.blog/changelog/2025-05-22-sunset-of-automatic-watching-of-repositories-and-teams/), [discussão #157470](https://github.com/orgs/community/discussions/157470)): a feature não existe mais, a torneira já está fechada na origem. MAS o sunset **não foi retroativo** — inscrições acumuladas na era do auto-watch persistem (relatos de 900k+). Contas antigas têm entulho: faxina única resolve, não é imposto recorrente.
 - **Correção de premissa (erro registrado no planejamento):** participar de uma conversa (comentar/@mention) inscreve na **thread**, NÃO no repositório — thread subscription ≠ repo subscription. A lista de watches de repo nunca foi poluída por participação. O argumento "watch é gesto misturado, estrela é gesto puro" era FALSO; watch é tão deliberado quanto estrela, e é a palavra certa.
 - **Verificação por evidência antes de QUALQUER código** (disciplina ADR-0005) — **CONCLUÍDA em 2026-07-16** (ver "Veredito" abaixo): o risco era real, mas não do jeito hipotetizado. `Custom → Releases only` não faz o repo reportar `subscribed: false` — faz o endpoint de subscription devolver **404**, e some das DUAS APIs (REST e GraphQL), não só de uma. Decisão resultante para a 0021: coletar via `All Activity` (a API enxerga) e mover a curadoria de entrega para `settings/notifications`, nunca para o nível de subscription.
@@ -95,7 +95,8 @@ O GitHub modela subscription como binário (`subscribed`/`ignored`); watch **cus
 
 **Correção (achado do advisor, sessão 0021 — este parágrafo ficava órfão e mentindo em 6 meses):**
 a migração dos 136 Custom para All Activity está FEITA, não é mais tarefa pendente — a lista de
-watch é 260 repos, e é isso que o worker `github-releases` v0.2.0 lê (ADR-0022). A ideia original
+watch é 260 repos, e é isso que o worker `github-releases` lê (v0.3.0 desde D57, era v0.2.0 —
+ADR-0022). A ideia original
 deste parágrafo (estrelar os repos desejados como filtro de curadoria) NÃO foi implementada — a
 0021 decidiu (D52) neutralizar a enxurrada de estreia com `since` congelado, sem camada de
 curadoria por estrela. A curadoria dos 260 continua uma dívida real e nomeada (ADR-0022,
@@ -116,6 +117,33 @@ desenhado, não manutenção do Kubo).
 
 1. **O `_RUN_DEADLINE` não cobre a descoberta nem o fetch em curso — o pior caso real é maior que os "5 min" prometidos no docstring.** `deadline = time.monotonic() + _RUN_DEADLINE` (`kubo/workers/github_releases.py`) é calculado ANTES de `_discover_repos` rodar, mas só é CHECADO entre iterações do loop de repos — nunca dentro da paginação de `/user/subscriptions` nem durante o fetch de um único repo. Números reais: `_MAX_SUBSCRIPTION_PAGES=10` × `_TIMEOUT=15s` = até 150s de descoberta inteiramente fora de qualquer checagem (absorvidos dentro da mesma janela de 300s, sem interromper nada); e o repo que já estava "em voo" quando o relógio cruza os 300s tem até `_TIMEOUT=15s` pra terminar antes do loop notar. **Pior caso real: ~315s (5min15s), não 300s** — e o gap estrutural (nada interrompe uma chamada de rede em curso, só a decisão de COMEÇAR a próxima) é o achado que importa mais que o número: era exatamente a mitigação que o advisor pediu pro risco do `BlockingScheduler` segurar os outros jobs de cron, e checada só entre repos ela é mais mole do que o plano promete.
 2. **`full_name` ausente/vazio/não-string na descoberta de repos é descartado em silêncio — só a forma "shape errado" conta em `skipped_bad_repo_shape`.** Em `_discover_repos`, o `continue` do caso `not isinstance(full_name, str) or not full_name` não incrementa nenhum contador nem loga — o operador olhando os stats do run não tem como distinguir "watch list limpa" de "alguns registros da API vieram sem `full_name` e sumiram sem rastro". É a mesma família de falha silenciosa que esta sessão já documentou três vezes no achado D51 acima (lista vazia sem erro, `-f` vs `-F` mascarado por `2>/dev/null`, `parent.nameWithOwner` nulo colapsando num `sort -u` que parecia resultado válido) — quarta ocorrência da semana do mesmo padrão, que o ADR-0021 §XI já nomeia como classe: automação (CI, testes, revisor genérico) não é desenhada pra pegar "campo ausente vira contagem errada silenciosamente"; só auditoria deliberada dos números pega.
+
+### Quinta falha silenciosa (D57, mesmo dia, ~21:00) — `/user/subscriptions` sub-contava, sem erro, sem sinal
+
+**`GET /user/subscriptions` (REST) devolvia 243 repos onde a lista real era 261 — 200 OK, sem
+qualquer sinal de que faltava algo.** Descoberto por comparação direta: 3 credenciais diferentes
+contra o endpoint REST (PAT clássico, PAT fine-grained, OAuth do `gh`) convergiram no MESMO 243;
+`gh api graphql viewer.watching` com o PAT clássico devolveu 261. Mecanismo do undercount do REST
+NÃO diagnosticado — só evidenciado. Decisão (D57): descoberta migra pra GraphQL `viewer.watching`
+(ADR-0022, emenda 2026-07-16b; worker `github-releases` v0.3.0).
+
+Quinta ocorrência da mesma família nomeada pelo ADR-0021 §XI: API devolve 200 com dado
+INCOMPLETO, não errado — indistinguível de "lista pequena de verdade" sem uma segunda fonte pra
+comparar. As quatro anteriores (lista vazia sem erro; `-f` vs `-F` mascarado; `parent.
+nameWithOwner` nulo; `full_name` ausente sem contagem) eram todas AUSÊNCIA total ou malformação
+de campo — esta é a primeira da família que é sub-contagem PARCIAL de um endpoint que responde
+normalmente. Mitigação de instrumento, não de causa (a causa segue não-diagnosticada): o card de
+run na UI passa a mostrar `repos_discovered`/`repos_total` lado a lado (E6) — se as duas fontes
+um dia divergirem nesse número de novo, fica visível no card, não só numa comparação manual de
+madrugada.
+
+**Nota de método (a lição desta, além da lista de ocorrências):** um teste negativo tem PRAZO DE
+VALIDADE. O "Veredito da verificação" no D51 acima testou GraphQL às ~03:00 e concluiu
+`totalCount: 0` — verdade NAQUELE momento (os 136 repos ainda estavam em `Custom`, ponto cego
+real e diferente deste). Ninguém re-testou GraphQL depois que a migração Custom→All Activity
+mudou o estado do mundo que aquele teste media. "GraphQL não serve" era fato às 03:00 e ficou
+sendo repetido como fato às 21:00, quando já não era. Detalhe completo (tabela comparando os dois
+achados) na emenda 2026-07-16b do ADR-0022 — não duplicar aqui.
 
 ## Fila (itens nomeados, sem sessão ainda)
 

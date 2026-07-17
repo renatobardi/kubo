@@ -18,6 +18,8 @@ def _run(**kw: object) -> RunListItem:
         "error_kind": None,
         "error": None,
         "items": None,
+        "repos_total": None,
+        "repos_discovered": None,
         "started_at": "2026-07-12T09:00:00+00:00",
         "finished_at": "2026-07-12T09:00:05+00:00",
     }

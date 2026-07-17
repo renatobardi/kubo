@@ -613,8 +613,20 @@ def test_execute_flow_job_opens_own_connection_and_drives_run_flow(
     job_cfg = replace(client.config(), database=_JOB_DB)
     monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
 
-    respx.get("https://api.github.com/user/subscriptions").mock(
-        return_value=httpx.Response(200, json=[{"id": 1, "full_name": "acme/widget"}])
+    respx.post("https://api.github.com/graphql").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {
+                        "watching": {
+                            "nodes": [{"nameWithOwner": "acme/widget"}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            },
+        )
     )
     respx.get("https://api.github.com/repos/acme/widget/releases").mock(
         return_value=httpx.Response(

@@ -41,7 +41,7 @@
                 {% endif %}
               </div>
               <p class="mt-0.5 truncate text-xs text-muted-foreground">
-                {{ run.started_at | short_datetime }} · {{ run.started_at | duration(run.finished_at) }}{% if run.items is not none %} · {{ run.items }} itens{% endif %}
+                {{ run.started_at | short_datetime }} · {{ run.started_at | duration(run.finished_at) }}{% if run.items is not none %} · {{ run.items }} itens{% endif %}{% if run.repos_total is not none %} · {{ run.repos_discovered }}/{{ run.repos_total }} repos{% endif %}
               </p>
             </div>
             {% if run.error %}

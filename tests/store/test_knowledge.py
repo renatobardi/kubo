@@ -973,6 +973,31 @@ def test_list_runs_derives_items_from_distiller_stats(db: Any) -> None:
     assert knowledge.list_runs(db, limit=20, start=0)[0].items == 7
 
 
+def test_list_runs_derives_repos_total_and_discovered_from_stats(db: Any) -> None:
+    """D57: `repos_total`/`repos_discovered` (stats do github-releases) aparecem no card
+    de run quando presentes -- o instrumento de verificação da migração REST->GraphQL
+    (o dono confere `repos_total` contra a contagem real de watches)."""
+    run = knowledge.start_run(db, worker="github-releases")
+    knowledge.finish_run(db, run, stats={"repos_total": 261, "repos_discovered": 259, "items": 4})
+
+    result = knowledge.list_runs(db, limit=20, start=0)[0]
+
+    assert result.repos_total == 261
+    assert result.repos_discovered == 259
+
+
+def test_list_runs_repo_counts_are_none_when_absent(db: Any) -> None:
+    """Workers que não descobrem repos (feed, distiller) não têm `repos_total`/
+    `repos_discovered` em stats -- fallback gracioso pra None, mesmo padrão de `items`."""
+    run = knowledge.start_run(db, worker="feed")
+    knowledge.finish_run(db, run, stats={"items": 3})
+
+    result = knowledge.list_runs(db, limit=20, start=0)[0]
+
+    assert result.repos_total is None
+    assert result.repos_discovered is None
+
+
 def test_list_runs_pagination_start_skips(db: Any) -> None:
     """start pula as N execuções mais recentes — paginação estável."""
     for i in range(3):

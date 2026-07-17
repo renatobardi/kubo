@@ -9,12 +9,21 @@ worker agora lê a watch list do operador via `GET /user/subscriptions` (paginad
 releases de cada repo descoberto, filtrando por `since` (`published_at`). A integração
 dedicada é `github-watch` (não mais `github-releases`). `/user/subscriptions` é mockado
 com o mesmo respx usado para `/repos/{owner}/{repo}/releases`.
+
+v0.3.0 (D57): a descoberta migra de REST (`GET /user/subscriptions`) para GraphQL
+(`POST /graphql`, `viewer.watching`, paginação por cursor) — o REST silenciosamente
+subcontava (243 repos vs. 261 reais com o mesmo PAT, mecanismo não diagnosticado). A busca
+de releases por repo (`GET /repos/{owner}/{repo}/releases`) permanece REST, inalterada.
+Estes testes são o RED da migração — escritos ANTES da implementação, contra o contrato
+combinado com o dono; ver `_WATCHING_QUERY`/`_fetch_watched_repos`/`_discover_repos` em
+`kubo/workers/github_releases.py` (ainda não implementados neste ponto do ciclo TDD).
 """
 
 from __future__ import annotations
 
 import gzip
 import json as jsonlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import httpx
@@ -26,11 +35,12 @@ from pydantic import ValidationError
 from kubo.contracts.models import ItemPayload, RunResult
 from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import ResolvedIntegration
+from kubo.workers import github_releases as _github_releases_module
 from kubo.workers.github_releases import GithubReleasesConfig, GithubReleasesWorker
 
 _BASE_URL = "https://api.github.com"
 _TOKEN = "ghr-secret-token"  # pragma: allowlist secret
-_SUBSCRIPTIONS_URL = f"{_BASE_URL}/user/subscriptions"
+_GRAPHQL_URL = f"{_BASE_URL}/graphql"
 _SINCE = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -61,18 +71,51 @@ def _release(
     }
 
 
-def _subscription(full_name: str, *, sub_id: int = 1, private: bool = False) -> dict[str, object]:
-    """Constrói um item de `/user/subscriptions`, no molde real do GitHub."""
-    return {"id": sub_id, "full_name": full_name, "private": private}
+def _watching_node(full_name: object) -> dict[str, object]:
+    """Constrói um node de `viewer.watching.nodes`, no molde real da API GraphQL do GitHub."""
+    return {"nameWithOwner": full_name}
+
+
+def _graphql_response(
+    nodes: Sequence[object], *, has_next: bool = False, end_cursor: str | None = None
+) -> dict[str, object]:
+    """Corpo de SUCESSO de uma resposta `/graphql` (`viewer.watching`), no molde real."""
+    return {
+        "data": {
+            "viewer": {
+                "watching": {
+                    "nodes": nodes,
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                }
+            }
+        }
+    }
+
+
+def _graphql_error_response(error_type: str, message: str = "erro graphql") -> dict[str, object]:
+    """Corpo de erro no NÍVEL DO GRAPHQL (HTTP 200) -- `errors[].type`, no molde real."""
+    return {"errors": [{"type": error_type, "message": message}]}
+
+
+def _mock_watching(
+    *repos: str, has_next: bool = False, end_cursor: str | None = None
+) -> respx.Route:
+    """Mocka `POST /graphql` com UMA página de `viewer.watching` cobrindo `repos` (sem
+    próxima página por padrão)."""
+    nodes = [_watching_node(r) for r in repos]
+    return respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200, json=_graphql_response(nodes, has_next=has_next, end_cursor=end_cursor)
+        )
+    )
 
 
 def _mock_watch_list(*repos: str) -> None:
-    """Mocka `/user/subscriptions` com UMA página (sem `Link` -> sem próxima página)."""
-    respx.get(_SUBSCRIPTIONS_URL).mock(
-        return_value=httpx.Response(
-            200, json=[_subscription(r, sub_id=i) for i, r in enumerate(repos, start=1)]
-        )
-    )
+    """Mocka `/graphql` com UMA página cobrindo `repos` -- equivalente GraphQL (D57) do
+    antigo helper baseado em `GET /user/subscriptions`. Mantido com o mesmo nome pra não
+    reescrever cada call site fora da seção de paginação (since-filtering, classificação de
+    erro etc. só precisam de UM repo descoberto, mecanismo de descoberta é incidental)."""
+    _mock_watching(*repos)
 
 
 def _config(*, since: datetime = _SINCE) -> GithubReleasesConfig:
@@ -140,41 +183,68 @@ def test_config_rejects_leftover_repos_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Manifest (D54): versão 0.2.0, integração dedicada `github-watch`.
+# Manifest (D54/D57): versão 0.3.0, integração dedicada `github-watch`.
 # ---------------------------------------------------------------------------
 
 
-def test_manifest_version_is_0_2_0() -> None:
-    assert GithubReleasesWorker.manifest.version == "0.2.0"
+def test_manifest_version_is_0_3_0() -> None:
+    assert GithubReleasesWorker.manifest.version == "0.3.0"
 
 
 def test_manifest_integrations_lists_github_watch_only() -> None:
-    """UMA integração dedicada (`github-watch`) cobre tanto `/user/subscriptions` quanto
-    `/repos/.../releases` -- D54, PAT próprio, não o `github-releases` antigo."""
+    """UMA integração dedicada (`github-watch`) cobre tanto `viewer.watching` (GraphQL)
+    quanto `/repos/.../releases` (REST) -- D54, PAT próprio, não o `github-releases`
+    antigo."""
     assert GithubReleasesWorker.manifest.integrations == ["github-watch"]
 
 
 # ---------------------------------------------------------------------------
-# Paginação de /user/subscriptions (C4 -- achado do advisor, bug mais provável da sessão).
+# Descoberta via GraphQL (D57): `viewer.watching`, paginação por cursor.
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
-def test_subscriptions_pagination_walks_every_page() -> None:
-    """3 páginas (2+2+1 repos) via `Link: rel=\"next\"` -> releases de TODOS os repos são
-    buscadas, não só a primeira página."""
+def test_happy_path_single_page_watching() -> None:
+    """UMA resposta GraphQL com 2 repos, `hasNextPage=False` -> releases dos DOIS repos
+    são buscadas, e `repos_total`/`repos_discovered` refletem os 2 (nada foi filtrado)."""
+    _mock_watching("acme/widget", "acme/gizmo")
+    respx.get(_releases_url("acme", "widget")).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(_releases_url("acme", "gizmo")).mock(return_value=httpx.Response(200, json=[]))
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    stats = result.stats.model_dump()
+    assert stats["repos_seen"] == 2
+    assert stats["repos_total"] == 2
+    assert stats["repos_discovered"] == 2
+
+
+@respx.mock
+def test_watching_pagination_walks_every_page_and_threads_cursor() -> None:
+    """3 páginas (2+2+1 repos) via cursor -> releases de TODOS os repos são buscadas, E o
+    `cursor` de cada POST é exatamente o `endCursor` da página anterior (nunca um valor
+    inventado/re-derivado pelo worker) -- primeira página sempre com `cursor: None`."""
     page1 = httpx.Response(
         200,
-        json=[_subscription("acme/widget", sub_id=1), _subscription("acme/gizmo", sub_id=2)],
-        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=2>; rel="next"'},
+        json=_graphql_response(
+            [_watching_node("acme/widget"), _watching_node("acme/gizmo")],
+            has_next=True,
+            end_cursor="cursor-1",
+        ),
     )
     page2 = httpx.Response(
         200,
-        json=[_subscription("acme/foo", sub_id=3), _subscription("acme/bar", sub_id=4)],
-        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=3>; rel="next"'},
+        json=_graphql_response(
+            [_watching_node("acme/foo"), _watching_node("acme/bar")],
+            has_next=True,
+            end_cursor="cursor-2",
+        ),
     )
-    page3 = httpx.Response(200, json=[_subscription("acme/baz", sub_id=5)])
-    respx.get(_SUBSCRIPTIONS_URL).mock(side_effect=[page1, page2, page3])
+    page3 = httpx.Response(
+        200, json=_graphql_response([_watching_node("acme/baz")], has_next=False)
+    )
+    route = respx.post(_GRAPHQL_URL).mock(side_effect=[page1, page2, page3])
 
     repos = ["acme/widget", "acme/gizmo", "acme/foo", "acme/bar", "acme/baz"]
     for idx, owner_repo in enumerate(repos, start=1):
@@ -192,18 +262,34 @@ def test_subscriptions_pagination_walks_every_page() -> None:
     assert repos_covered == set(repos)
     stats = result.stats.model_dump()
     assert stats["repos_seen"] == 5
+    assert stats["repos_total"] == 5
+    assert stats["repos_discovered"] == 5
+
+    bodies = [jsonlib.loads(call.request.content) for call in route.calls]
+    assert bodies[0]["variables"]["cursor"] is None
+    assert bodies[1]["variables"]["cursor"] == "cursor-1"
+    assert bodies[2]["variables"]["cursor"] == "cursor-2"
 
 
 @respx.mock
-def test_subscriptions_pagination_hard_cap_stops_after_ten_pages() -> None:
-    """`Link: rel=\"next\"` SEMPRE presente (paginação patológica/infinita) -> o worker
-    para depois de um teto fixo de páginas (10), sem travar, e ainda devolve `RunResult`."""
-    endless_page = httpx.Response(
-        200,
-        json=[_subscription("acme/widget", sub_id=1)],
-        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=2>; rel="next"'},
-    )
-    route = respx.get(_SUBSCRIPTIONS_URL).mock(return_value=endless_page)
+def test_watching_pagination_hard_cap_stops_after_ten_pages() -> None:
+    """`hasNextPage=True` SEMPRE presente, com `endCursor` sempre novo (paginação
+    patológica/infinita) -> o worker para depois de um teto fixo de páginas (10), sem
+    travar, e ainda devolve `RunResult`."""
+    counter = {"n": 0}
+
+    def _endless_response(request: httpx.Request) -> httpx.Response:
+        counter["n"] += 1
+        return httpx.Response(
+            200,
+            json=_graphql_response(
+                [_watching_node("acme/widget")],
+                has_next=True,
+                end_cursor=f"cursor-{counter['n']}",
+            ),
+        )
+
+    route = respx.post(_GRAPHQL_URL).mock(side_effect=_endless_response)
     respx.get(_releases_url("acme", "widget")).mock(
         return_value=httpx.Response(200, json=[_release(1)])
     )
@@ -215,16 +301,88 @@ def test_subscriptions_pagination_hard_cap_stops_after_ten_pages() -> None:
 
 
 @respx.mock
-def test_pagination_link_off_origin_is_not_followed() -> None:
-    """Achado do CodeRabbit + security-reviewer (defesa em profundidade, não explorável no
-    modelo de ameaça atual, mas barata): um `Link: rel="next"` apontando pra outro host não
-    é seguido -- a paginação simplesmente para ali, sem erro, sem mandar o token pra fora."""
+def test_watching_has_next_page_true_with_null_cursor_stops_immediately() -> None:
+    """`hasNextPage=True` mas `endCursor=None` (resposta malformada -- sem cursor válido
+    pra pedir a próxima página) -> a paginação para IMEDIATAMENTE, sem crash/loop infinito,
+    e os repos da única página já buscada seguem processados normalmente."""
+    route = _mock_watching("acme/widget", has_next=True, end_cursor=None)
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert route.call_count == 1
+    assert isinstance(result, RunResult)
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
+
+
+@respx.mock
+def test_duplicate_repo_across_pages_is_deduped_and_fetched_once() -> None:
+    """Achado do CodeRabbit (PR #57), preservado sob GraphQL (D57): o mesmo repo aparecendo
+    em 2 páginas da watch list não pode gerar 2 fetches de releases -- dedup por ordem de
+    primeira aparição, sem inflar `repos_seen`."""
     page1 = httpx.Response(
         200,
-        json=[_subscription("acme/widget", sub_id=1)],
-        headers={"Link": '<https://evil.example.com/user/subscriptions?page=2>; rel="next"'},
+        json=_graphql_response(
+            [_watching_node("acme/widget")], has_next=True, end_cursor="cursor-1"
+        ),
     )
-    route = respx.get(_SUBSCRIPTIONS_URL).mock(return_value=page1)
+    page2 = httpx.Response(
+        200, json=_graphql_response([_watching_node("acme/widget")], has_next=False)
+    )
+    respx.post(_GRAPHQL_URL).mock(side_effect=[page1, page2])
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is None
+    assert releases_route.call_count == 1
+    stats = result.stats.model_dump()
+    assert stats["repos_seen"] == 1
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
+
+
+@respx.mock
+def test_watching_query_is_frozen_constant_cursor_travels_via_variables() -> None:
+    """A query GraphQL é uma constante FIXA (`_WATCHING_QUERY`) -- o cursor NUNCA é
+    interpolado na string da query (fecha injection-via-string-formatting por construção);
+    ele só viaja em `variables.cursor`.
+
+    `getattr` (não import direto do símbolo) DELIBERADO: `_WATCHING_QUERY` ainda não
+    existe em produção neste ponto do ciclo TDD (RED) -- um `from ... import` estático
+    quebraria a COLETA do arquivo inteiro no pyright/import-time, quando o objetivo é uma
+    falha de asserção isolada neste teste."""
+    watching_query = getattr(_github_releases_module, "_WATCHING_QUERY", None)
+    assert watching_query is not None, "_WATCHING_QUERY ainda não existe em produção (RED)"
+
+    route = _mock_watching("acme/widget", "acme/gizmo")
+    respx.get(_releases_url("acme", "widget")).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(_releases_url("acme", "gizmo")).mock(return_value=httpx.Response(200, json=[]))
+
+    GithubReleasesWorker().run(_ctx(_config()))
+
+    assert route.call_count >= 1
+    for call in route.calls:
+        body = jsonlib.loads(call.request.content)
+        assert body["query"] == watching_query
+
+
+@respx.mock
+def test_null_node_in_watching_is_filtered_not_crash() -> None:
+    """`nodes` com um `None` LITERAL ao lado de um node válido -> o worker não crasha,
+    `repos_total` conta só o node válido (dict), e o repo válido é processado
+    normalmente."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_graphql_response([_watching_node("acme/widget"), None], has_next=False),
+        )
+    )
     respx.get(_releases_url("acme", "widget")).mock(
         return_value=httpx.Response(200, json=[_release(1)])
     )
@@ -232,22 +390,23 @@ def test_pagination_link_off_origin_is_not_followed() -> None:
     result = GithubReleasesWorker().run(_ctx(_config()))
 
     assert result.error is None
-    assert route.call_count == 1  # NUNCA chamou evil.example.com
+    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
+    assert len(items) == 1
     stats = result.stats.model_dump()
-    assert stats["repos_seen"] == 1
+    assert stats["repos_total"] == 1
 
 
 # ---------------------------------------------------------------------------
 # Watch list vazia é ERRO, nunca run limpo (C3 -- armadilha silenciosa do D51: PAT sem
-# escopo `notifications` faz /user/subscriptions devolver 200 [] SEM erro do GitHub).
+# escopo `notifications` faz `viewer.watching` devolver `nodes: []` SEM erro do GitHub).
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_empty_watch_list_is_config_error() -> None:
-    """`/user/subscriptions` devolve `200 []` -> `ErrorInfo(kind=\"config\")`, NUNCA um run
+    """`viewer.watching` devolve `nodes: []` -> `ErrorInfo(kind=\"config\")`, NUNCA um run
     limpo e vazio -- e nenhum endpoint de releases é sequer chamado (nada pra buscar)."""
-    respx.get(_SUBSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json=[]))
+    _mock_watching()
     releases_route = respx.route(method="GET", url__regex=r".*/repos/.+/releases").mock(
         return_value=httpx.Response(200, json=[])
     )
@@ -258,6 +417,84 @@ def test_empty_watch_list_is_config_error() -> None:
     assert result.error.kind == "config"
     assert result.payloads == []
     assert releases_route.call_count == 0
+    stats = result.stats.model_dump()
+    assert stats["repos_total"] == 0
+    assert stats["repos_discovered"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Erros no NÍVEL DO GRAPHQL (HTTP 200, `errors[]`) -- distintos de falha de transporte/HTTP.
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_graphql_error_rate_limited_classifies_as_rate_limit() -> None:
+    """Erro no corpo GraphQL (HTTP 200) com `type == \"RATE_LIMITED\"` -> classificado como
+    `kind=\"rate_limit\"`, com o tipo bruto preservado em `detail` -- descoberta falhou
+    ANTES de qualquer repo ser conhecido, então nenhum endpoint de releases é chamado."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200, json=_graphql_error_response("RATE_LIMITED", "API rate limit exceeded")
+        )
+    )
+    releases_route = respx.route(method="GET", url__regex=r".*/repos/.+/releases").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "rate_limit"
+    assert result.error.detail is not None
+    assert result.error.detail.get("graphql_error_type") == "RATE_LIMITED"
+    assert result.payloads == []
+    assert releases_route.call_count == 0
+
+
+@respx.mock
+def test_graphql_error_forbidden_classifies_as_http_not_config_not_rate_limit() -> None:
+    """Erro no corpo GraphQL com `type` DIFERENTE de `RATE_LIMITED` (ex.: `FORBIDDEN`) ->
+    `kind=\"http\"`, NUNCA `config` (não é watch list vazia) nem `rate_limit`."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(200, json=_graphql_error_response("FORBIDDEN", "acesso negado"))
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.error.detail is not None
+    assert result.error.detail.get("graphql_error_type") == "FORBIDDEN"
+
+
+@respx.mock
+def test_graphql_errors_present_alongside_data_still_counts_as_failure() -> None:
+    """`errors` presente E `data.viewer.watching` populado ao mesmo tempo (o GraphQL
+    permite essa forma de sucesso-parcial) -> política do worker é `errors` presente SEMPRE
+    vence -- nunca um sucesso/parcial misto que descubra alguns repos e ignore o erro."""
+    body = _graphql_response([_watching_node("acme/widget")], has_next=False)
+    body["errors"] = [{"type": "FORBIDDEN", "message": "acesso negado"}]
+    respx.post(_GRAPHQL_URL).mock(return_value=httpx.Response(200, json=body))
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.error.detail is not None
+    assert result.error.detail.get("graphql_error_type") == "FORBIDDEN"
+
+
+@respx.mock
+def test_graphql_transport_failure_classifies_via_http_status_unchanged() -> None:
+    """Falha de TRANSPORTE pura (503, sem corpo GraphQL válido) -> classificação continua
+    via status HTTP (caminho INALTERADO de hoje, `graphql_error_type` nunca setado)."""
+    respx.post(_GRAPHQL_URL).mock(return_value=httpx.Response(503))
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert not (result.error.detail or {}).get("graphql_error_type")
 
 
 # ---------------------------------------------------------------------------
@@ -372,57 +609,6 @@ def test_release_missing_published_at_key_is_skipped_and_counted() -> None:
     assert result.payloads == []
     stats = result.stats.model_dump()
     assert stats["skipped_no_date"] == 1
-
-
-# ---------------------------------------------------------------------------
-# `repos_seen` reflete a watch list dinâmica, não uma lista estática de config.
-# ---------------------------------------------------------------------------
-
-
-@respx.mock
-def test_repos_seen_reflects_watch_list_size_across_pages() -> None:
-    """2 páginas, 3 repos totais -> `stats[\"repos_seen\"] == 3`."""
-    page1 = httpx.Response(
-        200,
-        json=[_subscription("acme/widget", sub_id=1), _subscription("acme/gizmo", sub_id=2)],
-        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=2>; rel="next"'},
-    )
-    page2 = httpx.Response(200, json=[_subscription("acme/foo", sub_id=3)])
-    respx.get(_SUBSCRIPTIONS_URL).mock(side_effect=[page1, page2])
-    for owner, name in (("acme", "widget"), ("acme", "gizmo"), ("acme", "foo")):
-        respx.get(_releases_url(owner, name)).mock(return_value=httpx.Response(200, json=[]))
-
-    result = GithubReleasesWorker().run(_ctx(_config()))
-
-    assert result.error is None
-    stats = result.stats.model_dump()
-    assert stats["repos_seen"] == 3
-
-
-@respx.mock
-def test_duplicate_repo_across_pages_is_deduped_and_fetched_once() -> None:
-    """Achado do CodeRabbit (PR #57): o mesmo repo aparecendo em 2 páginas da watch list
-    não pode gerar 2 fetches de releases -- dedup por ordem de primeira aparição, sem
-    inflar `repos_seen` nem os stats."""
-    page1 = httpx.Response(
-        200,
-        json=[_subscription("acme/widget", sub_id=1)],
-        headers={"Link": f'<{_SUBSCRIPTIONS_URL}?per_page=100&page=2>; rel="next"'},
-    )
-    page2 = httpx.Response(200, json=[_subscription("acme/widget", sub_id=1)])
-    respx.get(_SUBSCRIPTIONS_URL).mock(side_effect=[page1, page2])
-    releases_route = respx.get(_releases_url("acme", "widget")).mock(
-        return_value=httpx.Response(200, json=[_release(1)])
-    )
-
-    result = GithubReleasesWorker().run(_ctx(_config()))
-
-    assert result.error is None
-    assert releases_route.call_count == 1
-    stats = result.stats.model_dump()
-    assert stats["repos_seen"] == 1
-    items = [p for p in result.payloads if isinstance(p, ItemPayload)]
-    assert len(items) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +842,28 @@ def test_response_exceeding_byte_cap_is_rejected_without_buffering() -> None:
 
 
 @respx.mock
+def test_watching_response_exceeding_byte_cap_is_rejected_without_buffering() -> None:
+    """Achado do security-reviewer (D57, BAIXO): `_stream_json` é compartilhado entre GET
+    (releases) e POST (watching GraphQL) -- o teste acima só cobria o path REST. Mesma
+    disciplina precisa valer pro POST /graphql: resposta declarando Content-Length acima
+    do teto é rejeitada ANTES de bufferizar, e a falha na DESCOBERTA (não num repo
+    individual) encerra o run cedo, sem chegar a chamar releases."""
+    watching_route = respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(200, headers={"content-length": "99999999999"}, content=b"{}")
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert "teto de bytes" in result.error.message
+    assert result.payloads == []
+    # nenhuma rota de releases foi registrada -- se o worker tentasse chamar uma, o respx
+    # levantaria AllMockedAssertionError; o único POST que aconteceu foi a descoberta.
+    assert watching_route.call_count == 1
+
+
+@respx.mock
 def test_other_http_error_is_http_kind_and_does_not_abort_others() -> None:
     """5xx num repo -> kind=http (não rate_limit), sem abortar o próximo repo."""
     _mock_watch_list("acme/widget", "acme/gizmo")
@@ -748,12 +956,14 @@ def test_malformed_release_missing_optional_fields_falls_back_cleanly() -> None:
 
 
 @respx.mock
-def test_malformed_subscription_full_name_is_skipped_and_counted() -> None:
-    """`full_name` malformado (sem `/`) numa subscription é FILTRADO antes de virar repo a
-    processar -- não vira erro, não é fetchado, e é contado em
-    `stats["skipped_bad_repo_shape"]`. O repo bem-formado da mesma watch list segue coletado
+def test_malformed_watching_full_name_is_skipped_and_counted() -> None:
+    """`nameWithOwner` malformado (sem `/`) num node de `viewer.watching` é FILTRADO antes
+    de virar repo a processar -- não vira erro, não é fetchado, e é contado em
+    `stats[\"skipped_bad_repo_shape\"]`. `repos_total` conta o BRUTO (nodes pós-filtro-de-
+    nulos, PRÉ validação de shape); `repos_discovered` conta só o que sobrou depois do
+    filtro de shape/dedup. O repo bem-formado da mesma watch list segue coletado
     normalmente."""
-    _mock_watch_list("acme/widget", "no-slash-here")
+    _mock_watching("acme/widget", "no-slash-here")
     releases_route = respx.get(_releases_url("acme", "widget")).mock(
         return_value=httpx.Response(200, json=[_release(1)])
     )
@@ -767,6 +977,8 @@ def test_malformed_subscription_full_name_is_skipped_and_counted() -> None:
     stats = result.stats.model_dump()
     assert stats["skipped_bad_repo_shape"] == 1
     assert stats["repos_seen"] == 1
+    assert stats["repos_total"] == 2
+    assert stats["repos_discovered"] == 1
     assert releases_route.call_count == 1
 
 
