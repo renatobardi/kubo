@@ -175,11 +175,19 @@ def _classify_fetch_error(exc: _FetchError, repo: str | None = None) -> tuple[Er
 
 
 def _headers(token: str) -> dict[str, str]:
-    """Headers da API do GitHub — token no `Authorization`, nunca na URL."""
+    """Headers da API do GitHub — token no `Authorization`, nunca na URL.
+
+    `Accept-Encoding: identity` é OBRIGATÓRIO (achado do smoke físico, sessão 0021 passo 4):
+    o GitHub responde `Content-Encoding: gzip` por padrão, e `_stream_json_list` lê via
+    `iter_raw()` (bytes de FIO, nunca decodificados, mesma disciplina de `feed.py._fetch`
+    contra decompression bomb) — sem este header, `json.loads` no corpo ainda comprimido
+    falha em TODO request real. Mockado, isso não aparecia: respx nunca comprime de verdade
+    a menos que o teste construa o corpo comprimido à mão."""
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": _API_VERSION,
+        "Accept-Encoding": "identity",
     }
 
 

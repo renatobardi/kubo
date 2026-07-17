@@ -13,6 +13,8 @@ com o mesmo respx usado para `/repos/{owner}/{repo}/releases`.
 
 from __future__ import annotations
 
+import gzip
+import json as jsonlib
 from datetime import UTC, datetime
 
 import httpx
@@ -468,6 +470,12 @@ def test_happy_path_multiple_repos_multiple_releases() -> None:
     assert stats["rate_limited"] == 0
     # header de auth do token resolvido, nunca na URL.
     assert respx.calls.last.request.headers["authorization"] == f"Bearer {_TOKEN}"
+    # Accept-Encoding: identity é OBRIGATÓRIO (achado do smoke físico, sessão 0021 passo 4):
+    # sem ele, o GitHub responde gzip por padrão e `_stream_json_list` usa `iter_raw()` (bytes
+    # de FIO, NUNCA decodificados) -- json.loads no corpo ainda comprimido falha com "resposta
+    # da API não é JSON válido" em TODO request real, mascarado pelos mocks do respx (que nunca
+    # comprimem de verdade). Mesma disciplina de feed.py._fetch.
+    assert respx.calls.last.request.headers["accept-encoding"] == "identity"
 
 
 @respx.mock
@@ -600,6 +608,34 @@ def test_tag_name_in_metadata_is_sanitized_like_other_fields() -> None:
     assert len(items) == 1
     assert items[0].metadata is not None
     assert items[0].metadata["tag_name"] == "v1.0.0evil"  # caracteres de controle removidos
+
+
+@respx.mock
+def test_gzip_encoded_response_fails_safely_not_silently() -> None:
+    """Achado do smoke físico (sessão 0021 passo 4): `_stream_json_list` lê via `iter_raw()`
+    (bytes de FIO, NUNCA decodificados -- mesma disciplina de `feed.py._fetch` contra
+    decompression bomb), então uma resposta gzip nunca vira JSON válido NESTE worker, ponto.
+    A defesa real é `Accept-Encoding: identity` no request (o GitHub honra e não comprime,
+    confirmado ao vivo no smoke) -- este teste não prova decompressão (o worker
+    deliberadamente não decodifica), prova que SE alguma resposta ainda chegar gzip (proxy/CDN
+    que ignore o header), a falha é ESTRUTURADA (`kind='http'`, mensagem clara), nunca um
+    crash nem dado perdido silenciosamente."""
+    releases_json = jsonlib.dumps([_release(1)]).encode()
+    _mock_watch_list("acme/widget")
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(
+            200,
+            content=gzip.compress(releases_json),
+            headers={"content-encoding": "gzip"},
+        )
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert "JSON válido" in result.error.message
+    assert result.payloads == []
 
 
 @respx.mock
