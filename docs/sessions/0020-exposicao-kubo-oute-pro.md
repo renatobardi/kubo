@@ -1,6 +1,18 @@
 # Sessão 0020 — Exposição: kubo.oute.pro na internet
 
-> **Status:** aprovado pelo dono (2026-07-15, planejamento no Cowork); advisor GO com desenho fixado
+> **Status: ADIADA (2026-07-17, achado da reconciliação de docs).** O desenho abaixo
+> continua fixado (fica como registro), mas a sessão não roda como está — três motivos:
+> (a) `kubo.oute.pro` pertence ao ambiente PRD futuro na OCI, não ao DEV `kubo-test` onde a
+> fase 1 roda hoje (ADR-0011) — expor o DEV atual na internet é a fronteira errada; (b) a
+> pré-condição de `:8` ("sessões 0018 e 0019 encerradas") só se cumpre nesta mesma
+> reconciliação (ver `0019-notas-execucao.md`) e ainda carrega um gap real (smoke do dedo na
+> variante "Confirmar promoção" do `<dialog>`, issue aberta); (c) o motivo do PR2 (`:43`,
+> acesso guest do amigo) EXPIROU — a validação da 0019 pelo amigo, que justificava o acesso
+> guest como "temporário", nunca aconteceu. Decisão pendente, registrada e NÃO tomada aqui:
+> reduzir ao PR1 (só túnel+TLS, sem OAuth/guest) ou reciclar a sessão inteira quando a PRD
+> OCI nascer (issue aberta).
+>
+> **Status original (histórico):** aprovado pelo dono (2026-07-15, planejamento no Cowork); advisor GO com desenho fixado
 > **Ambiente de execução:** Claude Code CLI — **sessão de FRONTEIRA** (muda a fronteira de segurança do sistema)
 > **Política de modelo (custo-benefício, regra do dono):** Opus na thread até fixar abordagem dos marcos de auth (PR2); implementação sobre desenho validado pode ir a Sonnet com compensações (advisor por marco, checkpoints, travou 2x → para).
 > **Timebox:** 8 horas efetivas — **2 PRs** (fatias verticais); PR1 sozinho já entrega o caso de uso principal (dono no celular sem Tailscale)

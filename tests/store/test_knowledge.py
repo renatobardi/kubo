@@ -3,8 +3,7 @@
 Cobre plano 0003 §3.2.1: upsert idempotente de source/item, dedup de entity por
 normalização, escrita atômica de destilado (feliz e com rollback), proveniência
 distilled->item->source e busca vetorial que devolve o destilado, não o chunk
-órfão. `kubo.store.knowledge` ainda é STUB (NotImplementedError) — estes testes
-devem falhar por isso agora; ficam verdes quando a implementação (GREEN) entrar.
+órfão.
 """
 
 from __future__ import annotations
