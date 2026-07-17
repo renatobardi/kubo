@@ -1,7 +1,9 @@
 # Sessão 0019 — notas de execução
 
-> Complemento do plano `0019-ui-mobile.md`. Marcos 19.1–19.6 executados; 19.7 (deploy +
-> validação física) fica **gated no "pode executar"** do dono, conforme o próprio plano.
+> Complemento do plano `0019-ui-mobile.md`. Marcos 19.1–19.7 executados — o dono validou no
+> aparelho real em 2026-07-15 ("ficou bem bom"). Gap residual real (não fechado pela 19.7):
+> a variante "Confirmar promoção" do `<dialog>` de gate nunca foi smoked com o dedo (issue
+> aberta) — ver tabela de paridade, linha `GateDetail`.
 
 ## Estado dos marcos
 
@@ -13,7 +15,7 @@
 | 19.4 | Varredura por tela | ✅ Destilados/Entidades detail com chevron+título; busca sticky só em Destilados; metadados secundários (`hidden md:inline-flex`) em Fontes/Envios/Destinos/Fluxos/Entidades |
 | 19.5 | Tab Mais + pills Saber | ✅ `/more` (19.2) + pills Entidades/Fontes no topo de Destilados (`md:hidden`) |
 | 19.6 | Paridade + screenshots | ✅ este documento + smoke visual local (abaixo) |
-| 19.7 | Deploy + validação física | ⏸ gated — aguarda "pode executar" do dono |
+| 19.7 | Deploy + validação física | ✅ deploy no kubo-test + validação do dono no aparelho real, 2026-07-15 ("ficou bem bom") |
 
 **Suite:** 500 testes unit verdes (30 novos desta sessão: `test_mobile_shell.py`,
 `test_mobile_gates.py`, `test_mobile_sweep.py`), `ruff`/`ruff format`/`pyright` verdes.
@@ -80,5 +82,6 @@ tablet — conforme `0019-ui-mobile.md`.
 
 ## Próximo passo
 
-19.7 (deploy no kubo-test + validação física do dono no aparelho real via tailnet,
-Safari real) — gated, aguardando autorização explícita antes de tocar o ambiente DEV.
+19.7 concluída (deploy no kubo-test + validação física do dono no aparelho real via
+tailnet, Safari real, 2026-07-15). Gap residual: smoke do dedo na variante "Confirmar
+promoção" do `<dialog>` de gate (issue aberta).

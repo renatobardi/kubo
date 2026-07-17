@@ -3,8 +3,6 @@
 Cobre a camada pura (`parse_distilled_id`, `dedupe_hits`, `format_query_results`,
 `format_distilled` — sem DB) e a camada de orquestração (`run_query`, `run_show`
 — integração, SurrealDB real, embedder sempre FAKE, nenhuma chamada de rede).
-`kubo.__main__` ainda é STUB (NotImplementedError): estes testes devem falhar
-por isso agora; ficam verdes quando a implementação (GREEN) entrar.
 """
 
 from __future__ import annotations
