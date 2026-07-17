@@ -1,16 +1,12 @@
 # Sessão 0020 — Exposição: kubo.oute.pro na internet
 
-> **Status: ADIADA (2026-07-17, achado da reconciliação de docs).** O desenho abaixo
-> continua fixado (fica como registro), mas a sessão não roda como está — três motivos:
-> (a) `kubo.oute.pro` pertence ao ambiente PRD futuro na OCI, não ao DEV `kubo-test` onde a
-> fase 1 roda hoje (ADR-0011) — expor o DEV atual na internet é a fronteira errada; (b) a
-> pré-condição de `:8` ("sessões 0018 e 0019 encerradas") só se cumpre nesta mesma
-> reconciliação (ver `0019-notas-execucao.md`) e ainda carrega um gap real (smoke do dedo na
-> variante "Confirmar promoção" do `<dialog>`, issue aberta); (c) o motivo do PR2 (`:43`,
-> acesso guest do amigo) EXPIROU — a validação da 0019 pelo amigo, que justificava o acesso
-> guest como "temporário", nunca aconteceu. Decisão pendente, registrada e NÃO tomada aqui:
-> reduzir ao PR1 (só túnel+TLS, sem OAuth/guest) ou reciclar a sessão inteira quando a PRD
-> OCI nascer (issue aberta).
+> **Status: ADIADA, aguarda PRD (decidido 2026-07-17).** O desenho abaixo continua fixado
+> (fica como registro), mas não roda como está. Motivo: `kubo.oute.pro` pertence ao ambiente
+> de produção futuro na OCI, não ao DEV `kubo-test` onde a fase 1 roda hoje (ADR-0011) — expor
+> o DEV atual na internet é a fronteira errada. O dono já acessa o Kubo no celular pela tailnet
+> (validado e aprovado na 0019, 2026-07-15); o PR2 (`:43`, acesso guest do amigo) perdeu o
+> gatilho quando a validação do amigo pela 0019 nunca aconteceu. Reabre quando a PRD OCI
+> nascer — recicla o desenho, não repete o planejamento do zero.
 >
 > **Status original (histórico):** aprovado pelo dono (2026-07-15, planejamento no Cowork); advisor GO com desenho fixado
 > **Ambiente de execução:** Claude Code CLI — **sessão de FRONTEIRA** (muda a fronteira de segurança do sistema)
