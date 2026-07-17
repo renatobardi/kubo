@@ -49,8 +49,8 @@ como dívida pendurada.**
   docs: zero ocorrências em `kubo/runtime`, `kubo/workers`, `catalogs/flow_templates`) que
   nada depende disso hoje.
 
-Reabertura de qualquer um dos dois é **sessão nova com motivo novo**, não retomada da dívida
-antiga.
+Reabertura de qualquer um desses gatilhos é **sessão nova com motivo novo**, não retomada da
+dívida antiga.
 
 ## Consequências
 

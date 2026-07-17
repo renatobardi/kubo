@@ -3,10 +3,12 @@
 > **Status: ADIADA, aguarda PRD (decidido 2026-07-17).** O desenho abaixo continua fixado
 > (fica como registro), mas não roda como está. Motivo: `kubo.oute.pro` pertence ao ambiente
 > de produção futuro na OCI, não ao DEV `kubo-test` onde a fase 1 roda hoje (ADR-0011) — expor
-> o DEV atual na internet é a fronteira errada. O dono já acessa o Kubo no celular pela tailnet
-> (validado e aprovado na 0019, 2026-07-15); o PR2 (`:43`, acesso guest do amigo) perdeu o
-> gatilho quando a validação do amigo pela 0019 nunca aconteceu. Reabre quando a PRD OCI
-> nascer — recicla o desenho, não repete o planejamento do zero.
+> o DEV atual na internet é a fronteira errada. O dono já validou o uso diário do Kubo no
+> celular pela tailnet (sessão 0019, 2026-07-15) — esse é o caso de uso que o PR1 cobriria. O
+> PR2 (`:43`, acesso guest do amigo) tinha um gatilho DIFERENTE: a validação da UI mobile PELO
+> AMIGO como convidado, nunca agendada nem realizada — perdeu o motivo que a justificava como
+> "temporária". Reabre quando a PRD OCI nascer — recicla o desenho, não repete o planejamento
+> do zero.
 >
 > **Status original (histórico):** aprovado pelo dono (2026-07-15, planejamento no Cowork); advisor GO com desenho fixado
 > **Ambiente de execução:** Claude Code CLI — **sessão de FRONTEIRA** (muda a fronteira de segurança do sistema)
