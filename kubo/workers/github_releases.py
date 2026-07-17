@@ -336,6 +336,27 @@ def _raise_if_deadline_exceeded(deadline: float) -> None:
         )
 
 
+def _classify_graphql_error_type(errors: object) -> str | None:
+    """Extrai o `type` a usar pra classificar `errors[]` do corpo GraphQL — extraído de
+    `_parse_watching_page` pra ficar sob o teto de complexidade cognitiva do SonarCloud.
+
+    Todos os tipos presentes, não só o primeiro (achado do CodeRabbit, PR #61):
+    `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que classificar como
+    rate_limit, não como http só porque `RATE_LIMITED` veio depois."""
+    error_types = (
+        [
+            item["type"]
+            for item in errors
+            if isinstance(item, dict) and isinstance(item.get("type"), str)
+        ]
+        if isinstance(errors, list)
+        else []
+    )
+    if "RATE_LIMITED" in error_types:
+        return "RATE_LIMITED"
+    return error_types[0] if error_types else None
+
+
 def _parse_watching_page(data: object) -> tuple[list[dict[str, Any]], bool, str | None]:
     """Valida o envelope de UMA página de `viewer.watching` e devolve os repos da página,
     `hasNextPage` e `endCursor` (`None` se ausente/não-string) — extraído de
@@ -351,24 +372,11 @@ def _parse_watching_page(data: object) -> tuple[list[dict[str, Any]], bool, str 
         raise _FetchError("resposta da API GraphQL não é um objeto", None)
     errors = data.get("errors")
     if errors:
-        # Todos os tipos de `errors[]`, não só o primeiro (achado do CodeRabbit,
-        # PR #61): `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que
-        # classificar como rate_limit, não como http só porque veio depois.
-        error_types = (
-            [
-                item["type"]
-                for item in errors
-                if isinstance(item, dict) and isinstance(item.get("type"), str)
-            ]
-            if isinstance(errors, list)
-            else []
+        raise _FetchError(
+            "GitHub GraphQL devolveu erro(s)",
+            200,
+            graphql_error_type=_classify_graphql_error_type(errors),
         )
-        error_type = (
-            "RATE_LIMITED"
-            if "RATE_LIMITED" in error_types
-            else (error_types[0] if error_types else None)
-        )
-        raise _FetchError("GitHub GraphQL devolveu erro(s)", 200, graphql_error_type=error_type)
     data_field = data.get("data")
     if not isinstance(data_field, dict):
         raise _FetchError("resposta da API GraphQL sem campo 'data' válido", None)
