@@ -572,6 +572,67 @@ def test_watching_response_missing_page_info_fails_structured() -> None:
 
 
 @respx.mock
+def test_watching_missing_has_next_page_fails_structured() -> None:
+    """Achado do CodeRabbit (PR #62): `pageInfo` sem `hasNextPage` (chave ausente) NÃO pode
+    ser coagido pra `False` -- isso faria um `pageInfo` malformado encerrar a paginação como
+    sucesso (`hasNextPage=False` legítimo), recriando a subcontagem silenciosa que motivou o
+    D57. FALHA estruturada, nenhum repo processado."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {
+                        "watching": {
+                            "nodes": [_watching_node("acme/widget")],
+                            "pageInfo": {"endCursor": None},
+                        }
+                    }
+                }
+            },
+        )
+    )
+    releases_route = respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(1)])
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+    assert releases_route.call_count == 0
+
+
+@respx.mock
+def test_watching_non_bool_has_next_page_fails_structured() -> None:
+    """`hasNextPage` presente mas não-bool (ex.: `0`, string) NÃO pode ser coagido -- mesma
+    disciplina do teste acima, cobrindo o caso "presente com tipo errado" em vez de
+    "ausente"."""
+    respx.post(_GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {
+                        "watching": {
+                            "nodes": [_watching_node("acme/widget")],
+                            "pageInfo": {"hasNextPage": 0, "endCursor": None},
+                        }
+                    }
+                }
+            },
+        )
+    )
+
+    result = GithubReleasesWorker().run(_ctx(_config()))
+
+    assert result.error is not None
+    assert result.error.kind == "http"
+    assert result.payloads == []
+
+
+@respx.mock
 def test_graphql_errors_present_alongside_data_still_counts_as_failure() -> None:
     """`errors` presente E `data.viewer.watching` populado ao mesmo tempo (o GraphQL
     permite essa forma de sucesso-parcial) -> política do worker é `errors` presente SEMPRE

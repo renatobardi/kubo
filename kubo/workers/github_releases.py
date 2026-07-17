@@ -391,12 +391,23 @@ def _parse_watching_page(data: object) -> tuple[list[dict[str, Any]], bool, str 
     page_info = watching.get("pageInfo")
     if not isinstance(page_info, dict):
         raise _FetchError("resposta da API GraphQL sem 'pageInfo' válido em watching", None)
+    return (page_subscriptions, *_parse_page_info(page_info))
+
+
+def _parse_page_info(page_info: dict[str, Any]) -> tuple[bool, str | None]:
+    """Valida `pageInfo.hasNextPage`/`endCursor` — extraído de `_parse_watching_page` pra
+    ficar sob o teto de complexidade cognitiva do SonarCloud, e pro achado do CodeRabbit
+    (PR #62): `bool(page_info.get("hasNextPage"))` coagia ausência/`0`/`None` pra `False`
+    SILENCIOSAMENTE, fazendo um `pageInfo` malformado encerrar a paginação como sucesso —
+    exatamente a subcontagem que o D57 fechou. `hasNextPage` ausente ou não-bool agora é
+    `_FetchError` estruturado, nunca um `False` inventado."""
+    has_next = page_info.get("hasNextPage")
+    if not isinstance(has_next, bool):
+        raise _FetchError(
+            "resposta da API GraphQL sem 'hasNextPage' booleano válido em pageInfo", None
+        )
     next_cursor = page_info.get("endCursor")
-    return (
-        page_subscriptions,
-        bool(page_info.get("hasNextPage")),
-        next_cursor if isinstance(next_cursor, str) else None,
-    )
+    return has_next, next_cursor if isinstance(next_cursor, str) else None
 
 
 def _fetch_watched_repos(base_url: str, token: str, deadline: float) -> list[dict[str, Any]]:
@@ -540,7 +551,10 @@ def _discover_repos(
         full_name = sub.get("full_name")
         if not isinstance(full_name, str) or not full_name or not _is_valid_repo_shape(full_name):
             skipped_bad_repo_shape += 1
-            log.warning("github_watch_full_name_malformed", full_name=full_name)
+            # achado do CodeRabbit (PR #62): `full_name` vem de `viewer.watching` -- entrada
+            # externa hostil por padrão (CLAUDE.md §Segurança), nunca logada crua; só o TIPO
+            # é estrutural o bastante pra auditoria.
+            log.warning("github_watch_full_name_malformed", full_name_type=type(full_name).__name__)
             continue
         if full_name in seen:
             continue
