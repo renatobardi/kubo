@@ -336,6 +336,63 @@ def _raise_if_deadline_exceeded(deadline: float) -> None:
         )
 
 
+def _parse_watching_page(data: object) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Valida o envelope de UMA página de `viewer.watching` e devolve os repos da página,
+    `hasNextPage` e `endCursor` (`None` se ausente/não-string) — extraído de
+    `_fetch_watched_repos` pra manter a complexidade cognitiva da função sob o teto do
+    SonarCloud (`python:S3776`, ≤ 15); a checagem de "página promete mais mas veio sem
+    cursor válido" fica no CHAMADOR (só importa quando `hasNextPage` é true).
+
+    Envelope validado EXPLICITAMENTE em cada nível (`data`, `viewer.watching`, `nodes`,
+    `pageInfo`) — achado do CodeRabbit (PR #61): um shape inesperado nunca vira `{}`/`None`
+    silencioso, sempre `_FetchError` estruturado (mesma disciplina de `_stream_json_list`
+    pro REST, nunca um novo padrão)."""
+    if not isinstance(data, dict):
+        raise _FetchError("resposta da API GraphQL não é um objeto", None)
+    errors = data.get("errors")
+    if errors:
+        # Todos os tipos de `errors[]`, não só o primeiro (achado do CodeRabbit,
+        # PR #61): `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que
+        # classificar como rate_limit, não como http só porque veio depois.
+        error_types = (
+            [
+                item["type"]
+                for item in errors
+                if isinstance(item, dict) and isinstance(item.get("type"), str)
+            ]
+            if isinstance(errors, list)
+            else []
+        )
+        error_type = (
+            "RATE_LIMITED"
+            if "RATE_LIMITED" in error_types
+            else (error_types[0] if error_types else None)
+        )
+        raise _FetchError("GitHub GraphQL devolveu erro(s)", 200, graphql_error_type=error_type)
+    data_field = data.get("data")
+    if not isinstance(data_field, dict):
+        raise _FetchError("resposta da API GraphQL sem campo 'data' válido", None)
+    viewer = data_field.get("viewer")
+    watching = viewer.get("watching") if isinstance(viewer, dict) else None
+    if not isinstance(watching, dict):
+        raise _FetchError("resposta da API GraphQL sem 'viewer.watching' válido", None)
+    nodes = watching.get("nodes")
+    if not isinstance(nodes, list):
+        raise _FetchError("resposta da API GraphQL sem 'nodes' válido em watching", None)
+    page_subscriptions = [
+        {"full_name": node.get("nameWithOwner")} for node in nodes if isinstance(node, dict)
+    ]
+    page_info = watching.get("pageInfo")
+    if not isinstance(page_info, dict):
+        raise _FetchError("resposta da API GraphQL sem 'pageInfo' válido em watching", None)
+    next_cursor = page_info.get("endCursor")
+    return (
+        page_subscriptions,
+        bool(page_info.get("hasNextPage")),
+        next_cursor if isinstance(next_cursor, str) else None,
+    )
+
+
 def _fetch_watched_repos(base_url: str, token: str, deadline: float) -> list[dict[str, Any]]:
     """Busca a watch list do operador via GraphQL `viewer.watching` (D57 — substitui REST
     `/user/subscriptions`, que sub-contava silenciosamente: 243 vs 261 repos reais, mesmo
@@ -387,50 +444,11 @@ def _fetch_watched_repos(base_url: str, token: str, deadline: float) -> list[dic
                 headers,
                 json_body={"query": _WATCHING_QUERY, "variables": variables},
             )
-            if not isinstance(data, dict):
-                raise _FetchError("resposta da API GraphQL não é um objeto", None)
-            errors = data.get("errors")
-            if errors:
-                # Todos os tipos de `errors[]`, não só o primeiro (achado do CodeRabbit,
-                # PR #61): `[{"type": "FORBIDDEN"}, {"type": "RATE_LIMITED"}]` tem que
-                # classificar como rate_limit, não como http só porque veio depois.
-                error_types = (
-                    [
-                        item["type"]
-                        for item in errors
-                        if isinstance(item, dict) and isinstance(item.get("type"), str)
-                    ]
-                    if isinstance(errors, list)
-                    else []
-                )
-                error_type = (
-                    "RATE_LIMITED"
-                    if "RATE_LIMITED" in error_types
-                    else (error_types[0] if error_types else None)
-                )
-                raise _FetchError(
-                    "GitHub GraphQL devolveu erro(s)", 200, graphql_error_type=error_type
-                )
-            data_field = data.get("data")
-            if not isinstance(data_field, dict):
-                raise _FetchError("resposta da API GraphQL sem campo 'data' válido", None)
-            viewer = data_field.get("viewer")
-            watching = viewer.get("watching") if isinstance(viewer, dict) else None
-            if not isinstance(watching, dict):
-                raise _FetchError("resposta da API GraphQL sem 'viewer.watching' válido", None)
-            nodes = watching.get("nodes")
-            if not isinstance(nodes, list):
-                raise _FetchError("resposta da API GraphQL sem 'nodes' válido em watching", None)
-            subscriptions.extend(
-                {"full_name": node.get("nameWithOwner")} for node in nodes if isinstance(node, dict)
-            )
-            page_info = watching.get("pageInfo")
-            if not isinstance(page_info, dict):
-                raise _FetchError("resposta da API GraphQL sem 'pageInfo' válido em watching", None)
-            if not bool(page_info.get("hasNextPage")):
+            page_subscriptions, has_next, next_cursor = _parse_watching_page(data)
+            subscriptions.extend(page_subscriptions)
+            if not has_next:
                 return subscriptions
-            next_cursor = page_info.get("endCursor")
-            if not isinstance(next_cursor, str) or not next_cursor:
+            if next_cursor is None:
                 raise _FetchError(
                     "paginação GraphQL indica mais páginas (hasNextPage) sem endCursor válido",
                     None,
