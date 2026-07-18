@@ -12,7 +12,7 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
-from kubo.store.knowledge import SourceStat
+from kubo.store.knowledge import SourceDetail, SourceStat
 
 
 def _csrf(authed_client: TestClient) -> str:
@@ -221,6 +221,145 @@ def test_sources_orders_collected_before_never(
     )
     html = authed_client.get("/sources").text
     assert html.index("fresh://src") < html.index("never://src")
+
+
+def test_normalize_canonical_still_validates_rss() -> None:
+    """rss segue validado estruturalmente: sem esquema http(s) → ValueError (regressão-guard)."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    with pytest.raises(ValueError, match="feed"):
+        _normalize_canonical("rss", "sem-esquema")
+
+
+def test_normalize_canonical_github_normalizes() -> None:
+    """github-repo continua indo pela forma de-facto do worker."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    assert _normalize_canonical("github-repo", "owner/repo/") == "https://github.com/owner/repo"
+
+
+def test_normalize_canonical_passes_through_unknown_kind() -> None:
+    """kind SEM normalizador dedicado (ex.: `youtube` legado) NÃO é tratado como rss: a canonical
+    passa crua (só trim), senão editar só o título de uma fonte legada falharia sob o regime errado
+    (achado do CodeRabbit — a lista mostra `youtube` e a edição não restringe o kind)."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    assert _normalize_canonical("youtube", "  youtube.com/@canal  ") == "youtube.com/@canal"
+
+
+def _detail(**kw: object) -> SourceDetail:
+    base: dict[str, object] = {
+        "id": RecordID("source", "s1"),
+        "kind": "rss",
+        "canonical": "https://x/feed",
+        "title": "Feed X",
+        "tags": [],
+        "enabled": True,
+        "archived_at": None,
+    }
+    base.update(kw)
+    return SourceDetail(**base)  # type: ignore[arg-type]
+
+
+def test_edit_page_prefills_current_values(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A página de edição (#106) pré-preenche title/canonical/tags do Cadastro e mostra o kind
+    como READONLY (mudar o kind trocaria o coletor — não é editável). Sem pré-preencher tags,
+    salvar apagaria as tags existentes (full-replace)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.get_source",
+        lambda db, sid: _detail(title="Feed X", canonical="https://x/feed", tags=["python", "ml"]),
+    )
+    html = authed_client.get("/sources/s1/edit").text
+    assert 'value="Feed X"' in html
+    assert 'value="https://x/feed"' in html
+    assert "python, ml" in html  # tags pré-preenchidas
+    assert "Feed RSS" in html  # kind visível (rótulo humano), read-only
+    assert "não editável" in html  # kind não é editável
+    assert 'name="csrf"' in html
+
+
+def test_edit_page_absent_source_redirects_to_list(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET numa fonte que não existe (ou foi apagada) volta para a lista — não 500."""
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    resp = authed_client.get("/sources/ghost/edit", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
+
+
+def test_edit_rejects_bad_csrf(authed_client: TestClient) -> None:
+    """Sem CSRF válido, a edição é recusada (403) antes de qualquer toque na store."""
+    resp = authed_client.post(
+        "/sources/s1/edit",
+        data={"title": "X", "tags": "", "canonical": "https://x/feed", "csrf": "deadbeef"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+
+def test_edit_rejects_too_many_tags(authed_client: TestClient) -> None:
+    """Tags além do teto são barradas na borda pydantic (input renderizável tem cap, ADR-0018
+    §VI) → 400, sem tocar a store."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources/s1/edit",
+        data={
+            "title": "X",
+            "tags": ",".join(f"t{i}" for i in range(50)),
+            "canonical": "https://x/feed",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_edit_stale_source_is_409(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST numa fonte que saiu do estado editável (inexistente/arquivada) → 409 (staleness
+    semântica, molde ADR-0018), sem abrir a conexão de escrita."""
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources/ghost/edit",
+        data={"title": "X", "tags": "", "canonical": "https://x/feed", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+
+
+def test_edit_without_writer_credential_is_503(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-fast do molde ADR-0018: com a fonte editável (pré-check RO passa) mas sem a
+    credencial kubo_rw (env ausente no teste), a escrita é indisponível (503)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.get_source",
+        lambda db, sid: _detail(kind="rss", canonical="https://x/feed"),
+    )
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources/s1/edit",
+        data={"title": "Novo", "tags": "a,b", "canonical": "https://x/feed", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 503
+
+
+def test_list_has_edit_link_per_source(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cada fonte na lista tem um caminho para editar (a tela deixou de ser só-leitura no #106)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.sources_with_stats",
+        lambda db: [_src(id=RecordID("source", "abc"), canonical="https://x/feed")],
+    )
+    html = authed_client.get("/sources").text
+    assert "/sources/abc/edit" in html
 
 
 if __name__ == "__main__":

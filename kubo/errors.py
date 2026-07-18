@@ -39,6 +39,17 @@ class DuplicateSourceError(KuboError):
     não conteúdo coletado hostil)."""
 
 
+class StaleSourceError(KuboError):
+    """O Cadastro de fonte-alvo saiu do estado editável entre a leitura do form e a escrita.
+
+    Staleness SEMÂNTICA (molde ADR-0018, §VI: 'a entidade ainda está no estado acionável?'),
+    espelhando o 409 dos gates de flow — não é optimistic-lock com token de versão (o `source`
+    não tem `updated_at`, e criá-lo seria peso morto num single-user). O estado editável de um
+    Cadastro é 'existe e não está arquivado': `edit_source` levanta isto se o record sumiu
+    (hard-delete, #107) ou foi arquivado. A rota traduz em 409 + re-render, sem escrita silenciosa
+    num Cadastro arquivado/inexistente. A mensagem carrega só o id (entrada do dono, não hostil)."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 

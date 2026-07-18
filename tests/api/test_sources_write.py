@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.store import client, migrations
@@ -139,6 +140,136 @@ def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:
     assert again.status_code == 409
     assert "já está cadastrada" in again.text
     assert len(_sources()) == 1
+
+
+def _edit_csrf(tc: TestClient, sid: str) -> str:
+    """Lê o CSRF do form da página de edição de uma fonte específica."""
+    m = re.search(r'name="csrf" value="([0-9a-f]+)"', tc.get(f"/sources/{sid}/edit").text)
+    assert m, "csrf ausente no form de edição"
+    return m.group(1)
+
+
+def _create_source_via_route(tc: TestClient, csrf: str, **data: str) -> str:
+    """Cadastra pela rota real e devolve o KEY (parte do id) da fonte recém-criada."""
+    resp = tc.post("/sources", data={**data, "csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rows = root.query("SELECT id FROM source WHERE canonical = $c;", {"c": data["canonical"]})
+    return rows[0]["id"].id
+
+
+def test_edit_via_real_route_updates_and_preserves_history(app_db: Any) -> None:
+    """Editar pela rota real grava title/tags/canonical no MESMO record (id preservado) e o item
+    já coletado segue ligado — histórico intacto (o coração do #106), provado por read-back."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(
+        tc, csrf, kind="rss", canonical="https://old.example/feed", title="Antigo"
+    )
+    # semeia um item coletado sob essa fonte (histórico a preservar)
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        root.query(
+            "RELATE (CREATE item SET external_id='ep-1', content='bruto')->from_source->$s;",
+            {"s": RecordID("source", key)},
+        )
+
+    resp = tc.post(
+        f"/sources/{key}/edit",
+        data={
+            "title": "Novo",
+            "tags": "python, ml",
+            "canonical": "https://new.example/feed",
+            "csrf": _edit_csrf(tc, key),
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rows = root.query("SELECT canonical, title, tags FROM source;")
+        linked = root.query(
+            "SELECT count() FROM item WHERE ->from_source->source CONTAINS $s GROUP ALL;",
+            {"s": RecordID("source", key)},
+        )
+    assert len(rows) == 1
+    assert rows[0]["canonical"] == "https://new.example/feed"
+    assert rows[0]["title"] == "Novo"
+    assert rows[0]["tags"] == ["python", "ml"]
+    assert linked and int(linked[0]["count"]) == 1  # item preservado sob a mesma fonte
+
+
+def test_edit_github_repo_normalizes_canonical_per_db_kind(app_db: Any) -> None:
+    """A canonical editada é normalizada pelo kind lido do BANCO (o form não manda kind): um
+    github-repo com barra final vira a forma de-facto do worker. O kind não sai do form."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(
+        tc, csrf, kind="github-repo", canonical="https://github.com/owner/repo"
+    )
+
+    resp = tc.post(
+        f"/sources/{key}/edit",
+        data={
+            "title": "",
+            "tags": "",
+            "canonical": "https://github.com/owner/renamed/",
+            "csrf": _edit_csrf(tc, key),
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    rows = _sources()
+    assert rows[0]["canonical"] == "https://github.com/owner/renamed"
+
+
+def test_edit_to_duplicate_canonical_is_soft_409(app_db: Any) -> None:
+    """Editar a canonical para uma que já existe em OUTRO Cadastro do mesmo kind reabre com aviso
+    SOFT (409) e NÃO grava — a unicidade (kind, canonical) é garantida pela store."""
+    tc, csrf = _login_csrf(app_db)
+    a_key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://a.example/feed")
+    _create_source_via_route(tc, csrf, kind="rss", canonical="https://b.example/feed")
+
+    resp = tc.post(
+        f"/sources/{a_key}/edit",
+        data={
+            "title": "",
+            "tags": "",
+            "canonical": "https://b.example/feed",
+            "csrf": _edit_csrf(tc, a_key),
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 409
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        a_now = root.query("SELECT canonical FROM $s;", {"s": RecordID("source", a_key)})
+    assert a_now[0]["canonical"] == "https://a.example/feed"  # inalterado
+
+
+def test_edit_archived_source_is_stale_via_real_route(app_db: Any) -> None:
+    """Fonte arquivada saiu do estado editável: o GET volta à lista (303) e o POST reabre com
+    aviso de staleness (409), sem gravar. (Arquivar é do #107; aqui semeamos archived_at cru.)
+    Cobre o guard de staleness do ADR-0018 §VI ponta-a-ponta, não só no nível da store."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://arch.example/feed")
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        root.query(
+            "UPDATE $s SET enabled = false, archived_at = time::now();",
+            {"s": RecordID("source", key)},
+        )
+
+    get_resp = tc.get(f"/sources/{key}/edit", follow_redirects=False)
+    assert get_resp.status_code == 303
+    assert get_resp.headers["location"] == "/sources"
+
+    post_resp = tc.post(
+        f"/sources/{key}/edit",
+        data={"title": "Novo", "tags": "", "canonical": "https://arch.example/feed", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert post_resp.status_code == 409
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        row = root.query("SELECT title FROM $s;", {"s": RecordID("source", key)})
+    assert row[0].get("title") is None  # nada gravado no cadastro arquivado
 
 
 if __name__ == "__main__":

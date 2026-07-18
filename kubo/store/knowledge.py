@@ -22,7 +22,7 @@ from typing import Any, cast
 import structlog
 from surrealdb import RecordID
 
-from kubo.errors import DuplicateSourceError
+from kubo.errors import DuplicateSourceError, StaleSourceError
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger(__name__)
@@ -134,10 +134,15 @@ def upsert_source(db: Any, *, kind: str, canonical: str, title: str | None = Non
     reusa seu id — sha256 legado ou surrogate cadastrado pela UI — em vez de derivar o id da
     canonical. Ausente → cunha surrogate (`_fresh`). Isto faz o coletor convergir com o
     `create_source` da UI na mesma (kind, canonical): sem lookup-first, um repo cadastrado pela
-    UI e depois coletado geraria um segundo record que o índice UNIQUE barraria, quebrando a run."""
+    UI e depois coletado geraria um segundo record que o índice UNIQUE barraria, quebrando a run.
+
+    `title = title ?? $title` (coalesce): o coletor APENDE itens, não edita o Cadastro (#106). Um
+    título que o dono editou pela UI SOBREVIVE ao sweep — sem o coalesce, `SET title = $title`
+    reverteria a edição a cada coleta, em silêncio. Cadastro SEM título ainda é preenchido pelo
+    feed na 1ª coleta (o record novo nasce com title NONE, então NONE ?? $title = $title)."""
     rid = _find_source_id(db, kind=kind, canonical=canonical) or _fresh("source")
     db.query(
-        "UPSERT $r SET kind = $kind, canonical = $canonical, title = $title;",
+        "UPSERT $r SET kind = $kind, canonical = $canonical, title = title ?? $title;",
         {"r": rid, "kind": kind, "canonical": canonical, "title": title},
     )
     return rid
@@ -777,6 +782,83 @@ def sources_with_stats(db: Any) -> list[SourceStat]:
         )
         for r in rows
     ]
+
+
+@dataclass(frozen=True)
+class SourceDetail:
+    """O Cadastro de fonte INTEIRO (ADR-0025), para o form de edição (#106): expõe `tags` e
+    `enabled`/`archived_at` que `SourceInfo`/`SourceStat` não trazem. Leitura por id (não pela
+    chave natural), distinta das listagens — popula o form e serve o pré-check de staleness."""
+
+    id: RecordID
+    kind: str
+    canonical: str
+    title: str | None
+    tags: list[str]
+    enabled: bool
+    archived_at: str | None
+
+
+def get_source(db: Any, id: RecordID) -> SourceDetail | None:
+    """Lê o Cadastro INTEIRO por id, ou None se não existir (record ausente → SELECT vazio).
+
+    Porta única para 'o estado completo de UMA fonte' — o form de edição (#106) o usa para
+    popular os campos e para o pré-check de staleness (existe? arquivada?). `archived_at` volta
+    como string ISO (None quando ativa), simétrico ao `last_collected_at` de sources_with_stats."""
+    rows = db.query(
+        "SELECT id, kind, canonical, title, tags, enabled, archived_at FROM $r;",
+        {"r": id},
+    )
+    if not rows:
+        return None
+    r = rows[0]
+    archived = r.get("archived_at")
+    return SourceDetail(
+        id=r["id"],
+        kind=r["kind"],
+        canonical=r["canonical"],
+        title=r.get("title"),
+        tags=list(r.get("tags") or []),
+        enabled=bool(r["enabled"]),
+        archived_at=str(archived) if archived is not None else None,
+    )
+
+
+def edit_source(
+    db: Any, *, id: RecordID, title: str | None, tags: list[str], canonical: str
+) -> None:
+    """Edita os três campos do dono (title/tags/canonical) num Cadastro, PRESERVANDO o id — e
+    portanto as arestas `from_source` dos itens já coletados (histórico intacto, ADR-0025). O
+    `kind` NÃO é editável: mudá-lo trocaria o coletor e falsearia a proveniência dos itens.
+
+    Full-replace dos três campos (o form sempre manda os três). Duas guardas antes da escrita:
+    (1) STALENESS — Cadastro inexistente ou arquivado saiu do estado editável → `StaleSourceError`
+    (409 na rota), com o `UPDATE ... WHERE archived_at IS NONE` como cinto contra corrida (não
+    grava em cadastro arquivado nem que passe o pré-check); (2) UNICIDADE — editar a canonical
+    para uma que já existe em OUTRO Cadastro do mesmo kind viola UNIQUE(kind, canonical) →
+    `DuplicateSourceError`. O lookup exclui o PRÓPRIO record (senão editar só o título colidiria
+    consigo mesmo). O índice do banco segue como garantia dura contra a corrida TOCTOU residual
+    (um insert concorrente da mesma chave entre o lookup e a escrita → StoreError, nunca mudo)."""
+    current = get_source(db, id)
+    if current is None or current.archived_at is not None:
+        raise StaleSourceError(f"fonte não editável (inexistente ou arquivada): {id}")
+    other = _find_source_id(db, kind=current.kind, canonical=canonical)
+    if other is not None and str(other) != str(id):
+        raise DuplicateSourceError(
+            f"fonte já cadastrada: kind={current.kind} canonical={canonical}"
+        )
+    # UPDATE condicional (`WHERE archived_at IS NONE`) como cinto contra corrida: se a fonte for
+    # arquivada entre o pré-check e esta escrita (alcançável só quando #107 existir), o UPDATE casa
+    # 0 linhas. `run_transaction` não distingue 0-linhas de sucesso (só checa ERR) — então a escrita
+    # vai por `query`, que devolve os records tocados, e 0-linhas vira StaleSourceError, nunca um
+    # lost-write mudo devolvendo 303 (achado convergente do security-reviewer e do advisor).
+    updated = db.query(
+        "UPDATE $r SET title = $title, tags = $tags, canonical = $canonical "
+        "WHERE archived_at IS NONE;",
+        {"r": id, "title": title, "tags": tags, "canonical": canonical},
+    )
+    if not updated:
+        raise StaleSourceError(f"fonte arquivada durante a edição: {id}")
 
 
 def item_index(db: Any) -> dict[str, RecordID]:
