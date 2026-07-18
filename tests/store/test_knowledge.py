@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
-from kubo.errors import DuplicateSourceError, StoreError
+from kubo.errors import DuplicateSourceError, StaleSourceError, StoreError
 from kubo.store import client, knowledge, migrations
 from kubo.store.knowledge import Chunk
 
@@ -346,6 +346,153 @@ def test_upsert_source_reuses_legacy_sha256_record(db: Any) -> None:
 
     assert resolved == legacy
     assert _count(db, "source") == 1
+
+
+def test_get_source_returns_full_cadastro(db: Any) -> None:
+    """get_source expõe o Cadastro INTEIRO por id (kind, canonical, title, tags, enabled,
+    archived_at) — a leitura que o form de edição (#106) precisa e que list_sources/
+    sources_with_stats não dão (não trazem tags nem enabled)."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+
+    got = knowledge.get_source(db, rid)
+
+    assert got is not None
+    assert got.id == rid
+    assert got.kind == "rss"
+    assert got.canonical == "https://x/feed"
+    assert got.title == "Feed X"
+    assert got.tags == []
+    assert got.enabled is True
+    assert got.archived_at is None
+
+
+def test_get_source_absent_returns_none(db: Any) -> None:
+    """id inexistente → None (não erro): a rota traduz em staleness, não em 500."""
+    assert knowledge.get_source(db, knowledge._rid("source", "ghost")) is None
+
+
+def test_edit_source_updates_fields_keeping_id_and_history(db: Any) -> None:
+    """O coração do #106: editar title/tags/canonical mantém o MESMO id, então a aresta
+    from_source do item já coletado fica intacta — histórico preservado. Editar a URL não é
+    'trocar por outra fonte': é 'esta fonte mudou de endereço', os itens seguem pendurados."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://old/feed", title="Antigo")
+    item = knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
+
+    knowledge.edit_source(
+        db, id=rid, title="Novo", tags=["python", "ml"], canonical="https://new/feed"
+    )
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.id == rid  # id preservado
+    assert got.title == "Novo"
+    assert got.tags == ["python", "ml"]
+    assert got.canonical == "https://new/feed"
+    # o item segue ligado à MESMA source (histórico preservado)
+    linked = db.query("SELECT ->from_source->source AS srcs FROM $i;", {"i": item})[0]["srcs"]
+    assert linked == [rid]
+    assert _count(db, "source") == 1
+
+
+def test_edit_source_blank_title_becomes_none(db: Any) -> None:
+    """Título vazio na edição limpa o campo (None), simétrico ao create — full-replace dos
+    três campos editáveis, sem ambiguidade 'None = não mexer'."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Tinha")
+
+    knowledge.edit_source(db, id=rid, title=None, tags=[], canonical="https://x/feed")
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title is None
+
+
+def test_edit_source_rejects_canonical_colliding_with_another(db: Any) -> None:
+    """Editar a canonical para uma que JÁ existe em outro Cadastro do mesmo kind viola
+    UNIQUE(kind, canonical): recusa como DuplicateSourceError (aviso soft), sem gravar."""
+    a = knowledge.create_source(db, kind="rss", canonical="https://a/feed")
+    knowledge.create_source(db, kind="rss", canonical="https://b/feed")
+
+    with pytest.raises(DuplicateSourceError):
+        knowledge.edit_source(db, id=a, title=None, tags=[], canonical="https://b/feed")
+
+    # nada mudou: `a` ainda aponta para a canonical original
+    got = knowledge.get_source(db, a)
+    assert got is not None
+    assert got.canonical == "https://a/feed"
+
+
+def test_edit_source_keeping_own_canonical_is_not_a_duplicate(db: Any) -> None:
+    """Editar só title/tags (canonical inalterada) NÃO dispara falso-positivo de duplicata:
+    o lookup exclui o próprio record (senão o cadastro colidiria consigo mesmo)."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Antes")
+
+    knowledge.edit_source(db, id=rid, title="Depois", tags=["a"], canonical="https://x/feed")
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title == "Depois"
+    assert got.tags == ["a"]
+
+
+def test_edit_source_same_canonical_across_kinds_is_allowed(db: Any) -> None:
+    """A colisão é por (kind, canonical): editar a canonical de um rss para uma que existe só
+    num github-repo é permitido — kinds diferentes são Cadastros distintos."""
+    rss = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.create_source(db, kind="github-repo", canonical="https://github.com/o/r")
+
+    knowledge.edit_source(db, id=rss, title=None, tags=[], canonical="https://github.com/o/r")
+
+    got = knowledge.get_source(db, rss)
+    assert got is not None
+    assert got.canonical == "https://github.com/o/r"
+    assert got.kind == "rss"  # kind NÃO muda na edição
+
+
+def test_edit_source_on_archived_is_stale(db: Any) -> None:
+    """Cadastro arquivado saiu do estado editável → StaleSourceError, sem escrita (belt
+    `WHERE archived_at IS NONE`). (Arquivar é do #107; aqui semeamos archived_at cru.)"""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Antes")
+    db.query("UPDATE $r SET enabled = false, archived_at = time::now();", {"r": rid})
+
+    with pytest.raises(StaleSourceError):
+        knowledge.edit_source(db, id=rid, title="Depois", tags=[], canonical="https://x/feed")
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title == "Antes"  # nada gravado no cadastro arquivado
+
+
+def test_edit_source_absent_is_stale(db: Any) -> None:
+    """Editar um Cadastro que sumiu (hard-delete, #107) → StaleSourceError, nunca 500."""
+    with pytest.raises(StaleSourceError):
+        knowledge.edit_source(
+            db, id=knowledge._rid("source", "ghost"), title="x", tags=[], canonical="https://x"
+        )
+
+
+def test_upsert_source_preserves_owner_edited_title(db: Any) -> None:
+    """O coletor APENDE itens, não edita o Cadastro: um sweep (`upsert_source`) NÃO sobrescreve
+    o título que o dono editou pela UI — senão a edição do #106 seria revertida todo dia, sem
+    log. Cadastro SEM título ainda é preenchido pelo feed (nicety), e uma vez preenchido, fica."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Dono editou")
+
+    knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Título do feed")
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title == "Dono editou"  # coletor não clobbera
+
+
+def test_upsert_source_fills_missing_title_from_feed(db: Any) -> None:
+    """Cadastro sem título (criado pela UI sem informar) recebe o título do feed na 1ª coleta —
+    a nicety legada sobrevive; só a SOBRESCRITA de um título já presente é que some."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+
+    knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Título do feed")
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title == "Título do feed"
 
 
 def _seed_distilled(db: Any, n: int) -> list[RecordID]:

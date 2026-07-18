@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Editar fonte · Kubo{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-xl space-y-4">
+  {{ macros.page_header("Editar fonte", "Ajuste o título, as tags e a origem. Mudar a origem não perde o histórico já coletado.") }}
+
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  {# Edição (#106): title/tags/canonical editáveis; kind é READONLY (mudar o kind trocaria o
+     coletor e falsearia a proveniência dos itens já coletados). Escrita no molde ADR-0018. #}
+  <form method="post" action="/sources/{{ source.id.id }}/edit" class="space-y-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div>
+      <span class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tipo</span>
+      <div class="flex h-9 w-full items-center rounded-4xl border border-input bg-muted/40 px-4 text-sm text-muted-foreground">
+        {% if source.kind == "github-repo" %}Repositório do GitHub{% elif source.kind == "rss" %}Feed RSS{% else %}{{ source.kind }}{% endif %}
+        <span class="ml-2 text-2xs">· não editável</span>
+      </div>
+    </div>
+    <div>
+      <label for="edit-canonical" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Origem</label>
+      <input id="edit-canonical" name="canonical" required value="{{ source.canonical }}"
+             class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      <p class="mt-1 text-2xs text-muted-foreground">Trocar a origem mantém os itens já coletados sob esta fonte.</p>
+    </div>
+    <div>
+      <label for="edit-title" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Título <span class="font-normal">(opcional)</span></label>
+      <input id="edit-title" name="title" value="{{ source.title or '' }}" placeholder="Como aparece na tela"
+             class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    </div>
+    <div>
+      <label for="edit-tags" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tags <span class="font-normal">(separadas por vírgula)</span></label>
+      <input id="edit-tags" name="tags" value="{{ tags_str }}" placeholder="python, ml, notícias"
+             class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    </div>
+    <div class="flex items-center gap-3 pt-1">
+      <button class="h-9 flex-1 rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Salvar</button>
+      <a href="/sources" class="flex h-9 items-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
