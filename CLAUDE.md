@@ -112,7 +112,7 @@ Config por-repo que o stack de skills do Matt Pocock (`/ask-matt`, `/wayfinder`,
 
 ### Issue tracker
 
-Issues e PRDs vivem como GitHub Issues, via `gh` CLI. Regra de governança em **dois regimes** (issue-ponteiro padrão vs andaime wayfinder, **ADR-0024**). See `docs/agents/issue-tracker.md`.
+Issues e PRDs vivem como GitHub Issues, via `gh` CLI. Issues podem carregar conteúdo à vontade; único guardrail: "cópia congelada nunca é canônica" (**ADR-0026**, substitui ADR-0024). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
