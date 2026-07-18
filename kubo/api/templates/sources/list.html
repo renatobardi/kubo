@@ -5,10 +5,45 @@
 <div class="space-y-4">
   {{ macros.page_header("Fontes", "De onde vem o que você sabe — canais, feeds e sites, com a recência de cada coleta.") }}
 
+  {% if notice %}
+  <div role="status" class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</div>
+  {% endif %}
+
   <div class="flex items-center justify-between gap-3">
     {{ macros.search_filter("sources-list", "Buscar fontes por nome, tipo ou integração…") }}
     {{ macros.view_toggle("sources", ["list", "grid2", "squares"]) }}
   </div>
+
+  {# Adicionar fonte (#105): disclosure nativo (sem JS), reaberto quando há aviso (erro/duplicata)
+     para o dono ver a tentativa. Escrita no molde ADR-0018: POST /sources com CSRF. #}
+  <details class="rounded-xl bg-card ring-1 ring-foreground/10" {% if notice %}open{% endif %}>
+    <summary class="flex cursor-pointer list-none items-center gap-2 p-4 text-sm font-medium text-foreground">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
+      Adicionar fonte
+    </summary>
+    <form method="post" action="/sources" class="space-y-3 border-t border-border p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div>
+        <label for="src-kind" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tipo</label>
+        <select id="src-kind" name="kind" class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <option value="rss">Feed RSS</option>
+          <option value="github-repo">Repositório do GitHub</option>
+        </select>
+      </div>
+      <div>
+        <label for="src-canonical" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Origem</label>
+        <input id="src-canonical" name="canonical" required placeholder="https://exemplo.com/feed.xml  ·  owner/repo"
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        <p class="mt-1 text-2xs text-muted-foreground">Feed RSS: a URL do feed. GitHub: <code class="rounded bg-muted px-1 py-0.5">owner/repo</code> ou a URL do repositório.</p>
+      </div>
+      <div>
+        <label for="src-title" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Título <span class="font-normal">(opcional)</span></label>
+        <input id="src-title" name="title" placeholder="Como aparece na tela"
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+      <button class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Cadastrar fonte</button>
+    </form>
+  </details>
 
   {% if not sources %}
     <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
