@@ -15,7 +15,12 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
-from kubo.errors import DuplicateSourceError, StaleSourceError, StoreError
+from kubo.errors import (
+    DuplicateSourceError,
+    SourceHasHistoryError,
+    StaleSourceError,
+    StoreError,
+)
 from kubo.store import client, knowledge, migrations
 from kubo.store.knowledge import Chunk
 
@@ -467,6 +472,172 @@ def test_edit_source_absent_is_stale(db: Any) -> None:
     ghost = knowledge._rid("source", "ghost")
     with pytest.raises(StaleSourceError):
         knowledge.edit_source(db, id=ghost, title="x", tags=[], canonical="https://x")
+
+
+# ── #107: pausar / arquivar / restaurar / apagar (ciclo de vida do Cadastro) ─────────────
+
+
+def _state(db: Any, rid: RecordID) -> tuple[bool, str | None]:
+    """Lê (enabled, archived_at) cru do banco — a prova de atomicidade do estado."""
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    return got.enabled, got.archived_at
+
+
+def test_set_source_enabled_pauses_without_archiving(db: Any) -> None:
+    """Pausar é um estado PRÓPRIO (emenda #107 ao ADR-0025 §8): `enabled=false` com
+    `archived_at=NONE` é VÁLIDO — o sweep varre só os ativos, então pausar tira do ar sem
+    arquivar. Retomar volta a `enabled=true` sem nunca ter tocado `archived_at`."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+
+    knowledge.set_source_enabled(db, id=rid, enabled=False)
+    assert _state(db, rid) == (False, None)  # pausado, NÃO arquivado
+
+    knowledge.set_source_enabled(db, id=rid, enabled=True)
+    assert _state(db, rid) == (True, None)  # ativo de novo
+
+
+def test_set_source_enabled_on_archived_is_stale(db: Any) -> None:
+    """`enabled` de um arquivado é sempre `false` (invariante `archived_at set ⟹ enabled=false`):
+    pausar/retomar um arquivado é recusado (StaleSourceError), sem violar o invariante."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.archive_source(db, id=rid)
+
+    with pytest.raises(StaleSourceError):
+        knowledge.set_source_enabled(db, id=rid, enabled=True)
+    assert _state(db, rid) == (False, _state(db, rid)[1])  # segue arquivado/desabilitado
+
+
+def test_set_source_enabled_absent_is_stale(db: Any) -> None:
+    """Pausar um Cadastro inexistente → StaleSourceError, nunca 500."""
+    with pytest.raises(StaleSourceError):
+        knowledge.set_source_enabled(db, id=knowledge._rid("source", "ghost"), enabled=False)
+
+
+def test_archive_source_sets_both_fields_atomically(db: Any) -> None:
+    """Arquivar (ADR-0025 §8) põe `enabled=false` E `archived_at` num só statement — nunca o
+    estado divergente arquivado-mas-ativo. O histórico (item pendurado) fica intacto: arquivar
+    tira da operação, não apaga."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    item = knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
+
+    knowledge.archive_source(db, id=rid)
+
+    enabled, archived = _state(db, rid)
+    assert enabled is False
+    assert archived is not None  # carimbo presente
+    linked = db.query("SELECT ->from_source->source AS srcs FROM $i;", {"i": item})[0]["srcs"]
+    assert linked == [rid]  # histórico preservado
+
+
+def test_archive_source_already_archived_is_stale(db: Any) -> None:
+    """Arquivar duas vezes: a segunda é StaleSourceError (WHERE archived_at IS NONE casa 0
+    linhas), sem re-carimbar `archived_at` por cima do original."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.archive_source(db, id=rid)
+    first_stamp = _state(db, rid)[1]
+
+    with pytest.raises(StaleSourceError):
+        knowledge.archive_source(db, id=rid)
+    assert _state(db, rid)[1] == first_stamp  # carimbo original intacto
+
+
+def test_archive_source_absent_is_stale(db: Any) -> None:
+    """Arquivar um Cadastro inexistente → StaleSourceError."""
+    with pytest.raises(StaleSourceError):
+        knowledge.archive_source(db, id=knowledge._rid("source", "ghost"))
+
+
+def test_restore_source_clears_both_fields_atomically(db: Any) -> None:
+    """Restaurar é o oposto exato de arquivar: `enabled=true` E `archived_at=NONE` num só
+    statement. Volta ao estado ATIVO (não a pausado) — restaurar sempre reativa."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.archive_source(db, id=rid)
+
+    knowledge.restore_source(db, id=rid)
+
+    assert _state(db, rid) == (True, None)  # ativo
+
+
+def test_restore_source_not_archived_is_stale(db: Any) -> None:
+    """Restaurar um Cadastro que NÃO está arquivado (ativo ou pausado) → StaleSourceError:
+    o WHERE archived_at IS NOT NONE não casa nada, sem forçar enabled=true num pausado."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.set_source_enabled(db, id=rid, enabled=False)  # pausado, não arquivado
+
+    with pytest.raises(StaleSourceError):
+        knowledge.restore_source(db, id=rid)
+    assert _state(db, rid) == (False, None)  # segue pausado, restore não reativou
+
+
+def test_delete_source_removes_cadastro_with_zero_items(db: Any) -> None:
+    """Hard delete (ADR-0025 §8, exceção estreita): Cadastro com ZERO itens é apagado de vez —
+    limpa um cadastro criado por engano. Só este caminho apaga na store inteira."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+
+    knowledge.delete_source(db, id=rid)
+
+    assert knowledge.get_source(db, rid) is None
+    assert _count(db, "source") == 0
+
+
+def test_delete_source_with_items_is_blocked(db: Any) -> None:
+    """Apagar um Cadastro COM itens é impedido (SourceHasHistoryError) — proveniência é 'o
+    produto', o caminho é arquivar. O record e o item seguem intactos."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
+
+    with pytest.raises(SourceHasHistoryError):
+        knowledge.delete_source(db, id=rid)
+
+    assert knowledge.get_source(db, rid) is not None  # nada apagado
+    assert _count(db, "source") == 1
+
+
+def test_delete_source_archived_with_zero_items_is_allowed(db: Any) -> None:
+    """A guarda do delete é ZERO ITENS, não o estado do ciclo de vida: um Cadastro arquivado
+    (ou pausado) sem itens é apagável — não se exige um estado prévio (advisor)."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.archive_source(db, id=rid)
+
+    knowledge.delete_source(db, id=rid)
+
+    assert knowledge.get_source(db, rid) is None
+
+
+def test_delete_source_absent_is_stale(db: Any) -> None:
+    """Apagar um Cadastro que já sumiu → StaleSourceError, nunca 500."""
+    with pytest.raises(StaleSourceError):
+        knowledge.delete_source(db, id=knowledge._rid("source", "ghost"))
+
+
+def test_source_item_count_reflects_from_source_edges(db: Any) -> None:
+    """`source_item_count` conta os itens via `<-from_source<-item`: 0 num cadastro novo, sobe a
+    cada item coletado. É a guarda do apagável (zero) e o dado da tela de confirmação."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    assert knowledge.source_item_count(db, rid) == 0
+
+    knowledge.upsert_item(db, source=rid, external_id="ep-1", content="a")
+    knowledge.upsert_item(db, source=rid, external_id="ep-2", content="b")
+    assert knowledge.source_item_count(db, rid) == 2
+
+
+def test_sources_with_stats_carries_lifecycle_state(db: Any) -> None:
+    """A listagem (#107) traz `enabled`/`archived_at` para a tela derivar o badge de estado e as
+    ações: ativo, pausado (enabled=false, sem carimbo) e arquivado (com carimbo) são distinguíveis
+    numa leitura só, sem N+1 get_source."""
+    active = knowledge.create_source(db, kind="rss", canonical="https://active/feed")
+    paused = knowledge.create_source(db, kind="rss", canonical="https://paused/feed")
+    archived = knowledge.create_source(db, kind="rss", canonical="https://archived/feed")
+    knowledge.set_source_enabled(db, id=paused, enabled=False)
+    knowledge.archive_source(db, id=archived)
+
+    by_id = {str(s.id): s for s in knowledge.sources_with_stats(db)}
+
+    assert (by_id[str(active)].enabled, by_id[str(active)].archived_at) == (True, None)
+    assert (by_id[str(paused)].enabled, by_id[str(paused)].archived_at) == (False, None)
+    assert by_id[str(archived)].enabled is False
+    assert by_id[str(archived)].archived_at is not None
 
 
 def test_upsert_source_preserves_owner_edited_title(db: Any) -> None:

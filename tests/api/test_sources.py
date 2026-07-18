@@ -31,6 +31,8 @@ def _src(**kw: object) -> SourceStat:
         "title": None,
         "items": 0,
         "last_collected_at": None,
+        "enabled": True,
+        "archived_at": None,
     }
     base.update(kw)
     return SourceStat(**base)  # type: ignore[arg-type]
@@ -360,6 +362,98 @@ def test_list_has_edit_link_per_source(
     )
     html = authed_client.get("/sources").text
     assert "/sources/abc/edit" in html
+
+
+# ── #107: rotas de ciclo de vida (pausar/arquivar/restaurar/apagar) — MOLDE ──────────────
+# O COMPORTAMENTO (grava no grafo, staleness, guarda de itens) vive no test_sources_write
+# (integração); aqui ficam o molde ADR-0018 (CSRF/fail-fast) e a leitura (badges/confirmação).
+
+_LIFECYCLE_ACTIONS = ["disable", "enable", "archive", "restore", "delete"]
+
+
+@pytest.mark.parametrize("action", _LIFECYCLE_ACTIONS)
+def test_lifecycle_rejects_bad_csrf(authed_client: TestClient, action: str) -> None:
+    """Toda ação de ciclo de vida é recusada (403) sem CSRF válido, antes de tocar a store."""
+    resp = authed_client.post(
+        f"/sources/s1/{action}", data={"csrf": "deadbeef"}, follow_redirects=False
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("action", _LIFECYCLE_ACTIONS)
+def test_lifecycle_without_writer_credential_is_503(authed_client: TestClient, action: str) -> None:
+    """Fail-fast do molde ADR-0018: com CSRF válido mas sem a credencial kubo_rw, toda escrita
+    de ciclo de vida é indisponível (503) — o resto da UI (kubo_ro) segue vivo."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(f"/sources/s1/{action}", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 503
+
+
+def test_delete_page_zero_items_shows_confirm(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tela de confirmação de apagar (dupla verificação, #107): com ZERO itens, mostra o botão
+    destrutivo de confirmar e o form POST /sources/{id}/delete com CSRF."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.get_source",
+        lambda db, sid: _detail(title="Errado", canonical="https://x/feed"),
+    )
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 0)
+    html = authed_client.get("/sources/s1/delete").text
+    assert 'action="/sources/s1/delete"' in html and 'method="post"' in html
+    assert 'name="csrf"' in html
+    assert "Apagar de vez" in html  # ação destrutiva confirmável
+
+
+def test_delete_page_with_items_blocks_and_points_to_archive(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Com itens, a tela de confirmação NÃO oferece apagar: explica que há histórico e orienta a
+    arquivar (US#11). Sem botão de POST delete — a store recusaria, e a UI não convida ao erro."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.get_source",
+        lambda db, sid: _detail(title="Tem histórico", canonical="https://x/feed"),
+    )
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 7)
+    html = authed_client.get("/sources/s1/delete").text
+    assert "7" in html  # a contagem de itens é dita
+    assert "arquiv" in html.lower()  # orienta a arquivar
+    assert 'action="/sources/s1/delete"' not in html  # sem convite a apagar
+
+
+def test_delete_page_absent_source_redirects_to_list(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET de apagar numa fonte inexistente volta para a lista — não 500."""
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    resp = authed_client.get("/sources/ghost/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
+
+
+def test_list_shows_state_badges_and_actions(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lista distingue os 3 estados (#107) e oferece a ação certa: ativo → pausar; pausado →
+    retomar; arquivado → restaurar. Cada estado tem um badge visível (US#16)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.sources_with_stats",
+        lambda db: [
+            _src(id=RecordID("source", "act"), canonical="a://s", enabled=True, archived_at=None),
+            _src(id=RecordID("source", "pau"), canonical="p://s", enabled=False, archived_at=None),
+            _src(
+                id=RecordID("source", "arc"),
+                canonical="r://s",
+                enabled=False,
+                archived_at=_iso_days_ago(1),
+            ),
+        ],
+    )
+    html = authed_client.get("/sources").text
+    assert 'action="/sources/act/disable"' in html  # ativo pode pausar
+    assert 'action="/sources/pau/enable"' in html  # pausado pode retomar
+    assert 'action="/sources/arc/restore"' in html  # arquivado pode restaurar
+    assert "Pausado" in html and "Arquivado" in html  # badges de estado
 
 
 if __name__ == "__main__":

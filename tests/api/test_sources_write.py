@@ -272,5 +272,87 @@ def test_edit_archived_source_is_stale_via_real_route(app_db: Any) -> None:
     assert row[0].get("title") is None  # nada gravado no cadastro arquivado
 
 
+# ── #107: ciclo de vida pela rota REAL (pausar/arquivar/restaurar/apagar) ────────────────
+
+
+def _state(key: str) -> dict[str, Any]:
+    """Lê COMO ROOT (enabled, archived_at) de um Cadastro — a prova de estado do read-back."""
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rows = root.query("SELECT enabled, archived_at FROM $s;", {"s": RecordID("source", key)})
+    return rows[0]
+
+
+def test_disable_then_enable_via_real_route(app_db: Any) -> None:
+    """Pausar pela rota real grava `enabled=false` SEM tocar `archived_at` (estado pausado é
+    próprio — emenda #107); retomar volta a `enabled=true`. Read-back como root prova cada passo."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://x.example/feed")
+
+    assert tc.post(f"/sources/{key}/disable", data={"csrf": csrf}).status_code == 200
+    st = _state(key)
+    assert st["enabled"] is False and st.get("archived_at") is None  # pausado, não arquivado
+
+    assert tc.post(f"/sources/{key}/enable", data={"csrf": csrf}).status_code == 200
+    st = _state(key)
+    assert st["enabled"] is True and st.get("archived_at") is None  # ativo de novo
+
+
+def test_archive_then_restore_via_real_route(app_db: Any) -> None:
+    """Arquivar pela rota real põe `enabled=false` E carimba `archived_at` (atômico); restaurar
+    limpa os dois. Read-back como root — se a rota usasse kubo_ro por bug, nada gravaria."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://x.example/feed")
+
+    assert tc.post(f"/sources/{key}/archive", data={"csrf": csrf}).status_code == 200
+    st = _state(key)
+    assert st["enabled"] is False and st.get("archived_at") is not None  # arquivado
+
+    assert tc.post(f"/sources/{key}/restore", data={"csrf": csrf}).status_code == 200
+    st = _state(key)
+    assert st["enabled"] is True and st.get("archived_at") is None  # ativo
+
+
+def test_delete_zero_items_via_real_route(app_db: Any) -> None:
+    """Apagar de vez uma fonte com ZERO itens pela rota real remove o record do grafo (303).
+    O único caminho de delete da store, exercido ponta-a-ponta."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://gone.example/feed")
+
+    resp = tc.post(f"/sources/{key}/delete", data={"csrf": csrf}, follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert len(_sources()) == 0  # apagado de vez
+
+
+def test_delete_with_items_is_blocked_via_real_route(app_db: Any) -> None:
+    """Apagar uma fonte COM itens é impedido pela rota real (409): o record e o item seguem
+    intactos e a tela reorienta a arquivar (US#11). A guarda é da store, não da view."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://keep.example/feed")
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        root.query(
+            "RELATE (CREATE item SET external_id='ep-1', content='bruto')->from_source->$s;",
+            {"s": RecordID("source", key)},
+        )
+
+    resp = tc.post(f"/sources/{key}/delete", data={"csrf": csrf}, follow_redirects=False)
+
+    assert resp.status_code == 409
+    assert "arquive" in resp.text.lower()  # reorienta a arquivar
+    assert len(_sources()) == 1  # nada apagado
+
+
+def test_delete_page_get_renders_confirmation_via_real_route(app_db: Any) -> None:
+    """A tela de confirmação (GET) de uma fonte sem itens oferece o POST de apagar com CSRF —
+    a dupla verificação servida pelo caminho real de leitura (kubo_ro)."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://conf.example/feed")
+
+    html = tc.get(f"/sources/{key}/delete").text
+
+    assert f'action="/sources/{key}/delete"' in html
+    assert "Apagar de vez" in html
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

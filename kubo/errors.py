@@ -50,6 +50,19 @@ class StaleSourceError(KuboError):
     num Cadastro arquivado/inexistente. A mensagem carrega só o id (entrada do dono, não hostil)."""
 
 
+class SourceHasHistoryError(KuboError):
+    """Hard delete de um Cadastro recusado porque ele tem itens coletados (ADR-0025 §8, #107).
+
+    Deletar de vez é a primeira e única exceção ao 'a store não deleta', e é ESTREITA: só
+    quando **zero itens** apontam via `from_source`. Um Cadastro com histórico carrega
+    proveniência — 'o produto' — e o caminho para tirá-lo de operação é ARQUIVAR, não apagar.
+    `delete_source` levanta isto quando encontra itens (inclusive na corrida rara em que a
+    coleta chega entre o pré-check e a escrita: o `DELETE` condicional a zero itens recusa e a
+    rota reapresenta a orientação de arquivar). Distinta de `StaleSourceError` (o Cadastro
+    sumiu/saiu do estado): aqui o Cadastro EXISTE, só não é apagável. A mensagem carrega só o
+    id (entrada do dono, não conteúdo coletado hostil)."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 
