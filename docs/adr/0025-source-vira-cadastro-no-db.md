@@ -49,12 +49,38 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
 7. **Despacho por `kind` = mapa fixo em código** (`rss`→`feed`, `github-repo`→coletor de
    releases). Nunca nome-de-worker como campo livre do Cadastro.
 8. **Deletar = soft archive** (`enabled=false` **e** `archived_at`), nunca cascade — proveniência
-   é "o produto". Arquivar e restaurar atualizam os dois campos **atomicamente**: estado
-   divergente (`enabled=true` com `archived_at` preenchido, ou `enabled=false` sem `archived_at`)
-   é inválido — a store garante. Hard delete só quando **zero itens** apontam para o Cadastro
+   é "o produto". Arquivar e restaurar atualizam os dois campos **atomicamente** — nunca deixam o
+   Cadastro num estado divergente `archived_at` preenchido **com** `enabled=true` (arquivado-mas-ativo
+   é nonsense); a store garante. Hard delete só quando **zero itens** apontam para o Cadastro
    (checagem na store): a store hoje não deleta em lugar nenhum; este hard delete estreito,
    condicionado a zero itens, é a primeira e única exceção. Dupla verificação na UI para a ação
    destrutiva.
+
+   > **Emenda #107 (2026-07-18) — invariante de estado vira unidirecional.** A redação original
+   > deste §8 declarava também `enabled=false` **sem** `archived_at` como divergente/inválido. Isso
+   > foi escrito quando *desabilitar* e *arquivar* eram a mesma operação. O #107 (e a spec #103, US#7/
+   > US#16) separam os dois eixos: o dono **pausa** um Cadastro (`enabled=false`) sem arquivá-lo. Logo
+   > o modelo tem **três estados válidos** — ativo (`enabled=true`, `archived_at=NONE`), pausado
+   > (`enabled=false`, `archived_at=NONE`) e arquivado (`enabled=false`, `archived_at` set) — e o
+   > invariante que a store garante é só a direção `archived_at IS NOT NONE ⟹ enabled=false`.
+   >
+   > **Dupla verificação = só o hard delete** (a "ação destrutiva" singular deste §8). Pausar,
+   > arquivar e restaurar são **reversíveis** (o par oposto desfaz cada um) → POST simples com CSRF.
+   > Só o hard delete é irreversível e apaga o registro → tela interstitial de confirmação. Isto
+   > estreita a redação do snapshot #103 **US#12** ("dupla verificação antes de arquivar/apagar"):
+   > US#12 listava arquivar como destrutivo quando arquivar ainda ERA o delete; separado o eixo,
+   > arquivar virou reversível e dispensa o 2º passo. O ADR é canônico sobre o snapshot (#103,
+   > cabeçalho), então esta leitura vale.
+   >
+   > **Modalidade — o sweep é design, ainda não vivo (dívida sequencial).** A decisão 4 ("o sweep
+   > varre só os ativos") descreve o comportamento-alvo, **não o presente**. Até o sweep por Cadastro
+   > existir (#108, passo 1 do rollout), `enabled`/`archived_at` são **estado registrado pela store e
+   > exibido pela UI — ainda não honrado por coletor nenhum**: a coleta permanece dirigida pelo
+   > `schedules.yaml` (6 feeds) + watch-list do GitHub, que o #107 não tocou. Logo pausar/arquivar
+   > pela tela hoje muda o registro e a listagem, **não interrompe a coleta** — a interrupção chega
+   > com o #108. A UI diz essa verdade num helper text (a ser removido quando o #108 fechar); a ordem
+   > de entrega (schema→create→edit→lifecycle→sweep) inverteu a ordem de rollout deste ADR, o que é
+   > seguro porque nenhuma dessas fatias encostou no caminho de coleta (achado do security-reviewer).
 9. **Uma tabela só** — `source` *vira* Cadastro; sem coexistência/sincronização.
 10. **Escrita pela UI** segue o molde ADR-0018: credencial `kubo_rw` EDITOR por-request + CSRF
     + guarda 409 de staleness. Todo acesso via `kubo/store/`.

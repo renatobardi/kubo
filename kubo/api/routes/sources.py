@@ -9,6 +9,7 @@ na borda, fail-fast 503 sem a credencial. Duplicata (kind+canonical) é recusada
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from kubo.api.rendering import templates
 from kubo.errors import (
     ConfigError,
     DuplicateSourceError,
+    SourceHasHistoryError,
     StaleSourceError,
     format_validation_error,
 )
@@ -31,6 +33,7 @@ from kubo.store.knowledge import SourceDetail, SourceStat
 
 _log = structlog.get_logger(__name__)
 _LIST_TEMPLATE = "sources/list.html"
+_WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 
 
 _FEED_SCHEMES = ("http", "https")
@@ -240,7 +243,7 @@ def create(
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
         _log.warning("sources.write_unavailable")
-        return PlainTextResponse("Escrita indisponível por erro de configuração.", status_code=503)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
 
 _EDIT_TEMPLATE = "sources/edit.html"
@@ -333,4 +336,136 @@ def _apply_edit(
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
         _log.warning("sources.write_unavailable")
-        return PlainTextResponse("Escrita indisponível por erro de configuração.", status_code=503)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+
+
+# ── #107: ciclo de vida (pausar/arquivar/restaurar/apagar), molde ADR-0018 ───────────────
+
+_DELETE_TEMPLATE = "sources/delete.html"
+
+
+def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]) -> Response:
+    """Executa uma ação de ciclo de vida (`action(db)`) no molde ADR-0018 comum a
+    pausar/retomar/arquivar/restaurar: CSRF (403) → `connect_rw` (503 sem a credencial) → a
+    escrita da store → redirect 303 (PRG). `StaleSourceError` (Cadastro saiu do estado da ação)
+    reabre a lista com aviso SOFT (409). Extraído para não repetir o molde por rota (e manter a
+    complexidade sob o teto C901): a única variação entre as quatro é o método da store chamado."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    try:
+        with client.connect_rw() as db:
+            try:
+                action(db)
+            except StaleSourceError:
+                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            return RedirectResponse("/sources", status_code=303)
+    except ConfigError:
+        _log.warning("sources.write_unavailable")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+
+
+@router.post("/{sid}/disable")
+def disable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Pausa a coleta de uma fonte (`enabled=false`, ADR-0025 §8 emenda #107) — sai do sweep sem
+    arquivar. Reversível por `enable`. Não destrutivo: um POST simples, sem dupla verificação."""
+    rid = RecordID("source", sid)
+    return _lifecycle_action(
+        request, csrf, lambda db: knowledge.set_source_enabled(db, id=rid, enabled=False)
+    )
+
+
+@router.post("/{sid}/enable")
+def enable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Retoma a coleta de uma fonte pausada (`enabled=true`) — volta ao sweep."""
+    rid = RecordID("source", sid)
+    return _lifecycle_action(
+        request, csrf, lambda db: knowledge.set_source_enabled(db, id=rid, enabled=True)
+    )
+
+
+@router.post("/{sid}/archive")
+def archive(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Arquiva uma fonte (soft delete, ADR-0025 §8): tira da operação PRESERVANDO o histórico.
+    Atômico na store (`enabled=false` + `archived_at`). Reversível por `restore`."""
+    rid = RecordID("source", sid)
+    return _lifecycle_action(request, csrf, lambda db: knowledge.archive_source(db, id=rid))
+
+
+@router.post("/{sid}/restore")
+def restore(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Restaura uma fonte arquivada (volta ao estado ATIVO, varrida pelo sweep de novo)."""
+    rid = RecordID("source", sid)
+    return _lifecycle_action(request, csrf, lambda db: knowledge.restore_source(db, id=rid))
+
+
+def _render_delete(
+    request: Request,
+    detail: SourceDetail,
+    items: int,
+    *,
+    notice: str | None = None,
+    status: int = 200,
+) -> Response:
+    """Renderiza a tela de confirmação de apagar (dupla verificação pura-HTML, #107) a partir do
+    Cadastro do BANCO — nunca do input (mesma não-reflexão do create/edit). `items` decide a tela:
+    zero → oferece apagar de vez; >0 → explica o histórico e orienta a arquivar (US#11), sem
+    convite a apagar. Também serve a recusa quando a corrida do item acontece (SourceHasHistory)."""
+    return templates.TemplateResponse(
+        request,
+        _DELETE_TEMPLATE,
+        {
+            "source": detail,
+            "items": items,
+            "csrf": csrf_token(request),
+            "notice": notice,
+        },
+        status_code=status,
+    )
+
+
+@router.get("/{sid}/delete")
+def delete_page(request: Request, sid: str) -> Response:
+    """Tela de confirmação de apagar (#107): a "dupla verificação" idiomática pura-HTML (mesmo
+    precedente do gate de reject). Zero itens → confirma; com itens → orienta a arquivar. Fonte
+    inexistente volta para a lista (não 500)."""
+    rid = RecordID("source", sid)
+    with client.connect() as ro:
+        detail = knowledge.get_source(ro, rid)
+        items = knowledge.source_item_count(ro, rid) if detail is not None else 0
+    if detail is None:
+        return RedirectResponse("/sources", status_code=303)
+    return _render_delete(request, detail, items)
+
+
+@router.post("/{sid}/delete")
+def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Apaga de vez uma fonte com ZERO itens (hard delete, ADR-0025 §8) — o único caminho de
+    delete da store. Molde ADR-0018: CSRF (403) → `connect_rw` (503) → `delete_source`. Sucesso =
+    redirect 303 à lista. Fonte que ganhou itens na corrida (`SourceHasHistoryError`) reabre a tela
+    de confirmação orientando a arquivar (409); fonte já sumida (`StaleSourceError`) volta à lista
+    com aviso de staleness (409). O detalhe do re-render vem da MESMA conexão de escrita."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    rid = RecordID("source", sid)
+    try:
+        with client.connect_rw() as db:
+            try:
+                knowledge.delete_source(db, id=rid)
+            except SourceHasHistoryError:
+                detail = knowledge.get_source(db, rid)
+                if detail is None:
+                    return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+                items = knowledge.source_item_count(db, rid)
+                return _render_delete(
+                    request,
+                    detail,
+                    items,
+                    notice="Essa fonte recebeu itens e não pode mais ser apagada — arquive.",
+                    status=409,
+                )
+            except StaleSourceError:
+                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            return RedirectResponse("/sources", status_code=303)
+    except ConfigError:
+        _log.warning("sources.write_unavailable")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)

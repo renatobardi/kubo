@@ -22,7 +22,7 @@ from typing import Any, cast
 import structlog
 from surrealdb import RecordID
 
-from kubo.errors import DuplicateSourceError, StaleSourceError
+from kubo.errors import DuplicateSourceError, SourceHasHistoryError, StaleSourceError
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger(__name__)
@@ -750,7 +750,12 @@ class SourceStat:
     """Uma fonte com os fatos da coleta (UI Fontes, fase 2): quantos itens acumulou e
     o carimbo da ÚLTIMA coleta. `last_collected_at` alimenta o badge de recência (E4:
     mostra o FATO 'última coleta há Nd', não julga 'saúde'); None quando a fonte ainda
-    não coletou nada."""
+    não coletou nada.
+
+    `enabled`/`archived_at` (#107) trazem o ESTADO do Cadastro para a listagem decidir o badge
+    (ativo/pausado/arquivado) e quais ações oferecer (pausar↔retomar, arquivar↔restaurar, apagar
+    só com zero itens) — a lista deixou de ser só-leitura. `items` (já exposto) é a guarda do
+    apagável na tela sem uma segunda leitura."""
 
     id: RecordID
     canonical: str
@@ -758,16 +763,19 @@ class SourceStat:
     title: str | None
     items: int
     last_collected_at: str | None
+    enabled: bool
+    archived_at: str | None
 
 
 def sources_with_stats(db: Any) -> list[SourceStat]:
-    """Lista as fontes com contagem de itens e o carimbo da última coleta (E4).
+    """Lista as fontes com contagem de itens, o carimbo da última coleta (E4) e o ESTADO (#107).
 
     `array::len(<-from_source<-item)` conta os itens da fonte; `time::max(...)` pega o
     `collected_at` mais recente (math::max explode em datetime — probe 0010). Fonte sem
-    item nenhum → agregação NONE → `last_collected_at` None (o badge trata o estado)."""
+    item nenhum → agregação NONE → `last_collected_at` None (o badge trata o estado).
+    `enabled`/`archived_at` derivam o badge de estado (ativo/pausado/arquivado) na tela."""
     rows = db.query(
-        "SELECT id, canonical, kind, title, "
+        "SELECT id, canonical, kind, title, enabled, archived_at, "
         "array::len(<-from_source<-item) AS items, "
         "time::max(<-from_source<-item.collected_at) AS last FROM source;"
     )
@@ -779,6 +787,8 @@ def sources_with_stats(db: Any) -> list[SourceStat]:
             title=r.get("title"),
             items=int(r["items"]),
             last_collected_at=str(r["last"]) if r.get("last") is not None else None,
+            enabled=bool(r["enabled"]),
+            archived_at=str(r["archived_at"]) if r.get("archived_at") is not None else None,
         )
         for r in rows
     ]
@@ -859,6 +869,91 @@ def edit_source(
     )
     if not updated:
         raise StaleSourceError(f"fonte arquivada durante a edição: {id}")
+
+
+def set_source_enabled(db: Any, *, id: RecordID, enabled: bool) -> None:
+    """Pausa (`enabled=false`) ou retoma (`enabled=true`) a coleta de um Cadastro (#107) — SEM
+    tocar `archived_at`. Pausar é um estado próprio (`enabled=false`, `archived_at=NONE`), distinto
+    de arquivar (ADR-0025 §8, emenda #107): o sweep varre só os ativos, então pausar já tira do
+    ar sem apagar. Restaurar de pausa é retomar; nenhum dado se perde.
+
+    Só age sobre Cadastro NÃO arquivado — `enabled` de um arquivado é sempre `false` e mexê-lo
+    quebraria o invariante `archived_at IS NOT NONE ⟹ enabled=false`. O `WHERE archived_at IS NONE`
+    é o cinto: 0 linhas (inexistente ou arquivado) → `StaleSourceError`, nunca um toggle silencioso
+    num arquivado."""
+    updated = db.query(
+        "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE;",
+        {"r": id, "enabled": enabled},
+    )
+    if not updated:
+        raise StaleSourceError(f"fonte não pausável/retomável (inexistente ou arquivada): {id}")
+
+
+def archive_source(db: Any, *, id: RecordID) -> None:
+    """Arquiva um Cadastro (soft delete, ADR-0025 §8): `enabled=false` E `archived_at=time::now()`
+    num ÚNICO statement — atômico, nunca deixa o estado divergente arquivado-mas-ativo. Preserva
+    todo o histórico (nenhuma aresta some); tira só da operação. Reversível por `restore_source`.
+
+    `WHERE archived_at IS NONE` torna a operação idempotente-segura e detecta staleness: já
+    arquivado ou inexistente → 0 linhas → `StaleSourceError` (o gate reapresenta, sem re-arquivar
+    por cima nem carimbar `archived_at` de novo)."""
+    updated = db.query(
+        "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
+        {"r": id},
+    )
+    if not updated:
+        raise StaleSourceError(f"fonte não arquivável (inexistente ou já arquivada): {id}")
+
+
+def restore_source(db: Any, *, id: RecordID) -> None:
+    """Restaura um Cadastro arquivado (ADR-0025 §8): `enabled=true` E `archived_at=NONE` num ÚNICO
+    statement — atômico, o oposto exato de `archive_source`. Volta ao estado ATIVO (varrido pelo
+    sweep de novo). Restaurar sempre reativa: não existe 'restaurar para pausado' (seria dois
+    passos — restaurar, depois pausar).
+
+    `WHERE archived_at IS NOT NONE` só casa Cadastro de fato arquivado: não-arquivado ou
+    inexistente → 0 linhas → `StaleSourceError`."""
+    updated = db.query(
+        "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE;",
+        {"r": id},
+    )
+    if not updated:
+        raise StaleSourceError(f"fonte não restaurável (inexistente ou não arquivada): {id}")
+
+
+def source_item_count(db: Any, id: RecordID) -> int:
+    """Conta os itens que apontam para um Cadastro via `<-from_source<-item` (0 se nenhum).
+
+    Porta única para 'quantos itens penduram nesta fonte' — a guarda do hard delete (#107) e a
+    tela de confirmação a usam para decidir apagável (zero) vs orientar a arquivar (>0)."""
+    rows = db.query("SELECT array::len(<-from_source<-item) AS items FROM $r;", {"r": id})
+    return int(rows[0]["items"]) if rows else 0
+
+
+def delete_source(db: Any, *, id: RecordID) -> None:
+    """Hard delete de um Cadastro — a PRIMEIRA e única exceção ao 'a store não deleta' (ADR-0025
+    §8), ESTREITA: só quando **zero itens** apontam via `from_source`. Cadastro com histórico
+    carrega proveniência ('o produto') e o caminho é ARQUIVAR — `SourceHasHistoryError`, sem apagar.
+
+    Três desfechos, sem lost-delete mudo: inexistente → `StaleSourceError`; com itens →
+    `SourceHasHistoryError`; zero itens → apaga. O `DELETE ... WHERE ... = 0` avalia a condição no
+    MESMO statement (fecha o TOCTOU do lado 'item chegou entre o pré-check e a escrita': a coleta
+    concorrente não vira um delete que destrói proveniência). Quando o DELETE condicional não casa
+    nada, um re-get único distingue as duas causas do vazio — o record ainda existe (ganhou item na
+    corrida) → `SourceHasHistoryError`; sumiu → `StaleSourceError` — para a mensagem certa no
+    caminho raro (achado do advisor)."""
+    if get_source(db, id) is None:
+        raise StaleSourceError(f"fonte inexistente: {id}")
+    if source_item_count(db, id) > 0:
+        raise SourceHasHistoryError(f"fonte com histórico não é apagável (arquive): {id}")
+    deleted = db.query(
+        "DELETE $r WHERE array::len(<-from_source<-item) = 0 RETURN BEFORE;",
+        {"r": id},
+    )
+    if not deleted:
+        if get_source(db, id) is not None:
+            raise SourceHasHistoryError(f"fonte recebeu itens durante o apagamento (arquive): {id}")
+        raise StaleSourceError(f"fonte inexistente: {id}")
 
 
 def item_index(db: Any) -> dict[str, RecordID]:
