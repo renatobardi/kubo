@@ -26,14 +26,22 @@ _log = structlog.get_logger(__name__)
 _LIST_TEMPLATE = "sources/list.html"
 
 
+_FEED_SCHEMES = ("http", "https")
+
+
+def _scheme(url: str) -> str:
+    """Esquema de uma URL (parte antes de `://`), em minúsculas; `""` se não houver `://`."""
+    return url.split("://", 1)[0].lower() if "://" in url else ""
+
+
 def _github_canonical(raw: str) -> str:
     """Reduz uma entrada de repo (`owner/name`, `github.com/owner/name` ou URL completa) à
     forma de-facto que o worker `github_releases` já grava: `https://github.com/{owner}/{name}`
     (sem barra final nem `.git`). Sem essa normalização, `/o/r` e `/o/r/` virariam dois
     Cadastros que o índice UNIQUE(kind, canonical) não pega. Sem exatamente owner+name → erro."""
     s = raw.removesuffix("/")
-    for prefix in ("https://", "http://"):
-        s = s.removeprefix(prefix)
+    if "://" in s:
+        s = s.split("://", 1)[1]  # descarta o esquema (qualquer que seja), depois o host github
     s = s.removeprefix("www.").removeprefix("github.com/").strip("/").removesuffix(".git")
     parts = [p for p in s.split("/") if p]
     if len(parts) != 2:
@@ -67,10 +75,10 @@ class NewSource(BaseModel):
         raw = self.canonical.strip()
         if self.kind == "github-repo":
             self.canonical = _github_canonical(raw)
-        elif raw.startswith(("http://", "https://")):
+        elif _scheme(raw) in _FEED_SCHEMES:
             self.canonical = raw
         else:
-            raise ValueError("URL de feed inválida: precisa começar com http:// ou https://")
+            raise ValueError("URL de feed inválida: precisa usar esquema http ou https")
         return self
 
 
