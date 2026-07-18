@@ -464,10 +464,9 @@ def test_edit_source_on_archived_is_stale(db: Any) -> None:
 
 def test_edit_source_absent_is_stale(db: Any) -> None:
     """Editar um Cadastro que sumiu (hard-delete, #107) → StaleSourceError, nunca 500."""
+    ghost = knowledge._rid("source", "ghost")
     with pytest.raises(StaleSourceError):
-        knowledge.edit_source(
-            db, id=knowledge._rid("source", "ghost"), title="x", tags=[], canonical="https://x"
-        )
+        knowledge.edit_source(db, id=ghost, title="x", tags=[], canonical="https://x")
 
 
 def test_upsert_source_preserves_owner_edited_title(db: Any) -> None:

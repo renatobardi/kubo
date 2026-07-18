@@ -223,6 +223,30 @@ def test_sources_orders_collected_before_never(
     assert html.index("fresh://src") < html.index("never://src")
 
 
+def test_normalize_canonical_still_validates_rss() -> None:
+    """rss segue validado estruturalmente: sem esquema http(s) → ValueError (regressão-guard)."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    with pytest.raises(ValueError, match="feed"):
+        _normalize_canonical("rss", "sem-esquema")
+
+
+def test_normalize_canonical_github_normalizes() -> None:
+    """github-repo continua indo pela forma de-facto do worker."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    assert _normalize_canonical("github-repo", "owner/repo/") == "https://github.com/owner/repo"
+
+
+def test_normalize_canonical_passes_through_unknown_kind() -> None:
+    """kind SEM normalizador dedicado (ex.: `youtube` legado) NÃO é tratado como rss: a canonical
+    passa crua (só trim), senão editar só o título de uma fonte legada falharia sob o regime errado
+    (achado do CodeRabbit — a lista mostra `youtube` e a edição não restringe o kind)."""
+    from kubo.api.routes.sources import _normalize_canonical
+
+    assert _normalize_canonical("youtube", "  youtube.com/@canal  ") == "youtube.com/@canal"
+
+
 def _detail(**kw: object) -> SourceDetail:
     base: dict[str, object] = {
         "id": RecordID("source", "s1"),

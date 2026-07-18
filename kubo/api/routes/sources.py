@@ -67,12 +67,21 @@ def _github_canonical(raw: str) -> str:
 def _normalize_canonical(kind: str, raw: str) -> str:
     """Normaliza a canonical conforme o kind — a MESMA regra no cadastro (#105) e na edição
     (#106), extraída para não divergir: divergência fabricaria quase-duplicatas que o índice
-    UNIQUE(kind, canonical) não pega (`/o/r/` vs forma canônica). github-repo → forma de-facto do
-    worker (`_github_canonical`); rss → trim + validação estrutural (urlparse) exigindo esquema
-    http(s) E host. Levanta ValueError na borda; a query no feed é permitida."""
+    UNIQUE(kind, canonical) não pega (`/o/r/` vs forma canônica).
+
+    `github-repo` → forma de-facto do worker (`_github_canonical`); `rss` → trim + validação
+    estrutural (urlparse) exigindo esquema http(s) E host (query no feed é permitida). Qualquer
+    OUTRO kind (ex.: `youtube` legado, que a lista mostra e a edição não restringe) NÃO tem
+    normalizador dedicado: a canonical passa CRUA (só trim), sem impor o regime de feed — senão
+    editar só o título de uma fonte legada com canonical fora das regras de RSS falharia com 400
+    (achado do CodeRabbit). O create nunca chega aqui com kind fora de rss/github-repo (Literal
+    do NewSource); o passe-cru só é alcançável pela edição de uma fonte legada. Levanta ValueError
+    só no regime rss."""
     raw = raw.strip()
     if kind == "github-repo":
         return _github_canonical(raw)
+    if kind != "rss":
+        return raw
     parsed = urlparse(raw)
     if parsed.scheme not in _FEED_SCHEMES:
         raise ValueError("URL de feed inválida: precisa usar esquema http ou https")

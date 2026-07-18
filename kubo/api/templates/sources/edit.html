@@ -30,6 +30,7 @@
       <label for="edit-title" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Título <span class="font-normal">(opcional)</span></label>
       <input id="edit-title" name="title" value="{{ source.title or '' }}" placeholder="Como aparece na tela"
              class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      <p class="mt-1 text-2xs text-muted-foreground">Em branco, a próxima coleta usa o título do feed.</p>
     </div>
     <div>
       <label for="edit-tags" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tags <span class="font-normal">(separadas por vírgula)</span></label>
@@ -37,7 +38,7 @@
              class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
     </div>
     <div class="flex items-center gap-3 pt-1">
-      <button class="h-9 flex-1 rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Salvar</button>
+      <button type="submit" class="h-9 flex-1 rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Salvar</button>
       <a href="/sources" class="flex h-9 items-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Cancelar</a>
     </div>
   </form>
