@@ -27,6 +27,18 @@ class ConfigError(KuboError):
     """Configuração ausente ou inconsistente (ex.: credencial obrigatória faltando)."""
 
 
+class DuplicateSourceError(KuboError):
+    """Já existe um Cadastro de fonte com este (kind, canonical) — a store recusa a duplicata.
+
+    Distinta de `StoreError` (que é 'statement revertido numa transação'): esta é uma
+    decisão de negócio detectada por lookup ANTES da escrita — `create_source` recusa
+    criar uma fonte que já existe (ADR-0025 §unicidade composta). O índice
+    `UNIQUE(kind, canonical)` do banco segue como garantia dura; esta exceção dá à UI o
+    sinal limpo para o aviso soft, sem parsear mensagem de erro do SurrealDB (frágil ao
+    par SDK/server pinado). A mensagem carrega só `kind`/`canonical` (entrada do dono,
+    não conteúdo coletado hostil)."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 

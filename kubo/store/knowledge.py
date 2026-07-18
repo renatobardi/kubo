@@ -22,6 +22,7 @@ from typing import Any, cast
 import structlog
 from surrealdb import RecordID
 
+from kubo.errors import DuplicateSourceError
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger(__name__)
@@ -88,9 +89,53 @@ def _require_dim_matches(ch: Chunk) -> None:
         )
 
 
+def _find_source_id(db: Any, *, kind: str, canonical: str) -> RecordID | None:
+    """Resolve o record de uma source pela chave natural (kind, canonical), ou None.
+
+    Lookup por CAMPO (não por id derivado): acha o record qualquer que seja o esquema do
+    id — sha256 legado (pré-ADR-0025) ou surrogate cadastrado pela UI. É a peça que faz
+    os dois escritores (`create_source` da UI e `upsert_source` do coletor) convergirem
+    na mesma (kind, canonical), sem um segundo record que o índice UNIQUE barraria."""
+    rows = db.query(
+        "SELECT id FROM source WHERE kind = $kind AND canonical = $canonical;",
+        {"kind": kind, "canonical": canonical},
+    )
+    return rows[0]["id"] if rows else None
+
+
+def create_source(db: Any, *, kind: str, canonical: str, title: str | None = None) -> RecordID:
+    """Cadastra uma fonte NOVA (id surrogate, desacoplado da canonical — ADR-0025) e a
+    recusa se já existir (kind, canonical). Escrita da UI (#105), distinta de
+    `upsert_source` (chave natural, idempotente): aqui duplicata é ERRO, não no-op.
+
+    Duplicata é detectada por lookup ANTES da escrita → `DuplicateSourceError` (sinal limpo
+    para o aviso soft da UI, sem parsear mensagem de erro). O `CREATE` roda pelo wrapper
+    transacional VERIFICADO: uma violação residual do índice UNIQUE(kind, canonical) (corrida
+    TOCTOU, quase impossível single-user) falha ALTO como `StoreError`, nunca perde a escrita
+    em silêncio. Nasce ativo (`enabled=true`, `tags=[]`); `created_at` vem do DEFAULT READONLY."""
+    if _find_source_id(db, kind=kind, canonical=canonical) is not None:
+        raise DuplicateSourceError(f"fonte já cadastrada: kind={kind} canonical={canonical}")
+    rid = _fresh("source")
+    run_transaction(
+        db,
+        [
+            "CREATE $r SET kind = $kind, canonical = $canonical, title = $title, "
+            "enabled = true, tags = []"
+        ],
+        {"r": rid, "kind": kind, "canonical": canonical, "title": title},
+    )
+    return rid
+
+
 def upsert_source(db: Any, *, kind: str, canonical: str, title: str | None = None) -> RecordID:
-    """Cria/atualiza uma source pela chave natural (identificador canônico). Idempotente."""
-    rid = _rid("source", canonical)
+    """Cria/atualiza uma source pela chave natural (kind, canonical). Idempotente.
+
+    Lookup-first (ADR-0025, nota da migration 0009): resolve o record existente por CAMPO e
+    reusa seu id — sha256 legado ou surrogate cadastrado pela UI — em vez de derivar o id da
+    canonical. Ausente → cunha surrogate (`_fresh`). Isto faz o coletor convergir com o
+    `create_source` da UI na mesma (kind, canonical): sem lookup-first, um repo cadastrado pela
+    UI e depois coletado geraria um segundo record que o índice UNIQUE barraria, quebrando a run."""
+    rid = _find_source_id(db, kind=kind, canonical=canonical) or _fresh("source")
     db.query(
         "UPSERT $r SET kind = $kind, canonical = $canonical, title = $title;",
         {"r": rid, "kind": kind, "canonical": canonical, "title": title},

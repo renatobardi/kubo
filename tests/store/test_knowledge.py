@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
-from kubo.errors import StoreError
+from kubo.errors import DuplicateSourceError, StoreError
 from kubo.store import client, knowledge, migrations
 from kubo.store.knowledge import Chunk
 
@@ -283,6 +283,69 @@ def test_list_sources_returns_all_with_their_fields(db: Any) -> None:
     assert by_canonical["https://a/feed"].kind == "rss"
     assert by_canonical["https://a/feed"].title == "A"
     assert by_canonical["https://b"].title is None
+
+
+def test_create_source_mints_surrogate_id_decoupled_from_canonical(db: Any) -> None:
+    """create_source cunha um id SURROGATE (não derivado da canonical) e o Cadastro nasce
+    ativo: enabled=true, tags=[], sem archived_at. É a escrita da UI (ADR-0025) — cadastro
+    novo com id desacoplado da URL, distinto de upsert_source (chave natural sha256)."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+
+    assert rid != knowledge._rid("source", "https://x/feed")  # id NÃO deriva da canonical
+    row = db.query("SELECT canonical, title, enabled, archived_at, tags FROM $s;", {"s": rid})[0]
+    assert row["enabled"] is True
+    assert row["tags"] == []
+    assert row.get("archived_at") is None
+    assert row["title"] == "Feed X"
+    assert _count(db, "source") == 1
+
+
+def test_create_source_rejects_duplicate_kind_canonical(db: Any) -> None:
+    """Duplicata (mesmo kind + mesma canonical) é ERRO da store, não no-op: a segunda
+    chamada levanta DuplicateSourceError e nenhum segundo record nasce (constraint da
+    store, não checagem na view — ticket #105)."""
+    knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+
+    with pytest.raises(DuplicateSourceError):
+        knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+
+    assert _count(db, "source") == 1
+
+
+def test_create_source_allows_same_canonical_across_kinds(db: Any) -> None:
+    """A unicidade é composta (kind, canonical): a MESMA canonical em kinds diferentes são
+    dois Cadastros distintos — exercita o índice UNIQUE(kind, canonical) da 0009, que a
+    global UNIQUE(canonical) anterior barraria."""
+    a = knowledge.create_source(db, kind="rss", canonical="https://x")
+    b = knowledge.create_source(db, kind="github-repo", canonical="https://x")
+
+    assert a != b
+    assert _count(db, "source") == 2
+
+
+def test_upsert_source_reuses_record_created_by_ui(db: Any) -> None:
+    """Lookup-first (a mina que #105 desarma): um Cadastro criado pela UI (id surrogate) é
+    REUSADO pelo coletor. upsert_source resolve à mesma (kind, canonical) sem cunhar um
+    segundo record que o índice UNIQUE(kind, canonical) barraria — quebrando a coleta."""
+    ui_id = knowledge.create_source(db, kind="github-repo", canonical="https://github.com/o/r")
+
+    collected = knowledge.upsert_source(db, kind="github-repo", canonical="https://github.com/o/r")
+
+    assert collected == ui_id
+    assert _count(db, "source") == 1
+
+
+def test_upsert_source_reuses_legacy_sha256_record(db: Any) -> None:
+    """Lookup-first preserva ids legados: um record com id sha256(canonical) (esquema
+    anterior à 0025) é resolvido pela CHAVE NATURAL, não substituído por um id novo — ids
+    existentes e suas arestas ficam intactos (ADR-0025)."""
+    legacy = knowledge._rid("source", "https://legacy/feed")
+    db.query("CREATE $r SET kind = 'rss', canonical = 'https://legacy/feed';", {"r": legacy})
+
+    resolved = knowledge.upsert_source(db, kind="rss", canonical="https://legacy/feed")
+
+    assert resolved == legacy
+    assert _count(db, "source") == 1
 
 
 def _seed_distilled(db: Any, n: int) -> list[RecordID]:
