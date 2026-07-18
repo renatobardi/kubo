@@ -7,8 +7,10 @@ timestamps READONLY. São o guarda de regressão do schema, independente da stor
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -74,6 +76,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0006_gate_decision.surql",
         "0007_deliverable_pr.surql",
         "0008_deliverable_merge_sha.surql",
+        "0009_source_cadastro.surql",
     }
 
 
@@ -136,3 +139,55 @@ def test_created_at_is_readonly_across_upsert(db: Any) -> None:
     db.query("UPSERT source:s SET kind='rss', canonical='https://x/feed', title='changed';")
     second = db.query("SELECT created_at FROM source:s;")[0]["created_at"]
     assert first == second
+
+
+# ── 0009: source vira Cadastro (ADR-0025, ticket #104) ──────────────────────
+
+
+def test_source_has_cadastro_fields(db: Any) -> None:
+    """0009: source ganha os campos de estado do Cadastro (enabled/archived_at/tags)."""
+    fields = db.query("INFO FOR TABLE source;")["fields"]
+    assert "enabled" in fields
+    assert "archived_at" in fields
+    assert "tags" in fields
+
+
+def test_source_unique_is_composite_kind_canonical(db: Any) -> None:
+    """0009: unicidade passa de UNIQUE(canonical) para UNIQUE(kind, canonical)."""
+    db.query("CREATE source:a SET kind='rss', canonical='https://x/feed';")
+    # mesma canonical, kind diferente: agora é permitido (não era, sob o índice antigo).
+    db.query("CREATE source:b SET kind='github-repo', canonical='https://x/feed';")
+    # mesma canonical E mesmo kind: rejeitado pelo índice composto.
+    with pytest.raises(Exception):  # noqa: B017, PT011 (índice UNIQUE do SurrealDB)
+        db.query("CREATE source:c SET kind='rss', canonical='https://x/feed';")
+
+
+def test_new_source_defaults_active_and_untagged(db: Any) -> None:
+    """0009: Cadastro criado sem estado nasce enabled=true, tags=[], archived_at=NONE."""
+    db.query("CREATE source:s SET kind='rss', canonical='https://x/feed';")
+    got = db.query("SELECT enabled, tags, archived_at FROM source:s;")[0]
+    assert got["enabled"] is True
+    assert got["tags"] == []
+    assert got.get("archived_at") is None
+
+
+def test_legacy_source_backfilled_active(tmp_path: Path) -> None:
+    """0009: registro criado ANTES da 0009 é backfillado para enabled=true, tags=[]."""
+    # Aplica só até 0008 num dir temporário, insere um source "legado" (sem os campos
+    # novos), e só então aplica a 0009 — é o cenário real dos dados de produção.
+    pre = tmp_path / "pre"
+    pre.mkdir()
+    for f in sorted(migrations.MIGRATIONS_DIR.glob("*.surql")):
+        if f.name < "0009":
+            shutil.copy(f, pre / f.name)
+    cfg = replace(client.config(), database="test_backfill_0009")
+    with client.connect(cfg) as conn:
+        conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
+        conn.use(cfg.namespace, cfg.database)
+        migrations.apply_migrations(conn, pre)
+        conn.query("CREATE source:legacy SET kind='rss', canonical='https://x/legacy';")
+        migrations.apply_migrations(conn)  # dir real: aplica a 0009 pendente
+        got = conn.query("SELECT enabled, tags FROM source:legacy;")[0]
+        conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
+    assert got["enabled"] is True
+    assert got["tags"] == []
