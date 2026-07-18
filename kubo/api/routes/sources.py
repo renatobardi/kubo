@@ -10,6 +10,7 @@ na borda, fail-fast 503 sem a credencial. Duplicata (kind+canonical) é recusada
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 import structlog
 from fastapi import APIRouter, Form, Request
@@ -29,9 +30,20 @@ _LIST_TEMPLATE = "sources/list.html"
 _FEED_SCHEMES = ("http", "https")
 
 
-def _scheme(url: str) -> str:
-    """Esquema de uma URL (parte antes de `://`), em minúsculas; `""` se não houver `://`."""
-    return url.split("://", 1)[0].lower() if "://" in url else ""
+def _github_path(raw: str) -> str:
+    """Extrai o path `owner/name` de uma entrada de repo, validando estruturalmente com
+    `urlparse` (não por matching de string): entrada com esquema precisa apontar para o host
+    `github.com` e não pode ter query nem fragment; a forma curta (`owner/name` ou
+    `github.com/owner/name`) é aceita direto. Rejeita host não-GitHub, query/fragment e
+    qualquer coisa fora de `owner/name` — senão `https://evil.com/o/r` viraria um repo 'válido'."""
+    if "://" in raw:
+        parsed = urlparse(raw)
+        if parsed.query or parsed.fragment:
+            raise ValueError("repositório do GitHub inválido: sem query nem fragment")
+        if (parsed.hostname or "").removeprefix("www.").lower() != "github.com":
+            raise ValueError("repositório do GitHub inválido: o host precisa ser github.com")
+        return parsed.path
+    return raw.removeprefix("www.").removeprefix("github.com")
 
 
 def _github_canonical(raw: str) -> str:
@@ -39,11 +51,8 @@ def _github_canonical(raw: str) -> str:
     forma de-facto que o worker `github_releases` já grava: `https://github.com/{owner}/{name}`
     (sem barra final nem `.git`). Sem essa normalização, `/o/r` e `/o/r/` virariam dois
     Cadastros que o índice UNIQUE(kind, canonical) não pega. Sem exatamente owner+name → erro."""
-    s = raw.removesuffix("/")
-    if "://" in s:
-        s = s.split("://", 1)[1]  # descarta o esquema (qualquer que seja), depois o host github
-    s = s.removeprefix("www.").removeprefix("github.com/").strip("/").removesuffix(".git")
-    parts = [p for p in s.split("/") if p]
+    path = _github_path(raw.strip()).strip("/").removesuffix(".git")
+    parts = [p for p in path.split("/") if p]
     if len(parts) != 2:
         raise ValueError("repositório do GitHub inválido: use owner/name")
     return f"https://github.com/{parts[0]}/{parts[1]}"
@@ -71,14 +80,19 @@ class NewSource(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_canonical(self) -> NewSource:
-        """Normaliza a canonical conforme o kind (github-repo → forma do worker; rss → trim)."""
+        """Normaliza a canonical conforme o kind: github-repo → forma do worker
+        (`_github_canonical`); rss → só trim, mas validado estruturalmente (`urlparse`): precisa de
+        esquema http(s) E host (um `https://` sem host não é feed). Query no feed é permitida."""
         raw = self.canonical.strip()
         if self.kind == "github-repo":
             self.canonical = _github_canonical(raw)
-        elif _scheme(raw) in _FEED_SCHEMES:
-            self.canonical = raw
-        else:
+            return self
+        parsed = urlparse(raw)
+        if parsed.scheme not in _FEED_SCHEMES:
             raise ValueError("URL de feed inválida: precisa usar esquema http ou https")
+        if not parsed.netloc:
+            raise ValueError("URL de feed inválida: falta o host")
+        self.canonical = raw
         return self
 
 

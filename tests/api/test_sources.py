@@ -128,6 +128,44 @@ def test_create_rejects_rss_without_scheme(authed_client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_create_rejects_rss_without_host(authed_client: TestClient) -> None:
+    """RSS com esquema mas SEM host (`https://`) é barrado (validação estrutural) → 400."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources",
+        data={"kind": "rss", "canonical": "https://", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_rejects_github_url_with_query(authed_client: TestClient) -> None:
+    """github-repo com query/fragment é barrado — `?x=1` não pode virar parte do repo (400)."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources",
+        data={
+            "kind": "github-repo",
+            "canonical": "https://github.com/owner/repo?x=1",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_rejects_non_github_host(authed_client: TestClient) -> None:
+    """github-repo com host que não é github.com é barrado — sem reescrever `evil.com/o/r`
+    num repo 'válido' (validação estrutural do host via urlparse) → 400."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources",
+        data={"kind": "github-repo", "canonical": "https://evil.com/owner/repo", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
 def test_create_does_not_reflect_submitted_input(authed_client: TestClient) -> None:
     """A submissão inválida NÃO é ecoada de volta na tela (nem o campo, nem o notice): o aviso
     é texto estático/`format_validation_error` (só loc+msg, nunca `input`) e o form não

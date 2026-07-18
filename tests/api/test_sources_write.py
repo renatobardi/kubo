@@ -109,6 +109,23 @@ def test_create_github_repo_normalizes_canonical(app_db: Any) -> None:
     assert rows[0]["canonical"] == "https://github.com/owner/repo"
 
 
+def test_create_github_repo_accepts_short_form(app_db: Any) -> None:
+    """A forma curta `owner/name` (que o placeholder do form anuncia) é aceita e normalizada
+    à mesma canonical do worker — prova que o parsing estrutural preserva o atalho."""
+    tc, csrf = _login_csrf(app_db)
+
+    resp = tc.post(
+        "/sources",
+        data={"kind": "github-repo", "canonical": "owner/repo", "csrf": csrf},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    rows = _sources()
+    assert len(rows) == 1
+    assert rows[0]["canonical"] == "https://github.com/owner/repo"
+
+
 def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:
     """Duplicata (mesmo kind+canonical) reabre a tela com aviso SOFT (409) e NÃO grava um
     segundo record — a unicidade é garantida pela store, não pela view."""
