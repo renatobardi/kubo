@@ -47,7 +47,8 @@ Rode `gh issue view <number> --comments`.
 ## Operações de wayfinding
 
 Usadas por `/wayfinder`. O **mapa** é uma issue única com issues **filhas** como tickets.
-Regidas pelo regime andaime acima (ADR-0024).
+A cláusula de handoff e os demais detalhes abaixo são **práticas da skill `/wayfinder`**, não
+um regime de governança do repo (ver Governança / ADR-0026).
 
 - **Mapa**: issue com label `wayfinder:map`, contendo o corpo Notes / Decisions-so-far / Fog.
   `gh issue create --label wayfinder:map`.

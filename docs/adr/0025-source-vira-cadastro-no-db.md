@@ -31,13 +31,15 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
 1. **Cadastro no DB com id próprio (surrogate)**, desacoplado da URL — editar a URL de origem
    não perde o histórico coletado.
 2. **`canonical` único por `kind`** — sem fonte repetida. A unicidade é constraint da store
-   (invariante 2), nunca "checagem soft na view".
+   (invariante 2), nunca "checagem soft na view". A migração **substitui** a `UNIQUE(canonical)`
+   global atual por `UNIQUE(kind, canonical)`; como a composta é estritamente **menos**
+   restritiva, nenhum registro existente conflita (não há resolução de conflito a fazer).
 3. **O Cadastro dirige a coleta.** A **lista de fontes** sai do `schedules.yaml`; os jobs que
    não são fonte (distiller, digest, pipeline) permanecem no `schedules.yaml` enxuto — sempre
    foram operação (quando roda), não artefato (o quê existe).
-4. **Sweep fixo:** um job de coleta em horário fixo varre os Cadastros `enabled`. O Cadastro
-   carrega só `enabled`; **sem cron por-cadastro**. Preserva "um run = um feed" (ADR-0009): o
-   sweep é um loop que dispara um run por Cadastro.
+4. **Sweep fixo:** um job de coleta em horário fixo varre os Cadastros **ativos** (`enabled=true`
+   e não arquivados). O Cadastro carrega só `enabled`; **sem cron por-cadastro**. Preserva "um
+   run = um feed" (ADR-0009): o sweep é um loop que dispara um run por Cadastro.
 5. **Descoberta automática do GitHub: aposentada.** Repo vira **Cadastro comum** (`kind`
    `github-repo`), cadastrado à mão. O pipeline 07:00 deixa de descobrir e passa a só coletar
    releases dos Cadastros existentes. A lógica de `viewer.watching` renasce **depois**, num
@@ -46,10 +48,13 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
    pelo `kind`.
 7. **Despacho por `kind` = mapa fixo em código** (`rss`→`feed`, `github-repo`→coletor de
    releases). Nunca nome-de-worker como campo livre do Cadastro.
-8. **Deletar = soft archive** (`enabled=false`/`archived_at`), nunca cascade — proveniência é
-   "o produto". Hard delete só quando **zero itens** apontam para o Cadastro (checagem na store):
-   a store hoje não deleta em lugar nenhum; este hard delete estreito, condicionado a zero itens,
-   é a primeira e única exceção. Dupla verificação na UI para a ação destrutiva.
+8. **Deletar = soft archive** (`enabled=false` **e** `archived_at`), nunca cascade — proveniência
+   é "o produto". Arquivar e restaurar atualizam os dois campos **atomicamente**: estado
+   divergente (`enabled=true` com `archived_at` preenchido, ou `enabled=false` sem `archived_at`)
+   é inválido — a store garante. Hard delete só quando **zero itens** apontam para o Cadastro
+   (checagem na store): a store hoje não deleta em lugar nenhum; este hard delete estreito,
+   condicionado a zero itens, é a primeira e única exceção. Dupla verificação na UI para a ação
+   destrutiva.
 9. **Uma tabela só** — `source` *vira* Cadastro; sem coexistência/sincronização.
 10. **Escrita pela UI** segue o molde ADR-0018: credencial `kubo_rw` EDITOR por-request + CSRF
     + guarda 409 de staleness. Todo acesso via `kubo/store/`.
@@ -80,7 +85,10 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
   pedaço mais delicado do build. **Nota de escopo:** os ids `sha256(canonical)` existentes são
   opacos e podem ser preservados; "surrogate" exige apenas que ids *novos* não derivem da URL e
   que nada trate o id como hash dela — reescrever ids e re-apontar arestas `from_source` **não**
-  é exigência deste ADR.
+  é exigência deste ADR. **Ordem de rollout** (não interromper a coleta): (1) criar e validar o
+  job de sweep varrendo os Cadastros ativos; (2) migrar as 6 entradas de feed + os `source` do
+  GitHub já coletados para Cadastros; (3) só então remover os feeds do `schedules.yaml` e validar
+  que o scheduler não depende mais do formato antigo — os jobs operacionais não-fonte permanecem.
 - **Neutro:** a tela Fontes deixa de ser read-only; primeira superfície de escrita da UI além
   dos gates de fluxo.
 
