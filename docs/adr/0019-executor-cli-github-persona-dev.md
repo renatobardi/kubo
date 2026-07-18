@@ -52,7 +52,8 @@ turno do agente (§X). Nenhum bypass, nenhuma flag.
 - **D37** — repo **sandbox fixo privado**, criado manualmente pelo dono; **PAT
   fine-grained restrito a esse único repo** (`contents:write`, `pull_requests:write`). O
   side-effect "criar repo na instanciação" (spec §3.1) fica para quando um flow real
-  precisar.
+  precisar. **Renunciado (ADR-0023, 2026-07-17):** 4 fases depois, nenhum flow precisou —
+  o adiamento virou renúncia formal do mecanismo, não só do exemplo.
 - **D38** — aprovar no gate = decisão no grafo + flow fechado. **O Kubo não faz merge**
   (anti-bypass por construção, padrão ADR-0018 §V-bis); o merge é clique do dono no
   GitHub. Rejeitar = fechar o PR via API com o `reason` em comentário.

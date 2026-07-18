@@ -30,3 +30,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0020](0020-metodologia-dev-aidlc.md) | Metodologia do flow dev da fase 4: AI-DLC no lugar do BMAD | aceito |
 | [0021](0021-rito-promocao.md) | Rito de promoção: worker → grafo (deploy-gap, import-oráculo, gate sequencial) | aceito |
 | [0022](0022-pipeline-agendado.md) | Pipeline agendado: watch list, flow por cron, agendamento de flow | aceito |
+| [0023](0023-renuncia-scribe-harvest-side-effect-repo.md) | Renúncia: port de `scribe`/`harvest` e side-effect "criar repo na instanciação" | aceito |

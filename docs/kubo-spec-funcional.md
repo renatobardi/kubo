@@ -17,7 +17,7 @@ O Kubo **não é um fork**. Ele rouba especificações funcionais e padrões de 
 |---|---|---|
 | **Valmis** | Modelo de agents + workflows; catálogo "1 YAML por integração"; memória em 4 categorias; design system completo (ver `kubo-design-system.md`) | Proxy de credenciais (threat model corporativo multi-tenant); pgvector; monorepo TS/Svelte; workflow canvas builder |
 | **Multica** | Personas; fluxo BMAD; projetos/issues/tasks/kanban como modelo de trabalho | Coreografia fixa de 13 agentes; kanban como produto/UI de primeira classe |
-| **RARA/Kura** | Workers de produção (scribe, feed, harvest) como templates; orquestração provider-agnostic (LiteLLM); tese do grafo de conhecimento (document + vector + graph) | CQRS poliglota; dois bancos; três linguagens |
+| **RARA/Kura** | Worker de produção como template (`feed`; port de `scribe`/`harvest` renunciado, ADR-0023); orquestração provider-agnostic (LiteLLM); tese do grafo de conhecimento (document + vector + graph) | CQRS poliglota; dois bancos; três linguagens |
 
 **Princípio-guia:** um runtime, um banco, três catálogos, quatro capacidades. Toda decisão de design é julgada contra a pergunta: *isso aumenta ou reduz a carga cognitiva de um mantenedor solo?*
 
@@ -184,7 +184,7 @@ Um **flow template** declara:
 **Regras invioláveis:**
 - Templates são **dados, não código**. Sem condicionais, sem herança, sem hooks programáveis. (Escopo negativo §1.2.)
 - **Template versionado, instância snapshot.** Instanciar = copiar config congelada pro flow. Editar template não afeta flows em andamento.
-- Instanciar template = materializar registros no grafo (flow + board_states + personas + gates) + side effects declarados (ex.: criar repo GitHub).
+- Instanciar template = materializar registros no grafo (flow + board_states + personas + gates). **Renunciado (ADR-0023):** o mecanismo de "side effects declarados" na instanciação (ex.: criar repo GitHub automaticamente) foi cogitado, adiado no ADR-0019 e nunca precisou em 4 fases de uso real — o repo do worker nasce do próprio fluxo dev via PR, não de um efeito colateral automático da instanciação. Não é só a promessa do exemplo que cai: é o mecanismo — reabrir exigiria ADR próprio, não uma linha de código.
 
 ### 3.2 Persona
 
@@ -227,10 +227,7 @@ class Worker(Protocol):
 
 O contrato é o que torna código gerado por agente **deployável por construção**: o runtime não confia no agente — valida o contrato. Todo worker vive em repo Git (ou diretório do monorepo de pipelines), nunca solto no banco.
 
-Os workers do RARA são portados como os **três primeiros templates**, validando o contrato com código de produção real:
-- `scribe` — transcrição (whisper.cpp large-v3, beam 5, Silero VAD, PT-BR)
-- `feed` — coleta RSS/HTML/HN
-- `harvest` — coleta de páginas/artigos
+Dos workers do RARA, `feed` — coleta RSS/HTML/HN — foi portado e valida o contrato com código de produção real. `scribe` (transcrição whisper.cpp large-v3, beam 5, Silero VAD, PT-BR) e `harvest` (coleta de páginas/artigos) tiveram o port **renunciado (ADR-0023)**: 4 fases de uso real sem demanda — o caso de uso do dono até agora é RSS/GitHub, não transcrição de áudio nem scraping de artigos avulsos. Reabertura é sessão nova com motivo novo (demanda real de transcrição, ou fonte que RSS/GitHub não cobre), não dívida pendurada.
 
 ### 3.4 O rito de promoção
 
@@ -274,7 +271,7 @@ Query sobre o grafo → artefato → canal.
 ### Fase 1 — Substrato (o produto mínimo que já vence)
 - Runtime Python + SurrealDB + LiteLLM; Docker Compose na VPC.
 - Schemas de conhecimento e trabalho; contrato de worker; catálogos de integrações e personas.
-- Porte de `scribe`, `feed`, `harvest` como templates de worker.
+- Porte de `feed` como template de worker (entregue). Porte de `scribe`/`harvest` **renunciado (ADR-0023)** — ver §3.3.
 - **Deliverable de prova (90 dias):** conteúdo PT-BR (YouTube/RSS) entra, é destilado, vira grafo consultável com citação de origem.
 
 ### Fase 2 — Distribuição
@@ -314,7 +311,7 @@ Query sobre o grafo → artefato → canal.
 - `kubo-design-system.md` — UI/UX integral extraída do Valmis (tokens OKLCH, Inter + Noto Serif, componentes, app shell).
 - Valmis (`valmishq/valmis`) — especificação funcional de agents/integrações/memória.
 - Multica (privado) — personas, BMAD, modelo de projetos.
-- RARA (`rara-scribe`, `rara-feed`, `rara-harvest`, `rara-mind`) — workers a portar e camada LiteLLM de referência.
+- RARA (`rara-scribe`, `rara-feed`, `rara-harvest`, `rara-mind`) — camada LiteLLM de referência; `rara-feed` foi portado, `rara-scribe`/`rara-harvest` têm port renunciado (ADR-0023) mas o código legado segue aqui como ponto de partida se reabrir.
 
 ---
 
