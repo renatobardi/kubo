@@ -106,6 +106,22 @@ kubo/
 - **Toda decisão de arquitetura** que contrarie ou estenda a spec vira ADR em `docs/adr/` ANTES do código.
 - **Code review:** CodeRabbit revisa **no PR, nunca em tempo de commit**. Não instalar CodeRabbit CLI como pre-commit hook nem rodá-lo localmente por padrão. Commits devem fluir rápido; o gate de review é o PR. Comentários do CodeRabbit no PR devem ser respondidos ou resolvidos antes do merge — nunca ignorados silenciosamente.
 
+## Agent skills
+
+Config por-repo que o stack de skills do Matt Pocock (`/ask-matt`, `/wayfinder`, `/triage`, `/to-tickets`...) consome. Detalhe operacional nos arquivos; aqui só o ponteiro.
+
+### Issue tracker
+
+Issues e PRDs vivem como GitHub Issues, via `gh` CLI. Regra de governança em **dois regimes** (issue-ponteiro padrão vs andaime wayfinder, **ADR-0024**). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Cinco papéis canônicos, label = nome (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` (sob demanda) + `docs/adr/` na raiz. See `docs/agents/domain.md`.
+
 ## TDD — Red/Green/Refactor (obrigatório)
 
 Todo código de produção em `kubo/` nasce por TDD. O ciclo é inegociável e deve ficar **visível no histórico**:
