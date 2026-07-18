@@ -284,30 +284,40 @@ def _state(key: str) -> dict[str, Any]:
 
 def test_disable_then_enable_via_real_route(app_db: Any) -> None:
     """Pausar pela rota real grava `enabled=false` SEM tocar `archived_at` (estado pausado é
-    próprio — emenda #107); retomar volta a `enabled=true`. Read-back como root prova cada passo."""
+    próprio — emenda #107); retomar volta a `enabled=true`. Read-back como root prova cada passo.
+    PRG: POST retorna 303 com Location: /sources."""
     tc, csrf = _login_csrf(app_db)
     key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://x.example/feed")
 
-    assert tc.post(f"/sources/{key}/disable", data={"csrf": csrf}).status_code == 200
+    resp = tc.post(f"/sources/{key}/disable", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
     st = _state(key)
     assert st["enabled"] is False and st.get("archived_at") is None  # pausado, não arquivado
 
-    assert tc.post(f"/sources/{key}/enable", data={"csrf": csrf}).status_code == 200
+    resp = tc.post(f"/sources/{key}/enable", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
     st = _state(key)
     assert st["enabled"] is True and st.get("archived_at") is None  # ativo de novo
 
 
 def test_archive_then_restore_via_real_route(app_db: Any) -> None:
     """Arquivar pela rota real põe `enabled=false` E carimba `archived_at` (atômico); restaurar
-    limpa os dois. Read-back como root — se a rota usasse kubo_ro por bug, nada gravaria."""
+    limpa os dois. Read-back como root — se a rota usasse kubo_ro por bug, nada gravaria.
+    PRG: POST retorna 303 com Location: /sources."""
     tc, csrf = _login_csrf(app_db)
     key = _create_source_via_route(tc, csrf, kind="rss", canonical="https://x.example/feed")
 
-    assert tc.post(f"/sources/{key}/archive", data={"csrf": csrf}).status_code == 200
+    resp = tc.post(f"/sources/{key}/archive", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
     st = _state(key)
     assert st["enabled"] is False and st.get("archived_at") is not None  # arquivado
 
-    assert tc.post(f"/sources/{key}/restore", data={"csrf": csrf}).status_code == 200
+    resp = tc.post(f"/sources/{key}/restore", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/sources"
     st = _state(key)
     assert st["enabled"] is True and st.get("archived_at") is None  # ativo
 

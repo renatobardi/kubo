@@ -502,10 +502,11 @@ def test_set_source_enabled_on_archived_is_stale(db: Any) -> None:
     pausar/retomar um arquivado é recusado (StaleSourceError), sem violar o invariante."""
     rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
     knowledge.archive_source(db, id=rid)
+    archived_at_before = _state(db, rid)[1]  # captura archived_at ANTES da tentativa
 
     with pytest.raises(StaleSourceError):
         knowledge.set_source_enabled(db, id=rid, enabled=True)
-    assert _state(db, rid) == (False, _state(db, rid)[1])  # segue arquivado/desabilitado
+    assert _state(db, rid) == (False, archived_at_before)  # segue arquivado/desabilitado
 
 
 def test_set_source_enabled_absent_is_stale(db: Any) -> None:

@@ -456,5 +456,23 @@ def test_list_shows_state_badges_and_actions(
     assert "Pausado" in html and "Arquivado" in html  # badges de estado
 
 
+def test_delete_page_archived_with_items_shows_only_back(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fonte arquivada com itens: a tela de confirmação NÃO oferece o POST de arquivar (já está
+    arquivada), só mostra histórico e botão 'Voltar' — sem ação duplicada."""
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.get_source",
+        lambda db, sid: _detail(
+            title="Já arquivada", canonical="https://x/feed", archived_at=_iso_days_ago(2)
+        ),
+    )
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 5)
+    html = authed_client.get("/sources/s1/delete").text
+    assert "5" in html  # contagem de itens
+    assert 'action="/sources/s1/archive"' not in html  # sem POST arquivar (já arquivada)
+    assert "Voltar" in html  # só a ação de voltar
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

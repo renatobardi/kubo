@@ -58,7 +58,7 @@
     {% for source in sources %}
       {% set days = source.last_collected_at | days_since %}
       <div data-search="{{ source.title or '' }} {{ source.canonical }} {{ source.kind }}"
-           class="flex items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+           class="flex flex-wrap items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
         <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {% if source.kind == "youtube" %}
             <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><path d="m10 15 5-3-5-3z"/></svg>
@@ -78,22 +78,23 @@
         {# Estado do Cadastro (#107): pausado/arquivado ganham badge próprio; ativo mostra a
            recência da coleta (E4). Os três estados são distinguíveis de relance (US#16). #}
         {% set sid = source.id.id %}
-        {% if source.archived_at %}
-          <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Arquivado</span>
-        {% elif not source.enabled %}
-          <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Pausado</span>
-        {% elif days is none %}
-          <span class="shrink-0 rounded-4xl px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">sem coleta</span>
-        {% else %}
-          <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-            {% if days == 0 %}coletou hoje{% else %}última coleta há {{ days }}d{% endif %}
-          </span>
-        {% endif %}
+        <div class="flex w-full items-center gap-3 md:w-auto">
+          {% if source.archived_at %}
+            <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Arquivado</span>
+          {% elif not source.enabled %}
+            <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Pausado</span>
+          {% elif days is none %}
+            <span class="shrink-0 rounded-4xl px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">sem coleta</span>
+          {% else %}
+            <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+              {% if days == 0 %}coletou hoje{% else %}última coleta há {{ days }}d{% endif %}
+            </span>
+          {% endif %}
 
-        {# Ações de ciclo de vida (#107), condicionadas ao estado. Cada POST leva CSRF (molde
-           ADR-0018). Pausar/arquivar/restaurar são reversíveis → botão direto; apagar leva à
-           tela de dupla verificação. Destructive sempre TINTED (design system §5). #}
-        <div class="flex shrink-0 items-center gap-1.5">
+          {# Ações de ciclo de vida (#107), condicionadas ao estado. Cada POST leva CSRF (molde
+             ADR-0018). Pausar/arquivar/restaurar são reversíveis → botão direto; apagar leva à
+             tela de dupla verificação. Destructive sempre TINTED (design system §5). #}
+          <div class="ml-auto flex shrink-0 items-center gap-1.5">
           {% if source.archived_at %}
             <form method="post" action="/sources/{{ sid }}/restore">
               <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -137,6 +138,7 @@
              class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-destructive/10 hover:text-destructive">
             <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
           </a>
+          </div>
         </div>
       </div>
     {% endfor %}

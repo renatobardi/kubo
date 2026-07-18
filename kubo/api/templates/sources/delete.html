@@ -22,14 +22,18 @@
     {% if items > 0 %}
       {# Com histórico: apagar é impedido (US#11). A tela orienta a arquivar, sem convite a apagar. #}
       <div class="rounded-lg bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">
-        Esta fonte tem <strong class="text-foreground">{{ items }}</strong> {{ "item" if items == 1 else "itens" }} coletado{{ "" if items == 1 else "s" }} — apagar destruiria a proveniência. Para tirá-la de operação sem perder o histórico, <strong class="text-foreground">arquive</strong>.
+        Esta fonte tem <strong class="text-foreground">{{ items }}</strong> {{ "item" if items == 1 else "itens" }} coletado{{ "" if items == 1 else "s" }} — apagar destruiria a proveniência.{% if not source.archived_at %} Para tirá-la de operação sem perder o histórico, <strong class="text-foreground">arquive</strong>.{% endif %}
       </div>
       <div class="flex items-center gap-3 pt-1">
-        <form method="post" action="/sources/{{ source.id.id }}/archive" class="flex-1">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <button type="submit" class="h-9 w-full rounded-4xl bg-destructive/10 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/20 active:translate-y-px">Arquivar</button>
-        </form>
-        <a href="/sources" class="flex h-9 items-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Voltar</a>
+        {% if source.archived_at %}
+          <a href="/sources" class="flex h-9 flex-1 items-center justify-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Voltar</a>
+        {% else %}
+          <form method="post" action="/sources/{{ source.id.id }}/archive" class="flex-1">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="h-9 w-full rounded-4xl bg-destructive/10 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/20 active:translate-y-px">Arquivar</button>
+          </form>
+          <a href="/sources" class="flex h-9 items-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Voltar</a>
+        {% endif %}
       </div>
     {% else %}
       {# Zero itens: apagável de vez. O POST destrutivo com CSRF é o 2º passo (o 1º foi chegar aqui). #}
