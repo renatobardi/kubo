@@ -4,20 +4,18 @@ Issues e PRDs deste repo vivem como GitHub Issues (`github.com/renatobardi/kubo`
 Use a `gh` CLI para todas as operações. O `gh` infere o repo do `git remote -v` quando
 rodado dentro do clone.
 
-## Governança: dois regimes (ADR-0024)
+## Governança (ADR-0026, substitui ADR-0024)
 
-Princípio: **conteúdo durável vive no repo; issue nunca é registro permanente.**
+**Issues podem carregar conteúdo à vontade** — specs/PRDs (`/to-spec`), mapas de wayfinder,
+notas de design. Não há regime de "issue-ponteiro". Único guardrail:
 
-- **Regime padrão (toda issue):** título + 1 parágrafo + link. Doc vivo = link de branch,
-  nunca conteúdo inline. SHA-pin só para código que não se move.
-- **Regime andaime (só `/wayfinder`):** o mapa (`wayfinder:map`) e seus tickets de decisão
-  podem carregar conteúdo no corpo, porque são quadro-branco transitório com morte programada.
-  Condições: (1) contexto pesado fora do corpo (gist/branch); (2) no handoff `/to-spec` o
-  mapa morre — colapsa em spec/ADRs e é fechado linkando os artefatos, com descarte explícito
-  nomeado de decisão não-colapsada; (3) mapa parado 30 dias ou aberto pós-handoff é violação;
-  (4) o regime pertence ao ciclo de vida da skill, não ao label; (5) no máx. 1–2 mapas ativos.
+> **Cópia congelada nunca é canônica.**
+> (a) Link para doc vivo = link de **branch**; SHA-pin só para código imóvel.
+> (b) Corpo de issue que **duplica** artefato do repo é snapshot — **o repo é canônico**; em
+> divergência, o corpo perde, sem discussão.
 
-Critério de decisão: *isto é registro ou andaime?* Ver ADR-0024 para o racional completo.
+Ver ADR-0026 para o racional. (A cláusula "o mapa morre no handoff" é agora **prática da skill
+`/wayfinder`**, não regra do repo.)
 
 ## Convenções
 
@@ -49,7 +47,8 @@ Rode `gh issue view <number> --comments`.
 ## Operações de wayfinding
 
 Usadas por `/wayfinder`. O **mapa** é uma issue única com issues **filhas** como tickets.
-Regidas pelo regime andaime acima (ADR-0024).
+A cláusula de handoff e os demais detalhes abaixo são **práticas da skill `/wayfinder`**, não
+um regime de governança do repo (ver Governança / ADR-0026).
 
 - **Mapa**: issue com label `wayfinder:map`, contendo o corpo Notes / Decisions-so-far / Fog.
   `gh issue create --label wayfinder:map`.

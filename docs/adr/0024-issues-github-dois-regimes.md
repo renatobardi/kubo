@@ -1,7 +1,11 @@
 # ADR-0024 — Issues do GitHub: dois regimes (registro vs andaime wayfinder)
 
-> Status: **aceito** · Data: 2026-07-17 · Validado pelo advisor (Fable 5) antes do crave.
+> Status: **substituído por ADR-0026** · Data: 2026-07-17 · Validado pelo advisor (Fable 5) antes do crave.
 > Estende/versiona a regra "issue é ponteiro" que até aqui vivia só na memória do agente.
+>
+> **⚠️ Superado (2026-07-17):** o ADR-0026 revoga a regra dos dois regimes — issues podem carregar
+> conteúdo à vontade (o `/to-spec` publica PRD gorda no corpo). Sobrevive só o guardrail "cópia
+> congelada nunca é canônica". Ver ADR-0026.
 
 ## Contexto
 
