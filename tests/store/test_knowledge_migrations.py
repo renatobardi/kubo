@@ -183,11 +183,13 @@ def test_legacy_source_backfilled_active(tmp_path: Path) -> None:
     cfg = replace(client.config(), database="test_backfill_0009")
     with client.connect(cfg) as conn:
         conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
-        conn.use(cfg.namespace, cfg.database)
-        migrations.apply_migrations(conn, pre)
-        conn.query("CREATE source:legacy SET kind='rss', canonical='https://x/legacy';")
-        migrations.apply_migrations(conn)  # dir real: aplica a 0009 pendente
-        got = conn.query("SELECT enabled, tags FROM source:legacy;")[0]
-        conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
+        try:
+            conn.use(cfg.namespace, cfg.database)
+            migrations.apply_migrations(conn, pre)
+            conn.query("CREATE source:legacy SET kind='rss', canonical='https://x/legacy';")
+            migrations.apply_migrations(conn)  # dir real: aplica a 0009 pendente
+            got = conn.query("SELECT enabled, tags FROM source:legacy;")[0]
+        finally:
+            conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
     assert got["enabled"] is True
     assert got["tags"] == []
