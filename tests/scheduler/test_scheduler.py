@@ -20,7 +20,6 @@ from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock
-from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -147,27 +146,24 @@ def test_unknown_timezone_is_rejected() -> None:
 
 
 def test_load_schedules_reads_real_repo_config() -> None:
-    """`load_schedules()` sobre o `schedules.yaml` real da raiz: 6 feeds reais
-    (critério de aceite do plano 0005) + 1 entry do destilador diário ATIVO (marco
-    8.7, ADR-0013 §VIII) + 1 entry do digest diário (ADR-0015) + 1 entry do flow
-    `pipeline` (D51/D52/D54, sessão 0021) — 9 entries no total, timezone explícita,
-    cada feed aponta pro worker `feed` com uma URL http(s) não-vazia, e
-    destilador/digest/pipeline rodam 1x/dia."""
-    from kubo.scheduler import FlowEntry, WorkerEntry, load_schedules
+    """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108): a lista
+    estática de feeds saiu (o banco dita o quê coletar) e no lugar entra 1 `sweep: rss` (ADR-0025
+    §4) + 1 destilador diário ATIVO (ADR-0013 §VIII) + 1 digest diário (ADR-0015) + 1 flow
+    `pipeline` (sessão 0021) — 4 entries, timezone explícita, ZERO worker `feed` estático."""
+    from kubo.scheduler import FlowEntry, SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
     worker_entries = [e for e in schedules.schedules if isinstance(e, WorkerEntry)]
     flow_entries = [e for e in schedules.schedules if isinstance(e, FlowEntry)]
+    sweep_entries = [e for e in schedules.schedules if isinstance(e, SweepEntry)]
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 9
-    feed_entries = [e for e in worker_entries if e.worker == "feed"]
-    assert len(feed_entries) == 6
-    for entry in feed_entries:
-        feed_url = entry.config["feed_url"]
-        assert isinstance(feed_url, str)
-        assert feed_url != ""
-        assert urlsplit(feed_url).scheme in ("http", "https")
+    assert len(schedules.schedules) == 4
+    # A coleta de feeds virou um sweep dirigido por Cadastro; nenhum worker `feed` estático.
+    assert not any(e.worker == "feed" for e in worker_entries)
+    assert len(sweep_entries) == 1
+    assert sweep_entries[0].sweep == "rss"
+    assert sweep_entries[0].cron == "0 8 * * *"
 
     # O destilador foi REATIVADO (entry descomentado, mini-sessão 0008 pós-filtro de
     # content vazio); `max_items` subiu de 20 para 50 (D56) pro funil não represar
@@ -207,15 +203,14 @@ def test_distiller_entry_config_validates() -> None:
 
 
 def test_build_scheduler_creates_one_job_per_entry() -> None:
-    """Um job por entry do `schedules.yaml` real — 6 feeds + 1 destilador diário
-    (reativado na mini-sessão 0008) + 1 digest diário (ADR-0015) + 1 flow `pipeline`
-    (sessão 0021) = 9 jobs. Não inicia o scheduler (`.start()` bloquearia o teste)."""
+    """Um job por entry do `schedules.yaml` real, pós corte RSS (#108): 1 sweep + 1 destilador
+    + 1 digest + 1 flow `pipeline` = 4 jobs. Não inicia o scheduler (`.start()` bloquearia)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 9
+    assert len(scheduler.get_jobs()) == 4
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:
@@ -450,15 +445,16 @@ def test_flow_entry_missing_question_is_rejected() -> None:
 
 
 def test_real_schedules_yaml_loads_the_worker_flow_mix() -> None:
-    """Regressão: o `schedules.yaml` real da raiz (8 worker entries + 1 flow entry do
-    pipeline, D51/D52/D54/D56, sessão 0021) carrega sem erro — a união WorkerEntry|FlowEntry
-    desambigua os dois tipos sem `discriminator=` explícito."""
-    from kubo.scheduler import FlowEntry, WorkerEntry, load_schedules
+    """Regressão: o `schedules.yaml` real da raiz, pós corte RSS (#108), carrega sem erro — a
+    união WorkerEntry|FlowEntry|SweepEntry desambigua os três tipos sem `discriminator=`. Sobram
+    2 workers (distiller, digest) + 1 flow (pipeline) + 1 sweep (rss)."""
+    from kubo.scheduler import FlowEntry, SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
 
-    assert sum(isinstance(e, WorkerEntry) for e in schedules.schedules) == 8
+    assert sum(isinstance(e, WorkerEntry) for e in schedules.schedules) == 2
     assert sum(isinstance(e, FlowEntry) for e in schedules.schedules) == 1
+    assert sum(isinstance(e, SweepEntry) for e in schedules.schedules) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -667,3 +663,228 @@ def test_execute_flow_job_reraises_and_logs_on_failure(monkeypatch: pytest.Monke
 
     with pytest.raises(ConfigError, match="não existe no catálogo"):
         scheduler.execute_flow_job("ghost-template", "q", {})
+
+
+# ---------------------------------------------------------------------------
+# SweepEntry (#108, corte RSS do ADR-0025 §4): a coleta de feeds sai da lista
+# estática do schedules.yaml e vira um sweep que varre os Cadastros ativos e
+# dispara UM run por Cadastro. Terceiro membro da união (worker|flow|sweep).
+# ---------------------------------------------------------------------------
+
+
+class _DummyCtx:
+    """Context manager mínimo que devolve um db fake — evita conexão real nos testes unit
+    de `execute_sweep_job` (a lógica do loop não toca o banco de verdade)."""
+
+    def __enter__(self) -> Any:
+        return MagicMock()
+
+    def __exit__(self, *_: object) -> bool:
+        return False
+
+
+def test_sweep_entry_dict_parses_to_sweep_entry_instance() -> None:
+    """Uma entry `{sweep, cron}` parseia para `SweepEntry` (novo shape, #108) — o `sweep` é o
+    KIND a varrer (dado, não nome de worker), campo obrigatório disjunto que desambigua a união
+    sem discriminador explícito (como `worker` vs `flow`)."""
+    from kubo.scheduler import Schedules, SweepEntry  # type: ignore[attr-defined]
+
+    data = {
+        "timezone": "America/Sao_Paulo",
+        "schedules": [{"sweep": "rss", "cron": "0 8 * * *"}],
+    }
+
+    parsed = Schedules.model_validate(data)
+
+    entry = parsed.schedules[0]
+    assert isinstance(entry, SweepEntry)
+    assert entry.sweep == "rss"  # type: ignore[attr-defined]
+    assert entry.cron == "0 8 * * *"
+
+
+def test_entry_with_worker_and_sweep_keys_is_rejected() -> None:
+    """Entry ambígua com `worker` E `sweep` falha em todos os ramos da união (`extra="forbid"`
+    em cada modelo barra o campo do outro) — nunca escolhe um dos dois em silêncio."""
+    from kubo.scheduler import Schedules
+
+    data = {
+        "timezone": "America/Sao_Paulo",
+        "schedules": [{"worker": "feed", "sweep": "rss", "cron": "0 8 * * *"}],
+    }
+
+    with pytest.raises(ValidationError):
+        Schedules.model_validate(data)
+
+
+def test_build_scheduler_accepts_valid_sweep_entry_and_wires_one_job() -> None:
+    """Uma `SweepEntry` com kind despachável não levanta — o scheduler monta o job do sweep."""
+    from kubo.scheduler import Schedules, SweepEntry, build_scheduler  # type: ignore[attr-defined]
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo",
+        schedules=[SweepEntry(sweep="rss", cron="0 8 * * *")],
+    )
+
+    scheduler = build_scheduler(schedules)
+
+    assert len(scheduler.get_jobs()) == 1
+
+
+def test_build_scheduler_rejects_unknown_sweep_kind() -> None:
+    """`sweep` de kind sem despacho em `SWEEP_DISPATCH` (ex.: `github-repo` antes do #110) vira
+    `ConfigError` no BUILD, eager — assim o caso 'kind desconhecido em runtime' fica IMPOSSÍVEL
+    por construção (não há skip-silencioso nem falha tardia no 1º disparo do cron)."""
+    from kubo.scheduler import Schedules, SweepEntry, build_scheduler  # type: ignore[attr-defined]
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo",
+        schedules=[SweepEntry(sweep="banana", cron="0 8 * * *")],
+    )
+
+    with pytest.raises(ConfigError, match="sweep"):
+        build_scheduler(schedules)
+
+
+def test_build_scheduler_rejects_bad_cron_for_sweep_entry() -> None:
+    """Cron malformado numa `SweepEntry` também vira `ConfigError` (padrão de domínio já
+    aplicado a `WorkerEntry`/`FlowEntry`)."""
+    from kubo.scheduler import Schedules, SweepEntry, build_scheduler  # type: ignore[attr-defined]
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo",
+        schedules=[SweepEntry(sweep="rss", cron="not a cron")],
+    )
+
+    with pytest.raises(ConfigError, match="cron"):
+        build_scheduler(schedules)
+
+
+def test_build_scheduler_wires_sweep_entry_to_execute_sweep_job() -> None:
+    """O job de uma `SweepEntry` chama `execute_sweep_job` com o `kind` da entry — não
+    `execute_job`/`execute_flow_job` (fiação separada por isinstance, como os outros dois)."""
+    from kubo.scheduler import (  # type: ignore[attr-defined]
+        Schedules,
+        SweepEntry,
+        build_scheduler,
+        execute_sweep_job,
+    )
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo",
+        schedules=[SweepEntry(sweep="rss", cron="0 8 * * *")],
+    )
+
+    job = build_scheduler(schedules).get_jobs()[0]
+
+    assert job.func is execute_sweep_job
+    assert job.kwargs == {"kind": "rss"}
+
+
+def test_execute_sweep_job_dispatches_one_run_per_active_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O critério central do #108: dados N Cadastros ativos, o sweep dispara N runs — um
+    `run_worker` por Cadastro (preserva 'um run = um feed', ADR-0009), com a config derivada da
+    fonte (canonical→feed_url, title, tags fecham o metadata)."""
+    from surrealdb import RecordID
+
+    from kubo import scheduler
+    from kubo.store.knowledge import ActiveSource
+
+    sources = [
+        ActiveSource(
+            id=RecordID("source", "a"),
+            kind="rss",
+            canonical="https://a/feed",
+            title="A",
+            tags=["ai"],
+        ),
+        ActiveSource(
+            id=RecordID("source", "b"),
+            kind="rss",
+            canonical="https://b/feed",
+            title=None,
+            tags=[],
+        ),
+    ]
+    monkeypatch.setattr(scheduler.client, "config", lambda: None)
+    monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
+    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind: sources)
+    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        scheduler,
+        "run_worker",
+        lambda db, worker, *, config: calls.append((type(worker).__name__, config)),
+    )
+
+    scheduler.execute_sweep_job("rss")
+
+    assert len(calls) == 2
+    assert calls[0] == ("FeedWorker", {"feed_url": "https://a/feed", "title": "A", "tags": ["ai"]})
+    assert calls[1] == (
+        "FeedWorker",
+        {"feed_url": "https://b/feed", "title": None, "tags": []},
+    )
+
+
+def test_execute_sweep_job_isolates_failing_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolamento por Cadastro: se o run de UM Cadastro falha (ws morto, setup), os demais AINDA
+    rodam — o sweep loga e segue, nunca explode a metade restante. Sem isso, um feed ruim
+    derrubaria a coleta de todos os seguintes."""
+    from surrealdb import RecordID
+
+    from kubo import scheduler
+    from kubo.store.knowledge import ActiveSource
+
+    sources = [
+        ActiveSource(
+            id=RecordID("source", c), kind="rss", canonical=f"https://{c}/f", title=c, tags=[]
+        )
+        for c in ("a", "b", "c")
+    ]
+    monkeypatch.setattr(scheduler.client, "config", lambda: None)
+    monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
+    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind: sources)
+    attempted: list[str] = []
+
+    def _run(db: Any, worker: Any, *, config: dict[str, Any]) -> None:
+        attempted.append(config["feed_url"])
+        if config["feed_url"] == "https://b/f":
+            raise RuntimeError("ws morreu no meio do sweep")
+
+    monkeypatch.setattr(scheduler, "run_worker", _run)
+
+    scheduler.execute_sweep_job("rss")  # NÃO propaga a falha do 'b'
+
+    assert attempted == ["https://a/f", "https://b/f", "https://c/f"]
+
+
+@pytest.mark.integration
+def test_execute_sweep_job_honors_active_filter_against_real_db(
+    scheduler_db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fiação real (ADR-0010 item V): `execute_sweep_job` abre a PRÓPRIA conexão, lê os ativos do
+    banco de verdade e despacha só por eles. Semeia 2 rss ativos + 1 pausado + 1 arquivado + 1
+    github-repo ativo; o sweep de `rss` dispara run só pelos 2 ativos (pausado/arquivado/outro
+    kind = 0 runs). `run_worker` é mockado para não puxar a rede do FeedWorker — a persistência
+    da run já é coberta por `test_execute_job_*`; aqui importa o FILTRO."""
+    from kubo import scheduler
+    from kubo.store import knowledge
+
+    job_cfg = replace(client.config(), database=_JOB_DB)
+    monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
+    knowledge.create_source(scheduler_db, kind="rss", canonical="https://a.test/feed", title="A")
+    knowledge.create_source(scheduler_db, kind="rss", canonical="https://b.test/feed", title="B")
+    paused = knowledge.create_source(scheduler_db, kind="rss", canonical="https://p.test/feed")
+    knowledge.set_source_enabled(scheduler_db, id=paused, enabled=False)
+    archived = knowledge.create_source(scheduler_db, kind="rss", canonical="https://x.test/feed")
+    knowledge.archive_source(scheduler_db, id=archived)
+    knowledge.create_source(scheduler_db, kind="github-repo", canonical="https://github.com/o/r")
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        scheduler, "run_worker", lambda db, worker, *, config: dispatched.append(config["feed_url"])
+    )
+
+    scheduler.execute_sweep_job("rss")
+
+    assert sorted(dispatched) == ["https://a.test/feed", "https://b.test/feed"]

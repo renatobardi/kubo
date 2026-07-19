@@ -22,6 +22,9 @@ until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q 
   sleep 3
 done
 docker compose run -T --rm kubo-scheduler python -m kubo.store.migrations
+# Seed das fontes RSS legadas como Cadastros (#108, corte RSS): passo IRMÃO das migrations —
+# migração é schema, seed é DADO. Idempotente e não-destrutivo (coalesce), roda a cada deploy.
+docker compose run -T --rm kubo-scheduler python -m kubo.store.seed
 # Recria SÓ os serviços de app: --force-recreate sem nome bounceava surrealdb+backup a cada
 # deploy à toa. O `up -d` seguinte garante o restante (backup) de pé em host fresh.
 docker compose up -d --force-recreate kubo-api kubo-scheduler

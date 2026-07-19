@@ -72,15 +72,11 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
    > arquivar virou reversível e dispensa o 2º passo. O ADR é canônico sobre o snapshot (#103,
    > cabeçalho), então esta leitura vale.
    >
-   > **Modalidade — o sweep é design, ainda não vivo (dívida sequencial).** A decisão 4 ("o sweep
-   > varre só os ativos") descreve o comportamento-alvo, **não o presente**. Até o sweep por Cadastro
-   > existir (#108, passo 1 do rollout), `enabled`/`archived_at` são **estado registrado pela store e
-   > exibido pela UI — ainda não honrado por coletor nenhum**: a coleta permanece dirigida pelo
-   > `schedules.yaml` (6 feeds) + watch-list do GitHub, que o #107 não tocou. Logo pausar/arquivar
-   > pela tela hoje muda o registro e a listagem, **não interrompe a coleta** — a interrupção chega
-   > com o #108. A UI diz essa verdade num helper text (a ser removido quando o #108 fechar); a ordem
-   > de entrega (schema→create→edit→lifecycle→sweep) inverteu a ordem de rollout deste ADR, o que é
-   > seguro porque nenhuma dessas fatias encostou no caminho de coleta (achado do security-reviewer).
+   > **Modalidade — SUPERADA pelo #108 (2026-07-18).** Esta emenda #107 dizia que o sweep era
+   > "design, ainda não vivo" e que pausar/arquivar mudava o registro **sem interromper a coleta**
+   > (com um helper text na UI dizendo essa verdade provisória). O #108 fechou o corte RSS: o sweep
+   > está **vivo** e pausar/arquivar de fato para a coleta — a modalidade caducou, o helper foi
+   > removido. Detalhes na **Emenda #108** ao fim deste ADR.
 9. **Uma tabela só** — `source` *vira* Cadastro; sem coexistência/sincronização.
 10. **Escrita pela UI** segue o molde ADR-0018: credencial `kubo_rw` EDITOR por-request + CSRF
     + guarda 409 de staleness. Todo acesso via `kubo/store/`.
@@ -115,6 +111,9 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
   job de sweep varrendo os Cadastros ativos; (2) migrar as 6 entradas de feed + os `source` do
   GitHub já coletados para Cadastros; (3) só então remover os feeds do `schedules.yaml` e validar
   que o scheduler não depende mais do formato antigo — os jobs operacionais não-fonte permanecem.
+  **RSS: colapsado num corte só pelo #108 (ver Emenda #108)** — os 3 passos permanecem a ordem
+  correta em geral; a precondição que legitimou o colapso (os 6 já eram Cadastros ativos) foi
+  verificada empiricamente, não presumida. GitHub segue os 3 passos no #110.
 - **Neutro:** a tela Fontes deixa de ser read-only; primeira superfície de escrita da UI além
   dos gates de fluxo.
 
@@ -140,3 +139,47 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
 - Worker de seed em massa de Cadastros (renasce o `viewer.watching`). Sem ele, dupla entrada
   manual para repos do GitHub.
 - Fase B (as três alternativas adiadas acima), cada uma com seu gatilho empírico.
+
+## Emenda #108 (2026-07-18) — corte RSS num só passo; sweep vivo
+
+O #108 entregou o **sweep dirigido por Cadastro para RSS** e, ao fazê-lo, **absorveu o corte RSS
+do #109** (migração das 6 fontes + remoção da lista estática do `schedules.yaml`) num único PR. O
+que mudou concretamente:
+
+- **Sweep vivo:** uma `SweepEntry` (`sweep: rss`, cron `0 8 * * *`) no `schedules.yaml` varre os
+  Cadastros rss ativos (`enabled=true` E `archived_at IS NONE`, via `active_sources`) e dispara um
+  run por Cadastro (`SWEEP_DISPATCH` fixo em código, `rss`→`feed`; despacho por kind, decisão 7).
+  Preserva "um run = um feed" (ADR-0009): o sweep é `query → loop → run_worker`, isolado por
+  Cadastro. Não é engine (guardrails da decisão 4 intactos: sem cron/worker por-Cadastro no banco,
+  sem retry/estado/DAG).
+- **Lista de feeds sai do YAML:** as 6 entradas `worker: feed` foram removidas; o `schedules.yaml`
+  fica só com operação (sweep + distiller + digest + pipeline). A migração dos dados é o seed
+  `python -m kubo.store.seed` (passo de deploy irmão das migrations), idempotente e **não-destrutivo**
+  (coalesce: `title ?? $title`, `enabled ?? true`, `tags` só se vazio) — completa `tags`/`title`
+  nos 6 records legados sem reverter edições/pausas do dono (#106/#107 estão vivos).
+- **Fim do caveat de honestidade:** o helper text da tela Fontes e a "Modalidade" desta emenda #107
+  foram removidos — pausar/arquivar de fato para a coleta.
+
+**Por que colapsar os 3 passos do rollout num só (a decisão desta emenda):** a ordem original
+existe para *não interromper a coleta* provando o sweep antes de remover a rede estática. A
+precondição que a torna desnecessária — os 6 feeds **já serem Cadastros rss ativos com canonical
+e título corretos** — foi **verificada ao vivo no kubo-test** (não presumida). Com o dado já
+migrado de fato (efeito colateral da coleta histórica), a "rede" das entradas estáticas é
+substituída por duas garantias mais fortes: o **seed** garante o DADO (6 Cadastros completos)
+antes do 1º run; o **smoke físico owner-gated** garante o CÓDIGO (sweep coleta + pausar tira da
+coleta) antes de confiar no cron, e o corte só se declara concluído após a **1ª run por cron**
+(verificação D+1: 6 runs em Execuções). Em ambiente **sem** essa verificação empírica, a ordem de
+3 passos continua sendo a correta.
+
+**Alternativa rejeitada (nesta fatia):** *estado misto* — ativar o sweep **junto** com as 6
+entradas estáticas vivas (coleta dupla como rede provisória). Rejeitada pelo dono: cria um estado
+em que pausar um feed legado não o interrompe (a entrada estática ignora o estado) enquanto pausar
+um feed novo da UI interrompe — um helper text não descreve honestamente esse meio-termo. O dono
+pediu explicitamente "uma solução limpa e única". O corte único entrega isso: **uma
+fonte-de-verdade (o DB), um coletor (o sweep), um estado honesto.**
+
+**Consequências de tickets:** o **#109** (migrar feeds + aposentar a lista) fecha como **absorvido**
+por este corte; o **#110** (github-repo → coletor de releases) segue **intacto** e adiciona a chave
+`github-repo` ao `SWEEP_DISPATCH` reconciliando com o pipeline 07:00 — o `github-repo` continua
+fora do sweep até lá (validação eager de `_add_sweep_job` barra uma `SweepEntry` de kind não
+mapeado).
