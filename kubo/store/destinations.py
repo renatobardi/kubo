@@ -11,7 +11,6 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
-import structlog
 from surrealdb import RecordID
 
 from kubo.errors import (
@@ -19,8 +18,6 @@ from kubo.errors import (
     DuplicateDestinationError,
     StaleDestinationError,
 )
-
-_log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -184,7 +181,7 @@ def destination_dispatch_count(db: Any, id: RecordID) -> int:
         "SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL;",
         {"addr": _destination_ref(id)},
     )
-    return int(rows[0]["count"])
+    return int(rows[0]["count"]) if rows else 0
 
 
 def delete_destination(db: Any, *, id: RecordID) -> None:

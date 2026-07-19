@@ -45,6 +45,9 @@ _EDIT_TEMPLATE = "destinations/edit.html"
 _DELETE_TEMPLATE = "destinations/delete.html"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 _STALE_NOTICE = "Esse destino não está mais disponível para edição."
+_CSRF_INVALID = "CSRF inválido — recarregue a página."
+_WRITE_LOG = "destinations.write_unavailable"
+_DESTINATIONS_ROUTE = "/destinations"
 
 
 @dataclass(frozen=True)
@@ -174,7 +177,7 @@ def create(
     """Cadastra um destino novo. E-mail é barrado até KUBO-47; duplicata vira aviso
     SOFT (409)."""
     if not verify_csrf(request, csrf):
-        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
         payload = NewDestination(name=name, kind=kind, channel=channel, address=address)  # type: ignore[arg-type]
     except ValidationError as exc:
@@ -193,9 +196,11 @@ def create(
                 return _render_list(
                     request, notice="Esse destino já está cadastrado.", status=409, db=db
                 )
-            return RedirectResponse("/destinations", status_code=303)
+            except StaleDestinationError:
+                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
-        _log.warning("destinations.write_unavailable")
+        _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
 
@@ -221,7 +226,7 @@ def edit_page(request: Request, did: str) -> Response:
     with client.connect() as ro:
         detail = destination_store.get_destination(ro, RecordID("destination", did))
     if detail is None or detail.archived_at is not None:
-        return RedirectResponse("/destinations", status_code=303)
+        return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     return _render_edit(request, detail)
 
 
@@ -235,7 +240,7 @@ def edit(
 ) -> Response:
     """Edita nome e endereço de um destino, preservando id."""
     if not verify_csrf(request, csrf):
-        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
     destination_id = RecordID("destination", did)
     try:
         payload = EditDestination(name=name, address=address)  # type: ignore[arg-type]
@@ -268,9 +273,9 @@ def _apply_edit(
                 )
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-            return RedirectResponse("/destinations", status_code=303)
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
-        _log.warning("destinations.write_unavailable")
+        _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
 
@@ -278,16 +283,16 @@ def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]
     """Executa uma ação de ciclo de vida (pausar/retomar/arquivar/reativar) no molde
     ADR-0018: CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
     if not verify_csrf(request, csrf):
-        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
         with client.connect_rw() as db:
             try:
                 action(db)
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-            return RedirectResponse("/destinations", status_code=303)
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
-        _log.warning("destinations.write_unavailable")
+        _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
 
@@ -358,7 +363,7 @@ def delete_page(request: Request, did: str) -> Response:
             destination_store.destination_dispatch_count(ro, rid) if detail is not None else 0
         )
     if detail is None:
-        return RedirectResponse("/destinations", status_code=303)
+        return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     return _render_delete(request, detail, dispatches)
 
 
@@ -366,7 +371,7 @@ def delete_page(request: Request, did: str) -> Response:
 def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
     """Apaga de vez um destino com ZERO dispatches."""
     if not verify_csrf(request, csrf):
-        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
     rid = RecordID("destination", did)
     try:
         with client.connect_rw() as db:
@@ -386,7 +391,7 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
                 )
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-            return RedirectResponse("/destinations", status_code=303)
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
-        _log.warning("destinations.write_unavailable")
+        _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
