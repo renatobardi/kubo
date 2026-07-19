@@ -20,6 +20,7 @@ from typing import Any
 import structlog
 
 from kubo.store import client
+from kubo.store import settings as settings_store
 from kubo.store.knowledge import upsert_seed_source
 
 _log = structlog.get_logger().bind(worker="seed-cli")
@@ -95,15 +96,34 @@ def seed_feed_cadastros(db: Any) -> int:
     return len(FEED_CADASTROS)
 
 
+def seed_default_settings(db: Any) -> bool:
+    """Cria o singleton `settings:global` com os defaults operacionais UMA VEZ por ambiente
+    (KUBO-44, ADR-0028). Segue o mesmo padrão de marcador do seed de feeds para evitar
+    overwrite de edições do dono feitas pela UI."""
+    db.query("DEFINE TABLE IF NOT EXISTS seed_marker SCHEMALESS;")
+    if db.query("SELECT id FROM seed_marker:settings;"):
+        return False
+    settings_store.put_settings(
+        db,
+        digest_cron="30 9 * * *",
+        distribution_paused=False,
+        default_destination=None,
+    )
+    db.query("CREATE seed_marker:settings SET applied_at = time::now();")
+    return True
+
+
 def main() -> int:
-    """Conecta por ambiente e semeia as fontes RSS; devolve o total processado."""
+    """Conecta por ambiente e semeia feeds + settings; devolve total de feeds processado."""
     try:
         with client.connect() as db:
             count = seed_feed_cadastros(db)
+            settings_applied = seed_default_settings(db)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga (padrão do migrations-cli)
         _log.exception("seed_failed")
         raise
     _log.info("feed cadastros seeded", count=count)
+    _log.info("default_settings_seeded", applied=settings_applied)
     return count
 
 

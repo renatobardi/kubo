@@ -1,6 +1,11 @@
 """Agendador da fase 1 (ADR-0010): lê schedules.yaml, registra um job cron por
 entry e roda cada worker sob contrato com conexão POR execução. BlockingScheduler
-síncrono (sem event loop); SIGTERM faz shutdown que espera a run em voo terminar."""
+síncrono (sem event loop); SIGTERM faz shutdown que espera a run em voo terminar.
+
+A partir do KUBO-44 (ADR-0028): o job `digest` passa a ser montado a partir do
+singleton `settings` (`digest_cron` + timezone do schedules.yaml), e um poll de 5
+minutos reage a mudanças de horário sem restartar o processo.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ import structlog
 import yaml
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from kubo.distribution.destinations import (
@@ -27,6 +33,7 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
 from kubo.scheduler.sweep import SWEEP_DISPATCH
 from kubo.store import client
+from kubo.store import settings as settings_store
 from kubo.store.knowledge import active_sources
 from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
@@ -36,6 +43,9 @@ _REPO_ROOT = Path(__file__).parents[2]
 _SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
 _DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
 _log = structlog.get_logger()
+
+# Intervalo de polling da config do digest — 5 minutos (ADR-0028 §4).
+_DIGEST_POLL_MINUTES = 5
 
 # Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
 # 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
@@ -113,7 +123,7 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
     scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`. Se a key faltar
     na hora do disparo, o `ConfigError` sobe a `execute_job` e é registrado como
     `scheduler_job_failed` (o mesmo tratamento de qualquer falha de SETUP que
-    ocorre ANTES de `run_worker` abrir a run — não vira `run.error` estruturado,
+    ocorre ANTES de `run_worker` abrir o run — não vira `run.error` estruturado,
     porque a run ainda não existe), em vez de derrubar o processo inteiro às
     09:00. Trocar isso por um `run.error` exigiria abrir a run antes das deps
     (factory de embedder avaliada pós-`start_run`) — adiado: a fase 1 tem um
@@ -136,8 +146,24 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
 def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     """Executa um worker agendado com conexão POR execução (ADR-0010): abre a
     conexão, roda sob contrato (run_worker persiste), fecha. Sem handle global de
-    DB (um ws de vida longa apodrece num processo que roda dias)."""
+    DB (um ws de vida longa apodrece num processo que roda dias).
+
+    No disparo do `digest`, lê `distribution_paused` de `settings` (KUBO-44) — se
+    pausado, encerra SEM instanciar o worker nem abrir run. Erros de leitura de
+    settings não derrubam o job: o default é `false` e o log mantém visibilidade.
+    """
     try:
+        if worker_name == "digest":
+            with client.connect(client.config()) as db:
+                try:
+                    settings = settings_store.get_settings(db)
+                    paused = settings.distribution_paused if settings else False
+                except Exception:  # noqa: BLE001 — defensivo: config pode estar inconsistente
+                    paused = False
+                _log.info("digest_pause_read", distribution_paused=paused)
+                if paused:
+                    _log.info("digest_skipped_paused")
+                    return
         worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
             run_worker(db, worker, config=config, embedder=embedder)
@@ -152,7 +178,7 @@ def execute_sweep_job(kind: str) -> None:
     """Executa o sweep de coleta de um `kind` (#108, ADR-0025 §4): lê os Cadastros ATIVOS e
     dispara UM run por Cadastro (preserva 'um run = um feed', ADR-0009). Loop query→run_worker,
     ISOLADO por Cadastro — a falha de um NÃO condena os demais (`try`/`continue`), e cada run
-    abre a PRÓPRIA conexão para que um ws morto num Cadastro não derrube o resto do sweep
+    abre a PRÓPRIA conexão para que um ws morto num Cadastro não derrube o reste do sweep
     (a listagem dos ativos usa uma conexão curta antes). Sem run 'pai', sem retry, sem estado
     de orquestração: os registros do sweep SÃO as runs que `run_worker` persiste — cruzar
     essa linha entraria no escopo negativo (invariante 7). `kind` já foi validado contra
@@ -221,8 +247,101 @@ def _add_sweep_job(scheduler: BlockingScheduler, entry: SweepEntry, tz: ZoneInfo
     scheduler.add_job(execute_sweep_job, trigger=trigger, kwargs={"kind": entry.sweep})
 
 
-def build_scheduler(schedules: Schedules) -> BlockingScheduler:
-    """Monta o BlockingScheduler com um job cron por entry, tz explícita SEMPRE.
+def _digest_trigger(cron: str, tz: ZoneInfo) -> CronTrigger:
+    """Parseia o `digest_cron` do settings com o label fixo `digest`."""
+    return _cron_trigger(cron, tz, label="digest")
+
+
+def _add_digest_job(
+    scheduler: BlockingScheduler, settings: settings_store.Settings, tz: ZoneInfo
+) -> None:
+    """Registra o job `digest` a partir do `digest_cron` do singleton settings (KUBO-44).
+
+    O horário não vem mais do `schedules.yaml` — a timezone continua vindo de lá. A config
+    do worker usa o default do `DigestConfig` (`max_items=50`) e os destinos ainda vêm do
+    `destinations.yaml` (cutover em ticket futuro).
+    """
+    trigger = _digest_trigger(settings.digest_cron, tz)
+    scheduler.add_job(
+        execute_job,
+        trigger=trigger,
+        id="digest",
+        kwargs={"worker_name": "digest", "config": {}},
+    )
+
+
+def _check_and_reschedule_digest(
+    db: Any,
+    scheduler: BlockingScheduler,
+    tz: ZoneInfo,
+    last_cron: str,
+) -> str:
+    """Lê `settings` e reagenda o job `digest` se `digest_cron` mudou.
+
+    Devolve o novo `last_cron` (igual ou atualizado). Erros de DB ou cron inválido
+    são logados e NÃO levantam — o agendador mantém o comportamento atual
+    (ADR-0028 §4). Mudanças vazias/mesmo cron não geram log, só o efetivo reschedule.
+    """
+    try:
+        settings = settings_store.get_settings(db)
+    except Exception:  # noqa: BLE001 — erro de leitura não derruba o poll
+        _log.exception("digest_poll_failed", phase="read_settings")
+        return last_cron
+    if settings is None:
+        _log.warning("digest_poll_no_settings")
+        return last_cron
+
+    if settings.digest_cron == last_cron:
+        return last_cron
+
+    try:
+        _digest_trigger(settings.digest_cron, tz)
+    except ConfigError:
+        _log.error("digest_poll_invalid_cron", cron=settings.digest_cron)
+        return last_cron
+
+    try:
+        scheduler.reschedule_job("digest", trigger=_digest_trigger(settings.digest_cron, tz))
+    except Exception:  # noqa: BLE001 — scheduler pode estar em teardown
+        _log.exception("digest_poll_reschedule_failed")
+        return last_cron
+
+    _log.info("digest_rescheduled", cron=settings.digest_cron)
+    return settings.digest_cron
+
+
+def _add_digest_poll_job(
+    scheduler: BlockingScheduler, settings: settings_store.Settings, tz: ZoneInfo
+) -> None:
+    """Adiciona o job de polling que reage a mudanças de `digest_cron` no DB (KUBO-44).
+
+    O `last_cron` vive numa closure mutável (`state`) — o job do APScheduler recebe a
+    closure por captura. Em testes, `_check_and_reschedule_digest` é testada isoladamente.
+    """
+    state: dict[str, str] = {"last_cron": settings.digest_cron}
+
+    def _poll() -> None:
+        try:
+            with client.connect(client.config()) as db:
+                state["last_cron"] = _check_and_reschedule_digest(
+                    db, scheduler, tz, state["last_cron"]
+                )
+        except Exception:  # noqa: BLE001 — poll nunca derruba o scheduler
+            _log.exception("digest_poll_failed")
+
+    scheduler.add_job(
+        _poll,
+        trigger=IntervalTrigger(minutes=_DIGEST_POLL_MINUTES),
+        id="digest_poll",
+    )
+
+
+def build_scheduler(
+    schedules: Schedules,
+    settings: settings_store.Settings | None = None,
+) -> BlockingScheduler:
+    """Monta o BlockingScheduler com um job cron por entry do YAML, mais `digest` e `digest_poll`
+    quando `settings` é fornecido.
 
     Valida TUDO eagerly (falha alta antes do start, não horas depois no 1º disparo). Cada
     entry é `WorkerEntry` (ADR-0010) ou `SweepEntry` (#108/#110) — o dispatch por `isinstance`
@@ -235,6 +354,9 @@ def build_scheduler(schedules: Schedules) -> BlockingScheduler:
             _add_worker_job(scheduler, entry, tz)
         else:
             _add_sweep_job(scheduler, entry, tz)
+    if settings is not None:
+        _add_digest_job(scheduler, settings, tz)
+        _add_digest_poll_job(scheduler, settings, tz)
     return scheduler
 
 
@@ -249,9 +371,20 @@ def make_sigterm_handler(scheduler: BlockingScheduler) -> Callable[[int, Any], N
 
 
 def main() -> None:
-    """Sobe o agendador: carrega schedules, registra jobs + SIGTERM, bloqueia."""
+    """Sobe o agendador: carrega schedules, lê settings, monta jobs, SIGTERM, bloqueia."""
     schedules = load_schedules()
-    scheduler = build_scheduler(schedules)
+    with client.connect(client.config()) as db:
+        settings = settings_store.get_settings(db)
+    if settings is None:
+        raise ConfigError("settings não encontrado — rode as migrations e o seed")
+    # Valida o cron do digest antes de subir (fail-fast no boot).
+    _digest_trigger(settings.digest_cron, ZoneInfo(schedules.timezone))
+    scheduler = build_scheduler(schedules, settings)
     signal.signal(signal.SIGTERM, make_sigterm_handler(scheduler))
-    _log.info("scheduler_starting", jobs=len(schedules.schedules), timezone=schedules.timezone)
+    _log.info(
+        "scheduler_starting",
+        yaml_jobs=len(schedules.schedules),
+        digest_cron=settings.digest_cron,
+        timezone=schedules.timezone,
+    )
     scheduler.start()

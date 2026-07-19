@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Configurações · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Configurações", "Agenda do digest, pausa da distribuição e destino padrão.") }}
+
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <h2 class="text-sm font-medium">Operação</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Ajustes que o agendador lê do banco a cada poucos minutos.</p>
+    </div>
+    <form method="post" action="/settings" class="space-y-4 p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <div>
+        <label for="digest_cron" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Horário do digest (cron)</label>
+        <input id="digest_cron" name="digest_cron" value="{{ digest_cron }}" required
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+               placeholder="30 9 * * *">
+        <p class="mt-1 text-2xs text-muted-foreground">Ex.: <code class="rounded bg-muted px-1">30 9 * * *</code> = diário às 09:30. Aplica em até 5 min.</p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <input id="distribution_paused" name="distribution_paused" type="checkbox" value="on" {% if distribution_paused %}checked{% endif %}
+               class="size-4 rounded border-input bg-input/30 text-primary focus-visible:ring-ring">
+        <label for="distribution_paused" class="text-sm text-foreground">Pausar distribuição</label>
+      </div>
+
+      <div>
+        <label for="default_destination" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Destino padrão</label>
+        <select id="default_destination" name="default_destination"
+                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <option value="" {% if not default_destination %}selected{% endif %}>— nenhum —</option>
+          {% for d in choices %}
+          <option value="{{ d.id.id }}" {% if default_destination and default_destination.id == d.id.id %}selected{% endif %}>{{ d.name }} ({{ d.channel }})</option>
+          {% endfor %}
+        </select>
+        <p class="mt-1 text-2xs text-muted-foreground">Usado por relatórios e comandos one-off; pausado resolve normalmente.</p>
+      </div>
+
+      <button type="submit"
+              class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
+        Salvar configurações
+      </button>
+    </form>
+  </section>
+</div>
+{% endblock %}

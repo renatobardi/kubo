@@ -34,15 +34,6 @@ schedules:
     cron: "0 9 * * *"
     config:
       max_items: 50
-  # ── DIGEST DIÁRIO — 09:30, após a destilação das 09:00 (ADR-0015 D30) ──────────
-  # Envia aos destinos do destinations.yaml os destilados novos desde o último
-  # envio (por destino, watermark). Dia sem novidade = sem mensagem (só-se-novidade,
-  # ADR-0015 §V). A corrida 09:00/09:30 é semântica ACEITA: o watermark garante que
-  # nada se perde, só desloca para o dia seguinte o que a destilação ainda não fechou.
-  - worker: digest
-    cron: "30 9 * * *"
-    config:
-      max_items: 50
   # ── SWEEP github-repo — releases dos Cadastros github-repo (#110, ADR-0025 §5) ──
   # Fora do trem 08:00-09:30 (feeds + destilador + digest) — 07:00, antes de tudo.
   # Varre os Cadastros github-repo ATIVOS e dispara um run por repo (simétrico ao sweep

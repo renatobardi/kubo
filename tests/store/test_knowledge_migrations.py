@@ -30,6 +30,8 @@ _TABLES = {
     "run",
     "dispatch",
     "destination",
+    # 0012 (KUBO-44): singleton settings.
+    "settings",
     # 0005 (execução, ADR-0016): flow/task/persona/deliverable.
     "flow",
     "task",
@@ -80,6 +82,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0009_source_cadastro.surql",
         "0010_github_repo_cadastro.surql",
         "0011_destination_cadastro.surql",
+        "0012_settings_singleton.surql",
     }
 
 

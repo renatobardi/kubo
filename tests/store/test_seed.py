@@ -16,7 +16,8 @@ from typing import Any
 import pytest
 
 from kubo.store import client, knowledge, migrations
-from kubo.store.seed import FEED_CADASTROS, seed_feed_cadastros
+from kubo.store.seed import FEED_CADASTROS, seed_default_settings, seed_feed_cadastros
+from kubo.store.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -122,3 +123,36 @@ def test_seed_reuses_legacy_sha256_record(db: Any) -> None:
     assert len(rows) == 1
     assert str(rows[0]["id"]) == str(legacy_id)
     assert rows[0]["tags"] == ["ai", "openai", "confiavel"]
+
+
+def test_seed_default_settings_creates_singleton(db: Any) -> None:
+    """KUBO-44: ambiente limpo ganha settings:global com defaults operacionais (cron 09:30,
+    distribuição não pausada, sem destino padrão)."""
+    applied = seed_default_settings(db)
+
+    assert applied is True
+    settings = get_settings(db)
+    assert settings is not None
+    assert settings.digest_cron == "30 9 * * *"
+    assert settings.distribution_paused is False
+    assert settings.default_destination is None
+
+
+def test_seed_default_settings_is_once_per_env(db: Any) -> None:
+    """O seed de settings roda UMA VEZ por ambiente: a 2ª chamada devolve False e não altera."""
+    assert seed_default_settings(db) is True
+    settings_store = get_settings(db)
+    assert settings_store is not None
+
+    # Simula edição do dono pela UI.
+    from kubo.store import settings
+
+    settings.put_settings(
+        db, digest_cron="0 20 * * *", distribution_paused=True, default_destination=None
+    )
+
+    assert seed_default_settings(db) is False
+    current = get_settings(db)
+    assert current is not None
+    assert current.digest_cron == "0 20 * * *"
+    assert current.distribution_paused is True

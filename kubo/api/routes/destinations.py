@@ -2,9 +2,9 @@
 
 Espelha 1:1 a tela de Fontes: lista com endereço completo visível, criar/editar/pausar/
 arquivar/reativar/apagar. Escrita no molde ADR-0018: CSRF, kubo_rw por-request,
-validação pydantic na borda, guarda de staleness (409). A entrega continua usando o
-`destinations.yaml` (cutover é KUBO-48): a seção "Artefatos configurados" ainda deriva
-de `schedules.yaml` + `destinations.yaml`.
+validação pydantic na borda, guarda de staleness (409). A seção "Artefatos configurados"
+deriva do cron salvo em `settings` (KUBO-44) e dos destinos do `destinations.yaml`
+(cutover dos destinos para DB é KUBO-48).
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import structlog
-import yaml
 from fastapi import APIRouter, Form, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
@@ -23,7 +22,7 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
-from kubo.distribution.destinations import Destination, load_destinations
+from kubo.distribution.destinations import load_destinations
 from kubo.errors import (
     ConfigError,
     DestinationHasHistoryError,
@@ -33,13 +32,13 @@ from kubo.errors import (
 )
 from kubo.store import client
 from kubo.store import destinations as destination_store
+from kubo.store import settings as settings_store
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
 
 _REPO_ROOT = Path(__file__).parents[3]
 _DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
-_SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
 _LIST_TEMPLATE = "destinations/list.html"
 _EDIT_TEMPLATE = "destinations/edit.html"
 _DELETE_TEMPLATE = "destinations/delete.html"
@@ -53,7 +52,7 @@ _DESTINATIONS_ROUTE = "/destinations"
 @dataclass(frozen=True)
 class Artefato:
     """Um artefato recorrente configurado (o digest): nome, agenda humana, origem e
-    os destinos que o recebem — derivado do schedules.yaml + destinations.yaml."""
+    os destinos que o recebem — derivado de `settings.digest_cron` + destinations.yaml."""
 
     name: str
     agenda: str
@@ -74,26 +73,21 @@ def _humanize_cron(cron: str) -> str:
     return cron or "—"
 
 
-def _digest_artefatos(schedules_path: Path, destinations: list[Destination]) -> list[Artefato]:
-    """Deriva os artefatos configurados dos entries `digest` do schedules.yaml.
+def _digest_artefatos(cron: str | None, destination_names: list[str]) -> list[Artefato]:
+    """Deriva o artefato `Digest` a partir do cron vindo de `settings` (KUBO-44).
 
     O digest envia para TODOS os destinos declarados (um artefato, um conteúdo nesta
     fase — sem digest por-destino). `agenda` traduz o cron para leitura humana."""
-    raw = yaml.safe_load(schedules_path.read_text(encoding="utf-8"))
-    entries = raw.get("schedules", []) if isinstance(raw, dict) else []
-    nomes = [d.name for d in destinations]
-    artefatos: list[Artefato] = []
-    for entry in entries:
-        if isinstance(entry, dict) and entry.get("worker") == "digest":
-            artefatos.append(
-                Artefato(
-                    name="Digest",
-                    agenda=_humanize_cron(str(entry.get("cron", ""))),
-                    origem="destilados novos desde o último envio",
-                    destinos=nomes,
-                )
-            )
-    return artefatos
+    if not cron:
+        return []
+    return [
+        Artefato(
+            name="Digest",
+            agenda=_humanize_cron(cron),
+            origem="destilados novos desde o último envio",
+            destinos=destination_names,
+        )
+    ]
 
 
 class NewDestination(BaseModel):
@@ -138,14 +132,17 @@ def _render_list(
     status: int = 200,
     db: Any = None,
 ) -> Response:
-    """Renderiza a lista de Destinos: artefatos (YAML) + destinos (DB) + form."""
+    """Renderiza a lista de Destinos: artefatos (settings + YAML) + destinos (DB) + form."""
     if db is None:
         with client.connect() as ro:
             db_destinations = destination_store.list_destinations(ro)
+            settings = settings_store.get_settings(ro)
     else:
         db_destinations = destination_store.list_destinations(db)
+        settings = settings_store.get_settings(db)
     yaml_destinations = load_destinations(_DESTINATIONS_PATH)
-    artefatos = _digest_artefatos(_SCHEDULES_PATH, yaml_destinations)
+    cron = settings.digest_cron if settings else None
+    artefatos = _digest_artefatos(cron, [d.name for d in yaml_destinations])
     return templates.TemplateResponse(
         request,
         _LIST_TEMPLATE,
