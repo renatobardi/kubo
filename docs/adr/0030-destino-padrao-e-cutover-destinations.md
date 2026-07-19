@@ -1,9 +1,10 @@
 # ADR-0030 — Destino padrão no `settings` + fechamento do cutover: aposenta o `destinations.yaml`
 
 > Status: **aceito** · Data: 2026-07-19 · Validado pelo advisor (Fable 5) antes do crave.
-> **Emenda o ADR-0028 §1** (settings ganha `default_destination`); **executa o ADR-0027 §14/§6/§11**
-> (ordem do cutover, local do retype, relocação do base URL). Resolve o ticket wayfinder #123 (mapa
-> #117) — a **última peça estrutural** do épico.
+> **Emenda o ADR-0028 §1** (settings ganha `default_destination`) e o **ADR-0027 §6** (realoca o
+> retype de `dispatch.destination` da migration 0011 para a 0013 do cutover); **executa o ADR-0027
+> §14/§11** (ordem do cutover, relocação do base URL). Resolve o ticket wayfinder #123 (mapa #117) —
+> a **última peça estrutural** do épico.
 
 ## Contexto
 
@@ -24,8 +25,11 @@ no instante em que roda, o código velho (que escreve `destination` como string)
 
 1. **`settings.default_destination`** (`record<destination>`, aceita NONE). O report on-demand e o
    CLI resolvem o alvo por uma função de store `default_destination(db)` — lê o `settings`, busca o
-   registro, devolve o modelo do destino **ativo**, ou `ConfigError` nos casos NONE / dangling /
-   arquivado. Um só ponto de verdade para report e CLI. O dono edita na tela de settings (#122).
+   registro, devolve o modelo do destino **se resolvível**, ou `ConfigError` **só** nos casos NONE /
+   dangling / arquivado. **Pausado resolve** (§2: o report on-demand ignora a pausa):
+   `default_destination(db)` **não** reusa o filtro/modelo `active_destinations` (que exclui pausado,
+   ADR-0027 §8) — carrega o registro direto por id. Um só ponto de verdade para report e CLI. O dono
+   edita na tela de settings (#122).
    **É config operacional** ("pra quem vão meus one-offs"), não fato do destino — a mesma distinção
    que justificou a `settings` (ADR-0028 §1). Campo novo no singleton tipado = código + PR.
 
@@ -45,33 +49,46 @@ no instante em que roda, o código velho (que escreve `destination` como string)
    quebrado sem superfície de conserto além de edição manual do DB. Paridade out-of-the-box com o
    comportamento atual é o critério. **Ordem do seed:** a linha `settings:global` (#119) precisa
    existir **antes** de o seed do destino (#118) escrever `default_destination` — ordem interna
-   consciente no `kubo/store/seed.py` (settings primeiro). O marker do seed já evita clobberar
-   edição posterior do dono.
+   consciente no `kubo/store/seed.py` (settings primeiro). **O seed do destino faz a escrita
+   cross-table** em `settings.default_destination`, e o **marker do destino** (não o de settings)
+   guarda o re-run — já evitando clobberar edição posterior do dono.
 
 4. **Default irresolvível → `ConfigError` no clique** (503, reusando o handling que o
    `_owner_delivery`/report já tem hoje — sem semântica de status nova), com mensagem acionável
    ("defina o destino padrão em Configurações"). Falhar alto numa ação explícita é aceitável e
    visível.
 
-5. **Cutover = UM DEPLOY** (a atomicidade do `deploy.sh`: rsync → build → migrations → seed → up).
-   A precondição "0011/0012 rodados" só é segura quando "rodados" = **no mesmo deploy do código novo**
-   — o retype destrutivo da 0011 quebra os escritores velhos no ato. **Forma: PRs empilhados, um
-   deploy** (recomendação do advisor, pela fadiga de complexidade + precedente da casa de ADRs
-   pequenos encadeados):
-   - Os **aditivos primeiro** (tabela `destination` + store + seed **sem** o retype de dispatch;
-     `settings` + boot + poll) — cada PR verde, revisável, deployável-aditivo.
-   - O **PR de cutover** carrega a parte **destrutiva**: a migration que apaga+retipa `dispatch`, o
-     rewire dos consumidores, e a morte dos YAML. Deploya-se **uma vez, no fim**.
-   - **Reconcilia o ADR-0027 §6:** o retype de `dispatch.destination` sai da 0011 e vai para a
-     migration do cutover (desvio de *build*, não de decisão; o ADR-0028 §1 já previu reconciliação
-     de numeração). Não deployar às 09:30 (o scheduler velho roda enquanto a migration executa).
-   - Gatilho para reconsiderar a forma 1 (PR único, fiel à letra do §6): se o diff total da onda
-     couber em ~1–1.5k linhas medidas no 1º spike.
+5. **Cutover = UM DEPLOY, com quiescência antes do retype destrutivo.** A sequência do `deploy.sh`
+   (rsync → build → migrations → seed → up) **não é atômica** por si: após o rsync, um processo velho
+   (scheduler/api) ainda vivo grava `dispatch.destination` como **string** enquanto a migration
+   destrutiva retipa o campo para `record<destination>`, e uma migration que falhe deixaria código
+   novo sobre schema meio-migrado. Logo o deploy do cutover **para os escritores antes da migration**:
+   `docker compose stop` do scheduler e da api → migration destrutiva + seed → `up` do código novo →
+   **health check `/healthz`** antes de declarar ok. **Rollback/recuperação:** os `dispatch` são dado
+   de dev (apagados pela própria migration), então recuperar = re-rodar o seed; migration falha →
+   o health check falha o deploy (não sobe código novo sobre schema meio-migrado). Não deployar às
+   09:30 (janela do digest).
+   - **Migrations — IDs e ordem finais:** **0011** = tabela `destination` (ADR-0027, **aditiva, SEM**
+     o retype de dispatch); **0012** = singleton `settings` (ADR-0028, aditiva); **0013** = cutover
+     (`DELETE dispatch` + retype `dispatch.destination` → `record<destination>`, a parte destrutiva).
+   - **Forma: PRs empilhados, um deploy** (advisor; fadiga de complexidade + precedente de ADRs
+     encadeados): os aditivos primeiro (0011/0012 + store + seed + settings/boot/poll), cada PR verde
+     e deployável-aditivo; o **PR de cutover** carrega a **0013** + o rewire dos consumidores + a morte
+     dos YAML, deployado **uma vez, no fim** com a quiescência acima.
+   - **Emenda ao ADR-0027 §6:** aquele §6 empacotou o retype + `DELETE dispatch` na migration 0011.
+     Este ADR **realoca o retype para a 0013** (a 0011 fica aditiva), porque os escritores velhos
+     quebram no ato do retype — ele tem que rodar no MESMO deploy que os substitui. É **emenda
+     explícita ao §6**, não o precedente de numeração do ADR-0028 §1 (que trata de ordem, não de
+     realocar o retype).
+   - Gatilho para reconsiderar a forma 1 (PR único, fiel à letra original do §6): se o diff total da
+     onda couber em ~1–1.5k linhas medidas no 1º spike.
 
 6. **Consumidores migram antes do YAML morrer** (ADR-0027 §14), no PR de cutover:
    - `scheduler/__init__.py` → sweep de destinos (ADR-0029).
-   - **`flow_runner.py` + `analyst.py`** (o caminho do report): o modelo do DB (`ActiveDestination`)
-     substitui `ResolvedDestination` através do runner. As **obrigações de PII test-enforced**
+   - **`flow_runner.py` + `analyst.py`** (o caminho do report): o registro de destino carregado por
+     `default_destination(db)` (§1 — resolve pausado, só arquivado rejeita; **não** o filtro
+     active-only do sweep) substitui `ResolvedDestination` através do runner. As **obrigações de PII
+     test-enforced**
      (ADR-0027 §3; endereço pelo construtor, nunca em config/log — ADR-0029 §3) valem para **este**
      caminho também. O report on-demand **ignora `distribution_paused`** (ADR-0028 §6) — preservar no
      rewire, não "unificar" por engano com o curto-circuito do sweep.
