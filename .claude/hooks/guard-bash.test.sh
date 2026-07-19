@@ -89,5 +89,33 @@ if [ "$cwd_code" = 2 ]; then printf 'ok    %-5s : %s\n' BLOCK 'commit em main li
 else printf 'FAIL  want=BLOCK got=ALLOW (exit %s) : commit-em-main via cwd\n' "$cwd_code"; fails=$((fails+1)); fi
 rm -rf "$tmp"
 
+# Untracked NÃO é árvore suja para troca de branch: git mantém arquivos untracked no
+# working dir ao trocar (o vetor do incidente era WIP *tracked*). Guard usa -uno.
+# Exercita a leitura real (sem override), com repo temp de estado controlado.
+tmp_ut="$(mktemp -d)"
+git -C "$tmp_ut" init -q -b main
+git -C "$tmp_ut" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+: > "$tmp_ut/untracked.txt"
+ut_in="$(printf '{"cwd":%s,"tool_input":{"command":"git switch other"}}' \
+  "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$tmp_ut")")"
+ut_code="$(printf '%s' "$ut_in" | bash "$HOOK" >/dev/null 2>&1; echo $?)"
+if [ "$ut_code" = 0 ]; then printf 'ok    %-5s : %s\n' ALLOW 'troca com so untracked (nao e sujeira)'
+else printf 'FAIL  want=ALLOW got=BLOCK (exit %s) : untracked nao deve bloquear\n' "$ut_code"; fails=$((fails+1)); fi
+rm -rf "$tmp_ut"
+
+# Modificação tracked (o vetor real) AINDA bloqueia — -uno não afrouxa isso.
+tmp_md="$(mktemp -d)"
+git -C "$tmp_md" init -q -b main
+: > "$tmp_md/f.txt"
+git -C "$tmp_md" -c user.email=t@t -c user.name=t add f.txt
+git -C "$tmp_md" -c user.email=t@t -c user.name=t commit -q -m init
+printf 'change\n' > "$tmp_md/f.txt"
+md_in="$(printf '{"cwd":%s,"tool_input":{"command":"git switch other"}}' \
+  "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$tmp_md")")"
+md_code="$(printf '%s' "$md_in" | bash "$HOOK" >/dev/null 2>&1; echo $?)"
+if [ "$md_code" = 2 ]; then printf 'ok    %-5s : %s\n' BLOCK 'troca com tracked modificado'
+else printf 'FAIL  want=BLOCK got=ALLOW (exit %s) : tracked modificado deve bloquear\n' "$md_code"; fails=$((fails+1)); fi
+rm -rf "$tmp_md"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "todos os casos passaram"; else echo "$fails caso(s) falharam"; exit 1; fi
