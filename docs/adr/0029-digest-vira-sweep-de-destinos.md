@@ -9,7 +9,8 @@
 Hoje o worker `digest` (`kubo/workers/digest.py`) é **monolítico**: uma instância segura a lista de
 todos os destinos, `run()` itera todos, e uma falha de envio vira `ErrorInfo(dispatch_partial)` com
 o run fechando parcial. O `manifest` declara `integrations=["telegram"]` **estaticamente**; o branch
-de e-mail é um `raise SenderError("email = 12.9")`.
+de e-mail é um `raise SenderError("canal ... não suportado nesta sessão")` (o `# email = 12.9` é
+comentário inline no código, não a mensagem).
 
 Com destinos no DB (ADR-0027), múltiplos, e o canal e-mail chegando (#120), esse desenho bate em
 duas paredes: **(1)** adicionar e-mail força o manifest para `["telegram", "smtp"]`, e o runtime
@@ -71,9 +72,11 @@ destinos**.
    - **Backlog (default, sem escolha):** o dreno natural do item 5 — desde o watermark antigo,
      oldest-first, capado. Confirma o defer-não-discard do ADR-0027 §9 / ADR-0028 §5 **como default**.
    - **Recente:** avança o watermark do destino para o **`time::now()` do banco** (evita skew
-     app↔DB), via uma **função de store nomeada `reset_destination_watermark`** que envolve
-     `insert_dispatch` num dispatch **`ok` de zero-item** (`item_count=0`, `items=[]`,
-     `watermark=now`). Reusa a máquina de watermark (sem campo novo), é **auditável** (aparece em
+     app↔DB), via uma **função de store nomeada `reset_destination_watermark`** que grava um dispatch
+     **`ok` de zero-item** (`item_count=0`, `items=[]`, `watermark=now`). Reusa a máquina de watermark
+     (sem campo novo — nuance de build: o `insert_dispatch` atual recebe o watermark como bind param,
+     então o `time::now()` do servidor pode exigir estender a função ou um `SELECT` prévio), é
+     **auditável** (aparece em
      Envios como "reset"), e a exceção ao só-se-novidade (§V) fica **localizada** a essa escrita
      administrativa por ação explícita do dono — o §V continua governando o job agendado, intacto.
    - **Vale para a reativação por-destino E para o unpause global** (o caso *férias* — a motivação
@@ -97,10 +100,17 @@ destinos**.
    | 0 destinos ativos | `digest_sweep_done total=0` | nada |
    | Dia sem novidade | `digest_sweep_done` com runs ok | runs ok, sem dispatch |
 
+   O **critério de teste** do ADR-0028 §5 ("run pausada não escreve dispatch nem move watermark")
+   **perde o sujeito** sob zero-runs — não há run pausada. O build o **reescreve** para "dia pausado →
+   zero runs + watermark intocado", não o preserva verbatim.
+
 8. **Canal sem worker no `DEST_DISPATCH`.** Ao contrário do `SweepEntry.kind` (validado eager no boot),
    o canal vem de **dado em tempo de fire** — não há validação eager possível. A borda pydantic limita
    a `telegram|email`, mas edição manual do DB fura. O loop tem o guard defensivo espelho do sweep:
-   canal fora do mapa → **log + skip + `failed++`, sem abrir run** (não há worker).
+   canal fora do mapa → **log + skip + `failed++`, sem abrir run** (não há worker). **#121 é
+   telegram-only:** `DEST_DISPATCH = {telegram}`; a chave `email` entra com o worker de e-mail
+   (#120/#124), e a UI (#122) **barra a criação de destino `email` até lá**. No meio-tempo, este guard
+   só alcança **adulteração do DB**, nunca um destino de e-mail legítimo — sem skip silencioso.
 
 9. **`active_destinations(db)` retorna TODOS os ativos** (todos os canais), e o sweep despacha por
    canal de cada linha. Isso **refina o ADR-0027 §8** (que a definiu `(db, *, channel)`): o filtro por
