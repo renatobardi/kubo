@@ -63,6 +63,29 @@ class SourceHasHistoryError(KuboError):
     id (entrada do dono, não conteúdo coletado hostil)."""
 
 
+class DuplicateDestinationError(KuboError):
+    """Já existe um destino com este (channel, address) — a store recusa a duplicata.
+
+    `create_destination` levanta isto quando um (channel, address) normalizado já está
+    ativo/pausado (arquivado reativa em vez de duplicar, ADR-0027 §4). A mensagem carrega
+    só `channel`/`address` (entrada do dono, não PII do banco) — o endereço real já está
+    normalizado quando a exceção é levantada."""
+
+
+class StaleDestinationError(KuboError):
+    """O destino-alvo saiu do estado editável entre a leitura do form e a escrita.
+
+    Espelho semântico de `StaleSourceError` para o Cadastro de destinos (ADR-0027 §12):
+    ação atingiu um destino inexistente ou arquivado. A rota traduz em 409 + re-render."""
+
+
+class DestinationHasHistoryError(KuboError):
+    """Hard delete de um destino recusado porque ele tem dispatches (ADR-0027 §12).
+
+    A única ação irreversível da tela é apagar; com histórico de envio a proveniência deve
+    ser preservada, então a UI oferece arquivar. A mensagem carrega só o id."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 

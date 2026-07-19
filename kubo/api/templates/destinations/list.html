@@ -2,10 +2,53 @@
 {% import "_macros.html" as macros %}
 {% block title %}Destinos · Kubo{% endblock %}
 {% block content %}
-<div class="space-y-6">
-  {{ macros.page_header("Destinos", "O que é distribuído e para onde. Convidados recebem — não operam.") }}
+<div class="space-y-4">
+  {{ macros.page_header("Destinos", "Para onde o conhecimento sai — pessoas e sistemas, com endereço visível só para você.") }}
 
-  {# Artefatos configurados — digests recorrentes (do schedules.yaml) #}
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  {# Adicionar destino (#122): canal e-mail é barrado no servidor até KUBO-47. #}
+  <details class="rounded-xl bg-card ring-1 ring-foreground/10" {% if notice %}open{% endif %}>
+    <summary class="flex cursor-pointer list-none items-center gap-2 p-4 text-sm font-medium text-foreground">
+      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
+      Adicionar destino
+    </summary>
+    <form method="post" action="/destinations" class="space-y-3 border-t border-border p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div>
+        <label for="dst-name" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Nome</label>
+        <input id="dst-name" name="name" required placeholder="Renato (Telegram)"
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="dst-kind" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tipo</label>
+          <select id="dst-kind" name="kind" class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            <option value="pessoa">Pessoa</option>
+            <option value="sistema">Sistema</option>
+          </select>
+        </div>
+        <div>
+          <label for="dst-channel" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Canal</label>
+          <select id="dst-channel" name="channel" class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            <option value="telegram">Telegram</option>
+            <option value="email">E-mail</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label for="dst-address" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Endereço</label>
+        <input id="dst-address" name="address" required placeholder="chat_id ou e-mail"
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        <p class="mt-1 text-2xs text-muted-foreground">Telegram: chat_id (número). E-mail: bloqueado até o worker existir.</p>
+      </div>
+      <button class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Cadastrar destino</button>
+    </form>
+  </details>
+
+  {# Artefatos configurados — ainda derivados do schedules.yaml + destinations.yaml até o cutover. #}
   <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
     <div class="border-b border-border p-4">
       <h2 class="text-sm font-medium">Artefatos configurados</h2>
@@ -37,39 +80,93 @@
     {% endif %}
   </section>
 
-  {# Destinos — pessoas (dono) e sistemas (do destinations.yaml) #}
+  {# Destinos — cadastro DB-backed. #}
   <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
     <div class="border-b border-border p-4">
-      <h2 class="text-sm font-medium">Destinos</h2>
-      <p class="mt-0.5 text-xs text-muted-foreground">Pessoas (dono) e sistemas.</p>
+      <h2 class="text-sm font-medium">Destinos cadastrados</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Pessoas (dono/convidados) e sistemas.</p>
     </div>
     {% if not destinations %}
-      <p class="p-4 text-sm text-muted-foreground">Nenhum destino declarado no destinations.yaml.</p>
+      <p class="p-4 text-sm text-muted-foreground">Nenhum destino cadastrado ainda.</p>
     {% else %}
-    <ul class="divide-y divide-border">
-      {% for r in destinations %}
-      <li class="flex items-center gap-3 p-4">
-        <span class="flex size-8 shrink-0 items-center justify-center text-xs font-semibold {% if r.kind == 'pessoa' %}rounded-full bg-primary text-primary-foreground{% else %}rounded-lg bg-muted text-muted-foreground{% endif %}">
-          {% if r.kind == 'pessoa' %}{{ r.name[0] | upper }}{% else %}
-          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-          {% endif %}
-        </span>
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-medium">{{ r.name }}</span>
-            <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">{{ "dono" if r.kind == "pessoa" else r.kind }}</span>
-            <span class="hidden items-center gap-1 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground md:inline-flex">
-              <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
-              {{ r.channel }}
-            </span>
+    <ul id="destinations-list" class="viewbox divide-y divide-border" data-view-group="destinations" data-mode="list">
+      {% for d in destinations %}
+        {% set did = d.id.id %}
+        <li data-search="{{ d.name }} {{ d.kind }} {{ d.channel }} {{ d.address }}"
+            class="flex flex-wrap items-center gap-3 p-4">
+          <span class="flex size-8 shrink-0 items-center justify-center text-xs font-semibold {% if d.kind == 'pessoa' %}rounded-full bg-primary text-primary-foreground{% else %}rounded-lg bg-muted text-muted-foreground{% endif %}">
+            {% if d.kind == 'pessoa' %}{{ d.name[0] | upper }}{% else %}
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+            {% endif %}
+          </span>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="truncate text-sm font-medium">{{ d.name }}</span>
+              <span class="rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary">{{ d.kind }}</span>
+              <span class="hidden items-center gap-1 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground md:inline-flex">
+                <svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+                {{ d.channel }}
+              </span>
+            </div>
+            <p class="mt-0.5 truncate text-xs text-muted-foreground">{{ d.address }} · {{ d.dispatches }} envio{{ "" if d.dispatches == 1 else "s" }}</p>
           </div>
-        </div>
-      </li>
+          <div class="flex w-full items-center gap-3 md:w-auto">
+            {% if d.archived_at %}
+              <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Arquivado</span>
+            {% elif not d.enabled %}
+              <span class="shrink-0 rounded-4xl bg-muted px-2.5 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Pausado</span>
+            {% else %}
+              <span class="shrink-0 rounded-4xl bg-primary/10 px-2.5 py-0.5 text-xs text-primary ring-1 ring-foreground/10">Ativo</span>
+            {% endif %}
+            <div class="ml-auto flex shrink-0 items-center gap-1.5">
+              {% if d.archived_at %}
+                <form method="post" action="/destinations/{{ did }}/restore">
+                  <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <button type="submit" aria-label="Restaurar destino {{ d.name }}"
+                          class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                  </button>
+                </form>
+              {% else %}
+                {% if d.enabled %}
+                <form method="post" action="/destinations/{{ did }}/disable">
+                  <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <button type="submit" aria-label="Pausar destino {{ d.name }}"
+                          class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                  </button>
+                </form>
+                {% else %}
+                <form method="post" action="/destinations/{{ did }}/enable">
+                  <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <button type="submit" aria-label="Retomar destino {{ d.name }}"
+                          class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                  </button>
+                </form>
+                {% endif %}
+                <a href="/destinations/{{ did }}/edit" aria-label="Editar destino {{ d.name }}"
+                   class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
+                  <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </a>
+                <form method="post" action="/destinations/{{ did }}/archive">
+                  <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <button type="submit" aria-label="Arquivar destino {{ d.name }}"
+                          class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+                  </button>
+                </form>
+              {% endif %}
+              <a href="/destinations/{{ did }}/delete" aria-label="Apagar destino {{ d.name }}"
+                 class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-destructive/10 hover:text-destructive">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+              </a>
+            </div>
+          </div>
+        </li>
       {% endfor %}
     </ul>
     {% endif %}
   </section>
-
-  <p class="text-xs text-muted-foreground">Destinos e agenda são configuração (destinations.yaml + schedules.yaml) — editar é mudar o arquivo e abrir PR.</p>
 </div>
 {% endblock %}

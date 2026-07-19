@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Apagar destino · Kubo{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-xl space-y-4">
+  {{ macros.page_header("Apagar destino", "Confirme a ação destrutiva.") }}
+
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  {% if dispatches > 0 %}
+  <div class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <p class="text-sm font-medium">Esse destino não pode ser apagado</p>
+    <p class="mt-1 text-sm text-muted-foreground">
+      Existe{{ "" if dispatches == 1 else "m" }} <strong>{{ dispatches }}</strong> envio{{ "" if dispatches == 1 else "s" }} registrado{{ "" if dispatches == 1 else "s" }}
+      para <strong>{{ destination.name }}</strong>. Para manter a auditoria, o destino só pode ser arquivado.
+    </p>
+    <form method="post" action="/destinations/{{ destination.id.id }}/archive" class="mt-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Arquivar destino</button>
+    </form>
+  </div>
+  {% else %}
+  <form method="post" action="/destinations/{{ destination.id.id }}/delete" class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p class="text-sm">
+      Apagar de vez <strong>{{ destination.name }}</strong> ({{ destination.channel }})?
+    </p>
+    <p class="mt-1 text-sm text-muted-foreground">Essa ação não pode ser desfeita. Não há envios registrados, então nenhum histórico será perdido.</p>
+    <div class="mt-4 flex items-center gap-3">
+      <button type="submit" class="h-9 flex-1 rounded-4xl bg-destructive px-3 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/80 active:translate-y-px">Apagar de vez</button>
+      <a href="/destinations" class="flex h-9 items-center rounded-4xl px-4 text-sm text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted">Cancelar</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
