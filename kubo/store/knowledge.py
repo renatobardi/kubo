@@ -867,13 +867,19 @@ class ActiveSource:
     """Um Cadastro ATIVO reduzido ao que o sweep de coleta precisa para despachar um run
     (#108, ADR-0025 §4): a canonical (vira o alvo do coletor), o title e as tags (compõem a
     config do worker). Sem `enabled`/`archived_at` — já filtrados pela query, todo `ActiveSource`
-    é, por construção, ativo."""
+    é, por construção, ativo.
+
+    `created_at` (datetime tz-aware do SDK) é o piso `since` do sweep github-repo (#110/ADR-0025
+    §5, D2): o coletor de releases só pega releases publicadas a partir do cadastro do repo —
+    sem backfill na estreia (D52), sem `since` operacional no schedules.yaml. Para o sweep rss
+    o campo existe mas o `_feed_config` o ignora (o worker `feed` não filtra por data)."""
 
     id: RecordID
     kind: str
     canonical: str
     title: str | None
     tags: list[str]
+    created_at: datetime
 
 
 def active_sources(db: Any, *, kind: str) -> list[ActiveSource]:
@@ -884,7 +890,7 @@ def active_sources(db: Any, *, kind: str) -> list[ActiveSource]:
     no sweep de `rss`. Traz `tags` porque a config do worker as carrega (feed marca os itens
     com elas); sem isso, itens novos nasceriam sem `metadata.tags` em silêncio."""
     rows = db.query(
-        "SELECT id, kind, canonical, title, tags FROM source "
+        "SELECT id, kind, canonical, title, tags, created_at FROM source "
         "WHERE enabled = true AND archived_at IS NONE AND kind = $kind;",
         {"kind": kind},
     )
@@ -895,6 +901,7 @@ def active_sources(db: Any, *, kind: str) -> list[ActiveSource]:
             canonical=r["canonical"],
             title=r.get("title"),
             tags=list(r.get("tags") or []),
+            created_at=r["created_at"],
         )
         for r in rows
     ]

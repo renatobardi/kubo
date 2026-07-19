@@ -411,6 +411,22 @@ def test_active_sources_carries_canonical_title_tags_for_dispatch(db: Any) -> No
     assert source.tags == ["ai", "openai"]
 
 
+def test_active_sources_carries_created_at_as_aware_datetime(db: Any) -> None:
+    """O sweep github-repo usa o `created_at` do Cadastro como piso `since` do coletor de
+    releases (#110/ADR-0025 §5, D2): repo cadastrado hoje só coleta releases publicadas a
+    partir de agora, sem backfill. `since` do worker exige datetime tz-aware — então
+    active_sources tem que trazer o created_at como datetime aware (não string de exibição)."""
+    from datetime import datetime
+
+    rid = knowledge.create_source(db, kind="github-repo", canonical="https://github.com/o/r")
+
+    (source,) = knowledge.active_sources(db, kind="github-repo")
+
+    assert source.id == rid
+    assert isinstance(source.created_at, datetime)
+    assert source.created_at.tzinfo is not None
+
+
 def test_edit_source_updates_fields_keeping_id_and_history(db: Any) -> None:
     """O coração do #106: editar title/tags/canonical mantém o MESMO id, então a aresta
     from_source do item já coletado fica intacta — histórico preservado. Editar a URL não é

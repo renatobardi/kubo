@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from pydantic import BaseModel
 from surrealdb import RecordID
 
 from kubo.contracts.models import WorkerManifest
@@ -51,7 +50,6 @@ from kubo.store.knowledge import insert_dispatch, run_status
 from kubo.workers import github_api
 from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
 from kubo.workers.dev import DevWorker, KuboDevWorker
-from kubo.workers.github_releases import GithubReleasesConfig, GithubReleasesWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
 _CATALOG_ROOT = Path(__file__).parents[2] / "catalogs"
@@ -77,10 +75,6 @@ _DEV_PERSONA = "dev"
 _IMPLEMENTING, _REVIEW, _DONE = "implementing", "review", "done"
 # v2 (ADR-0021): `done` abre o gate de promoção `[done, promoted]` — `promoted` é o terminal.
 _PROMOTED = "promoted"
-# `pipeline` (ADR-0021 §21.3, sessão 0021): board mínimo sem gate humano — a coletora vai
-# direto de queued a collecting a stored|failed (`_FAILED` já existe acima, reusado).
-_COLETOR_PERSONA = "coletor"
-_QUEUED, _COLLECTING, _STORED = "queued", "collecting", "stored"
 # Env do sandbox (invariante 8 — nunca em YAML/código): coordenadas do repo `kubo-forge` (D37).
 _FORGE_ENV = {
     "repo_url": "KUBO_FORGE_REPO_URL",
@@ -153,7 +147,6 @@ class FlowBehavior:
     resume: Callable[..., None] | None = None
     reject: Callable[..., None] | None = None
     promote: Callable[..., None] | None = None
-    config_model: type[BaseModel] | None = None
 
 
 def run_flow(
@@ -174,9 +167,10 @@ def run_flow(
     alto — E4) e delega. `executor`/`senders` são injetáveis (default = reais) para tornar o
     caminho testável com LLM/Telegram/cli falsos. `embedder`/`destination` são opcionais: o
     flow `dev` (executor cli) não usa nenhum dos dois — o behavior declara o que precisa.
-    `worker_config` (sessão 0021, marco 21.3/21.4) é a config bruta do worker mecânico do
-    flow `pipeline` — dead para os demais behaviors, que o ignoram (só existe pro call site
-    único não levantar `TypeError` por kwarg inesperado)."""
+    `worker_config` era a config bruta do worker mecânico do flow `pipeline` (aposentado no
+    #110). Vestigial: nenhum behavior vivo o consome — permanece só no shape comum de
+    `behavior.run` (todos o ignoram). Remoção do parâmetro (e das assinaturas dos behaviors) é
+    dívida nomeada, fora do escopo do #110."""
     templates = load_flow_templates(_TEMPLATES_DIR)
     template = templates.get(template_name)
     if template is None:
@@ -367,54 +361,6 @@ def _run_dev(
         gate_state=_REVIEW,
     )
     return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_REVIEW, gate_task=gate_task)
-
-
-def _run_pipeline(
-    db: Any,
-    template: FlowTemplate,
-    personas: Mapping[str, Persona],
-    question: str,
-    *,
-    embedder: Embedder | None,
-    destination: ResolvedDestination | None,
-    base_url: str,
-    executor: Executor | None,
-    senders: Mapping[str, Sender] | None,
-    worker_config: Mapping[str, Any] | None,
-) -> FlowRunResult:
-    """Comportamento do template `pipeline` (C1/C3/C6, sessão 0021, marco 21.3): a coletora
-    (persona `coletor`, sem LLM — E4) roda o `GithubReleasesWorker` mecânico, sem gate humano
-    (board `queued→collecting→stored|failed`, D56 fora do orçamento do runner síncrono).
-
-    `embedder`/`destination`/`executor`/`senders` NÃO se aplicam (worker sem LLM, sem envio) —
-    aceitos só pra casar o shape comum de `FlowBehavior.run` (mesmo idioma de `_run_dev`).
-    `worker_config` é passado CRU a `run_worker`, que já valida contra `GithubReleasesConfig`
-    do manifest (`_build_context`, `kubo/runtime/runner.py`): construir `GithubReleasesConfig`
-    aqui duplicaria essa validação e mudaria onde a falha de config malformada é capturada —
-    o teste de regressão `test_pipeline_bad_worker_config_does_not_crash_and_lands_in_failed`
-    exige que a falha surja PELO `run_worker`, task pousando em `failed`, nunca um crash antes
-    de `run_worker` sequer abrir o run."""
-    coletor = personas.get(_COLETOR_PERSONA)
-    if coletor is None:
-        raise ConfigError(f"template 'pipeline' exige a persona '{_COLETOR_PERSONA}' no catálogo")
-    _assert_permissions(coletor, GithubReleasesWorker.manifest)
-
-    inst = instantiate_flow(db, template=template, personas=personas, question=question)
-    task = create_task(db, flow=inst.flow, persona=inst.personas[_COLETOR_PERSONA], state=_QUEUED)
-    transition_task(db, task, from_state=_QUEUED, to_state=_COLLECTING)
-
-    worker = GithubReleasesWorker()
-    run_id = run_worker(
-        db,
-        worker,
-        config=dict(worker_config or {}),
-        embedder=embedder,
-        flow_ctx=FlowCtx(inst.flow, task),
-    )
-    set_task_run(db, task, run_id)
-    final = _STORED if _run_succeeded(db, run_id) else _FAILED
-    transition_task(db, task, from_state=_COLLECTING, to_state=final)
-    return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=final)
 
 
 def _build_cli_executor(persona: Persona, template: FlowTemplate) -> CliRunner:
@@ -856,5 +802,4 @@ _FLOW_REGISTRY: dict[str, FlowBehavior] = {
         reject=functools.partial(_reject_dev, target=_KUBO_TARGET),
         promote=functools.partial(_promote_dev, target=_KUBO_TARGET),
     ),
-    "pipeline": FlowBehavior(run=_run_pipeline, config_model=GithubReleasesConfig),
 }

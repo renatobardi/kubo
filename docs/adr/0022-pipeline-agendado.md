@@ -1,6 +1,14 @@
 # ADR-0022 — Pipeline agendado: watch list, flow por cron, agendamento de flow
 
 > Status: **aceito** (GO com correções, validado pelo advisor Fable 5, 2026-07-16) · Data: 2026-07-16
+> **Parcialmente superado pelo #110 (2026-07-18):** a COLETA do pipeline (worker `github-releases`
+> descobrindo a watch list, flow por cron) migrou para o sweep dirigido por Cadastro `github-repo`
+> (ADR-0025, Emenda #110). Com o pipeline — único flow `scheduled` — aposentado, a **maquinaria de
+> agendamento-de-flow** (`FlowEntry`/`_add_flow_job`/`execute_flow_job`) ficou sem usuário e foi
+> **removida**: a união de `schedules.yaml` voltou a `WorkerEntry|SweepEntry`. Capacidade removida,
+> **não proibida** — reintroduzir um flow agendado exige só reanimar `FlowEntry`+`_add_flow_job` do
+> histórico do git. O RUNTIME de flow (`run_flow`, behaviors dev/analysis) permanece intacto — só o
+> AGENDAMENTO de flow saiu.
 
 ## Contexto
 

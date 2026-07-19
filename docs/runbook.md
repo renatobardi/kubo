@@ -62,42 +62,27 @@ execute_job('feed', {'feed_url': 'https://example.com/feed.xml', 'title': 'Teste
 SELECT worker, status, stats, error, started_at, finished_at FROM run ORDER BY started_at DESC LIMIT 1;
 ```
 
-## PAT `GITHUB_TOKEN_WATCH` (worker github-releases v0.2.0, D54, sessão 0021)
+## PAT do worker `github-releases` (APOSENTADO `GITHUB_TOKEN_WATCH`, #110)
 
-O worker `github-releases` lê a watch list do dono via `GET /user/subscriptions`.
+Até o #110 o worker DESCOBRIA a watch list do dono via `GET /user/subscriptions` (depois
+GraphQL `viewer.watching`, D57) e exigia um PAT dedicado `GITHUB_TOKEN_WATCH` com escopo
+`notifications`. O #110 aposentou a descoberta: o repo agora é um Cadastro `github-repo`
+cadastrado à mão (UI #105) e o worker só lê `/repos/{owner}/{repo}/releases` (público, leitura
+pura). O PAT dedicado perdeu a razão de existir.
 
-**Opção A (USE ESTA) — PAT clássico, escopo `notifications`.** PROVADO fisicamente na sessão
-0021: HTTP 200 contra `api.github.com/user/subscriptions` — é o token que está no `.env` do
-kubo-test hoje.
+**O worker usa hoje `GITHUB_TOKEN_READONLY`** — o MESMO token de leitura do rito de promoção
+(integração `github-readonly`), já configurado no `.env` do kubo-test. Sem alargamento de escopo:
+ambos os usos são leitura pública. Nada a criar no deploy do #110; `GITHUB_TOKEN_WATCH` pode ser
+removido do `.env` do servidor (não é mais lido).
 
-1. *GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) →
-   Generate new token (classic)*.
-2. Escopo: **`notifications`**. **Atenção:** este escopo **NÃO é read-only** — permite marcar
-   notificação como lida e inscrever/desinscrever watches, além de ler a lista. É escrita de
-   baixo risco, mas não documente nem trate este token como "leitura".
-3. Expiração curta (renovável). O valor NUNCA passa pelo chat/log — cole direto no `.env`
-   do servidor (`GITHUB_TOKEN_WATCH=`, ver `.env.example`), invariante 8.
-4. Redeploy (`./scripts/deploy.sh`) pra o `kubo-scheduler` pegar a env nova.
+**Nota de método preservada (valor durável da investigação aposentada):** na sessão 0021, sobre
+"fine-grained cobre `/user/subscriptions`?", houve TRÊS respostas divergentes — o advisor disse
+que não (sem evidência), a doc oficial do GitHub disse que sim (evidência documental), a API real
+quebrou com 503 ao testar (evidência empírica). Nenhuma das duas primeiras acertou sozinha.
+Capacidade de API é fato empírico — doc oficial é hipótese até o `curl` responder.
 
-**Opção B (NÃO PROVADA — não seguir sem testar antes) — fine-grained, Account permissions →
-Watching: Read-only.** A doc oficial da API do GitHub (REST, seção "Watching") lista
-`GET /user/subscriptions` sob esta permissão — menor privilégio que o escopo `notifications`
-do PAT clássico. Mas a tentativa real (2026-07-16, token recém-criado) devolveu **HTTP 503**
-com a página de erro "Unicorn" do GitHub — inclusive em `GET /user`, o endpoint mais básico
-que existe. No mesmo instante: `githubstatus.com` reportava "All Systems Operational", e o
-MESMO Mac fez 200 em `api.github.com/rate_limit` sem token nenhum. Causa NÃO diagnosticada.
-**Dívida nomeada:** fechar essa folga de least-privilege exige diagnosticar o 503 primeiro —
-não repetir a tentativa em produção sem isso.
-
-**Nota de método (o valor durável deste achado):** sobre a mesma pergunta — "fine-grained cobre
-`/user/subscriptions`?" — houve TRÊS respostas diferentes ao longo da sessão 0021: o advisor
-afirmou que não cobria (sem evidência anexada); a doc oficial do GitHub afirmou que cobria
-(evidência documental); a API real quebrou com 503 ao testar (evidência empírica). Nenhuma das
-duas primeiras acertou sozinha. Capacidade de API é fato empírico — doc oficial é hipótese até
-o `curl` responder.
-
-Sem este PAT, o worker levanta `ConfigError` no run (integração `github-watch` sem secret
-resolvido) — falha legível, não silenciosa; o resto do scheduler segue rodando.
+Sem `GITHUB_TOKEN_READONLY`, o worker levanta `ConfigError` no run (integração `github-readonly`
+sem secret resolvido) — falha legível, não silenciosa; o resto do scheduler segue rodando.
 
 ## Pendências de operação (a reconciliar antes do deploy)
 

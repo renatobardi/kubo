@@ -116,36 +116,10 @@ def test_run_flow_accepts_worker_config_kwarg_without_breaking_existing_callers(
         )
 
 
-def test_pipeline_is_registered_with_github_releases_config_model() -> None:
-    """`pipeline` (ADR-0021 §21.3/21.4) declara `config_model=GithubReleasesConfig` no
-    FlowBehavior — é o que permite `build_scheduler` validar eagerly a `config` de um
-    `FlowEntry` no boot, no mesmo espírito de `worker_cls.manifest.config.model_validate`
-    já feito para workers."""
-    from kubo.runtime.flow_runner import _FLOW_REGISTRY
-    from kubo.workers.github_releases import GithubReleasesConfig
-
-    behavior = _FLOW_REGISTRY["pipeline"]
-
-    assert behavior.config_model is GithubReleasesConfig  # type: ignore[attr-defined]
-
-
 def test_dev_mini_config_model_defaults_to_none() -> None:
-    """Regressão: os 4 behaviors pré-existentes (`analysis`/`analysis-review`/`dev-mini`/
-    `dev-kubo`) NÃO ganharam `config_model` de graça — só `pipeline` precisa dele (os
-    outros são disparados por CLI/browser, nunca por `build_scheduler`)."""
+    """Regressão: os behaviors não declaram `config_model` — o campo foi aposentado com o flow
+    `pipeline` (#110), único que o usava (via `_add_flow_job`, também aposentado). O acesso a
+    `.config_model` agora levanta AttributeError, provando que o campo sumiu do FlowBehavior."""
     from kubo.runtime.flow_runner import _FLOW_REGISTRY
 
-    assert _FLOW_REGISTRY["dev-mini"].config_model is None  # type: ignore[attr-defined]
-
-
-def test_pipeline_behavior_has_no_gate_wiring() -> None:
-    """`pipeline` v1 não tem gate humano (o template não declara `gates` — C6, board
-    `queued→collecting→stored|failed`): resume/reject/promote continuam None, igual ao
-    `analysis` sem review."""
-    from kubo.runtime.flow_runner import _FLOW_REGISTRY
-
-    behavior = _FLOW_REGISTRY["pipeline"]
-
-    assert behavior.resume is None
-    assert behavior.reject is None
-    assert behavior.promote is None
+    assert not hasattr(_FLOW_REGISTRY["dev-mini"], "config_model")
