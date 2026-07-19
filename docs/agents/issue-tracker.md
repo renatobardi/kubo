@@ -1,8 +1,26 @@
-# Issue tracker: GitHub
+# Issue tracker: Jira
 
-Issues e PRDs deste repo vivem como GitHub Issues (`github.com/renatobardi/kubo`).
-Use a `gh` CLI para todas as operações. O `gh` infere o repo do `git remote -v` quando
-rodado dentro do clone.
+Issues e PRDs deste projeto vivem como **issues do Jira**, no projeto **`KUBO`** da instância
+`oute.atlassian.net`. As operações passam pelo **MCP do Atlassian (Rovo)** — ferramentas
+`mcp__claude_ai_Atlassian_Rovo__*`. Não há CLI dedicada; as chamadas são via MCP.
+
+> **Histórico:** até 2026-07-19 o tracker era GitHub Issues (`github.com/renatobardi/kubo`).
+> As 33 issues abertas foram migradas para `KUBO-1..33` e o GitHub foi fechado. O repositório Git
+> segue no GitHub (código, PRs, ADRs); só o **tracking de tickets** mudou para o Jira. Ver
+> ADR-0026 para a governança, que é agnóstica de tracker (o tracker é config, não regra).
+
+## Coordenadas (fixas)
+
+- **cloudId**: `77dbeb01-8de4-4ad9-8895-ebc2a711f18c` (ou passe `oute.atlassian.net` como cloudId).
+- **projectKey**: `KUBO` (Kanban, team-managed).
+- **Tipos de item** (o nome é **localizado em PT** — use exatamente):
+  `Epic`, `Tarefa`, `História`, `Função`, `Bug`, `Subtarefa`.
+  ⚠️ `createJiraIssue` exige `issueTypeName="Tarefa"` — **`Task` falha** ("Especifique algum tipo
+  de item válido").
+- **Descobrir/testar acesso**: `atlassianUserInfo` → `getAccessibleAtlassianResources` (dá o
+  cloudId) → `getVisibleJiraProjects`. Se os tools `mcp__claude_ai_Atlassian_Rovo__*` não
+  aparecerem (ToolSearch `atlassian`/`jira`), o MCP não subiu — **pare e avise**, não caia para
+  outro tracker.
 
 ## Governança (ADR-0026, substitui ADR-0024)
 
@@ -19,51 +37,61 @@ Ver ADR-0026 para o racional. (A cláusula "o mapa morre no handoff" é agora **
 
 ## Convenções
 
-- **Criar issue**: `gh issue create --title "..." --body "..."`. Heredoc para corpos multi-linha.
-- **Ler issue**: `gh issue view <number> --comments`, filtrando comentários com `jq` e buscando labels.
-- **Listar issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` com filtros `--label` e `--state`.
-- **Comentar**: `gh issue comment <number> --body "..."`
-- **Aplicar / remover labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Fechar**: `gh issue close <number> --comment "..."`
+Todas as chamadas levam `cloudId` e, quando criam/leem no projeto, `projectKey="KUBO"`.
+
+- **Criar issue**: `createJiraIssue` com `projectKey="KUBO"`, `issueTypeName="Tarefa"`,
+  `summary`, `description` (Markdown por default). Labels e campos extras vão em
+  `additional_fields`, ex.: `{"labels": ["backlog"]}` (labels Jira aceitam hífen, **não** espaço).
+- **Ler issue**: `getJiraIssue` com `issueIdOrKey="KUBO-<n>"`. Comentários e histórico via os
+  campos expandidos do próprio tool.
+- **Listar / buscar issues**: `searchJiraIssuesUsingJql`, ex.:
+  `project = KUBO AND statusCategory != Done ORDER BY key ASC`. Filtre por `labels`, `assignee`,
+  `status`. ⚠️ Uma query de projeto inteiro pode estourar o limite de tokens do resultado — peça
+  só os `fields` necessários (`["key","summary","labels","status"]`) e pagine com `maxResults`.
+- **Comentar**: `addCommentToJiraIssue` com `issueIdOrKey` e `commentBody`.
+- **Aplicar / remover labels e campos**: `editJiraIssue` (passe `labels` em `fields` /
+  `additional_fields`).
+- **Fechar / mover de estado**: transição de workflow, não edição de campo.
+  `getTransitionsForJiraIssue` para achar o id da transição (ex.: "Concluído") e
+  `transitionJiraIssue` para aplicá-la. Deixe o comentário de fecho via `addCommentToJiraIssue`.
 
 ## Pull requests como superfície de triagem
 
-**PRs como superfície de pedido: não.** _(Mude para `sim` se este repo tratar PRs externos como
-feature requests; `/triage` lê esta flag.)_
+**PRs como superfície de pedido: não.** _(Mude para `sim` se este projeto tratar PRs externos
+como feature requests; `/triage` lê esta flag.)_
 
-Quando `sim`, PRs passam pelos mesmos labels e estados das issues, via equivalentes `gh pr`
-(`gh pr view/diff/list/comment/edit/close`). GitHub compartilha um espaço de números entre
-issues e PRs, então um `#42` pode ser qualquer um — resolva com `gh pr view 42` e caia para
-`gh issue view 42`.
+PRs continuam no **GitHub** (`gh pr ...`) — são artefato de código, não de tracking. Se algum dia
+`sim`, um PR relevante vira uma issue `KUBO` correspondente via `createJiraIssue`, com o link do
+PR no corpo; a issue Jira é que carrega labels e estado de triagem.
 
 ## Quando uma skill diz "publish to the issue tracker"
 
-Crie uma GitHub Issue.
+Crie uma issue no Jira: `createJiraIssue` (`projectKey="KUBO"`, `issueTypeName="Tarefa"`).
 
 ## Quando uma skill diz "fetch the relevant ticket"
 
-Rode `gh issue view <number> --comments`.
+Rode `getJiraIssue` com a chave `KUBO-<n>` (ou `searchJiraIssuesUsingJql` se só houver o texto).
 
 ## Operações de wayfinding
 
-Usadas por `/wayfinder`. O **mapa** é uma issue única com issues **filhas** como tickets.
-A cláusula de handoff e os demais detalhes abaixo são **práticas da skill `/wayfinder`**, não
-um regime de governança do repo (ver Governança / ADR-0026).
+Usadas por `/wayfinder`. O **mapa** é um **Epic**; os tickets são issues **filhas** do épico.
+A cláusula de handoff e os detalhes abaixo são **práticas da skill `/wayfinder`**, não um regime
+de governança do repo (ver Governança / ADR-0026).
 
-- **Mapa**: issue com label `wayfinder:map`, contendo o corpo Notes / Decisions-so-far / Fog.
-  `gh issue create --label wayfinder:map`.
-- **Ticket filho**: issue ligada ao mapa como sub-issue do GitHub (`gh api` no endpoint de
-  sub-issues). Onde sub-issues não estão habilitadas, adicione o filho a uma task list no corpo
-  do mapa e ponha `Part of #<map>` no topo do corpo do filho. Labels: `wayfinder:<type>`
-  (`research`/`prototype`/`grilling`/`task`). Ao ser reivindicado, o ticket é atribuído ao dev.
-- **Bloqueio**: **issue dependencies nativas** do GitHub (representação canônica, visível na UI).
-  Adicione aresta com `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`,
-  onde `<blocker-db-id>` é o **database id** numérico do bloqueador
-  (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _não_ o `#number` nem o `node_id`).
-  Fallback: linha `Blocked by: #<n>, #<n>` no topo do corpo do filho. Ticket desbloqueia quando
-  todo bloqueador está fechado.
-- **Frontier query**: liste os filhos abertos do mapa, descarte os com bloqueador aberto
-  (`issue_dependencies_summary.blocked_by > 0`) ou com assignee; primeiro na ordem do mapa vence.
-- **Claim**: `gh issue edit <n> --add-assignee @me` — a primeira escrita da sessão.
-- **Resolver**: `gh issue comment <n> --body "<answer>"`, depois `gh issue close <n>`, depois
-  anexe um ponteiro de contexto (gist + link) ao Decisions-so-far do mapa.
+- **Mapa**: `createJiraIssue` com `issueTypeName="Epic"` + label `wayfinder:map`, contendo o corpo
+  Notes / Decisions-so-far / Fog.
+- **Ticket filho**: `createJiraIssue` com `issueTypeName="Tarefa"` e `parent="KUBO-<epic>"`
+  (hierarquia nativa Epic → Tarefa no team-managed). Label `wayfinder:<type>`
+  (`research`/`prototype`/`grilling`/`task`). Ao ser reivindicado, atribua ao dev (`editJiraIssue`
+  com `assignee`).
+- **Bloqueio**: **issue link** nativo do Jira. `getIssueLinkTypes` para achar o par
+  "Blocks / is blocked by"; `createIssueLink` ligando bloqueado ← bloqueador. Visível na UI.
+- **Frontier query**: `searchJiraIssuesUsingJql`, ex.:
+  `parent = KUBO-<epic> AND statusCategory != Done AND assignee IS EMPTY ORDER BY rank ASC`,
+  depois descarte em código os que têm link "is blocked by" com bloqueador aberto; primeiro na
+  ordem do épico vence.
+- **Claim**: `editJiraIssue` atribuindo a si (`assignee` = seu accountId, de `atlassianUserInfo`
+  ou `lookupJiraAccountId`) — a primeira escrita da sessão.
+- **Resolver**: `addCommentToJiraIssue` com a resposta, depois `transitionJiraIssue` para
+  "Concluído", depois anexe um ponteiro de contexto (gist + link) ao Decisions-so-far do épico
+  (`editJiraIssue` no corpo do épico).
