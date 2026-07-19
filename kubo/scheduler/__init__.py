@@ -27,7 +27,9 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.flow_runner import _FLOW_REGISTRY, run_flow
 from kubo.runtime.flow_templates import load_flow_templates
 from kubo.runtime.runner import run_worker
+from kubo.scheduler.sweep import SWEEP_DISPATCH
 from kubo.store import client
+from kubo.store.knowledge import active_sources
 from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.registry import WORKER_REGISTRY
@@ -69,15 +71,27 @@ class FlowEntry(BaseModel):
     config: dict[str, Any] = {}
 
 
+class SweepEntry(BaseModel):
+    """Uma entrada de SWEEP de coleta (#108, ADR-0025 §4): varre os Cadastros ativos de um
+    `kind` e dispara um run por Cadastro. `sweep` é o KIND a varrer (dado — `rss`), não um nome
+    de worker (o mapa kind→worker é fixo em código, `SWEEP_DISPATCH`). Sem `config`: a config de
+    cada run vem do Cadastro, não da entry. Campo obrigatório disjunto (`sweep`) desambigua a
+    união sem discriminador, como `worker` e `flow`."""
+
+    model_config = ConfigDict(extra="forbid")
+    sweep: str
+    cron: str
+
+
 class Schedules(BaseModel):
     """Config validada de `schedules.yaml`: timezone obrigatória + lista de entries — cada
-    entry é `WorkerEntry` OU `FlowEntry` (união em modo smart do Pydantic v2: os campos
-    obrigatórios disjuntos `worker` vs `flow`+`question` bastam para desambiguar sem
-    `discriminator=` explícito, ADR-0022)."""
+    entry é `WorkerEntry`, `FlowEntry` OU `SweepEntry` (união em modo smart do Pydantic v2: os
+    campos obrigatórios disjuntos `worker` vs `flow`+`question` vs `sweep` bastam para
+    desambiguar sem `discriminator=` explícito, ADR-0022/ADR-0025)."""
 
     model_config = ConfigDict(extra="forbid")
     timezone: str
-    schedules: list[WorkerEntry | FlowEntry]
+    schedules: list[WorkerEntry | FlowEntry | SweepEntry]
 
     @field_validator("timezone")
     @classmethod
@@ -163,6 +177,35 @@ def execute_flow_job(template_name: str, question: str, worker_config: dict[str,
         raise
 
 
+def execute_sweep_job(kind: str) -> None:
+    """Executa o sweep de coleta de um `kind` (#108, ADR-0025 §4): lê os Cadastros ATIVOS e
+    dispara UM run por Cadastro (preserva 'um run = um feed', ADR-0009). Loop query→run_worker,
+    ISOLADO por Cadastro — a falha de um NÃO condena os demais (`try`/`continue`), e cada run
+    abre a PRÓPRIA conexão para que um ws morto num Cadastro não derrube o resto do sweep
+    (a listagem dos ativos usa uma conexão curta antes). Sem run 'pai', sem retry, sem estado
+    de orquestração: os registros do sweep SÃO as runs que `run_worker` persiste — cruzar
+    essa linha entraria no escopo negativo (invariante 7). `kind` já foi validado contra
+    `SWEEP_DISPATCH` em `_add_sweep_job` (falha eager no build); o `.get` aqui é defensivo."""
+    dispatch = SWEEP_DISPATCH.get(kind)
+    if dispatch is None:  # inalcançável via build_scheduler (validado eager); guarda de fiação
+        raise ConfigError(f"sweep de kind '{kind}' sem despacho em SWEEP_DISPATCH")
+    with client.connect(client.config()) as db:
+        sources = active_sources(db, kind=kind)
+    dispatched = 0
+    failed = 0
+    for source in sources:
+        try:
+            with client.connect(client.config()) as db:
+                run_worker(db, dispatch.worker_factory(), config=dispatch.build_config(source))
+            dispatched += 1
+        except Exception:  # noqa: BLE001 — isola o Cadastro: loga e segue (run_worker já estrutura erro de worker)
+            failed += 1
+            _log.exception(
+                "sweep_run_failed", kind=kind, source=str(source.id), canonical=source.canonical
+            )
+    _log.info("sweep_done", kind=kind, total=len(sources), dispatched=dispatched, failed=failed)
+
+
 def _cron_trigger(cron: str, tz: ZoneInfo, *, label: str) -> CronTrigger:
     """Parseia `cron` em `CronTrigger`, com `ConfigError` legível (padrão de domínio do
     módulo) no lugar da `ValueError` crua da lib — `label` identifica a entry no erro."""
@@ -231,20 +274,36 @@ def _add_flow_job(scheduler: BlockingScheduler, entry: FlowEntry, tz: ZoneInfo) 
     )
 
 
+def _add_sweep_job(scheduler: BlockingScheduler, entry: SweepEntry, tz: ZoneInfo) -> None:
+    """Valida e registra o job de uma `SweepEntry` (#108): o `kind` tem que estar em
+    `SWEEP_DISPATCH` e o cron ser parseável — cada falha vira `ConfigError` EAGER (antes do
+    start). Validar o kind no build torna 'kind desconhecido em runtime' impossível por
+    construção (o `.get` de `execute_sweep_job` nunca vê um kind não mapeado)."""
+    if entry.sweep not in SWEEP_DISPATCH:
+        raise ConfigError(
+            f"sweep de kind '{entry.sweep}' sem despacho em SWEEP_DISPATCH "
+            f"(despacháveis: {sorted(SWEEP_DISPATCH)})"
+        )
+    trigger = _cron_trigger(entry.cron, tz, label=f"sweep '{entry.sweep}'")
+    scheduler.add_job(execute_sweep_job, trigger=trigger, kwargs={"kind": entry.sweep})
+
+
 def build_scheduler(schedules: Schedules) -> BlockingScheduler:
     """Monta o BlockingScheduler com um job cron por entry, tz explícita SEMPRE.
 
     Valida TUDO eagerly (falha alta antes do start, não horas depois no 1º disparo). Cada
-    entry é `WorkerEntry` (job existente, ADR-0010) ou `FlowEntry` (marco 21.4) — o dispatch
-    por `isinstance` mantém as duas validações/fiações SEPARADAS (`_add_worker_job`/
-    `_add_flow_job`), cada falha vira `ConfigError` (padrão de domínio do módulo)."""
+    entry é `WorkerEntry` (ADR-0010), `FlowEntry` (marco 21.4) ou `SweepEntry` (#108) — o
+    dispatch por `isinstance` mantém as três validações/fiações SEPARADAS (`_add_worker_job`/
+    `_add_flow_job`/`_add_sweep_job`), cada falha vira `ConfigError` (padrão de domínio)."""
     tz = ZoneInfo(schedules.timezone)
     scheduler = BlockingScheduler(timezone=tz)
     for entry in schedules.schedules:
         if isinstance(entry, WorkerEntry):
             _add_worker_job(scheduler, entry, tz)
-        else:
+        elif isinstance(entry, FlowEntry):
             _add_flow_job(scheduler, entry, tz)
+        else:
+            _add_sweep_job(scheduler, entry, tz)
     return scheduler
 
 

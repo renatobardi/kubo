@@ -376,6 +376,41 @@ def test_get_source_absent_returns_none(db: Any) -> None:
     assert knowledge.get_source(db, knowledge._rid("source", "ghost")) is None
 
 
+def test_active_sources_returns_only_enabled_non_archived_of_kind(db: Any) -> None:
+    """active_sources (#108) é a porta do sweep: devolve só os Cadastros ATIVOS (enabled=true
+    E archived_at IS NONE) do kind pedido. Pausado, arquivado e outro kind NUNCA entram — é o
+    que garante 'pausado/arquivado não gera run'."""
+    a = knowledge.create_source(db, kind="rss", canonical="https://a/feed", title="A")
+    b = knowledge.create_source(db, kind="rss", canonical="https://b/feed", title="B")
+    paused = knowledge.create_source(db, kind="rss", canonical="https://p/feed")
+    knowledge.set_source_enabled(db, id=paused, enabled=False)
+    archived = knowledge.create_source(db, kind="rss", canonical="https://x/feed")
+    knowledge.archive_source(db, id=archived)
+    knowledge.create_source(db, kind="github-repo", canonical="https://github.com/o/r")
+
+    active = knowledge.active_sources(db, kind="rss")
+
+    assert {str(s.id) for s in active} == {str(a), str(b)}
+
+
+def test_active_sources_carries_canonical_title_tags_for_dispatch(db: Any) -> None:
+    """O sweep monta a config do worker a partir do ActiveSource — então canonical, title e
+    tags precisam vir (as tags fecham o circuito de metadata dos itens; sem elas, itens novos
+    nasceriam sem rótulo em silêncio)."""
+    rid = knowledge.create_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+    knowledge.edit_source(
+        db, id=rid, title="Feed X", tags=["ai", "openai"], canonical="https://x/feed"
+    )
+
+    (source,) = knowledge.active_sources(db, kind="rss")
+
+    assert source.id == rid
+    assert source.kind == "rss"
+    assert source.canonical == "https://x/feed"
+    assert source.title == "Feed X"
+    assert source.tags == ["ai", "openai"]
+
+
 def test_edit_source_updates_fields_keeping_id_and_history(db: Any) -> None:
     """O coração do #106: editar title/tags/canonical mantém o MESMO id, então a aresta
     from_source do item já coletado fica intacta — histórico preservado. Editar a URL não é

@@ -6,53 +6,22 @@
 #
 # `timezone` é OBRIGATÓRIO e explícito — o default do APScheduler é a tz do
 # processo, que diverge silenciosamente entre dev (Mac) e container (UTC).
-# Uma entry = um feed (um run = um feed = source consistente, ADR-0009 item VII).
 # NUNCA carrega segredo (invariante 8): feeds são públicos; credencial vem do
 # catálogo de integrações + env, nunca daqui.
 #
-# ATENÇÃO (dono): as 6 URLs abaixo são as fontes reais do plano 0005, com os
-# endpoints RSS canônicos conhecidos. Reconciliar com as URLs exatas do legado
-# (NeonDB `feed_sources`) antes do deploy — o CI não toca a internet, então uma
-# URL errada aqui não quebra teste, só a coleta real.
+# A LISTA de feeds NÃO mora mais aqui (#108, corte RSS do ADR-0025): o banco diz
+# O QUÊ coletar (Cadastros ativos), geridos pela UI (#105-#107) e semeados por
+# `python -m kubo.store.seed`. Este arquivo é só OPERAÇÃO (quando roda). A coleta
+# de feeds virou UM sweep (`sweep: rss`) que varre os Cadastros ativos e dispara
+# um run por Cadastro — preserva "um run = um feed" (ADR-0009 item VII).
 timezone: America/Sao_Paulo
 
 schedules:
-  - worker: feed
+  # ── SWEEP RSS — coleta dirigida por Cadastro (#108, ADR-0025 §4) ──────────────
+  # Varre os Cadastros rss ATIVOS (enabled=true, não arquivados) e dispara um run
+  # por Cadastro. Pausar/arquivar pela UI de fato para a coleta a partir daqui.
+  - sweep: rss
     cron: "0 8 * * *"
-    config:
-      feed_url: https://openai.com/news/rss.xml
-      title: OpenAI News
-      tags: [ai, openai, confiavel]
-  - worker: feed
-    cron: "10 8 * * *"
-    config:
-      feed_url: https://deepmind.google/blog/rss.xml
-      title: Google DeepMind Blog
-      tags: [ai, deepmind, confiavel]
-  - worker: feed
-    cron: "20 8 * * *"
-    config:
-      feed_url: https://huggingface.co/blog/feed.xml
-      title: Hugging Face Blog
-      tags: [ai, dev, huggingface]
-  - worker: feed
-    cron: "30 8 * * *"
-    config:
-      feed_url: https://github.blog/ai-and-ml/feed/
-      title: GitHub Blog — AI & ML
-      tags: [ai, dev, github]
-  - worker: feed
-    cron: "40 8 * * *"
-    config:
-      feed_url: https://importai.substack.com/feed
-      title: Import AI
-      tags: [ai, newsletter]
-  - worker: feed
-    cron: "50 8 * * *"
-    config:
-      feed_url: https://www.semianalysis.com/feed
-      title: SemiAnalysis
-      tags: [ai, hardware, semianalysis]
   # ── DESTILADOR DIÁRIO — ATIVO (reativado na mini-sessão 0008) ─────────────────
   # Precondição cumprida: o filtro de itens `content=""` está em
   # kubo.store.knowledge.items_without_distilled (link-posts sem corpo nunca vão

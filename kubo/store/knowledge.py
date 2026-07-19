@@ -148,6 +148,34 @@ def upsert_source(db: Any, *, kind: str, canonical: str, title: str | None = Non
     return rid
 
 
+def upsert_seed_source(
+    db: Any, *, kind: str, canonical: str, title: str | None, tags: list[str]
+) -> RecordID:
+    """Semeia UM Cadastro de fonte de forma idempotente e NÃO-destrutiva (#108, corte RSS):
+    o bootstrap das 6 fontes legadas para o modelo dirigido-por-Cadastro, migrando canonical+
+    title+tags do antigo `schedules.yaml` para o DB (a única fonte-de-verdade daqui pra frente).
+
+    Lookup-first (como `upsert_source`): reusa o id existente — sha256 legado da coleta ou
+    surrogate da UI — ou cunha um surrogate se ausente. Convergem no mesmo (kind, canonical).
+
+    COALESCE em cada campo do dono, nunca SET cego — o #107 está vivo, o dono pode ter pausado
+    ou re-tageado uma fonte ANTES deste seed rodar, e o seed preenche lacuna, jamais reverte:
+    `title = title ?? $title` (título editado sobrevive); `enabled = enabled ?? true` (uma pausa
+    do dono sobrevive — só nasce ativo quem ainda não tem estado); `tags` só recebe as do seed
+    quando está vazio (`[]` = 'nunca setado', decisão explícita da migration 0009), preservando
+    qualquer edição de tags do dono. Num record NOVO todos os campos partem de NONE/[], então o
+    coalesce cai no valor do seed — bootstrap completo em ambiente limpo."""
+    rid = _find_source_id(db, kind=kind, canonical=canonical) or _fresh("source")
+    db.query(
+        "UPSERT $r SET kind = $kind, canonical = $canonical, "
+        "title = title ?? $title, "
+        "enabled = enabled ?? true, "
+        "tags = (IF array::len(tags ?? []) = 0 THEN $tags ELSE tags END);",
+        {"r": rid, "kind": kind, "canonical": canonical, "title": title, "tags": tags},
+    )
+    return rid
+
+
 def upsert_item(
     db: Any,
     *,
@@ -832,6 +860,44 @@ def get_source(db: Any, id: RecordID) -> SourceDetail | None:
         enabled=bool(r["enabled"]),
         archived_at=str(archived) if archived is not None else None,
     )
+
+
+@dataclass(frozen=True)
+class ActiveSource:
+    """Um Cadastro ATIVO reduzido ao que o sweep de coleta precisa para despachar um run
+    (#108, ADR-0025 §4): a canonical (vira o alvo do coletor), o title e as tags (compõem a
+    config do worker). Sem `enabled`/`archived_at` — já filtrados pela query, todo `ActiveSource`
+    é, por construção, ativo."""
+
+    id: RecordID
+    kind: str
+    canonical: str
+    title: str | None
+    tags: list[str]
+
+
+def active_sources(db: Any, *, kind: str) -> list[ActiveSource]:
+    """Lista os Cadastros ATIVOS de um `kind` — a porta única do sweep para 'o que coletar
+    agora' (#108, ADR-0025 §4). Ativo = `enabled=true` E `archived_at IS NONE`: pausado ou
+    arquivado NUNCA entra no resultado, logo nunca gera run (o critério do #108). Filtra por
+    `kind` na store (o sweep é por-kind, uma `SweepEntry` por kind) — `github-repo` nunca cai
+    no sweep de `rss`. Traz `tags` porque a config do worker as carrega (feed marca os itens
+    com elas); sem isso, itens novos nasceriam sem `metadata.tags` em silêncio."""
+    rows = db.query(
+        "SELECT id, kind, canonical, title, tags FROM source "
+        "WHERE enabled = true AND archived_at IS NONE AND kind = $kind;",
+        {"kind": kind},
+    )
+    return [
+        ActiveSource(
+            id=r["id"],
+            kind=r["kind"],
+            canonical=r["canonical"],
+            title=r.get("title"),
+            tags=list(r.get("tags") or []),
+        )
+        for r in rows
+    ]
 
 
 def edit_source(

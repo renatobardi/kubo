@@ -50,10 +50,6 @@
       Nenhuma fonte no acervo ainda.
     </div>
   {% else %}
-  {# Honestidade (#107, achado do security-reviewer): pausar/arquivar mudam o REGISTRO, não
-     interrompem a coleta ainda — o sweep por Cadastro (#108) é que vai honrar o estado. Helper
-     muted, sem alarme; some quando o #108 fechar (critério de aceite do #108). #}
-  <p class="text-xs text-muted-foreground">Pausar e arquivar mudam o registro e a listagem — a coleta ainda não é interrompida por aqui (o sweep de coleta por Cadastro está em construção).</p>
   <div id="sources-list" class="viewbox" data-view-group="sources" data-mode="list">
     {% for source in sources %}
       {% set days = source.last_collected_at | days_since %}
