@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.errors import (
     DestinationHasHistoryError,
@@ -21,6 +22,24 @@ from kubo.errors import (
 from kubo.store import client, destinations, knowledge, migrations
 
 pytestmark = pytest.mark.integration
+
+
+def test_pii_is_not_exposed_in_errors_or_repr() -> None:
+    """ADR-0027 §3: address é PII de roteamento; nunca aparece em log/repr/erro."""
+    d = destinations.Destination(
+        id=RecordID("destination", "test"),
+        name="Renato",
+        kind="pessoa",
+        channel="telegram",
+        address="123456789",
+        enabled=True,
+        archived_at=None,
+    )
+    assert "123456789" not in repr(d)
+
+    err = DuplicateDestinationError("destino já cadastrado: channel=telegram")
+    assert "123456789" not in str(err)
+
 
 _DESTINATIONS_DB = "test_destinations"
 

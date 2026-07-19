@@ -54,9 +54,14 @@ def normalize_address(channel: str, address: str) -> str:
     return raw
 
 
-def _fresh() -> RecordID:
+def _fresh_destination_id() -> RecordID:
     """Id surrogate novo para destination."""
     return RecordID("destination", secrets.token_hex(16))
+
+
+def _destination_ref(id: RecordID) -> str:
+    """String `destination:<key>` usada em `dispatch.destination` nesta fase."""
+    return str(id)
 
 
 def _find_destination_id(db: Any, *, channel: str, address: str) -> RecordID | None:
@@ -103,16 +108,18 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
         if current is None:
             raise StaleDestinationError(f"destino sumiu durante criação: {existing}")
         if current.archived_at is not None:
-            db.query(
+            updated = db.query(
                 "UPDATE $r SET name = $name, kind = $kind, enabled = true, "
                 "archived_at = NONE WHERE archived_at IS NOT NONE;",
                 {"r": existing, "name": name, "kind": kind},
             )
+            if not updated:
+                raise StaleDestinationError(f"destino sumiu durante reativação: {existing}")
             return existing
         raise DuplicateDestinationError(
-            f"destino já cadastrado: channel={channel} address={normalized}"
+            f"destino já cadastrado: channel={channel}"
         )
-    rid = _fresh()
+    rid = _fresh_destination_id()
     db.query(
         "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
         "address = $address, enabled = true, archived_at = NONE;",
@@ -133,7 +140,7 @@ def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
         other = _find_destination_id(db, channel=current.channel, address=normalized)
         if other is not None and str(other) != str(id):
             raise DuplicateDestinationError(
-                f"destino já cadastrado: channel={current.channel} address={normalized}"
+                f"destino já cadastrado: channel={current.channel}"
             )
     updated = db.query(
         "UPDATE $r SET name = $name, address = $address WHERE archived_at IS NONE;",
@@ -179,9 +186,9 @@ def destination_dispatch_count(db: Any, id: RecordID) -> int:
     """Conta quantos dispatches apontam para este destino (string RecordID)."""
     rows = db.query(
         "SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL;",
-        {"addr": str(id)},
+        {"addr": _destination_ref(id)},
     )
-    return int(rows[0]["count"]) if rows else 0
+    return int(rows[0]["count"])
 
 
 def delete_destination(db: Any, *, id: RecordID) -> None:
@@ -193,7 +200,7 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
     deleted = db.query(
         "DELETE $r WHERE (SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL)"
         "[0].count = 0 RETURN BEFORE;",
-        {"r": id, "addr": str(id)},
+        {"r": id, "addr": _destination_ref(id)},
     )
     if not deleted:
         if destination_dispatch_count(db, id) > 0:
