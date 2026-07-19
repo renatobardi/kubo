@@ -8,7 +8,7 @@ Escrita no molde ADR-0018: CSRF, kubo_rw por-request, validação pydantic na bo
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -22,6 +22,7 @@ from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
 from kubo.errors import ConfigError, format_validation_error
 from kubo.store import client
+from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 
 _log = structlog.get_logger(__name__)
@@ -42,8 +43,8 @@ class SettingsForm(BaseModel):
     """Entrada validada do form de Configurações."""
 
     digest_cron: str
-    distribution_paused_raw: Annotated[str, Form()] = "false"
-    default_destination_raw: Annotated[str, Form()] = ""
+    distribution_paused_raw: str = "false"
+    default_destination_raw: str = ""
 
     @field_validator("digest_cron", mode="after")
     @classmethod
@@ -81,7 +82,7 @@ class SettingsForm(BaseModel):
 def _render_page(
     request: Request,
     settings: settings_store.Settings | None,
-    choices: list[Any],
+    choices: list[destination_store.Destination],
     *,
     notice: str | None = None,
     status: int = 200,

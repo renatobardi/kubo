@@ -47,6 +47,11 @@ _log = structlog.get_logger()
 # Intervalo de polling da config do digest — 5 minutos (ADR-0028 §4).
 _DIGEST_POLL_MINUTES = 5
 
+# Teto de destilados por digest — constante pinada no scheduler (ADR-0028 §2), espelho
+# de `_DISTILLER_MODEL`. O worker ainda carrega o default 50, mas o scheduler passa
+# o valor explicitamente para não depender de default oculto.
+_DIGEST_MAX_ITEMS = 50
+
 # Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
 # 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
 # ADR-0010) — nunca fica configurável em schedules.yaml (evitaria o gate).
@@ -148,9 +153,11 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     conexão, roda sob contrato (run_worker persiste), fecha. Sem handle global de
     DB (um ws de vida longa apodrece num processo que roda dias).
 
-    No disparo do `digest`, lê `distribution_paused` de `settings` (KUBO-44) — se
-    pausado, encerra SEM instanciar o worker nem abrir run. Erros de leitura de
-    settings não derrubam o job: o default é `false` e o log mantém visibilidade.
+    No disparo do `digest`, lê `distribution_paused` de `settings` (KUBO-44) e passa
+    para o worker como config. Se pausado, o worker devolve `RunResult()` vazio,
+    que o runtime fecha como run `ok` sem dispatch (ADR-0028 §5) — o watermark
+    não avança. Erros de leitura de settings não derrubam o job: o default é
+    `false` e o log mantém visibilidade.
     """
     try:
         if worker_name == "digest":
@@ -160,11 +167,15 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
                     paused = settings.distribution_paused if settings else False
                 except Exception:  # noqa: BLE001 — defensivo: config pode estar inconsistente
                     paused = False
-                _log.info("digest_pause_read", distribution_paused=paused)
-                if paused:
-                    _log.info("digest_skipped_paused")
-                    return
-        worker, embedder = _instantiate(worker_name)
+            _log.info("digest_pause_read", distribution_paused=paused)
+            if paused:
+                worker: Any = DigestWorker(destinations=[], base_url="")
+                embedder: Embedder | None = None
+            else:
+                worker, embedder = _instantiate(worker_name)
+            config = {"max_items": _DIGEST_MAX_ITEMS, "paused": paused}
+        else:
+            worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
             run_worker(db, worker, config=config, embedder=embedder)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga; APScheduler não perde o traço
@@ -258,7 +269,8 @@ def _add_digest_job(
     """Registra o job `digest` a partir do `digest_cron` do singleton settings (KUBO-44).
 
     O horário não vem mais do `schedules.yaml` — a timezone continua vindo de lá. A config
-    do worker usa o default do `DigestConfig` (`max_items=50`) e os destinos ainda vêm do
+    efetiva do worker (`max_items` e `paused`) é montada em `execute_job` a partir das
+    constantes pinadas do scheduler e do `settings`; os destinos ainda vêm do
     `destinations.yaml` (cutover em ticket futuro).
     """
     trigger = _digest_trigger(settings.digest_cron, tz)
@@ -295,13 +307,13 @@ def _check_and_reschedule_digest(
         return last_cron
 
     try:
-        _digest_trigger(settings.digest_cron, tz)
+        new_trigger = _digest_trigger(settings.digest_cron, tz)
     except ConfigError:
         _log.error("digest_poll_invalid_cron", cron=settings.digest_cron)
         return last_cron
 
     try:
-        scheduler.reschedule_job("digest", trigger=_digest_trigger(settings.digest_cron, tz))
+        scheduler.reschedule_job("digest", trigger=new_trigger)
     except Exception:  # noqa: BLE001 — scheduler pode estar em teardown
         _log.exception("digest_poll_reschedule_failed")
         return last_cron

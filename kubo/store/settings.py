@@ -35,7 +35,7 @@ def _settings_from_row(row: dict[str, Any]) -> Settings:
         id=row["id"],
         digest_cron=row["digest_cron"],
         distribution_paused=bool(row["distribution_paused"]),
-        default_destination=default if default is not None else None,
+        default_destination=default,
     )
 
 

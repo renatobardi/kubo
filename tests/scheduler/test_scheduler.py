@@ -898,17 +898,24 @@ def test_execute_job_reads_distribution_paused_for_digest(monkeypatch: pytest.Mo
     )
 
 
-def test_execute_job_skips_digest_when_distribution_paused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Com `distribution_paused=true`, `execute_job` NÃO instancia nem roda o worker digest."""
+def test_execute_job_runs_paused_digest_as_empty_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Com `distribution_paused=true`, `execute_job` RODA o worker digest com a flag
+    pausada; o worker fecha `ok` sem dispatch e sem avançar watermark."""
     from kubo import scheduler
 
-    ran: list[bool] = []
+    instantiated: list[str] = []
 
     def _fake_worker(worker_name: str) -> tuple[Any, None]:
-        ran.append(True)
-        raise AssertionError("não deve instanciar worker quando pausado")
+        instantiated.append(worker_name)
+        raise AssertionError("não deve instanciar o digest real quando pausado")
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+        calls.append((worker, config))
 
     monkeypatch.setattr(scheduler, "_instantiate", _fake_worker)
+    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
     monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
     monkeypatch.setattr(
         scheduler.settings_store,
@@ -918,4 +925,9 @@ def test_execute_job_skips_digest_when_distribution_paused(monkeypatch: pytest.M
 
     scheduler.execute_job("digest", {})
 
-    assert not ran
+    assert not instantiated
+    assert len(calls) == 1
+    _worker, _config = calls[0]
+    assert _worker.manifest.name == "digest"
+    assert _config.get("paused") is True
+    assert _config.get("max_items") == 50

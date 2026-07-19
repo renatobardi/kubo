@@ -199,3 +199,22 @@ def test_missing_token_is_send_error_not_crash() -> None:
     d = _dispatch(result.payloads[0])
     assert d.status == "error"
     assert sender.calls == []  # nunca chega a enviar sem token
+
+
+def test_paused_returns_empty_ok_without_querying_knowledge() -> None:
+    """Config `paused=true` fecha o run `ok` com zero envio e não avança watermark."""
+    know = _FakeKnowledge({"owner-telegram": [_view("a")]})
+    sender = _FakeSender()
+    result = _worker([_dest()], sender).run(
+        _FakeCtx(
+            config=DigestConfig(paused=True),
+            integrations={"telegram": _Integration(secret=_FAKE_TOKEN)},
+            knowledge=know,
+            logger=structlog.get_logger(),
+        )
+    )
+
+    assert result.payloads == []
+    assert result.error is None
+    assert know.calls == []  # não consulta distilled
+    assert sender.calls == []  # não envia
