@@ -54,40 +54,54 @@ def test_seed_creates_six_active_rss_feeds_with_tags(db: Any) -> None:
     assert openai.tags == ["ai", "openai", "confiavel"]
 
 
-def test_seed_is_idempotent(db: Any) -> None:
-    """Re-rodar o seed é no-op seguro (o índice UNIQUE(kind,canonical) já barraria dup, mas o
-    lookup-first nem tenta): 6 fontes depois de rodar duas vezes, não 12."""
-    seed_feed_cadastros(db)
-    seed_feed_cadastros(db)
+def test_seed_is_once_per_env_no_op_on_second_run(db: Any) -> None:
+    """O seed roda UMA VEZ por ambiente (marcador): a 2ª chamada devolve 0 e não toca nada —
+    6 fontes depois de rodar duas vezes, não 12."""
+    assert seed_feed_cadastros(db) == 6
+    assert seed_feed_cadastros(db) == 0
 
     assert _count_source(db) == 6
 
 
-def test_seed_preserves_owner_pause_and_tag_edits(db: Any) -> None:
-    """O coração da correção do advisor: o #107 está vivo, então entre um deploy e outro o dono
-    pode pausar ou re-tagear uma fonte pela UI. O seed re-rodando NÃO pode reverter isso — o
-    coalesce preenche lacuna, nunca sobrescreve. Prova: pauso uma e edito as tags de outra,
-    re-semeio, e ambas as ações do dono sobrevivem."""
+def test_seed_first_run_coalesces_owner_pause_and_title(db: Any) -> None:
+    """No 1º seed, o coalesce protege estado que o dono já mudou ANTES do bootstrap (ambiente
+    legado onde o #106/#107 já rodou): pausa e título editado sobrevivem, e as tags legadas
+    (`[]`) são preenchidas — este é o único momento em que `[]` significa 'legado'."""
+    rid = knowledge.create_source(
+        db, kind="rss", canonical="https://openai.com/news/rss.xml", title="Meu título"
+    )
+    knowledge.set_source_enabled(db, id=rid, enabled=False)
+
+    assert seed_feed_cadastros(db) == 6
+
+    got = knowledge.get_source(db, rid)
+    assert got is not None
+    assert got.title == "Meu título"  # coalesce title ?? $title → edição do dono sobrevive
+    assert got.enabled is False  # coalesce enabled ?? true → pausa do dono sobrevive
+    assert got.tags == ["ai", "openai", "confiavel"]  # tags legadas ([]) preenchidas no bootstrap
+
+
+def test_seed_once_per_env_preserves_later_tag_clear(db: Any) -> None:
+    """A correção do CodeRabbit (#116): depois do bootstrap, o dono limpa TODAS as tags de uma
+    fonte pela UI (`tags=[]` intencional). Um segundo deploy NÃO pode refilar as tags legadas —
+    o marcador faz o seed pular, então o `[]` do dono sobrevive. É o caso que o coalesce sozinho
+    não cobria (`[]` ambíguo: legado vs limpo-de-propósito), resolvido por rodar só uma vez."""
     seed_feed_cadastros(db)
-    active = {s.canonical: s for s in knowledge.active_sources(db, kind="rss")}
-    paused = active["https://importai.substack.com/feed"]
-    retagged = active["https://www.semianalysis.com/feed"]
-    knowledge.set_source_enabled(db, id=paused.id, enabled=False)
+    tgt = {s.canonical: s for s in knowledge.active_sources(db, kind="rss")}[
+        "https://openai.com/news/rss.xml"
+    ]
     knowledge.edit_source(
-        db,
-        id=retagged.id,
-        title="SemiAnalysis",
-        tags=["dono-editou"],
-        canonical="https://www.semianalysis.com/feed",
+        db, id=tgt.id, title="OpenAI News", tags=[], canonical="https://openai.com/news/rss.xml"
     )
 
-    seed_feed_cadastros(db)
+    assert seed_feed_cadastros(db) == 0  # marcador presente → pula
 
-    # A pausa sobrevive: a fonte pausada saiu dos ativos (não voltou a enabled=true).
-    still_active = {s.canonical: s for s in knowledge.active_sources(db, kind="rss")}
-    assert "https://importai.substack.com/feed" not in still_active
-    # A edição de tags sobrevive: o seed não sobrescreveu as tags do dono pelas do bootstrap.
-    assert still_active["https://www.semianalysis.com/feed"].tags == ["dono-editou"]
+    (again,) = [
+        s
+        for s in knowledge.active_sources(db, kind="rss")
+        if s.canonical == "https://openai.com/news/rss.xml"
+    ]
+    assert again.tags == []  # o 'limpar tudo' do dono sobreviveu ao re-deploy
 
 
 def test_seed_reuses_legacy_sha256_record(db: Any) -> None:

@@ -200,9 +200,9 @@ def execute_sweep_job(kind: str) -> None:
             dispatched += 1
         except Exception:  # noqa: BLE001 — isola o Cadastro: loga e segue (run_worker já estrutura erro de worker)
             failed += 1
-            _log.exception(
-                "sweep_run_failed", kind=kind, source=str(source.id), canonical=source.canonical
-            )
+            # Só id + kind: a canonical é entrada do dono e pode trazer token na query string
+            # (feed privado) — logá-la vazaria segredo (CLAUDE.md §Logs). O id resolve a fonte.
+            _log.exception("sweep_run_failed", kind=kind, source=str(source.id))
     _log.info("sweep_done", kind=kind, total=len(sources), dispatched=dispatched, failed=failed)
 
 

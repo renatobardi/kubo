@@ -72,12 +72,26 @@ FEED_CADASTROS: list[FeedSeed] = [
 
 
 def seed_feed_cadastros(db: Any) -> int:
-    """Semeia as `FEED_CADASTROS` como Cadastros rss ativos (idempotente, não-destrutivo).
-    Devolve quantas fontes foram processadas. Delega o coalesce a `upsert_seed_source` (store)."""
+    """Semeia as `FEED_CADASTROS` como Cadastros rss ativos — bootstrap histórico que roda
+    **UMA VEZ por ambiente** (marcador `seed:feed_cadastros`), não a cada deploy. Devolve quantas
+    fontes processou (0 se já semeado).
+
+    Por que once-per-env e não idempotente-a-cada-deploy: `tags=[]` é AMBÍGUO — significa tanto
+    'legado ainda não migrado' (migration 0009) quanto 'o dono limpou todas as tags de propósito'
+    (#106). O coalesce de `upsert_seed_source` preenche `[]` com as tags do seed; se rodasse todo
+    deploy, refilaria as tags legadas por cima de um 'limpar tudo' do dono — destrutivo (achado do
+    CodeRabbit, PR #116). Rodando só na 1ª vez, o `[]` no bootstrap é sempre legado (preenche); um
+    `[]` posterior é sempre edição do dono (preservado, porque o seed não roda de novo). O coalesce
+    permanece para proteger pausa/título que o dono já tenha mudado ANTES do 1º seed."""
+    # `IF NOT EXISTS` como no runner de migrations: SELECT de tabela inexistente ERRA no v3.1.5.
+    db.query("DEFINE TABLE IF NOT EXISTS seed_marker SCHEMALESS;")
+    if db.query("SELECT id FROM seed_marker:feed_cadastros;"):
+        return 0
     for feed in FEED_CADASTROS:
         upsert_seed_source(
             db, kind="rss", canonical=feed.canonical, title=feed.title, tags=feed.tags
         )
+    db.query("CREATE seed_marker:feed_cadastros SET applied_at = time::now();")
     return len(FEED_CADASTROS)
 
 
