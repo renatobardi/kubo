@@ -116,9 +116,7 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
             if not updated:
                 raise StaleDestinationError(f"destino sumiu durante reativação: {existing}")
             return existing
-        raise DuplicateDestinationError(
-            f"destino já cadastrado: channel={channel}"
-        )
+        raise DuplicateDestinationError(f"destino já cadastrado: channel={channel}")
     rid = _fresh_destination_id()
     db.query(
         "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
@@ -139,9 +137,7 @@ def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
     if normalized != current.address:
         other = _find_destination_id(db, channel=current.channel, address=normalized)
         if other is not None and str(other) != str(id):
-            raise DuplicateDestinationError(
-                f"destino já cadastrado: channel={current.channel}"
-            )
+            raise DuplicateDestinationError(f"destino já cadastrado: channel={current.channel}")
     updated = db.query(
         "UPDATE $r SET name = $name, address = $address WHERE archived_at IS NONE;",
         {"r": id, "name": name, "address": normalized},
