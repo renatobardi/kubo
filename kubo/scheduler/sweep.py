@@ -24,9 +24,10 @@ from kubo.workers.feed import FeedWorker
 
 
 @dataclass(frozen=True)
-class SweepKind:
+class KindDispatch:
     """Como despachar um kind de Cadastro no sweep: a factory do worker (uma instância nova por
-    run) + o construtor da config do worker a partir do Cadastro. Um par por kind despachável."""
+    run) + o construtor da config do worker a partir do Cadastro. Um por kind despachável (o
+    kind em si é a CHAVE do `SWEEP_DISPATCH`, não um campo daqui)."""
 
     worker_factory: Callable[[], Any]
     build_config: Callable[[ActiveSource], dict[str, Any]]
@@ -40,6 +41,6 @@ def _feed_config(source: ActiveSource) -> dict[str, Any]:
 
 # Mapa fixo kind→despacho. `rss`→worker `feed`. Chave nova = código + PR (ADR-0025 §7,
 # teste do PR do invariante 7): tipo novo de coleta é código, não dado.
-SWEEP_DISPATCH: dict[str, SweepKind] = {
-    "rss": SweepKind(worker_factory=FeedWorker, build_config=_feed_config),
+SWEEP_DISPATCH: dict[str, KindDispatch] = {
+    "rss": KindDispatch(worker_factory=FeedWorker, build_config=_feed_config),
 }

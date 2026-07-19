@@ -72,13 +72,11 @@ ambições maiores adiadas com gatilho (ver Alternativas rejeitadas).
    > arquivar virou reversível e dispensa o 2º passo. O ADR é canônico sobre o snapshot (#103,
    > cabeçalho), então esta leitura vale.
    >
-   > **Modalidade — SUPERADA pelo #108 (2026-07-18).** A redação original desta emenda dizia que o
-   > sweep era "design, ainda não vivo" e que pausar/arquivar mudava o registro **sem interromper a
-   > coleta** (dirigida pelo `schedules.yaml`), com um helper text na UI dizendo essa verdade
-   > provisória. O #108 fechou o corte RSS: o sweep dirigido por Cadastro está **vivo**, a lista de
-   > feeds saiu do `schedules.yaml`, e pausar/arquivar de fato para a coleta. Logo esta modalidade
-   > caducou — o helper text foi removido e este parágrafo fica só como registro histórico. Ver a
-   > **Emenda #108** ao fim deste ADR.
+   > **Modalidade — SUPERADA pelo #108 (2026-07-18).** Esta emenda #107 dizia que o sweep era
+   > "design, ainda não vivo" e que pausar/arquivar mudava o registro **sem interromper a coleta**
+   > (com um helper text na UI dizendo essa verdade provisória). O #108 fechou o corte RSS: o sweep
+   > está **vivo** e pausar/arquivar de fato para a coleta — a modalidade caducou, o helper foi
+   > removido. Detalhes na **Emenda #108** ao fim deste ADR.
 9. **Uma tabela só** — `source` *vira* Cadastro; sem coexistência/sincronização.
 10. **Escrita pela UI** segue o molde ADR-0018: credencial `kubo_rw` EDITOR por-request + CSRF
     + guarda 409 de staleness. Todo acesso via `kubo/store/`.

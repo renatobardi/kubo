@@ -15,6 +15,7 @@ onde já existem da coleta, só completa as `tags` (que viviam só no YAML) sem 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 
@@ -70,7 +71,7 @@ FEED_CADASTROS: list[FeedSeed] = [
 ]
 
 
-def seed_feed_cadastros(db: object) -> int:
+def seed_feed_cadastros(db: Any) -> int:
     """Semeia as `FEED_CADASTROS` como Cadastros rss ativos (idempotente, não-destrutivo).
     Devolve quantas fontes foram processadas. Delega o coalesce a `upsert_seed_source` (store)."""
     for feed in FEED_CADASTROS:
