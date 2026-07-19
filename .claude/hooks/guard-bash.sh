@@ -79,12 +79,14 @@ fi
 # pra outra branch foi o mecanismo do incidente (subagente commitou WIP do dono). Barra
 # só a TROCA — criação (-b/-c) leva WIP legitimamente; restore de pathspec (--) e
 # resolução de conflito (--ours/--theirs/--merge/-p) têm a árvore suja por natureza.
+# Untracked não conta (-uno): o git os mantém no working dir ao trocar, não são o
+# vetor do incidente — barrar por eles seria falso-positivo (um ADR novo, p.ex.).
 # `stash && switch` não escapa: o porcelain é lido antes do stash rodar (item 11 proíbe
 # o contorno via stash). Árvore avaliada no CWD do comando, não em CLAUDE_PROJECT_DIR.
 if echo "$CMD" | grep -Eq "$CP"'git[[:space:]]+(checkout|switch)([[:space:]]|$)' \
    && ! echo "$CMD" | grep -Eq '([[:space:]]|^)(-b|-B|-c|-C|--|--ours|--theirs|--merge|-p|--patch)([[:space:]]|$)'; then
   if [ -n "${GUARD_BASH_TEST_DIRTY+set}" ]; then DIRTY="$GUARD_BASH_TEST_DIRTY"
-  else DIRTY="$([ -n "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] && echo 1 || true)"; fi
+  else DIRTY="$([ -n "$(git -C "$CWD" status --porcelain -uno 2>/dev/null)" ] && echo 1 || true)"; fi
   [ "$DIRTY" = 1 ] && deny "troca de branch com árvore suja — use 'git worktree add' para outra frente ou peça ao dono (item 11); não contorne via stash"
 fi
 
