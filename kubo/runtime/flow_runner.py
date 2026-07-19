@@ -159,18 +159,13 @@ def run_flow(
     base_url: str,
     executor: Executor | None = None,
     senders: Mapping[str, Sender] | None = None,
-    worker_config: Mapping[str, Any] | None = None,
 ) -> FlowRunResult:
     """Instancia e executa um flow do template `template_name` (ADR-0016 §III).
 
     Carrega os catálogos, resolve o handler no `FLOW_REGISTRY` (template sem handler falha
     alto — E4) e delega. `executor`/`senders` são injetáveis (default = reais) para tornar o
     caminho testável com LLM/Telegram/cli falsos. `embedder`/`destination` são opcionais: o
-    flow `dev` (executor cli) não usa nenhum dos dois — o behavior declara o que precisa.
-    `worker_config` era a config bruta do worker mecânico do flow `pipeline` (aposentado no
-    #110). Vestigial: nenhum behavior vivo o consome — permanece só no shape comum de
-    `behavior.run` (todos o ignoram). Remoção do parâmetro (e das assinaturas dos behaviors) é
-    dívida nomeada, fora do escopo do #110."""
+    flow `dev` (executor cli) não usa nenhum dos dois — o behavior declara o que precisa."""
     templates = load_flow_templates(_TEMPLATES_DIR)
     template = templates.get(template_name)
     if template is None:
@@ -189,7 +184,6 @@ def run_flow(
         base_url=base_url,
         executor=executor,
         senders=senders,
-        worker_config=worker_config,
     )
 
 
@@ -204,7 +198,6 @@ def _run_analysis(
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
-    worker_config: Mapping[str, Any] | None = None,
 ) -> FlowRunResult:
     """Comportamento do template `analysis` (E4): a analista recebe o task; o humano é
     materializado (D33) mas não recebe. Instancia → analyzing → run_worker(AnalystWorker) →
@@ -250,7 +243,6 @@ def _run_analysis_review(
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
-    worker_config: Mapping[str, Any] | None = None,
 ) -> FlowRunResult:
     """Comportamento do `analysis-review` (E4, ADR-0018 §IV/§V): roda a analista em modo
     PRODUCE-ONLY (`destination=None`) — o relatório PARA no gate ANTES do envio (D37). Sucesso
@@ -322,7 +314,6 @@ def _run_dev(
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
     target: _DevTarget,
-    worker_config: Mapping[str, Any] | None = None,
 ) -> FlowRunResult:
     """Comportamento do `dev-mini` (E4, ADR-0019): a persona dev implementa num clone efêmero do
     sandbox → PARA no gate `review` com um deliverable `kind=pr`.

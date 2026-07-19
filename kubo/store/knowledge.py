@@ -642,8 +642,10 @@ def _run_items(stats: dict[str, Any]) -> int | None:
 def _stat_int(stats: dict[str, Any], key: str) -> int | None:
     """Extrai `stats[key]` se for `int` (0 incluso — diferente de `_run_items`, aqui
     zero é um valor válido, não "sem contador"), senão None (fallback gracioso —
-    worker que não grava essa chave, ex.: `repos_total` só existe pro github-releases,
-    D57)."""
+    worker que não grava essa chave, ex.: `repos_total`/`repos_discovered` só existem em runs
+    HISTÓRICOS do github-releases pré-#110; o worker single-repo não os emite mais, então para
+    todo run novo vêm None e a coluna some — dívida nomeada: remover a fiação quando os runs
+    históricos saírem da janela do Painel)."""
     value = stats.get(key)
     return value if isinstance(value, int) else None
 

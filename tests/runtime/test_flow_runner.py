@@ -101,21 +101,6 @@ def test_dev_mini_is_wired_with_run_resume_reject() -> None:
         run_flow(db=None, template_name="ghost-template", question="x", base_url="")
 
 
-def test_run_flow_accepts_worker_config_kwarg_without_breaking_existing_callers() -> None:
-    """`worker_config` (sessão 0021, marco 21.3/21.4) é um novo kwarg keyword-only opcional
-    (default None) de `run_flow` — puramente aditivo. Chamando com ele presente, o guard de
-    template desconhecido (E4) ainda dispara a MESMA ConfigError, provando que o parâmetro
-    novo não desloca a semântica dos kwargs já obrigatórios (question/base_url)."""
-    with pytest.raises(ConfigError, match="não existe"):
-        run_flow(
-            db=object(),
-            template_name="inexistente",
-            question="q",
-            worker_config={"since": "2026-07-16T00:00:00Z"},  # type: ignore[call-arg]
-            base_url="",
-        )
-
-
 def test_dev_mini_config_model_defaults_to_none() -> None:
     """Regressão: os behaviors não declaram `config_model` — o campo foi aposentado com o flow
     `pipeline` (#110), único que o usava (via `_add_flow_job`, também aposentado). O acesso a

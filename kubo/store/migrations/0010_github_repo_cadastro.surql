@@ -11,17 +11,29 @@
 -- manipulação de aresta: o id do sobrevivente não muda, toda proveniência fica intacta. `kind` NÃO é
 -- READONLY no schema (só a política de app de `edit_source` o trava) — a migração pode flipá-lo.
 
--- ── (1) Onde há twin github-repo (mesma canonical), transferir o ESTADO do Cadastro do twin pro
--- sobrevivente ANTES de apagá-lo: title/tags e — crucial — enabled/archived_at. Se o dono pausou ou
--- arquivou o twin pela UI, essa intenção não pode se perder no flip. Os dois campos de estado JUNTOS
--- (o invariante `archived_at IS NOT NONE ⟹ enabled=false` é do twin e transfere coerente de uma vez).
+-- ── (1) Onde há twin github-repo (mesma canonical), MESCLAR o estado de Cadastro do twin no
+-- sobrevivente ANTES de apagá-lo. Merge RESTRITIVO, não cópia cega: tanto o sobrevivente
+-- (github-releases) QUANTO o twin eram listáveis/pausáveis na UI de Fontes (#107, kind não filtra),
+-- então a pausa/arquivamento do dono pode morar em QUALQUER um dos dois. Copiar cega o estado do
+-- twin (achado do code-review) reverteria em silêncio uma pausa que o dono deu no sobrevivente
+-- (twin nasce enabled=true no #105). Regra por campo — o estado MAIS restritivo vence, de qualquer
+-- lado; rótulos preferem o valor mais intencional sem apagar:
+--   enabled     = enabled AND $twin.enabled          -- pausado se QUALQUER um está pausado
+--   archived_at = archived_at ?? $twin.archived_at   -- arquivado se QUALQUER um está arquivado
+--   title       = $twin.title ?? title               -- título do twin se houver, senão mantém
+--   tags        = twin se não-vazio, senão mantém    -- nunca limpa tags que o dono já pôs
+-- O invariante `archived_at IS NOT NONE ⟹ enabled=false` sai coerente: um lado arquivado força
+-- archived_at set E enabled=false ao mesmo tempo (o AND garante o enabled).
 -- `LET` primeiro, FOR sobre a variável: `FOR $x IN (SELECT ...)` direto quebra no v3.1.5 (uma
 -- subquery vazia vira NONE, não `[]`, e o FOR levanta "Cannot execute statement using value: NONE").
 -- Ligar a SELECT a `$twins` dá um array de verdade — itera limpo, inclusive vazio (env sem twin).
 LET $twins = (SELECT canonical, title, tags, enabled, archived_at FROM source WHERE kind = 'github-repo');
 FOR $twin IN $twins {
     UPDATE source
-        SET title = $twin.title, tags = $twin.tags, enabled = $twin.enabled, archived_at = $twin.archived_at
+        SET title = $twin.title ?? title,
+            tags = IF array::len($twin.tags) > 0 THEN $twin.tags ELSE tags END,
+            enabled = enabled AND $twin.enabled,
+            archived_at = archived_at ?? $twin.archived_at
         WHERE kind = 'github-releases' AND canonical = $twin.canonical;
 };
 

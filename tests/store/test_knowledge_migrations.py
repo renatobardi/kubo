@@ -289,6 +289,33 @@ def test_0010_reconciles_twin_transferring_state_and_deleting_it(pre_0010_db: An
     assert len(rows) == 1
 
 
+def test_0010_twin_merge_does_not_revert_a_pause_on_the_survivor(pre_0010_db: Any) -> None:
+    """Achado do code-review: o sobrevivente github-releases TAMBÉM era pausável pela UI (#107 não
+    filtra por kind). Se o dono pausou o SOBREVIVENTE e existe um twin github-repo ATIVO
+    (enabled=true, default de criação #105), o merge NÃO pode reativar a coleta — pausa vence de
+    qualquer lado (`enabled = enabled AND twin.enabled`). E tags que o dono pôs no sobrevivente não
+    são apagadas por um twin de tags vazias."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:sv SET kind='github-releases', canonical='https://github.com/o/r', "
+        "title='old', enabled=false, tags=['keep'];"  # sobrevivente PAUSADO, com tags do dono
+    )
+    db.query(
+        "CREATE source:tw SET kind='github-repo', canonical='https://github.com/o/r', "
+        "title='New', tags=[], enabled=true, archived_at=NONE;"  # twin ATIVO, tags vazias
+    )
+
+    migrations.apply_migrations(db)
+
+    got = db.query("SELECT kind, enabled, tags, title FROM source:sv;")[0]
+    assert got["kind"] == "github-repo"
+    assert (
+        got["enabled"] is False
+    )  # pausa do sobrevivente PRESERVADA (não revertida pelo twin ativo)
+    assert got["tags"] == ["keep"]  # tags do dono não apagadas por twin de tags vazias
+    assert got["title"] == "New"  # título do twin (não-nulo) adotado
+
+
 def test_0010_preserves_untwinned_github_repo_cadastro(pre_0010_db: Any) -> None:
     """Um Cadastro github-repo criado pela UI SEM twin de coleta (repo que o dono cadastrou e o
     worker nunca coletou) NÃO é apagado — o DELETE do passo (2) só mira twins com sobrevivente."""

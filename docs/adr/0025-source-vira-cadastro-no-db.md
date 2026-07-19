@@ -218,12 +218,21 @@ Validada pelo advisor (Fable 5) em duas consultas antes do código.
    `kind="github-releases"` na MESMA canonical como efeito colateral da coleta — **dois records
    distintos** por repo sob `UNIQUE(kind, canonical)`. A migração reconcilia: o **sobrevivente é o
    record `github-releases`** (é ele que tem as arestas `from_source`/`collected_by`); o twin
-   `github-repo` da UI é edge-less por construção. Onde há twin: copia `title/tags/enabled/
-   archived_at` do twin → sobrevivente (não perde pausa/arquivamento que o dono fez pela UI),
-   `DELETE` do twin, flip `kind='github-repo'` no sobrevivente. Onde não há twin: só flip. **Zero
-   manipulação de aresta** (o id do sobrevivente não muda), `created_at` READONLY preservado
-   (nenhum re-backfill na 1ª varredura). Idempotente (`WHERE kind='github-releases'` esvazia).
-   Cadastros `github-repo` SEM twin de coleta (repo cadastrado e nunca coletado) são poupados.
+   `github-repo` da UI é edge-less por construção. Onde há twin: **mescla** o estado do twin no
+   sobrevivente, `DELETE` do twin, flip `kind='github-repo'` no sobrevivente. Onde não há twin:
+   só flip. **Zero manipulação de aresta** (o id do sobrevivente não muda), `created_at` READONLY
+   preservado (nenhum re-backfill na 1ª varredura). Idempotente (`WHERE kind='github-releases'`
+   esvazia). Cadastros `github-repo` SEM twin de coleta (repo cadastrado e nunca coletado) são
+   poupados.
+
+   O merge é **RESTRITIVO, não cópia cega** (achado do code-review): tanto o sobrevivente quanto o
+   twin eram listáveis/pausáveis na UI de Fontes (#107 não filtra por `kind`), então a pausa/
+   arquivamento do dono pode morar em qualquer um dos dois. Cópia cega do estado do twin
+   (enabled=true por default de criação #105) reverteria em silêncio uma pausa dada no sobrevivente.
+   Por campo, o estado mais restritivo vence: `enabled = enabled AND twin.enabled` (pausado se
+   qualquer lado o está), `archived_at = archived_at ?? twin.archived_at` (arquivado se qualquer
+   lado o está); rótulos preferem o valor mais intencional sem apagar (`title = twin.title ??
+   title`; `tags` = twin se não-vazio, senão mantém).
 
 5. **Integração: `github-watch` → `github-readonly`.** Sem descoberta, o worker só lê
    `/repos/{owner}/{repo}/releases` (público, leitura pura). O PAT dedicado `github-watch`
