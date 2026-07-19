@@ -1,7 +1,8 @@
 # ADR-0028 — Config operacional global no DB: horário do digest e pausa de distribuição editáveis pela UI
 
 > Status: **aceito** · Data: 2026-07-19 · Validado pelo advisor (Fable 5) antes do crave.
-> **Emenda o ADR-0010** (§I/§II — o "quando" mora no `schedules.yaml`) com uma exceção cirúrgica.
+> **Emenda o ADR-0010** (§I/§II — o "quando" mora no `schedules.yaml`) com uma exceção cirúrgica,
+> e **emenda a frase-sinal do ADR-0025** (aposenta o tripwire da "oração subordinada" — ver Guardrails).
 > Resolve o ticket wayfinder #119 (mapa #117); **2ª metade** da reabertura consciente iniciada
 > pelo ADR-0027 (destino).
 
@@ -17,7 +18,7 @@ horário e **pausar os envios (modo férias)** pela UI, sem deploy. Isso move o 
 para o banco — uma emenda ao ADR-0010.
 
 Este é o **par** do ADR-0027 (destino vira Cadastro): ambos nasceram do mesmo mapa #117, e o
-ADR-0027 declarou nas suas Consequências que este ADR e ele "cravam juntos ou em sequência
+ADR-0027 declarou nos seus Follow-ups nomeados que este ADR e ele "cravam juntos ou em sequência
 consciente, prestação de contas única" das tabelas extra-spec. `settings` é a **5ª tabela
 extra-spec** (run: ADR-0002; chunk: ADR-0008; dispatch: ADR-0015; destination: ADR-0027; settings:
 aqui) — e é **qualitativamente diferente** das quatro anteriores: aquelas são *fatos* do domínio,
@@ -32,15 +33,19 @@ extra-spec reabre planejamento.
    nunca `SELECT ... LIMIT 1` ambíguo; a unicidade vem do id fixo. Campos: `digest_cron` string +
    `distribution_paused` bool. **Singleton tipado (pydantic), não key-value genérico** — um KV
    stringly-typed é onde configs se acumulam sem review; o singleton tipado valida na borda e cada
-   campo novo é código + PR (gate).
+   campo novo é código + PR (gate). A `0012` **pressupõe a `0011`/`destination`** (ADR-0027) cravada
+   antes — a ordem das migrations segue a sequência consciente dos dois ADRs; se o build do 0028
+   preceder o do 0027, reconciliar a numeração.
 
 2. **O digest sai do `schedules.yaml`** e passa a ser dirigido por `settings`. `schedules.yaml` fica
    só com o encanamento de cron fixo (sweeps + distiller). `build_scheduler` **permanece puro** —
    recebe `Schedules` **e** `settings` por parâmetro; o `main` lê o DB (settings) e injeta. O job do
    digest é montado com **id estável `"digest"`**, trigger = `settings.digest_cron` **parseado com a
    tz do `schedules.yaml`**. O `max_items` (hoje `config: max_items: 50` na entry) vira **constante
-   de código pinada** (espelho de `_DISTILLER_MODEL`): cerca de volume é guardrail, e guardrail em
-   código muda por PR — mais alinhado ao invariante 3 que no YAML.
+   de código pinada** (espelho de `_DISTILLER_MODEL`). O driver é a **entry inteira sair do
+   `schedules.yaml`** (não sobra casa senão o código), não uma superioridade do guardrail-em-código —
+   tanto que o distiller **mantém** o `max_items` no YAML, sem contradição: cada `max_items` mora onde
+   a sua entry mora.
 
 3. **Dependência de DB no boot (mudança de contrato, registrada).** Hoje o scheduler sobe sem banco
    (jobs conectam no fire). Com o digest dirigido por `settings`, o boot **lê o DB**. `settings`
@@ -81,7 +86,11 @@ extra-spec reabre planejamento.
    (envio) — a coleta e a destilação continuam, o conhecimento acumula. Férias = "não me apite", não
    "congele o sistema" (decisão do dono: parar a coleta perderia a janela de RSS efêmero). "Global"
    faria parecer, em 6 meses, que a coleta parou — bug aparente. O "global" do ticket #119 era
-   "config da instalação (global) vs config por-destino", não "pausa tudo".
+   "config da instalação (global) vs config por-destino", não "pausa tudo". **Escopo pinado:** a flag
+   é lida no **fire do digest agendado** (e no sweep de destinos, #121); o **report on-demand**
+   (`kubo/api/routes/flows.py:47`, disparado pelo dono clicando) **ignora** a flag — é ação explícita
+   do dono naquele instante, não entrega automática, e "não me apite" não deve barrar um relatório que
+   ele mesmo acabou de pedir.
 
 7. **Seed once-per-env** cria a `settings` (`digest_cron="30 9 * * *"`, `distribution_paused=false`),
    passo de deploy irmão das migrations (precedente #108/#118), **marker idempotente** — não
@@ -108,6 +117,14 @@ escolhido por humano"; mudou o meio (YAML→DB), não a natureza. Frase-sinal at
 
 > *"O banco diz o quê coletar e para-quem entregar; o código diz como; o relógio diz quando — e o
 > dono move o ponteiro do digest pela UI. **Mover ponteiro é dado; criar relógio é código.**"*
+
+**Emenda à frase-sinal do ADR-0025.** O 0025 armou um tripwire — *"no dia em que essa frase precisar
+de uma oração subordinada, passou da linha"* — e a frase acima **tem** uma. Esse tripwire era um
+**proxy sintático** de um teste semântico; ele **cede** aos testes de fundo abaixo (valor×expressão,
+dado×DAG, instância×tipo), que decidem a mesma pergunta com mais precisão. Um cron editável pela UI
+passa nos três; a oração subordinada só nomeia *quem move o ponteiro*, não introduz lógica avaliada.
+Este ADR **aposenta o proxy sintático** e mantém os testes semânticos como a linha canônica (o 0027
+já havia relaxado o "fixo" da frase; este ADR fecha a conta explicitamente).
 
 A linha que, cruzada, vira engine (gatilhos binários): agendamento **condicionado a evento/dado**
 ("dispara quando chegar item novo"); **linhas de tabela criando jobs** (uma tabela `schedules`
