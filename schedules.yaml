@@ -43,15 +43,12 @@ schedules:
     cron: "30 9 * * *"
     config:
       max_items: 50
-  # ── PIPELINE github-releases — watch list do dono (D51/D52/D54, sessão 0021) ──
+  # ── SWEEP github-repo — releases dos Cadastros github-repo (#110, ADR-0025 §5) ──
   # Fora do trem 08:00-09:30 (feeds + destilador + digest) — 07:00, antes de tudo.
-  # ATENÇÃO (dono): `since` abaixo é o piso de estreia (D52 — começar do zero, sem
-  # backfill). Congelado PARA SEMPRE (não avança — dívida nomeada e aceita no
-  # roadmap: recupera outage de graça, upsert é last-wins). AJUSTE para a data
-  # real do primeiro disparo em produção ANTES do deploy — se ficar com a data
-  # deste PR, a estreia pode coletar releases de dias que já passaram.
-  - flow: pipeline
+  # Varre os Cadastros github-repo ATIVOS e dispara um run por repo (simétrico ao sweep
+  # rss). Sem `since` aqui: o piso de estreia é o `created_at` de CADA Cadastro (#110/D2)
+  # — repo cadastrado hoje só coleta releases publicadas a partir do cadastro, sem
+  # backfill (D52), sem `since` global congelado (a dívida "since PARA SEMPRE" morreu com
+  # o corte). Pausar/arquivar pela UI de fato para a coleta a partir daqui.
+  - sweep: github-repo
     cron: "0 7 * * *"
-    question: "coleta diária da watch list"
-    config:
-      since: "2026-07-17T00:00:00Z"

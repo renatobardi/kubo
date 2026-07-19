@@ -24,8 +24,6 @@ from kubo.distribution.destinations import (
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
-from kubo.runtime.flow_runner import _FLOW_REGISTRY, run_flow
-from kubo.runtime.flow_templates import load_flow_templates
 from kubo.runtime.runner import run_worker
 from kubo.scheduler.sweep import SWEEP_DISPATCH
 from kubo.store import client
@@ -37,7 +35,6 @@ from kubo.workers.registry import WORKER_REGISTRY
 _REPO_ROOT = Path(__file__).parents[2]
 _SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
 _DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
-_TEMPLATES_DIR = _REPO_ROOT / "catalogs" / "flow_templates"
 _log = structlog.get_logger()
 
 # Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
@@ -58,25 +55,12 @@ class WorkerEntry(BaseModel):
     config: dict[str, Any] = {}
 
 
-class FlowEntry(BaseModel):
-    """Uma entrada agendada de FLOW (sessão 0021, marco 21.4, ADR-0022): dispara
-    `run_flow(template_name=flow, question=question, worker_config=config)` no cron. `question`
-    é obrigatória (é o que `run_flow` grava em `flow.question`) — sem gate/executor/destination,
-    o flow `pipeline` não precisa de nenhum dos três."""
-
-    model_config = ConfigDict(extra="forbid")
-    flow: str
-    cron: str
-    question: str
-    config: dict[str, Any] = {}
-
-
 class SweepEntry(BaseModel):
     """Uma entrada de SWEEP de coleta (#108, ADR-0025 §4): varre os Cadastros ativos de um
-    `kind` e dispara um run por Cadastro. `sweep` é o KIND a varrer (dado — `rss`), não um nome
-    de worker (o mapa kind→worker é fixo em código, `SWEEP_DISPATCH`). Sem `config`: a config de
-    cada run vem do Cadastro, não da entry. Campo obrigatório disjunto (`sweep`) desambigua a
-    união sem discriminador, como `worker` e `flow`."""
+    `kind` e dispara um run por Cadastro. `sweep` é o KIND a varrer (dado — `rss`/`github-repo`),
+    não um nome de worker (o mapa kind→worker é fixo em código, `SWEEP_DISPATCH`). Sem `config`: a
+    config de cada run vem do Cadastro, não da entry. Campo obrigatório disjunto (`sweep`)
+    desambigua a união sem discriminador, como `worker`."""
 
     model_config = ConfigDict(extra="forbid")
     sweep: str
@@ -85,13 +69,18 @@ class SweepEntry(BaseModel):
 
 class Schedules(BaseModel):
     """Config validada de `schedules.yaml`: timezone obrigatória + lista de entries — cada
-    entry é `WorkerEntry`, `FlowEntry` OU `SweepEntry` (união em modo smart do Pydantic v2: os
-    campos obrigatórios disjuntos `worker` vs `flow`+`question` vs `sweep` bastam para
-    desambiguar sem `discriminator=` explícito, ADR-0022/ADR-0025)."""
+    entry é `WorkerEntry` OU `SweepEntry` (união em modo smart do Pydantic v2: os campos
+    obrigatórios disjuntos `worker` vs `sweep` bastam para desambiguar sem `discriminator=`
+    explícito, ADR-0010/ADR-0025).
+
+    Agendamento de FLOW (`FlowEntry`, ADR-0022) foi APOSENTADO no #110: o único flow `scheduled`
+    era o `pipeline`, cuja coleta migrou pro sweep `github-repo`. A capacidade foi removida, não
+    proibida — reintroduzir exige só reanimar `FlowEntry`+`_add_flow_job` do histórico (nota de
+    supersede no ADR-0022)."""
 
     model_config = ConfigDict(extra="forbid")
     timezone: str
-    schedules: list[WorkerEntry | FlowEntry | SweepEntry]
+    schedules: list[WorkerEntry | SweepEntry]
 
     @field_validator("timezone")
     @classmethod
@@ -159,24 +148,6 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
         raise
 
 
-def execute_flow_job(template_name: str, question: str, worker_config: dict[str, Any]) -> None:
-    """Executa um FLOW agendado (sessão 0021, marco 21.4) com conexão POR execução — espelho
-    exato de `execute_job`, mas delega a `run_flow` em vez de `run_worker` direto (`run_flow` já
-    faz o bookkeeping de grafo: instantiate_flow/create_task/transition/run_worker/transition)."""
-    try:
-        with client.connect(client.config()) as db:
-            run_flow(
-                db,
-                template_name=template_name,
-                question=question,
-                base_url="",
-                worker_config=worker_config,
-            )
-    except Exception:  # noqa: BLE001 — mesmo tratamento de `execute_job`
-        _log.exception("scheduler_flow_job_failed", template=template_name)
-        raise
-
-
 def execute_sweep_job(kind: str) -> None:
     """Executa o sweep de coleta de um `kind` (#108, ADR-0025 §4): lê os Cadastros ATIVOS e
     dispara UM run por Cadastro (preserva 'um run = um feed', ADR-0009). Loop query→run_worker,
@@ -236,44 +207,6 @@ def _add_worker_job(scheduler: BlockingScheduler, entry: WorkerEntry, tz: ZoneIn
     )
 
 
-def _add_flow_job(scheduler: BlockingScheduler, entry: FlowEntry, tz: ZoneInfo) -> None:
-    """Valida e registra o job de uma `FlowEntry` (marco 21.4): template no catálogo,
-    trigger `scheduled` declarado (só flows pensados pra cron podem ser agendados —
-    `dev-mini`/`analysis*` são `triggers: [manual]`, humano-gated, e cron desatendido
-    neles é a categoria do invariante 5 do CLAUDE.md), behavior no `_FLOW_REGISTRY`,
-    cron parseável e `config` coerente com `FlowBehavior.config_model` (quando
-    declarado) — mesmo padrão eager de `_add_worker_job`."""
-    templates = load_flow_templates(_TEMPLATES_DIR)
-    if entry.flow not in templates:
-        raise ConfigError(f"template de flow '{entry.flow}' não existe no catálogo")
-    template = templates[entry.flow]
-    if "scheduled" not in template.triggers:
-        raise ConfigError(
-            f"template de flow '{entry.flow}' não declara o trigger 'scheduled' "
-            f"(triggers={template.triggers!r}) — não pode ser agendado no cron"
-        )
-    behavior = _FLOW_REGISTRY.get(entry.flow)
-    if behavior is None:
-        raise ConfigError(f"flow '{entry.flow}' sem handler no FLOW_REGISTRY")
-    trigger = _cron_trigger(entry.cron, tz, label=f"flow '{entry.flow}'")
-    if behavior.config_model is not None:
-        try:
-            behavior.config_model.model_validate(entry.config)
-        except ValidationError as exc:
-            raise ConfigError(
-                f"config inválida para flow '{entry.flow}': {format_validation_error(exc)}"
-            ) from exc
-    scheduler.add_job(
-        execute_flow_job,
-        trigger=trigger,
-        kwargs={
-            "template_name": entry.flow,
-            "question": entry.question,
-            "worker_config": entry.config,
-        },
-    )
-
-
 def _add_sweep_job(scheduler: BlockingScheduler, entry: SweepEntry, tz: ZoneInfo) -> None:
     """Valida e registra o job de uma `SweepEntry` (#108): o `kind` tem que estar em
     `SWEEP_DISPATCH` e o cron ser parseável — cada falha vira `ConfigError` EAGER (antes do
@@ -292,16 +225,14 @@ def build_scheduler(schedules: Schedules) -> BlockingScheduler:
     """Monta o BlockingScheduler com um job cron por entry, tz explícita SEMPRE.
 
     Valida TUDO eagerly (falha alta antes do start, não horas depois no 1º disparo). Cada
-    entry é `WorkerEntry` (ADR-0010), `FlowEntry` (marco 21.4) ou `SweepEntry` (#108) — o
-    dispatch por `isinstance` mantém as três validações/fiações SEPARADAS (`_add_worker_job`/
-    `_add_flow_job`/`_add_sweep_job`), cada falha vira `ConfigError` (padrão de domínio)."""
+    entry é `WorkerEntry` (ADR-0010) ou `SweepEntry` (#108/#110) — o dispatch por `isinstance`
+    mantém as duas validações/fiações SEPARADAS (`_add_worker_job`/`_add_sweep_job`), cada falha
+    vira `ConfigError` (padrão de domínio)."""
     tz = ZoneInfo(schedules.timezone)
     scheduler = BlockingScheduler(timezone=tz)
     for entry in schedules.schedules:
         if isinstance(entry, WorkerEntry):
             _add_worker_job(scheduler, entry, tz)
-        elif isinstance(entry, FlowEntry):
-            _add_flow_job(scheduler, entry, tz)
         else:
             _add_sweep_job(scheduler, entry, tz)
     return scheduler

@@ -183,3 +183,65 @@ por este corte; o **#110** (github-repo → coletor de releases) segue **intacto
 `github-repo` ao `SWEEP_DISPATCH` reconciliando com o pipeline 07:00 — o `github-repo` continua
 fora do sweep até lá (validação eager de `_add_sweep_job` barra uma `SweepEntry` de kind não
 mapeado).
+
+---
+
+## Emenda #110 (2026-07-18) — GitHub vira Cadastro; pipeline 07:00 vira sweep `github-repo`
+
+Fecha o §5 desta ADR (descoberta automática do GitHub aposentada) e o §7 (despacho por `kind`).
+Validada pelo advisor (Fable 5) em duas consultas antes do código.
+
+1. **Auto-descoberta `viewer.watching` APOSENTADA.** O worker `github-releases` era MULTI-repo:
+   descobria ~261 repos da watch list do dono via GraphQL (`viewer.watching`, D57) e coletava
+   releases de cada um num único run. Todo o cliente GraphQL, a paginação por cursor, o teto de
+   páginas e o `_RUN_DEADLINE` (que existiam só pra processar centenas de repos num run) se
+   aposentaram. O worker virou **single-repo** (`GithubReleasesConfig = {repo, since}`), simétrico
+   ao `FeedWorker` (`feed_url`).
+
+2. **Despacho por `kind` = sweep.** `SWEEP_DISPATCH` ganha a chave `github-repo` →
+   `GithubReleasesWorker` (o mapa fixo kind→worker+config-builder do #108). O `schedules.yaml`
+   troca `flow: pipeline` (07:00) por `sweep: github-repo` (07:00): o sweep varre os Cadastros
+   `github-repo` ativos e dispara **um run por repo** — "um run = um Cadastro" (§4), igual ao RSS.
+
+3. **`since` = `created_at` do Cadastro (D2).** O RSS não tem config operacional (`SweepEntry` sem
+   `config`). O GitHub precisa de um piso temporal, mas colocá-lo na entry devolveria config
+   operacional ao `schedules.yaml` (o que o #108 removeu). A escolha: o sweep deriva
+   `since = created_at` de cada Cadastro (`ActiveSource` ganha o campo). Consequências: (a) a dívida
+   "since congelado PARA SEMPRE" do `schedules.yaml` **morre** — o piso é per-repo e nasce do
+   cadastro; (b) honra o D52 (sem backfill na estreia) naturalmente — repo cadastrado hoje só coleta
+   releases publicadas a partir de hoje; (c) `since` deixa de ser watermark — quem avança de run
+   pra run é a idempotência do `upsert_item` por `external_id`. Caveat de produto aceito: um release
+   publicado ANTES do cadastro (mesmo o que motivou o cadastro) não entra.
+
+4. **Migração 0010 — reconciliação, não flip cego.** A UI (#105) já cria Cadastros
+   `kind="github-repo"` (canonical `https://github.com/owner/name`), enquanto o worker gravava
+   `kind="github-releases"` na MESMA canonical como efeito colateral da coleta — **dois records
+   distintos** por repo sob `UNIQUE(kind, canonical)`. A migração reconcilia: o **sobrevivente é o
+   record `github-releases`** (é ele que tem as arestas `from_source`/`collected_by`); o twin
+   `github-repo` da UI é edge-less por construção. Onde há twin: **mescla** o estado do twin no
+   sobrevivente, `DELETE` do twin, flip `kind='github-repo'` no sobrevivente. Onde não há twin:
+   só flip. **Zero manipulação de aresta** (o id do sobrevivente não muda), `created_at` READONLY
+   preservado (nenhum re-backfill na 1ª varredura). Idempotente (`WHERE kind='github-releases'`
+   esvazia). Cadastros `github-repo` SEM twin de coleta (repo cadastrado e nunca coletado) são
+   poupados.
+
+   O merge é **RESTRITIVO, não cópia cega** (achado do code-review): tanto o sobrevivente quanto o
+   twin eram listáveis/pausáveis na UI de Fontes (#107 não filtra por `kind`), então a pausa/
+   arquivamento do dono pode morar em qualquer um dos dois. Cópia cega do estado do twin
+   (enabled=true por default de criação #105) reverteria em silêncio uma pausa dada no sobrevivente.
+   Por campo, o estado mais restritivo vence: `enabled = enabled AND twin.enabled` (pausado se
+   qualquer lado o está), `archived_at = archived_at ?? twin.archived_at` (arquivado se qualquer
+   lado o está); rótulos preferem o valor mais intencional sem apagar (`title = twin.title ??
+   title`; `tags` = twin se não-vazio, senão mantém).
+
+5. **Integração: `github-watch` → `github-readonly`.** Sem descoberta, o worker só lê
+   `/repos/{owner}/{repo}/releases` (público, leitura pura). O PAT dedicado `github-watch`
+   (escopo `notifications`, criado no D54 só para `viewer.watching`) perdeu a justificativa de
+   least-privilege que o criou; o worker volta ao `github-readonly`/`GITHUB_TOKEN_READONLY` (o
+   mesmo do rito de promoção, também leitura pura — **sem** alargamento de escopo, ao contrário do
+   que o D54 evitava, porque a descoberta que exigia o escopo extra não existe mais).
+   `catalogs/integrations/github-watch.yaml` e o env `GITHUB_TOKEN_WATCH` foram aposentados.
+
+6. **Rollout (dono):** a migração 0010 converte **todo** `source` `github-releases` já coletado em
+   Cadastro `github-repo` **ativo** — cada um vira 1 run/dia no sweep (aparece em Execuções). O dono
+   poda os indesejados pela UI (#107 pausar/arquivar). Daqui pra frente, repo novo só à mão (#105).

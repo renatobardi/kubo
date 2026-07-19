@@ -77,6 +77,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0007_deliverable_pr.surql",
         "0008_deliverable_merge_sha.surql",
         "0009_source_cadastro.surql",
+        "0010_github_repo_cadastro.surql",
     }
 
 
@@ -193,3 +194,160 @@ def test_legacy_source_backfilled_active(tmp_path: Path) -> None:
             conn.query("REMOVE DATABASE IF EXISTS test_backfill_0009;")
     assert got["enabled"] is True
     assert got["tags"] == []
+
+
+# ── 0010: GitHub vira Cadastro — source github-releases → github-repo (#110, ADR-0025 §5) ────
+
+_0010 = "0010_github_repo_cadastro.surql"
+
+
+def _apply_through_0009(conn: Any, tmp_path: Path) -> None:
+    """Aplica migrations 0001..0009 (tudo ANTES da 0010) num dir temporário — o cenário real dos
+    dados de produção no momento em que a 0010 vai rodar."""
+    pre = tmp_path / "pre"
+    pre.mkdir()
+    for f in sorted(migrations.MIGRATIONS_DIR.glob("*.surql")):
+        if f.name < _0010:
+            shutil.copy(f, pre / f.name)
+    migrations.apply_migrations(conn, pre)
+
+
+def _run_0010_sql(conn: Any) -> None:
+    """Executa o SQL da 0010 DIRETO (envolto em BEGIN/COMMIT como o runner faz) — para exercitar
+    a própria idempotência da migração (o runner só a roda 1x; rodar o SQL 2x prova que os WHERE
+    guards não apagam Cadastro legítimo nem mudam o sobrevivente numa 2ª passada)."""
+    body = (migrations.MIGRATIONS_DIR / _0010).read_text(encoding="utf-8")
+    conn.query(f"BEGIN;\n{body}\nCOMMIT;")
+
+
+@pytest.fixture
+def pre_0010_db(tmp_path: Path) -> Iterator[Any]:
+    """DB com migrations até 0009 aplicadas — os testes inserem o cenário e então aplicam a 0010."""
+    cfg = replace(client.config(), database="test_migr_0010")
+    with client.connect(cfg) as conn:
+        conn.query("REMOVE DATABASE IF EXISTS test_migr_0010;")
+        conn.use(cfg.namespace, cfg.database)
+        _apply_through_0009(conn, tmp_path)
+        yield conn
+        conn.query("REMOVE DATABASE IF EXISTS test_migr_0010;")
+
+
+def test_0010_flips_github_releases_to_github_repo_keeping_provenance(pre_0010_db: Any) -> None:
+    """Sem twin: um source github-releases (com item coletado) vira github-repo NO MESMO record —
+    id e proveniência (aresta from_source do item) intactos, created_at (READONLY) preservado."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:s1 SET kind='github-releases', "
+        "canonical='https://github.com/o/r', title='o/r releases', enabled=true, tags=[];"
+    )
+    db.query("CREATE item:i1 SET external_id='1', content='c';")
+    db.query("RELATE item:i1->from_source->source:s1;")
+    created_before = db.query("SELECT created_at FROM source:s1;")[0]["created_at"]
+
+    migrations.apply_migrations(db)  # aplica a 0010 pendente
+
+    got = db.query("SELECT kind, canonical, created_at FROM source:s1;")[0]
+    assert got["kind"] == "github-repo"
+    assert got["canonical"] == "https://github.com/o/r"
+    assert got["created_at"] == created_before  # READONLY, herda o piso `since` antigo
+    items = db.query("SELECT array::len(<-from_source<-item) AS n FROM source:s1;")[0]["n"]
+    assert items == 1
+
+
+def test_0010_reconciles_twin_transferring_state_and_deleting_it(pre_0010_db: Any) -> None:
+    """Com twin: o sobrevivente é o github-releases (tem a aresta); o twin github-repo criado pela
+    UI (arquivado, com tags/título) é APAGADO, mas seu estado de Cadastro (enabled/archived_at/
+    tags/title) transfere pro sobrevivente ANTES — a intenção do dono não se perde no flip."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:survivor SET kind='github-releases', "
+        "canonical='https://github.com/o/r', title='o/r releases', enabled=true, tags=[];"
+    )
+    db.query("CREATE item:i1 SET external_id='1', content='c';")
+    db.query("RELATE item:i1->from_source->source:survivor;")
+    # twin da UI: MESMA canonical, kind diferente → record distinto (edge-less), ARQUIVADO.
+    db.query(
+        "CREATE source:twin SET kind='github-repo', canonical='https://github.com/o/r', "
+        "title='My Repo', tags=['ai'], enabled=false, archived_at=time::now();"
+    )
+
+    migrations.apply_migrations(db)
+
+    assert db.query("SELECT id FROM source:twin;") == []  # twin apagado
+    survivor = db.query("SELECT kind, title, tags, enabled, archived_at FROM source:survivor;")[0]
+    assert survivor["kind"] == "github-repo"
+    assert survivor["title"] == "My Repo"  # estado do twin transferido
+    assert survivor["tags"] == ["ai"]
+    assert survivor["enabled"] is False
+    assert survivor["archived_at"] is not None  # arquivamento do dono preservado
+    items = db.query("SELECT array::len(<-from_source<-item) AS n FROM source:survivor;")[0]["n"]
+    assert items == 1  # proveniência intacta no sobrevivente
+    # só UM record github-repo pra essa canonical (sem bifurcação residual)
+    rows = db.query(
+        "SELECT id FROM source WHERE kind='github-repo' AND canonical='https://github.com/o/r';"
+    )
+    assert len(rows) == 1
+
+
+def test_0010_twin_merge_does_not_revert_a_pause_on_the_survivor(pre_0010_db: Any) -> None:
+    """Achado do code-review: o sobrevivente github-releases TAMBÉM era pausável pela UI (#107 não
+    filtra por kind). Se o dono pausou o SOBREVIVENTE e existe um twin github-repo ATIVO
+    (enabled=true, default de criação #105), o merge NÃO pode reativar a coleta — pausa vence de
+    qualquer lado (`enabled = enabled AND twin.enabled`). E tags que o dono pôs no sobrevivente não
+    são apagadas por um twin de tags vazias."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:sv SET kind='github-releases', canonical='https://github.com/o/r', "
+        "title='old', enabled=false, tags=['keep'];"  # sobrevivente PAUSADO, com tags do dono
+    )
+    db.query(
+        "CREATE source:tw SET kind='github-repo', canonical='https://github.com/o/r', "
+        "title='New', tags=[], enabled=true, archived_at=NONE;"  # twin ATIVO, tags vazias
+    )
+
+    migrations.apply_migrations(db)
+
+    got = db.query("SELECT kind, enabled, tags, title FROM source:sv;")[0]
+    assert got["kind"] == "github-repo"
+    assert (
+        got["enabled"] is False
+    )  # pausa do sobrevivente PRESERVADA (não revertida pelo twin ativo)
+    assert got["tags"] == ["keep"]  # tags do dono não apagadas por twin de tags vazias
+    assert got["title"] == "New"  # título do twin (não-nulo) adotado
+
+
+def test_0010_preserves_untwinned_github_repo_cadastro(pre_0010_db: Any) -> None:
+    """Um Cadastro github-repo criado pela UI SEM twin de coleta (repo que o dono cadastrou e o
+    worker nunca coletou) NÃO é apagado — o DELETE do passo (2) só mira twins com sobrevivente."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:only SET kind='github-repo', "
+        "canonical='https://github.com/solo/repo', title='Solo', enabled=true, tags=['x'];"
+    )
+
+    migrations.apply_migrations(db)
+
+    got = db.query("SELECT kind, canonical, tags FROM source:only;")
+    assert len(got) == 1
+    assert got[0]["kind"] == "github-repo"
+    assert got[0]["tags"] == ["x"]
+
+
+def test_0010_sql_is_self_idempotent(pre_0010_db: Any) -> None:
+    """Rodar o SQL da 0010 uma 2ª vez (belt-and-suspenders sobre a guarda do runner) é no-op: não
+    apaga o Cadastro github-repo legítimo nem mexe no sobrevivente já flipado."""
+    db = pre_0010_db
+    db.query(
+        "CREATE source:s1 SET kind='github-releases', "
+        "canonical='https://github.com/o/r', enabled=true, tags=[];"
+    )
+    db.query(
+        "CREATE source:only SET kind='github-repo', "
+        "canonical='https://github.com/solo/repo', enabled=true, tags=[];"
+    )
+
+    migrations.apply_migrations(db)  # 1ª aplicação da 0010
+    _run_0010_sql(db)  # 2ª passada, direta
+
+    assert db.query("SELECT kind FROM source:s1;")[0]["kind"] == "github-repo"
+    assert db.query("SELECT id FROM source:only;") != []  # Cadastro legítimo intacto

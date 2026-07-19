@@ -2,10 +2,12 @@ name: github-readonly
 kind: http
 # Token READ-ONLY, separado do `github` de ESCRITA (ADR-0021 §9, E12): o Confirmar promoção SÓ
 # LÊ o estado de merge de um PR na API — jamais mescla, comenta ou fecha. Repetir o PAT de escrita
-# aqui alargaria o blast radius do processo kubo-api sem necessidade. Servia também o coletor
-# github-releases (E13) até a v0.2.0 (sessão 0021, ADR-0022) — o worker migrou para o PAT
-# dedicado `github-watch`/`GITHUB_TOKEN_WATCH` (D54), esta integração voltou a ser SÓ do rito
-# de promoção. Segredo só por referência (invariante 8).
+# aqui alargaria o blast radius do processo kubo-api sem necessidade. Serve TAMBÉM o coletor
+# github-releases (desde o #110): sem a auto-descoberta `viewer.watching`, o worker só lê
+# `/repos/{owner}/{repo}/releases` (público, leitura pura) — o PAT dedicado `github-watch`
+# (escopo `notifications`) que a v0.2.0/D54 exigiu foi aposentado, e o coletor voltou a este
+# token; ambos os usos são leitura pública, sem alargamento de escopo. Segredo só por referência
+# (invariante 8).
 auth:
   type: bearer
   secret_ref: env:GITHUB_TOKEN_READONLY  # pragma: allowlist secret
