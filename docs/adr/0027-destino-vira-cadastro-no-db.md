@@ -55,17 +55,25 @@ Remodelar `destination` num Cadastro no DB, geríveis pela UI, **espelhando o mo
    e-mail — dano incomparavelmente menor, e aqui é o e-mail **do próprio dono** no banco **do
    próprio dono**, atrás de Tailscale/VCN. Cifrar no DB com a chave em `env` no mesmo host é
    segurança de fachada (chave e dado atrás da mesma fronteira) — custo real, ganho nulo.
-   Obrigações do plain-PII (garantidas no código): nunca em log/`structlog`; `repr=False` nos
-   modelos carregados (padrão já existente em `ResolvedDestination`); nunca literal em
-   seed/fixture/commit; nunca em traceback. **Credencial NÃO migra pro banco:** Telegram e SMTP
+   Obrigações do plain-PII — **critérios de aceite test-enforced** que atravessam para os tickets
+   de build (store/migration/#122), não promessas de prosa: nunca em log/`structlog`; `repr=False`
+   nos modelos carregados (o `ResolvedDestination` legado é só o **precedente**, não a prova — o
+   modelo novo persistido carrega o mesmo fechamento); nunca literal em seed/fixture/commit; nunca
+   em traceback; nenhum valor PII em dump/erro estruturado. Cada obrigação nasce com um teste que a
+   exerce, antes do cutover. **Credencial NÃO migra para o banco:** Telegram e SMTP
    seguem integrações de catálogo (`catalogs/integrations/*.yaml`, `secret_ref` env). A tabela
    `destination` guarda **endereço**, nunca token/senha.
 
 4. **`UNIQUE(channel, address)`** — a mesma pessoa por Telegram **e** e-mail são 2 linhas
    legítimas; o mesmo endereço 2× no mesmo canal é o bug real (inbox recebe o digest duplicado).
    Duas semânticas que o modelo pina (não deixa como acidente):
-   - **Normalização por canal na borda**, senão a constraint mente: `Foo@Bar.com` e `foo@bar.com`
-     seriam 2 linhas. E-mail = trim + lowercase; chat_id = dígitos com `-` opcional (grupos).
+   - **Normalização por canal num normalizer compartilhado, obrigatório em TODOS os caminhos de
+     escrita** (create/edit/reativação/**seed**/**migration**), não só na borda da UI — senão a
+     constraint mente: `Foo@Bar.com` e `foo@bar.com` seriam 2 linhas, e o seed gravando o `chat_id`
+     cru do env furaria o índice. É **uma função única** (a borda pydantic a chama; seed e migration
+     também a chamam **antes** da checagem de unicidade/persistência), com testes de contrato por
+     caminho de escrita, inclusive reativação. E-mail = trim + lowercase; chat_id = dígitos com `-`
+     opcional (grupos).
    - **Arquivado segura o slot.** O índice não conhece `archived_at` e o SurrealDB não tem partial
      unique index. Logo re-cadastrar um endereço arquivado = **reativar** o registro existente,
      nunca criar novo. Isso é semântica do modelo; o *como* na UI (lookup-first estilo #105 ou
@@ -120,10 +128,16 @@ Remodelar `destination` num Cadastro no DB, geríveis pela UI, **espelhando o mo
     `kubo/distribution/destinations.py`, que será aposentado no cutover (#123). A função migra
     para um módulo de config da distribution; segue `env` (é base de link da UI, não per-destino).
 
-12. **Hard delete** só quando **zero dispatches** apontam para o destino (checagem na store);
-    senão **arquiva** (§8 do ADR-0025, espelho #107). Dupla verificação na UI só para o hard
-    delete (a única ação irreversível); pausar/arquivar/reativar são reversíveis → POST simples com
-    CSRF. Detalhe da UI = #122.
+12. **Hard delete** só quando **zero dispatches** apontam para o destino, senão **arquiva** (§8 do
+    ADR-0025, espelho #107). A checagem "zero dispatches" e o `DELETE` são **atômicos** — mesma
+    transação (o runner envolve em `BEGIN;...;COMMIT;`, ADR-0007) ou `DELETE ... WHERE
+    count(dispatches)=0` num só statement. Como `record<destination>` valida tipo e **não**
+    existência (§5), um insert de dispatch concorrente entre uma checagem e um delete separados
+    deixaria o link dangling (TOCTOU) — a atomicidade fecha a janela, espelhando o arquivamento
+    atômico do #107. Probabilidade real baixa (digest agendado 1×/dia vs delete manual do dono
+    solo), mas o custo de fechar é nulo. Dupla verificação na UI só para o hard delete (a única
+    ação irreversível); pausar/arquivar/reativar são reversíveis → POST simples com CSRF. Detalhe
+    da UI = #122.
 
 13. **Escrita pela UI** segue o molde ADR-0018 / ADR-0025 §10: credencial `kubo_rw` EDITOR
     por-request + CSRF + guarda 409 de staleness; todo acesso via `kubo/store/`. (A tela em si é
