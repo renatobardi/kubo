@@ -58,5 +58,36 @@ expect ALLOW 'git checkout -b feat/ok && git switch -c ci/also-ok'   # todas na 
 expect ALLOW 'git status'
 expect ALLOW 'cat .env.example'
 
+# Troca de branch com árvore suja (item 11 CLAUDE.md global; incidente do subagente
+# que carregou WIP alheio pra outra branch). Sujeira simulada via GUARD_BASH_TEST_DIRTY
+# ("1"=suja, "0"=limpa); produção lê `git status --porcelain` do cwd do comando.
+GUARD_BASH_TEST_DIRTY=1 expect BLOCK 'git switch main'
+GUARD_BASH_TEST_DIRTY=1 expect BLOCK 'git checkout develop'
+GUARD_BASH_TEST_DIRTY=1 expect BLOCK 'git checkout -f main'          # -f é pior: destrói WIP
+GUARD_BASH_TEST_DIRTY=1 expect BLOCK 'git switch -'                  # branch anterior também é troca
+GUARD_BASH_TEST_DIRTY=1 expect BLOCK 'git stash && git switch main'  # stash não absolve: item 11
+# Árvore suja, mas operações legítimas que NÃO trocam branch -> permite
+GUARD_BASH_TEST_DIRTY=1 expect ALLOW 'git checkout -- src/file.py'         # restore de pathspec
+GUARD_BASH_TEST_DIRTY=1 expect ALLOW 'git checkout main -- src/file.py'    # restore de outra ref
+GUARD_BASH_TEST_DIRTY=1 expect ALLOW 'git checkout --theirs src/file.py'   # resolução de conflito
+GUARD_BASH_TEST_DIRTY=1 expect ALLOW 'git switch -c feat/new'              # criar carrega WIP: ok
+# Árvore limpa -> troca de branch é livre (dono voltando pra main após merge)
+GUARD_BASH_TEST_DIRTY=0 expect ALLOW 'git switch main'
+GUARD_BASH_TEST_DIRTY=0 expect ALLOW 'git checkout develop'
+
+# Guard de commit-em-main lê a branch do CWD do comando, não de CLAUDE_PROJECT_DIR
+# (bug de worktree: uma sessão em ../wt commitava avaliando a branch do clone principal).
+# Sem override — exercita a leitura real. CLAUDE_PROJECT_DIR aponta pro repo Kubo
+# (branch feat/*), o cwd injetado aponta pra um repo em main: só o fix bloqueia.
+tmp="$(mktemp -d)"
+git -C "$tmp" init -q -b main
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+cwd_input="$(printf '{"cwd":%s,"tool_input":{"command":"git commit -m x"}}' \
+  "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$tmp")")"
+cwd_code="$(printf '%s' "$cwd_input" | bash "$HOOK" >/dev/null 2>&1; echo $?)"
+if [ "$cwd_code" = 2 ]; then printf 'ok    %-5s : %s\n' BLOCK 'commit em main lido do cwd do worktree'
+else printf 'FAIL  want=BLOCK got=ALLOW (exit %s) : commit-em-main via cwd\n' "$cwd_code"; fails=$((fails+1)); fi
+rm -rf "$tmp"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "todos os casos passaram"; else echo "$fails caso(s) falharam"; exit 1; fi
