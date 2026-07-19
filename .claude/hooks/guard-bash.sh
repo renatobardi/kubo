@@ -7,6 +7,12 @@ INPUT="$(cat)"
 CMD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null || true)"
 [ -z "$CMD" ] && exit 0
 
+# Diretório onde o comando de fato roda. Numa sessão dentro de um worktree o cwd é
+# o worktree, não CLAUDE_PROJECT_DIR (fixo na raiz do clone principal): guards que
+# consultam git precisam do cwd, senão avaliam a árvore/branch errada (bug de squad).
+CWD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("cwd",""))' 2>/dev/null || true)"
+[ -z "$CWD" ] && CWD="${CLAUDE_PROJECT_DIR:-.}"
+
 deny() { echo "BLOQUEADO pelo harness: $1" >&2; exit 2; }
 
 # Prefixo de POSIÇÃO DE COMANDO: casa só no início de um comando — começo da linha
@@ -69,11 +75,24 @@ if [ -n "$NEWBRANCH" ]; then
     && deny "branch fora da taxonomia (feat|fix|chore|docs|test|refactor|ci)/slug kebab-case — ver ADR-0004: $NEWBRANCH"
 fi
 
+# Troca de branch com árvore suja (item 11 CLAUDE.md): carregar trabalho não-commitado
+# pra outra branch foi o mecanismo do incidente (subagente commitou WIP do dono). Barra
+# só a TROCA — criação (-b/-c) leva WIP legitimamente; restore de pathspec (--) e
+# resolução de conflito (--ours/--theirs/--merge/-p) têm a árvore suja por natureza.
+# `stash && switch` não escapa: o porcelain é lido antes do stash rodar (item 11 proíbe
+# o contorno via stash). Árvore avaliada no CWD do comando, não em CLAUDE_PROJECT_DIR.
+if echo "$CMD" | grep -Eq "$CP"'git[[:space:]]+(checkout|switch)([[:space:]]|$)' \
+   && ! echo "$CMD" | grep -Eq '([[:space:]]|^)(-b|-B|-c|-C|--|--ours|--theirs|--merge|-p|--patch)([[:space:]]|$)'; then
+  if [ -n "${GUARD_BASH_TEST_DIRTY+set}" ]; then DIRTY="$GUARD_BASH_TEST_DIRTY"
+  else DIRTY="$([ -n "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] && echo 1 || true)"; fi
+  [ "$DIRTY" = 1 ] && deny "troca de branch com árvore suja — use 'git worktree add' para outra frente ou peça ao dono (item 11); não contorne via stash"
+fi
+
 # Commit direto em main (achado 0018b, fase4-roadmap.md): CLAUDE.md promete "duas camadas de
 # enforce", esta cobria só criação de branch. GUARD_BASH_TEST_BRANCH é override só de teste;
-# produção sempre lê a branch real do repo.
+# produção lê a branch real do CWD do comando (não CLAUDE_PROJECT_DIR — vide bug de worktree).
 echo "$CMD" | grep -Eq "$CP"'git[[:space:]]+commit\b' && {
-  CURBRANCH="${GUARD_BASH_TEST_BRANCH:-$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
+  CURBRANCH="${GUARD_BASH_TEST_BRANCH:-$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
   case "$CURBRANCH" in
     main|master) deny "commit direto em $CURBRANCH — crie uma branch (feat|fix|chore|docs|test|refactor|ci)/slug primeiro" ;;
   esac

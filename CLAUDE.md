@@ -66,6 +66,8 @@ docker run -d --name surreal -p 127.0.0.1:8000:8000 \
 ```
 Conexão vem só de env (invariante 8): `SURREAL_URL` (default `ws://127.0.0.1:8000/rpc`), `SURREAL_USER`/`SURREAL_PASS`/`SURREAL_NS`/`SURREAL_DB` — ver `.env.example`.
 
+**Squad paralelo:** duas sessões rodando `pytest -m integration` batem no mesmo container/namespace e geram flakes fantasma — cada frente usa `SURREAL_NS`/`SURREAL_DB` próprios (padrão do smoke visual isolado). Worktree e troca de branch: item 11 do CLAUDE.md global.
+
 O par **SDK `surrealdb==2.0.0` ↔ server `v3.1.5`** é pinado por evidência (ADR-0005) e sobe junto: bump de um exige revalidar o outro.
 
 **Deploy DEV** (kubo-test, ADR-0011): use SEMPRE o script — nunca dite os passos manuais de rsync/build/up numa sessão.
@@ -222,7 +224,7 @@ Pedido ambíguo do dono não é licença para executar a interpretação mais pr
 ## Harness (hooks do Claude Code)
 
 O repo carrega um harness determinístico em `.claude/` (estilo hapai: bash puro, zero dependências):
-- `PreToolUse` bloqueia: comandos bash destrutivos/perigosos, edição de arquivos de segredo, `git push --force` em main, escrita fora do repo.
+- `PreToolUse` bloqueia: comandos bash destrutivos/perigosos, edição de arquivos de segredo, `git push --force` em main, commit direto em main, criação de branch fora da taxonomia, troca de branch com árvore suja (protege frentes paralelas/worktree — item 11 do CLAUDE.md global), escrita fora do repo.
 - `PostToolUse` roda `ruff` + `pyright` no arquivo tocado após cada edição — feedback imediato, não no fim.
 - `Stop` roda a suite unit antes de encerrar o turno — turno não termina com teste quebrado.
 Os hooks são parte do repo e evoluem por PR como qualquer código. Se um hook bloquear algo legítimo, a correção é no hook (por PR), nunca contorná-lo.
