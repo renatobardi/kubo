@@ -12,10 +12,12 @@ reviews:
   poem: false
   review_status: true
 
-  # Dispara automaticamente na ABERTURA do PR e a cada push subsequente no PR
+  # Dispara automaticamente na ABERTURA do PR (quando sai de draft); pushes
+  # subsequentes NÃO consomem review — re-review sob demanda via `@coderabbitai review`.
   auto_review:
     enabled: true
     drafts: false                     # draft PR = trabalho em andamento, sem review ainda
+    auto_incremental_review: false    # não revisar cada push; economiza quota do free tier
     base_branches:
       - main
 
