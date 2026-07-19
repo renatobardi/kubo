@@ -30,7 +30,7 @@ Em conflito entre este arquivo e a spec, a spec vence — e o conflito deve ser 
 - **API/serviço:** FastAPI. **Scheduling:** APScheduler. **LLM via API:** LiteLLM (roteamento por persona). **CLIs agênticos:** adapters sob a abstração `executor` (`api|cli`); Claude Code via Claude Agent SDK.
 - **SurrealDB:** schemas conforme spec §2.3. DDL versionada em `store/migrations/`. Nomes de tabelas/arestas em inglês, exatamente como na spec (`flow`, `task`, `persona`, `distilled`, `consults`, `produced_by`...).
 - **Front (fase 1):** FastAPI + HTMX + Tailwind 4 com os tokens do design system. Views são descartáveis; o grafo é o contrato.
-- **Idioma:** conversas, docs, ADRs e planos de sessão em PT-BR; código, identificadores, schema e — a partir da sessão 0002 (D16) — mensagens de commit e PRs em inglês.
+- **Idioma:** conversas, docs, ADRs e planos de sessão em PT-BR; código, identificadores, schema e — a partir da sessão 0002 (D16) — mensagens de commit e PRs em inglês. Exceção: o `README.md` da raiz é interface externa (repo público) e vive em **inglês** — não "corrigir" para PT-BR.
 
 ## Comandos
 
