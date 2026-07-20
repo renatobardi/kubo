@@ -9,17 +9,29 @@ sem clobber silencioso. Integração: só é exercível contra banco real.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from kubo.store import client, knowledge, migrations
-from kubo.store.seed import FEED_CADASTROS, seed_default_settings, seed_feed_cadastros
+from kubo.errors import ConfigError
+from kubo.store import client, knowledge, migrations, settings
+from kubo.store import destinations as destination_store
+from kubo.store.seed import (
+    FEED_CADASTROS,
+    main,
+    seed_default_settings,
+    seed_feed_cadastros,
+    seed_owner_destination,
+)
 from kubo.store.settings import get_settings
 
 pytestmark = pytest.mark.integration
+
+_OWNER_TELEGRAM = "+55 1199999-8888"
+_OWNER_TELEGRAM_NORMALIZED = "5511999998888"
 
 _SEED_DB = "test_seed"
 
@@ -131,22 +143,20 @@ def test_seed_default_settings_creates_singleton(db: Any) -> None:
     applied = seed_default_settings(db)
 
     assert applied is True
-    settings = get_settings(db)
-    assert settings is not None
-    assert settings.digest_cron == "30 9 * * *"
-    assert settings.distribution_paused is False
-    assert settings.default_destination is None
+    settings_obj = get_settings(db)
+    assert settings_obj is not None
+    assert settings_obj.digest_cron == "30 9 * * *"
+    assert settings_obj.distribution_paused is False
+    assert settings_obj.default_destination is None
 
 
 def test_seed_default_settings_is_once_per_env(db: Any) -> None:
     """O seed de settings roda UMA VEZ por ambiente: a 2ª chamada devolve False e não altera."""
     assert seed_default_settings(db) is True
-    settings_store = get_settings(db)
-    assert settings_store is not None
+    settings_obj = get_settings(db)
+    assert settings_obj is not None
 
     # Simula edição do dono pela UI.
-    from kubo.store import settings
-
     settings.put_settings(
         db, digest_cron="0 20 * * *", distribution_paused=True, default_destination=None
     )
@@ -156,3 +166,149 @@ def test_seed_default_settings_is_once_per_env(db: Any) -> None:
     assert current is not None
     assert current.digest_cron == "0 20 * * *"
     assert current.distribution_paused is True
+
+
+def test_seed_owner_destination_creates_owner_telegram_and_default(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-45: ambiente limpo ganha o destino Telegram do dono e ele vira default."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", _OWNER_TELEGRAM)
+
+    seed_default_settings(db)
+    applied = seed_owner_destination(db)
+
+    assert applied is True
+    settings_obj = get_settings(db)
+    assert settings_obj is not None
+    assert settings_obj.default_destination is not None
+
+    dest = destination_store.get_destination(db, settings_obj.default_destination)
+    assert dest is not None
+    assert dest.channel == "telegram"
+    assert dest.kind == "pessoa"
+    assert dest.name == "owner-telegram"
+    assert dest.address == _OWNER_TELEGRAM_NORMALIZED
+    assert dest.enabled is True
+
+
+def test_seed_owner_destination_requires_preexisting_settings(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-45: seed_owner_destination só escreve o ponteiro em settings já existente."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
+
+    assert get_settings(db) is None
+    with pytest.raises(ConfigError):
+        seed_owner_destination(db)
+
+
+def test_seed_owner_destination_is_once_per_env(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """KUBO-45: o seed do destino do dono roda uma vez; segunda chamada é no-op."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
+
+    seed_default_settings(db)
+    assert seed_owner_destination(db) is True
+    assert seed_owner_destination(db) is False
+
+    # Apenas um destino existe (não duplicou).
+    rows = db.query("SELECT count() FROM destination WHERE channel = 'telegram' GROUP ALL;")
+    assert int(rows[0]["count"] if rows else 0) == 1
+
+
+def test_seed_owner_destination_preserves_owner_edits(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-45: re-rodar o seed não reverte uma edição manual do dono no default."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
+
+    seed_default_settings(db)
+    seed_owner_destination(db)
+    original = get_settings(db)
+    assert original is not None
+    original_default = original.default_destination
+    assert original_default is not None
+
+    # Dono cria outro destino e muda o default pela UI.
+    other = destination_store.create_destination(
+        db, name="Outro", kind="pessoa", channel="telegram", address="999999"
+    )
+    settings.put_settings(
+        db,
+        digest_cron=original.digest_cron,
+        distribution_paused=original.distribution_paused,
+        default_destination=other,
+    )
+
+    # Re-run do seed não sobrescreve a escolha do dono.
+    assert seed_owner_destination(db) is False
+    current = get_settings(db)
+    assert current is not None
+    assert current.default_destination == other
+
+
+def test_seed_owner_destination_preserves_destination_edits(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-45: re-rodar o seed não reverte uma edição do próprio destino do dono."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
+
+    seed_default_settings(db)
+    seed_owner_destination(db)
+    original = get_settings(db)
+    assert original is not None
+    assert original.default_destination is not None
+
+    # Dono edita nome e endereço do destino semeado.
+    destination_store.edit_destination(
+        db, id=original.default_destination, name="Renomeado", address="999999"
+    )
+
+    assert seed_owner_destination(db) is False
+    edited = destination_store.get_destination(db, original.default_destination)
+    assert edited is not None
+    assert edited.name == "Renomeado"
+    assert edited.address == "999999"
+
+
+def test_seed_owner_destination_fails_fast_without_env(db: Any) -> None:
+    """KUBO-45: env ausente gera falha clara, sem escrever no banco."""
+    assert os.environ.get("KUBO_OWNER_TELEGRAM_CHAT_ID") is None
+
+    with pytest.raises(ConfigError):
+        seed_owner_destination(db)
+
+    # Nenhum destino foi criado e settings continua sem default.
+    rows = db.query("SELECT count() FROM destination GROUP ALL;")
+    assert int(rows[0]["count"] if rows else 0) == 0
+
+
+def test_main_seeds_settings_owner_destination_and_feeds_idempotently(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-45: main() roda settings, destino padrão e feeds sem duplicar."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "12345678")
+
+    class _FakeConnect:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def __enter__(self) -> Any:
+            return self._inner
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    monkeypatch.setattr("kubo.store.seed.client.connect", lambda cfg=None: _FakeConnect(db))
+
+    assert main() == 6
+
+    settings_obj = get_settings(db)
+    assert settings_obj is not None
+    assert settings_obj.default_destination is not None
+    dest = destination_store.get_destination(db, settings_obj.default_destination)
+    assert dest is not None
+    assert dest.address == "12345678"
+
+    # Segunda execução: feeds continuam 6 (não duplicou), settings/destino no-op.
+    assert main() == 0
+    assert _count_source(db) == 6
