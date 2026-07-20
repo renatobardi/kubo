@@ -189,9 +189,9 @@ def execute_digest_sweep_job() -> None:
     os demais; cada run abre sua própria conexão.
     """
     try:
-        with client.connect(client.config()) as db:
+        with client.connect(client.config()) as settings_db:
             try:
-                settings = settings_store.get_settings(db)
+                settings = settings_store.get_settings(settings_db)
             except Exception:  # noqa: BLE001 — defensivo: estado operacional desconhecido
                 _log.exception("digest_settings_read_failed")
                 paused = True
@@ -204,12 +204,12 @@ def execute_digest_sweep_job() -> None:
 
         base_url = resolve_base_url()
 
-        with client.connect(client.config()) as db:
-            destinations = destination_store.active_destinations(db)
+        with client.connect(client.config()) as list_db:
+            destination_list = destination_store.active_destinations(list_db)
 
         dispatched = 0
         failed = 0
-        for destination in destinations:
+        for destination in destination_list:
             factory = DEST_DISPATCH.get(destination.channel)
             if factory is None:
                 _log.warning(
@@ -221,9 +221,9 @@ def execute_digest_sweep_job() -> None:
                 continue
             try:
                 worker = factory(destination, base_url)
-                with client.connect(client.config()) as db:
+                with client.connect(client.config()) as run_db:
                     run_worker(
-                        db,
+                        run_db,
                         worker,
                         config={"max_items": _DIGEST_MAX_ITEMS},
                         embedder=None,
@@ -238,7 +238,7 @@ def execute_digest_sweep_job() -> None:
                 )
         _log.info(
             "digest_sweep_done",
-            total=len(destinations),
+            total=len(destination_list),
             dispatched=dispatched,
             failed=failed,
         )

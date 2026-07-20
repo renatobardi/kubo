@@ -139,11 +139,6 @@ def _error_payload(
 
 def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -> RunResult:
     """Envelope de RunResult com o payload único e stats."""
-    error = (
-        ErrorInfo(kind="telegram_send", message=str(payload.error.message))
-        if payload.error
-        else None
-    )
     stats = Stats.model_validate(
         {
             "new_distilled": new_distilled,
@@ -151,7 +146,7 @@ def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -
             "failed": 1 if failed else 0,
         }
     )
-    return RunResult(payloads=[payload], stats=stats, error=error)
+    return RunResult(payloads=[payload], stats=stats, error=payload.error)
 
 
 def _empty_run() -> RunResult:

@@ -153,7 +153,14 @@ def update_settings(
             settings = settings_store.get_settings(ro)
             choices = settings_store.default_destination_choices(ro)
         return _render_page(
-            request, settings, choices, notice=format_validation_error(exc), status=400
+            request,
+            settings,
+            choices,
+            notice=format_validation_error(exc),
+            status=400,
+            unpause_mode=unpause_mode.strip().lower()
+            if unpause_mode.strip().lower() in ("backlog", "recente")
+            else "backlog",
         )
 
     if form.default_destination is not None:

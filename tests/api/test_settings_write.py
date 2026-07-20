@@ -232,8 +232,8 @@ def test_unpause_global_recent_resets_watermarks(app_db: Any) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert _digest_dispatch_count(dest_a.id) == 1
-    assert _digest_dispatch_count(dest_b.id) == 1
+    assert _digest_dispatch_count(str(dest_a.id)) == 1
+    assert _digest_dispatch_count(str(dest_b.id)) == 1
 
 
 def test_unpause_global_backlog_keeps_watermarks(app_db: Any) -> None:
@@ -261,7 +261,7 @@ def test_unpause_global_backlog_keeps_watermarks(app_db: Any) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert _digest_dispatch_count(dest.id) == 0
+    assert _digest_dispatch_count(str(dest.id)) == 0
 
 
 def test_unpause_without_change_does_nothing(app_db: Any) -> None:
@@ -290,4 +290,4 @@ def test_unpause_without_change_does_nothing(app_db: Any) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert _digest_dispatch_count(dest.id) == 0
+    assert _digest_dispatch_count(str(dest.id)) == 0

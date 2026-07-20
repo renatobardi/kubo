@@ -221,7 +221,7 @@ def reset_destination_watermark(db: Any, *, destination: Destination) -> None:
     Grava um dispatch `ok` de zero-item (artifact='digest'), auditável na tela de
     Envios — a opção "recente" da reativação/unpause (ADR-0029 §6).
     """
-    now = db.query("RETURN time::now();")
+    now = db.query("SELECT time::now() AS now FROM 1;")[0]["now"]
     insert_dispatch(
         db,
         destination=str(destination.id),
