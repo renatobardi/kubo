@@ -277,8 +277,8 @@ def _apply_edit(
 
 
 def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]) -> Response:
-    """Executa uma ação de ciclo de vida (pausar/retomar/arquivar/reativar) no molde
-    ADR-0018: CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
+    """Executa uma ação de ciclo de vida (pausar/arquivar) no molde ADR-0018:
+    CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
@@ -287,6 +287,38 @@ def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]
                 action(db)
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
+    except ConfigError:
+        _log.warning(_WRITE_LOG)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+
+
+def _reactivation_action(
+    request: Request,
+    csrf: str,
+    rid: RecordID,
+    mode: str,
+    action: Callable[[Any], None],
+) -> Response:
+    """Executa reativação (enable/restore) com escolha backlog/recente.
+
+    mode=recente grava um dispatch zero-item que avança o watermark para
+    `time::now()` do banco (ADR-0029 §6). Mode inválido cai no default backlog.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    if mode not in ("backlog", "recente"):
+        mode = "backlog"
+    try:
+        with client.connect_rw() as db:
+            try:
+                action(db)
+            except StaleDestinationError:
+                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            if mode == "recente":
+                destination = destination_store.get_destination(db, rid)
+                if destination is not None:
+                    destination_store.reset_destination_watermark(db, destination=destination)
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
         _log.warning(_WRITE_LOG)
@@ -305,12 +337,19 @@ def disable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
 
 
 @router.post("/{did}/enable")
-def enable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Retoma um destino pausado (`enabled=true`)."""
+def enable(
+    request: Request,
+    did: str,
+    csrf: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "backlog",
+) -> Response:
+    """Retoma um destino pausado (`enabled=true`). mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
+    return _reactivation_action(
         request,
         csrf,
+        rid,
+        mode,
         lambda db: destination_store.set_destination_enabled(db, id=rid, enabled=True),
     )
 
@@ -325,11 +364,20 @@ def archive(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
 
 
 @router.post("/{did}/restore")
-def restore(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Restaura um destino arquivado."""
+def restore(
+    request: Request,
+    did: str,
+    csrf: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "backlog",
+) -> Response:
+    """Restaura um destino arquivado. mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
-        request, csrf, lambda db: destination_store.restore_destination(db, id=rid)
+    return _reactivation_action(
+        request,
+        csrf,
+        rid,
+        mode,
+        lambda db: destination_store.restore_destination(db, id=rid),
     )
 
 

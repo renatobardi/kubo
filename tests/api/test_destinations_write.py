@@ -309,5 +309,91 @@ def test_delete_page_get_renders_confirmation_via_real_route(app_db: Any) -> Non
     assert "Apagar de vez" in html
 
 
+def _last_digest_dispatch(key: str) -> dict[str, Any] | None:
+    """Último dispatch de digest do destino, ou None."""
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rows = root.query(
+            "SELECT * FROM dispatch WHERE destination = $d AND artifact = 'digest' "
+            "ORDER BY watermark DESC LIMIT 1;",
+            {"d": f"destination:{key}"},
+        )
+    return rows[0] if rows else None
+
+
+def test_enable_with_recent_resets_watermark(app_db: Any) -> None:
+    """Retomar com mode=recente grava dispatch zero-item com watermark=now."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_destination_via_route(
+        tc, csrf, name="A", kind="pessoa", channel="telegram", address="111"
+    )
+    tc.post(f"/destinations/{key}/disable", data={"csrf": csrf}, follow_redirects=False)
+
+    resp = tc.post(
+        f"/destinations/{key}/enable",
+        data={"csrf": csrf, "mode": "recente"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    dispatch = _last_digest_dispatch(key)
+    assert dispatch is not None
+    assert dispatch["status"] == "ok"
+    assert dispatch["item_count"] == 0
+    assert dispatch["watermark"] is not None
+
+
+def test_enable_default_backlog_does_not_reset(app_db: Any) -> None:
+    """Retomar sem mode não toca o watermark."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_destination_via_route(
+        tc, csrf, name="A", kind="pessoa", channel="telegram", address="111"
+    )
+    tc.post(f"/destinations/{key}/disable", data={"csrf": csrf}, follow_redirects=False)
+
+    resp = tc.post(
+        f"/destinations/{key}/enable",
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _last_digest_dispatch(key) is None
+
+
+def test_restore_with_recent_resets_watermark(app_db: Any) -> None:
+    """Restaurar arquivado com mode=recente grava dispatch zero-item."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_destination_via_route(
+        tc, csrf, name="A", kind="pessoa", channel="telegram", address="111"
+    )
+    tc.post(f"/destinations/{key}/archive", data={"csrf": csrf}, follow_redirects=False)
+
+    resp = tc.post(
+        f"/destinations/{key}/restore",
+        data={"csrf": csrf, "mode": "recente"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    dispatch = _last_digest_dispatch(key)
+    assert dispatch is not None
+    assert dispatch["status"] == "ok"
+    assert dispatch["item_count"] == 0
+
+
+def test_invalid_reactivation_mode_is_treated_as_backlog(app_db: Any) -> None:
+    """Mode desconhecido cai no default backlog, sem reset."""
+    tc, csrf = _login_csrf(app_db)
+    key = _create_destination_via_route(
+        tc, csrf, name="A", kind="pessoa", channel="telegram", address="111"
+    )
+    tc.post(f"/destinations/{key}/disable", data={"csrf": csrf}, follow_redirects=False)
+
+    resp = tc.post(
+        f"/destinations/{key}/enable",
+        data={"csrf": csrf, "mode": "nonsense"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _last_digest_dispatch(key) is None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

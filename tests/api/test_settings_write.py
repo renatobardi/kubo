@@ -191,3 +191,103 @@ def test_update_settings_rejects_dangling_default_destination(app_db: Any) -> No
     row = _settings_row()
     assert row is not None
     assert row.get("default_destination") is None
+
+
+def _digest_dispatch_count(dest: str) -> int:
+    """Conta dispatches digest de um destino (por key)."""
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rows = root.query(
+            "SELECT count() FROM dispatch WHERE destination = $d AND artifact = 'digest';",
+            {"d": f"destination:{dest}"},
+        )
+    return rows[0]["count"] if rows else 0
+
+
+def test_unpause_global_recent_resets_watermarks(app_db: Any) -> None:
+    """Despausar a distribuição com mode=recente reseta todos os destinos ativos."""
+    tc, csrf = _login_csrf(app_db)
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        dest_a = destinations.create_destination(
+            root, name="A", kind="pessoa", channel="telegram", address="111"
+        )
+        dest_b = destinations.create_destination(
+            root, name="B", kind="pessoa", channel="telegram", address="222"
+        )
+        settings_store.put_settings(
+            root,
+            digest_cron="30 9 * * *",
+            distribution_paused=True,
+            default_destination=None,
+        )
+
+    resp = tc.post(
+        "/settings",
+        data={
+            "digest_cron": "0 20 * * *",
+            "distribution_paused": "",
+            "default_destination": "",
+            "unpause_mode": "recente",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _digest_dispatch_count(dest_a.id) == 1
+    assert _digest_dispatch_count(dest_b.id) == 1
+
+
+def test_unpause_global_backlog_keeps_watermarks(app_db: Any) -> None:
+    """Despausar com mode=backlog (padrão) não gera dispatch."""
+    tc, csrf = _login_csrf(app_db)
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        dest = destinations.create_destination(
+            root, name="A", kind="pessoa", channel="telegram", address="111"
+        )
+        settings_store.put_settings(
+            root,
+            digest_cron="30 9 * * *",
+            distribution_paused=True,
+            default_destination=None,
+        )
+
+    resp = tc.post(
+        "/settings",
+        data={
+            "digest_cron": "0 20 * * *",
+            "distribution_paused": "",
+            "default_destination": "",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _digest_dispatch_count(dest.id) == 0
+
+
+def test_unpause_without_change_does_nothing(app_db: Any) -> None:
+    """Salvar settings mantendo pausado não reseta ninguém."""
+    tc, csrf = _login_csrf(app_db)
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        dest = destinations.create_destination(
+            root, name="A", kind="pessoa", channel="telegram", address="111"
+        )
+        settings_store.put_settings(
+            root,
+            digest_cron="30 9 * * *",
+            distribution_paused=True,
+            default_destination=None,
+        )
+
+    resp = tc.post(
+        "/settings",
+        data={
+            "digest_cron": "0 20 * * *",
+            "distribution_paused": "on",
+            "default_destination": "",
+            "unpause_mode": "recente",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _digest_dispatch_count(dest.id) == 0
