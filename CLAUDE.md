@@ -231,6 +231,15 @@ Os hooks são parte do repo e evoluem por PR como qualquer código. Se um hook b
 
 - **Definition of done:** ciclo TDD completo + gates de qualidade verdes + doc/ADR atualizados se comportamento ou arquitetura mudou + PR aberto com review do CodeRabbit endereçado. Telas de UI exigem adicionalmente **paridade com o mockup** (tabela de paridade + screenshots lado a lado; regra em `docs/design/README.md`) e **responsividade mobile** (norma "toda tela nasce responsiva", 2026-07-15, mesmo doc) — tela nova sem variante mobile não está pronta.
 
+## Jira / Issue tracker workflow
+
+Quando uma sessão atuar em um ticket Jira, o estado e a tag da issue devem refletir o passo exato do ciclo:
+
+1. **Ao iniciar** — movimentar a issue para o status **Running** e alterar a tag/label para `running`.
+2. **Ao terminar** — movimentar a issue para o status **Validate** e alterar a tag/label para `validate`.
+
+Use o MCP `atlassian` (`getJiraIssue`, `getTransitionsForJiraIssue`, `transitionJiraIssue`, `editJiraIssue`) para fazer as transições e atualizar `labels`. Se o status alvo não for alcançável diretamente, transicione pelo caminho do workflow (por exemplo, *Tarefas pendentes* → **Running** → **Validate**) e ajuste a label apenas no estado final. Nunca deixe a issue no status de início após o trabalho concluído.
+
 ## Como trabalhar comigo (o dono)
 
 - Fadiga de complexidade é a razão de este projeto existir. Na dúvida entre duas soluções, escolha a que um mantenedor solo entende em 6 meses. Dependência nova exige justificativa explícita.
