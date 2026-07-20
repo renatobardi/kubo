@@ -17,7 +17,9 @@ from kubo.errors import (
     DestinationHasHistoryError,
     DuplicateDestinationError,
     StaleDestinationError,
+    StoreError,
 )
+from kubo.store.transaction import run_transaction
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,25 @@ def _fresh_destination_id() -> RecordID:
 def _destination_ref(id: RecordID) -> str:
     """String `destination:<key>` usada em `dispatch.destination` nesta fase."""
     return str(id)
+
+
+_UNPAUSE_MODES = ("backlog", "recente")
+
+
+def valid_unpause_mode(raw: str) -> str:
+    """Valida e normaliza o modo de unpause (backlog/recente); levanta em inválido."""
+    v = raw.strip().lower()
+    if v not in _UNPAUSE_MODES:
+        raise ValueError("modo de unpause inválido")
+    return v
+
+
+def normalize_unpause_mode(raw: str | None) -> str:
+    """Normaliza o modo de unpause; valores inválidos caem no default backlog."""
+    if not raw:
+        return "backlog"
+    v = raw.strip().lower()
+    return v if v in _UNPAUSE_MODES else "backlog"
 
 
 def _find_destination_id(db: Any, *, channel: str, address: str) -> RecordID | None:
@@ -143,16 +164,78 @@ def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
         raise StaleDestinationError(f"destino arquivado durante a edição: {id}")
 
 
-def set_destination_enabled(db: Any, *, id: RecordID, enabled: bool) -> None:
-    """Pausa (`enabled=false`) ou retoma (`enabled=true`) um destino NÃO arquivado."""
-    updated = db.query(
-        "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE;",
-        {"r": id, "enabled": enabled},
+def _reset_watermark_sql_and_params(
+    *, prefix: str, destination: Destination
+) -> tuple[str, dict[str, Any]]:
+    """Devolve um statement CREATE dispatch de zero-item (watermark=time::now()) e params."""
+    rid = RecordID("dispatch", secrets.token_hex(16))
+    return (
+        "CREATE $d SET destination = $dest, channel = $ch, status = 'ok', "
+        "artifact = 'digest', watermark = time::now(), item_count = 0, items = [], error = NONE",
+        {
+            "d": rid,
+            "dest": _destination_ref(destination.id),
+            "ch": destination.channel,
+        },
     )
-    if not updated:
-        raise StaleDestinationError(
-            f"destino não pausável/retomável (inexistente ou arquivado): {id}"
-        )
+
+
+def _run_reactivate_transaction(
+    db: Any,
+    *,
+    id: RecordID,
+    update_statement: str,
+    update_params: dict[str, Any],
+    mode: str,
+    destination: Destination | None,
+) -> None:
+    """Executa UPDATE + reset de watermark (quando mode='recente') numa transação atômica.
+
+    Levanta `StaleDestinationError` se o UPDATE não tocar nenhuma linha.
+    """
+    statements: list[str] = [
+        f"LET $updated = ({update_statement} RETURN AFTER)",
+        "IF count($updated) == 0 { THROW 'StaleDestinationError' }",
+    ]
+    params: dict[str, Any] = dict(update_params)
+    if mode == "recente":
+        if destination is None:
+            raise ValueError("destination é obrigatório para mode='recente'")
+        stmt, p = _reset_watermark_sql_and_params(prefix="", destination=destination)
+        statements.append(stmt)
+        params |= p
+    try:
+        run_transaction(db, statements, params)
+    except StoreError as exc:
+        if "StaleDestinationError" in str(exc):
+            raise StaleDestinationError(
+                f"destino não editável (inexistente ou arquivado): {id}"
+            ) from exc
+        raise
+
+
+def set_destination_enabled(
+    db: Any,
+    *,
+    id: RecordID,
+    enabled: bool,
+    mode: str | None = None,
+    destination: Destination | None = None,
+) -> None:
+    """Pausa (`enabled=false`) ou retoma (`enabled=true`) um destino NÃO arquivado.
+
+    mode='recente' grava um dispatch zero-item que avança o watermark — atômico com o UPDATE.
+    """
+    mode = normalize_unpause_mode(mode)
+    update = "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE"
+    _run_reactivate_transaction(
+        db,
+        id=id,
+        update_statement=update,
+        update_params={"r": id, "enabled": enabled},
+        mode=mode,
+        destination=destination if enabled else None,
+    )
 
 
 def archive_destination(db: Any, *, id: RecordID) -> None:
@@ -165,14 +248,27 @@ def archive_destination(db: Any, *, id: RecordID) -> None:
         raise StaleDestinationError(f"destino não arquivável (inexistente ou já arquivado): {id}")
 
 
-def restore_destination(db: Any, *, id: RecordID) -> None:
-    """Restaura um destino arquivado ao estado ativo."""
-    updated = db.query(
-        "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE;",
-        {"r": id},
+def restore_destination(
+    db: Any,
+    *,
+    id: RecordID,
+    mode: str | None = None,
+    destination: Destination | None = None,
+) -> None:
+    """Restaura um destino arquivado ao estado ativo.
+
+    mode='recente' grava um dispatch zero-item que avança o watermark — atômico com o UPDATE.
+    """
+    mode = normalize_unpause_mode(mode)
+    update = "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE"
+    _run_reactivate_transaction(
+        db,
+        id=id,
+        update_statement=update,
+        update_params={"r": id},
+        mode=mode,
+        destination=destination,
     )
-    if not updated:
-        raise StaleDestinationError(f"destino não restaurável (inexistente ou não arquivado): {id}")
 
 
 def destination_dispatch_count(db: Any, id: RecordID) -> int:
@@ -201,14 +297,27 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
         raise StaleDestinationError(f"destino inexistente: {id}")
 
 
-def active_destinations(db: Any, *, channel: str) -> list[Destination]:
-    """Lista destinos ATIVOS (`enabled=true`, `archived_at IS NONE`) de um canal."""
-    rows = db.query(
-        "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE "
-        "AND channel = $channel;",
-        {"channel": channel},
-    )
+def active_destinations(db: Any, *, channel: str | None = None) -> list[Destination]:
+    """Lista destinos ATIVOS (`enabled=true`, `archived_at IS NONE`). Se `channel`
+    for fornecido, filtra por canal; senão, retorna todos (ADR-0029 §9)."""
+    query = "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE"
+    params: dict[str, Any] = {}
+    if channel is not None:
+        query += " AND channel = $channel"
+        params["channel"] = channel
+    query += ";"
+    rows = db.query(query, params)
     return [_destination_from_row(r) for r in rows]
+
+
+def reset_destination_watermark(db: Any, *, destination: Destination) -> None:
+    """Avança o watermark do destino para `time::now()` do banco sem entregar conteúdo.
+
+    Grava um dispatch `ok` de zero-item (artifact='digest'), auditável na tela de
+    Envios — a opção "recente" da reativação/unpause (ADR-0029 §6).
+    """
+    stmt, params = _reset_watermark_sql_and_params(prefix="", destination=destination)
+    db.query(stmt + ";", params)
 
 
 _LIST_DESTINATIONS_SQL = (

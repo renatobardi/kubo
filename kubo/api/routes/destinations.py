@@ -276,9 +276,13 @@ def _apply_edit(
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
 
-def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]) -> Response:
-    """Executa uma ação de ciclo de vida (pausar/retomar/arquivar/reativar) no molde
-    ADR-0018: CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
+def _lifecycle_action(
+    request: Request,
+    csrf: str,
+    action: Callable[[Any], None],
+) -> Response:
+    """Executa uma ação de ciclo de vida no molde ADR-0018:
+    CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
@@ -305,14 +309,24 @@ def disable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
 
 
 @router.post("/{did}/enable")
-def enable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Retoma um destino pausado (`enabled=true`)."""
+def enable(
+    request: Request,
+    did: str,
+    csrf: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "backlog",
+) -> Response:
+    """Retoma um destino pausado (`enabled=true`). mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
-        request,
-        csrf,
-        lambda db: destination_store.set_destination_enabled(db, id=rid, enabled=True),
-    )
+
+    def _action(db: Any) -> None:
+        destination = destination_store.get_destination(db, rid)
+        if destination is None:
+            raise StaleDestinationError(f"destino inexistente: {rid}")
+        destination_store.set_destination_enabled(
+            db, id=rid, enabled=True, mode=mode, destination=destination
+        )
+
+    return _lifecycle_action(request, csrf, _action)
 
 
 @router.post("/{did}/archive")
@@ -325,12 +339,22 @@ def archive(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
 
 
 @router.post("/{did}/restore")
-def restore(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Restaura um destino arquivado."""
+def restore(
+    request: Request,
+    did: str,
+    csrf: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "backlog",
+) -> Response:
+    """Restaura um destino arquivado. mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
-        request, csrf, lambda db: destination_store.restore_destination(db, id=rid)
-    )
+
+    def _action(db: Any) -> None:
+        destination = destination_store.get_destination(db, rid)
+        if destination is None:
+            raise StaleDestinationError(f"destino inexistente: {rid}")
+        destination_store.restore_destination(db, id=rid, mode=mode, destination=destination)
+
+    return _lifecycle_action(request, csrf, _action)
 
 
 def _render_delete(

@@ -45,6 +45,7 @@ class SettingsForm(BaseModel):
     digest_cron: str
     distribution_paused_raw: str = "false"
     default_destination_raw: str = ""
+    unpause_mode_raw: str = "backlog"
 
     @field_validator("digest_cron", mode="after")
     @classmethod
@@ -58,6 +59,12 @@ class SettingsForm(BaseModel):
         except ValueError as exc:
             raise ValueError("cron inválido") from exc
         return v
+
+    @field_validator("unpause_mode_raw", mode="after")
+    @classmethod
+    def _valid_unpause_mode(cls, v: str) -> str:
+        """Modo de unpause global: backlog (padrão) ou recente."""
+        return destination_store.valid_unpause_mode(v)
 
     @model_validator(mode="after")
     def _normalize(self) -> "SettingsForm":
@@ -78,6 +85,11 @@ class SettingsForm(BaseModel):
             return None
         return RecordID("destination", self.default_destination_raw)
 
+    @property
+    def unpause_mode(self) -> str:
+        """Modo escolhido ao despausar a distribuição global."""
+        return self.unpause_mode_raw
+
 
 def _render_page(
     request: Request,
@@ -86,6 +98,7 @@ def _render_page(
     *,
     notice: str | None = None,
     status: int = 200,
+    unpause_mode: str = "backlog",
 ) -> Response:
     """Renderiza a tela de Configurações com os valores atuais e as opções de destino."""
     return templates.TemplateResponse(
@@ -96,6 +109,7 @@ def _render_page(
             "distribution_paused": settings.distribution_paused if settings else False,
             "default_destination": settings.default_destination if settings else None,
             "choices": choices,
+            "unpause_mode": unpause_mode,
             "csrf": csrf_token(request),
             "notice": notice,
         },
@@ -118,6 +132,7 @@ def update_settings(
     digest_cron: Annotated[str, Form()] = _default_cron(),
     distribution_paused: Annotated[str, Form()] = "false",
     default_destination: Annotated[str, Form()] = "",
+    unpause_mode: Annotated[str, Form()] = "backlog",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
     """Persiste as configurações operacionais após validação pydantic + CSRF."""
@@ -128,37 +143,52 @@ def update_settings(
             digest_cron=digest_cron,
             distribution_paused_raw=distribution_paused,
             default_destination_raw=default_destination,
+            unpause_mode_raw=unpause_mode,
         )
     except ValidationError as exc:
         with client.connect() as ro:
             settings = settings_store.get_settings(ro)
             choices = settings_store.default_destination_choices(ro)
         return _render_page(
-            request, settings, choices, notice=format_validation_error(exc), status=400
+            request,
+            settings,
+            choices,
+            notice=format_validation_error(exc),
+            status=400,
+            unpause_mode=destination_store.normalize_unpause_mode(unpause_mode),
         )
 
-    if form.default_destination is not None:
-        with client.connect() as ro:
-            try:
+    try:
+        with client.connect_rw() as db:
+            if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),
                     digest_cron=form.digest_cron,
                     distribution_paused=form.distribution_paused,
                     default_destination=form.default_destination,
                 )
-                settings_store.resolve_default_destination(ro, temp)
-            except ConfigError as exc:
-                settings = settings_store.get_settings(ro)
-                choices = settings_store.default_destination_choices(ro)
-                return _render_page(request, settings, choices, notice=str(exc), status=400)
+                try:
+                    settings_store.resolve_default_destination(db, temp)
+                except ConfigError as exc:
+                    settings = settings_store.get_settings(db)
+                    choices = settings_store.default_destination_choices(db)
+                    return _render_page(request, settings, choices, notice=str(exc), status=400)
 
-    try:
-        with client.connect_rw() as db:
-            settings_store.put_settings(
+            old_settings = settings_store.get_settings(db)
+            unpause_recent = (
+                old_settings is not None
+                and old_settings.distribution_paused
+                and not form.distribution_paused
+                and form.unpause_mode == "recente"
+            )
+            destinations = destination_store.active_destinations(db) if unpause_recent else []
+            settings_store.put_settings_and_reset(
                 db,
                 digest_cron=form.digest_cron,
                 distribution_paused=form.distribution_paused,
                 default_destination=form.default_destination,
+                unpause_recent=unpause_recent,
+                destinations=destinations,
             )
     except ConfigError:
         _log.warning(_WRITE_LOG)

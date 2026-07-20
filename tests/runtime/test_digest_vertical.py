@@ -1,10 +1,11 @@
 """Vertical do digest ponta a ponta (integração, SurrealDB) — ADR-0015 §IV/§V.
 
-`run_worker` completo com `DigestWorker` (sender FAKE, destinos injetados) contra o
-banco real: prova o encanamento `distilled_for_digest` (watermark + bootstrap) →
-builder → sender → `DispatchPayload` → `_persist` (parse `distilled:<id>`→RecordID +
-`insert_dispatch`). Cobre o ramo `DispatchPayload` do runner e o critério físico do
-plano em unit: enviar cria dispatch(ok); re-rodar sem novidade não envia nada.
+`run_worker` completo com `TelegramDigestWorker` (sender FAKE, destino injetado)
+contra o banco real: prova o encanamento `distilled_for_digest` (watermark +
+bootstrap) → builder → sender → `DispatchPayload` → `_persist` (parse
+`distilled:<id>` → RecordID + `insert_dispatch`). Cobre o ramo `DispatchPayload`
+do runner e o critério físico do plano em unit: enviar cria dispatch(ok);
+re-rodar sem novidade não envia nada.
 ZERO rede — o sender fake nunca toca o Bot API.
 """
 
@@ -15,11 +16,11 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.runtime.runner import run_worker
-from kubo.store import client, knowledge, migrations
-from kubo.workers.digest import DigestWorker
+from kubo.store import client, destinations, knowledge, migrations
+from kubo.workers.digest import TelegramDigestWorker
 
 pytestmark = pytest.mark.integration
 
@@ -66,12 +67,21 @@ def _orphan_item(db: Any) -> Any:
     )
 
 
-def _worker(sender: _RecordingSender) -> DigestWorker:
-    dest = ResolvedDestination(
-        id="owner-telegram", name="dono", kind="pessoa", channel="telegram", address="99"
+def _worker(sender: _RecordingSender) -> TelegramDigestWorker:
+    dest = destinations.Destination(
+        id=RecordID("destination", "ownertelegram"),
+        name="dono",
+        kind="pessoa",
+        channel="telegram",
+        address="99",
+        enabled=True,
+        archived_at=None,
+        dispatches=0,
     )
-    return DigestWorker(
-        destinations=[dest], base_url="https://kubo.test:3900", senders={"telegram": sender}
+    return TelegramDigestWorker(
+        destination=dest,
+        base_url="https://kubo.test:3900",
+        sender=sender,
     )
 
 

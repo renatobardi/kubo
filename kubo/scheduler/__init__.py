@@ -22,26 +22,21 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from kubo.distribution.destinations import (
-    load_destinations,
-    resolve_base_url,
-    resolve_destinations,
-)
+from kubo.distribution.destinations import resolve_base_url
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
-from kubo.scheduler.sweep import SWEEP_DISPATCH
+from kubo.scheduler.sweep import DEST_DISPATCH, SWEEP_DISPATCH
 from kubo.store import client
+from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import active_sources
-from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
 _REPO_ROOT = Path(__file__).parents[2]
 _SCHEDULES_PATH = _REPO_ROOT / "schedules.yaml"
-_DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
 _log = structlog.get_logger()
 
 # Intervalo de polling da config do digest — 5 minutos (ADR-0028 §4).
@@ -139,12 +134,6 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
             ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
         )
         return DistillerWorker(executor), GeminiEmbedder.from_env()
-    if worker_name == "digest":
-        # Destinos + base URL resolvidos do env AQUI (no disparo), como o embedder do
-        # distiller: env ausente (chat_id/KUBO_BASE_URL) vira `scheduler_job_failed`,
-        # não derruba o processo. O worker recebe tudo resolvido — nunca lê os.environ.
-        destinations = resolve_destinations(load_destinations(_DESTINATIONS_PATH))
-        return DigestWorker(destinations=destinations, base_url=resolve_base_url()), None
     return WORKER_REGISTRY[worker_name](), None
 
 
@@ -152,33 +141,9 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     """Executa um worker agendado com conexão POR execução (ADR-0010): abre a
     conexão, roda sob contrato (run_worker persiste), fecha. Sem handle global de
     DB (um ws de vida longa apodrece num processo que roda dias).
-
-    No disparo do `digest`, lê `distribution_paused` de `settings` (KUBO-44) e passa
-    para o worker como config. Se pausado, o worker devolve `RunResult()` vazio,
-    que o runtime fecha como run `ok` sem dispatch (ADR-0028 §5) — o watermark
-    não avança. Erros de leitura de settings não derrubam o job e pausam por
-    segurança (fail-safe): não enviam digest quando o estado operacional é
-    desconhecido.
     """
     try:
-        if worker_name == "digest":
-            with client.connect(client.config()) as db:
-                try:
-                    settings = settings_store.get_settings(db)
-                except Exception:  # noqa: BLE001 — defensivo: estado operacional desconhecido
-                    _log.exception("digest_settings_read_failed")
-                    paused = True
-                else:
-                    paused = settings.distribution_paused if settings else False
-            _log.info("digest_pause_read", distribution_paused=paused)
-            if paused:
-                worker: Any = DigestWorker(destinations=[], base_url="")
-                embedder: Embedder | None = None
-            else:
-                worker, embedder = _instantiate(worker_name)
-            config = {"max_items": _DIGEST_MAX_ITEMS, "paused": paused}
-        else:
-            worker, embedder = _instantiate(worker_name)
+        worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
             run_worker(db, worker, config=config, embedder=embedder)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga; APScheduler não perde o traço
@@ -215,6 +180,71 @@ def execute_sweep_job(kind: str) -> None:
             # (feed privado) — logá-la vazaria segredo (CLAUDE.md §Logs). O id resolve a fonte.
             _log.exception("sweep_run_failed", kind=kind, source=str(source.id))
     _log.info("sweep_done", kind=kind, total=len(sources), dispatched=dispatched, failed=failed)
+
+
+def execute_digest_sweep_job() -> None:
+    """Executa o sweep de destinos do digest (ADR-0029): lê destinos ATIVOS do
+    banco, checa `distribution_paused` uma vez antes do loop (zero runs se
+    pausado) e dispara UM run por destino. Uma falha em um destino não impede
+    os demais; cada run abre sua própria conexão.
+    """
+    try:
+        with client.connect(client.config()) as settings_db:
+            try:
+                settings = settings_store.get_settings(settings_db)
+            except Exception:  # noqa: BLE001 — defensivo: estado operacional desconhecido
+                _log.exception("digest_settings_read_failed")
+                paused = True
+            else:
+                paused = settings.distribution_paused if settings else False
+        _log.info("digest_pause_read", distribution_paused=paused)
+        if paused:
+            _log.info("digest_sweep_skipped", reason="paused")
+            return
+
+        base_url = resolve_base_url()
+
+        with client.connect(client.config()) as list_db:
+            destination_list = destination_store.active_destinations(list_db)
+
+        dispatched = 0
+        failed = 0
+        for destination in destination_list:
+            factory = DEST_DISPATCH.get(destination.channel)
+            if factory is None:
+                _log.warning(
+                    "digest_sweep_channel_ignored",
+                    destination=str(destination.id),
+                    channel=destination.channel,
+                )
+                failed += 1
+                continue
+            try:
+                worker = factory(destination, base_url)
+                with client.connect(client.config()) as run_db:
+                    run_worker(
+                        run_db,
+                        worker,
+                        config={"max_items": _DIGEST_MAX_ITEMS},
+                        embedder=None,
+                    )
+                dispatched += 1
+            except Exception:  # noqa: BLE001 — isola o destino: loga e segue
+                failed += 1
+                _log.exception(
+                    "digest_sweep_run_failed",
+                    destination=str(destination.id),
+                    channel=destination.channel,
+                )
+        _log.info(
+            "digest_sweep_done",
+            total=len(destination_list),
+            dispatched=dispatched,
+            failed=failed,
+        )
+    except Exception:  # noqa: BLE001 — loga e repropaga falhas de setup
+        _log.exception("digest_sweep_failed")
+        raise
 
 
 def _cron_trigger(cron: str, tz: ZoneInfo, *, label: str) -> CronTrigger:
@@ -271,17 +301,15 @@ def _add_digest_job(
 ) -> None:
     """Registra o job `digest` a partir do `digest_cron` do singleton settings (KUBO-44).
 
-    O horário não vem mais do `schedules.yaml` — a timezone continua vindo de lá. A config
-    efetiva do worker (`max_items` e `paused`) é montada em `execute_job` a partir das
-    constantes pinadas do scheduler e do `settings`; os destinos ainda vêm do
-    `destinations.yaml` (cutover em ticket futuro).
+    O horário não vem mais do `schedules.yaml` — a timezone continua vindo de lá. O job
+    agora dispara o sweep de destinos (`execute_digest_sweep_job`), não mais o worker
+    monolítico `digest` (ADR-0029).
     """
     trigger = _digest_trigger(settings.digest_cron, tz)
     scheduler.add_job(
-        execute_job,
+        execute_digest_sweep_job,
         trigger=trigger,
         id="digest",
-        kwargs={"worker_name": "digest", "config": {}},
     )
 
 

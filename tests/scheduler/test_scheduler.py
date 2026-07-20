@@ -730,10 +730,15 @@ def _fake_db() -> Any:
 
 
 def test_build_scheduler_digest_job_uses_settings_cron() -> None:
-    """O job `digest` é registrado com o cron do settings, não do schedules.yaml."""
+    """O job `digest` é registrado com o cron do settings e aponta para o sweep."""
     from apscheduler.triggers.cron import CronTrigger
 
-    from kubo.scheduler import Schedules, SweepEntry, build_scheduler
+    from kubo.scheduler import (
+        Schedules,
+        SweepEntry,
+        build_scheduler,
+        execute_digest_sweep_job,
+    )
 
     schedules = Schedules(
         timezone="America/Sao_Paulo", schedules=[SweepEntry(sweep="rss", cron="0 8 * * *")]
@@ -743,7 +748,8 @@ def test_build_scheduler_digest_job_uses_settings_cron() -> None:
     digest_job = scheduler.get_job("digest")
     assert digest_job is not None
     assert isinstance(digest_job.trigger, CronTrigger)
-    assert digest_job.kwargs == {"worker_name": "digest", "config": {}}
+    assert digest_job.func is execute_digest_sweep_job
+    assert digest_job.kwargs == {}
 
 
 def test_build_scheduler_poll_job_is_interval() -> None:
@@ -847,91 +853,3 @@ def test_check_and_reschedule_digest_keeps_current_when_settings_missing() -> No
 
     assert new_cron == "30 9 * * *"
     scheduler.reschedule_job.assert_not_called()
-
-
-def test_execute_job_reads_distribution_paused_for_digest(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No disparo do `digest`, `execute_job` lê `distribution_paused` de settings e loga."""
-    from kubo import scheduler
-
-    logged: list[dict[str, Any]] = []
-
-    monkeypatch.setattr(scheduler, "run_worker", lambda db, worker, *, config, embedder: None)
-    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
-
-    settings_read: list[bool] = []
-
-    def _get_settings(_db: Any) -> Settings:
-        settings_read.append(True)
-        return _scheduler_settings(paused=True)  # type: ignore[call-arg]
-
-    monkeypatch.setattr(scheduler.settings_store, "get_settings", _get_settings)
-
-    def _info(event: str, **kwargs: Any) -> None:
-        logged.append({"event": event, **kwargs})
-
-    monkeypatch.setattr(scheduler._log, "info", _info)
-
-    scheduler.execute_job("digest", {})
-
-    assert settings_read
-    assert any(
-        e.get("event") == "digest_pause_read" and e.get("distribution_paused") is True
-        for e in logged
-    )
-
-
-def test_execute_job_runs_paused_digest_as_empty_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Com `distribution_paused=true`, `execute_job` RODA o worker digest com a flag
-    pausada; o worker fecha `ok` sem dispatch e sem avançar watermark."""
-    from kubo import scheduler
-
-    instantiated: list[str] = []
-
-    def _fake_worker(worker_name: str) -> tuple[Any, None]:
-        instantiated.append(worker_name)
-        raise AssertionError("não deve instanciar o digest real quando pausado")
-
-    calls: list[tuple[Any, dict[str, Any]]] = []
-
-    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
-        calls.append((worker, config))
-
-    monkeypatch.setattr(scheduler, "_instantiate", _fake_worker)
-    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
-    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
-    monkeypatch.setattr(
-        scheduler.settings_store,
-        "get_settings",
-        lambda _db: _scheduler_settings(paused=True),
-    )
-
-    scheduler.execute_job("digest", {})
-
-    assert not instantiated
-    assert len(calls) == 1
-    _worker, _config = calls[0]
-    assert _worker.manifest.name == "digest"
-    assert _config.get("paused") is True
-    assert _config.get("max_items") == 50
-
-
-def test_digest_pauses_when_settings_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Falha ao ler settings no disparo do digest deve ser fail-safe: digest pausado."""
-    from kubo import scheduler
-
-    calls: list[dict[str, Any]] = []
-
-    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
-        calls.append(config)
-
-    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
-    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
-    monkeypatch.setattr(
-        scheduler.settings_store,
-        "get_settings",
-        lambda _db: (_ for _ in ()).throw(Exception("db down")),
-    )
-
-    scheduler.execute_job("digest", {})
-
-    assert calls == [{"max_items": 50, "paused": True}]

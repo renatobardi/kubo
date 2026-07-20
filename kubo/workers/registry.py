@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from kubo.workers.digest import DigestWorker
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.feed import FeedWorker
 from kubo.workers.github_releases import GithubReleasesWorker
@@ -18,6 +17,5 @@ from kubo.workers.github_releases import GithubReleasesWorker
 WORKER_REGISTRY: dict[str, type[Any]] = {
     "feed": FeedWorker,
     "distiller": DistillerWorker,
-    "digest": DigestWorker,
     "github-releases": GithubReleasesWorker,
 }

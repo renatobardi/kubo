@@ -120,8 +120,13 @@
             {% endif %}
             <div class="ml-auto flex shrink-0 items-center gap-1.5">
               {% if d.archived_at %}
-                <form method="post" action="/destinations/{{ did }}/restore">
+                <form method="post" action="/destinations/{{ did }}/restore" class="flex items-center gap-1.5">
                   <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <select name="mode" aria-label="Modo de restauração de {{ d.name }}"
+                          class="h-8 rounded-4xl border border-input bg-input/30 px-2 text-xs text-muted-foreground outline-none focus-visible:border-ring">
+                    <option value="backlog" selected>Acumulado</option>
+                    <option value="recente">Só novos</option>
+                  </select>
                   <button type="submit" aria-label="Restaurar destino {{ d.name }}"
                           class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
                     <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
@@ -137,8 +142,13 @@
                   </button>
                 </form>
                 {% else %}
-                <form method="post" action="/destinations/{{ did }}/enable">
+                <form method="post" action="/destinations/{{ did }}/enable" class="flex items-center gap-1.5">
                   <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <select name="mode" aria-label="Modo de retomada de {{ d.name }}"
+                          class="h-8 rounded-4xl border border-input bg-input/30 px-2 text-xs text-muted-foreground outline-none focus-visible:border-ring">
+                    <option value="backlog" selected>Acumulado</option>
+                    <option value="recente">Só novos</option>
+                  </select>
                   <button type="submit" aria-label="Retomar destino {{ d.name }}"
                           class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
                     <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>

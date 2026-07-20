@@ -265,3 +265,37 @@ def test_list_destinations_counts_dispatches(db: Any) -> None:
     rows = destinations.list_destinations(db)
     assert len(rows) == 1
     assert rows[0].dispatches == 1
+
+
+def test_active_destinations_without_channel_returns_all_active(db: Any) -> None:
+    """active_destinations() sem filtro de canal devolve todos os ativos."""
+    destinations.create_destination(db, name="Tg", kind="pessoa", channel="telegram", address="111")
+    destinations.create_destination(
+        db, name="Em", kind="pessoa", channel="email", address="a@b.com"
+    )
+    archived = destinations.create_destination(
+        db, name="Arq", kind="pessoa", channel="telegram", address="222"
+    )
+    destinations.archive_destination(db, id=archived)
+
+    all_active = destinations.active_destinations(db)
+    assert {d.channel for d in all_active} == {"telegram", "email"}
+
+
+def test_reset_destination_watermark_writes_zero_item_dispatch(db: Any) -> None:
+    """reset_destination_watermark grava dispatch ok de 0 itens, auditável."""
+    rid = destinations.create_destination(
+        db, name="A", kind="pessoa", channel="telegram", address="111"
+    )
+    destination = destinations.get_destination(db, rid)
+    assert destination is not None
+    destinations.reset_destination_watermark(db, destination=destination)
+
+    rows = db.query(
+        "SELECT * FROM dispatch WHERE destination = $d AND artifact = 'digest';",
+        {"d": str(rid)},
+    )
+    assert len(rows) == 1
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["item_count"] == 0
+    assert rows[0]["watermark"] is not None

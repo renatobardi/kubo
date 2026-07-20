@@ -32,6 +32,16 @@
       </div>
 
       <div>
+        <label for="unpause_mode" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Ao despausar (recente)</label>
+        <select id="unpause_mode" name="unpause_mode"
+                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <option value="backlog" {% if unpause_mode == "backlog" %}selected{% endif %}>Entregar acumulado (padrão)</option>
+          <option value="recente" {% if unpause_mode == "recente" %}selected{% endif %}>Só conteúdo novo (ignorar backlog)</option>
+        </select>
+        <p class="mt-1 text-2xs text-muted-foreground">Aplica quando despausar a distribuição global.</p>
+      </div>
+
+      <div>
         <label for="default_destination" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Destino padrão</label>
         <select id="default_destination" name="default_destination"
                 class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
