@@ -50,7 +50,7 @@ def put_settings(
     *,
     digest_cron: str,
     distribution_paused: bool,
-    default_destination: RecordID | None = None,
+    default_destination: RecordID | None,
 ) -> None:
     """Cria ou atualiza `settings:global` com os três campos."""
     db.query(

@@ -137,6 +137,21 @@ def update_settings(
             request, settings, choices, notice=format_validation_error(exc), status=400
         )
 
+    if form.default_destination is not None:
+        with client.connect() as ro:
+            try:
+                temp = settings_store.Settings(
+                    id=RecordID("settings", "global"),
+                    digest_cron=form.digest_cron,
+                    distribution_paused=form.distribution_paused,
+                    default_destination=form.default_destination,
+                )
+                settings_store.resolve_default_destination(ro, temp)
+            except ConfigError as exc:
+                settings = settings_store.get_settings(ro)
+                choices = settings_store.default_destination_choices(ro)
+                return _render_page(request, settings, choices, notice=str(exc), status=400)
+
     try:
         with client.connect_rw() as db:
             settings_store.put_settings(

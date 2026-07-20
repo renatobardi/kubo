@@ -724,17 +724,9 @@ def test_execute_sweep_job_honors_active_filter_against_real_db(
 # ---------------------------------------------------------------------------
 
 
-def _fake_db_with_settings(cron: str = "30 9 * * *", paused: bool = False) -> Any:
-    """Db fake mínimo: `get_settings` devolve o singleton com o cron/pausa pedidos."""
-    settings = _scheduler_settings(cron=cron)
-    if paused:
-        settings = Settings(
-            id=settings.id,
-            digest_cron=cron,
-            distribution_paused=True,
-            default_destination=None,
-        )
-    return object()  # query não é chamada; a função usa get_settings injetada
+def _fake_db() -> Any:
+    """Db fake mínimo — `get_settings` é injetada pelo monkeypatch do teste."""
+    return object()
 
 
 def test_build_scheduler_digest_job_uses_settings_cron() -> None:
@@ -777,7 +769,7 @@ def test_check_and_reschedule_digest_reschedules_when_cron_changes() -> None:
     from kubo.scheduler import _check_and_reschedule_digest
 
     scheduler = MagicMock()
-    db = _fake_db_with_settings(cron="0 20 * * *")
+    db = _fake_db()
 
     def _get_settings(_db: Any) -> Settings:
         return _scheduler_settings(cron="0 20 * * *")
@@ -802,7 +794,7 @@ def test_check_and_reschedule_digest_keeps_current_on_same_cron() -> None:
     from kubo.scheduler import _check_and_reschedule_digest
 
     scheduler = MagicMock()
-    db = _fake_db_with_settings()
+    db = _fake_db()
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(
@@ -824,7 +816,7 @@ def test_check_and_reschedule_digest_keeps_current_on_invalid_cron() -> None:
     from kubo.scheduler import _check_and_reschedule_digest
 
     scheduler = MagicMock()
-    db = _fake_db_with_settings(cron="not a cron")
+    db = _fake_db()
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(
@@ -863,16 +855,6 @@ def test_execute_job_reads_distribution_paused_for_digest(monkeypatch: pytest.Mo
 
     logged: list[dict[str, Any]] = []
 
-    def _fake_worker(worker_name: str) -> tuple[Any, None]:
-        class _W:
-            manifest = WorkerManifest(name="fake-digest", version="0.1.0", config=BaseModel)
-
-            def run(self, ctx: RunContext) -> RunResult:
-                return RunResult(payloads=[])
-
-        return _W(), None
-
-    monkeypatch.setattr(scheduler, "_instantiate", _fake_worker)
     monkeypatch.setattr(scheduler, "run_worker", lambda db, worker, *, config, embedder: None)
     monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
 
@@ -931,3 +913,25 @@ def test_execute_job_runs_paused_digest_as_empty_ok(monkeypatch: pytest.MonkeyPa
     assert _worker.manifest.name == "digest"
     assert _config.get("paused") is True
     assert _config.get("max_items") == 50
+
+
+def test_digest_pauses_when_settings_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Falha ao ler settings no disparo do digest deve ser fail-safe: digest pausado."""
+    from kubo import scheduler
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+        calls.append(config)
+
+    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
+    monkeypatch.setattr(
+        scheduler.settings_store,
+        "get_settings",
+        lambda _db: (_ for _ in ()).throw(Exception("db down")),
+    )
+
+    scheduler.execute_job("digest", {})
+
+    assert calls == [{"max_items": 50, "paused": True}]

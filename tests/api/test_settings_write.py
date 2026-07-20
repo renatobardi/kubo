@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
-from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.store import client, destinations, migrations
@@ -26,21 +25,13 @@ pytestmark = pytest.mark.integration
 _DB = "test_settings_write"
 _RW_PASS = secrets.token_urlsafe(24)
 
+# Captura a implementação real antes do conftest sobrescrever settings_store.get_settings.
+_real_get_settings_impl = settings_store.get_settings
+
 
 def _real_get_settings(db: Any) -> settings_store.Settings | None:
-    """Recupera o settings real usando conexão real (conftest stuba a função global)."""
-    _rid = RecordID("settings", "global")
-    rows = db.query("SELECT * FROM $r;", {"r": _rid})
-    if not rows:
-        return None
-    row = rows[0]
-    default = row.get("default_destination")
-    return settings_store.Settings(
-        id=row["id"],
-        digest_cron=row["digest_cron"],
-        distribution_paused=bool(row["distribution_paused"]),
-        default_destination=default if default is not None else None,
-    )
+    """Delega à implementação real capturada no import (conftest stuba a global)."""
+    return _real_get_settings_impl(db)
 
 
 @pytest.fixture
@@ -172,3 +163,31 @@ def test_update_settings_rejects_bad_csrf(app_db: Any) -> None:
 
     assert resp.status_code == 403
     assert _settings_row() is None
+
+
+def test_update_settings_rejects_dangling_default_destination(app_db: Any) -> None:
+    """Destino padrão inexistente/arquivado é 400 e não persiste."""
+    tc, csrf = _login_csrf(app_db)
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        settings_store.put_settings(
+            root,
+            digest_cron="30 9 * * *",
+            distribution_paused=False,
+            default_destination=None,
+        )
+
+    resp = tc.post(
+        "/settings",
+        data={
+            "digest_cron": "0 20 * * *",
+            "distribution_paused": "",
+            "default_destination": "não-existe",
+            "csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 400
+    row = _settings_row()
+    assert row is not None
+    assert row.get("default_destination") is None

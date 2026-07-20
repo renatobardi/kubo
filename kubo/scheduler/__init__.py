@@ -156,17 +156,20 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     No disparo do `digest`, lê `distribution_paused` de `settings` (KUBO-44) e passa
     para o worker como config. Se pausado, o worker devolve `RunResult()` vazio,
     que o runtime fecha como run `ok` sem dispatch (ADR-0028 §5) — o watermark
-    não avança. Erros de leitura de settings não derrubam o job: o default é
-    `false` e o log mantém visibilidade.
+    não avança. Erros de leitura de settings não derrubam o job e pausam por
+    segurança (fail-safe): não enviam digest quando o estado operacional é
+    desconhecido.
     """
     try:
         if worker_name == "digest":
             with client.connect(client.config()) as db:
                 try:
                     settings = settings_store.get_settings(db)
+                except Exception:  # noqa: BLE001 — defensivo: estado operacional desconhecido
+                    _log.exception("digest_settings_read_failed")
+                    paused = True
+                else:
                     paused = settings.distribution_paused if settings else False
-                except Exception:  # noqa: BLE001 — defensivo: config pode estar inconsistente
-                    paused = False
             _log.info("digest_pause_read", distribution_paused=paused)
             if paused:
                 worker: Any = DigestWorker(destinations=[], base_url="")
