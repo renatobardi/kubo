@@ -39,6 +39,7 @@ from kubo.api.routes import (
     flows,
     more,
     runs,
+    settings,
     sources,
 )
 from kubo.errors import ConfigError
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(entities.router, prefix="/entities")
     app.include_router(destinations.router, prefix="/destinations")
     app.include_router(dispatches.router, prefix="/dispatches")
+    app.include_router(settings.router, prefix="/settings")
 
     # add_middleware empilha do interno para o externo: o ÚLTIMO é o mais externo.
     app.add_middleware(RequireLoginMiddleware)

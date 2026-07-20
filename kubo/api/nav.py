@@ -40,6 +40,7 @@ NAV: list[NavItem] = [
     {"label": "Execuções", "route": "/runs", "group": GROUP_WORK, "icon": "activity"},
     {"label": "Destinos", "route": "/destinations", "group": GROUP_DISTRIBUTION, "icon": "send"},
     {"label": "Envios", "route": "/dispatches", "group": GROUP_DISTRIBUTION, "icon": "mail"},
+    {"label": "Configurações", "route": "/settings", "group": None, "icon": "settings"},
 ]
 
 

@@ -12,10 +12,12 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.api.auth import hash_password
 from kubo.store.knowledge import DashboardCounts
+from kubo.store.settings import Settings
 
 UI_PASSWORD = "test-ui-password"  # pragma: allowlist secret
 
@@ -65,6 +67,15 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.count_dispatches", lambda db, **kw: 0)
     monkeypatch.setattr(
         "kubo.api.routes.destinations.destination_store.list_destinations", lambda db: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.destinations.settings_store.get_settings",
+        lambda db: Settings(
+            id=RecordID("settings", "global"),
+            digest_cron="30 9 * * *",
+            distribution_paused=False,
+            default_destination=None,
+        ),
     )
 
 

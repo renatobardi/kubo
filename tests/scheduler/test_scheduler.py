@@ -26,13 +26,25 @@ import pytest
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ValidationError
+from surrealdb import RecordID
 
 from kubo.contracts.models import RunResult, SourcePayload
 from kubo.contracts.worker import RunContext, WorkerManifest
 from kubo.errors import ConfigError
 from kubo.store import client, migrations
+from kubo.store.settings import Settings
 
 _JOB_DB = "test_scheduler_job"
+
+
+def _scheduler_settings(cron: str = "30 9 * * *", paused: bool = False) -> Settings:
+    """Settings mínimo para construir o scheduler com o job `digest` em testes unit."""
+    return Settings(
+        id=RecordID("settings", "global"),
+        digest_cron=cron,
+        distribution_paused=paused,
+        default_destination=None,
+    )
 
 
 class _FakeConfig(BaseModel):
@@ -145,10 +157,11 @@ def test_unknown_timezone_is_rejected() -> None:
 
 
 def test_load_schedules_reads_real_repo_config() -> None:
-    """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108) e migração
-    do GitHub pro sweep (#110): 1 `sweep: rss` + 1 `sweep: github-repo` (ADR-0025 §4/§5) + 1
-    destilador diário ATIVO (ADR-0013 §VIII) + 1 digest diário (ADR-0015) — 4 entries, timezone
-    explícita, ZERO worker `feed` estático e ZERO flow agendado (FlowEntry aposentado, #110)."""
+    """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108), migração
+    do GitHub pro sweep (#110) e KUBO-44 (digest sai do YAML): 1 `sweep: rss` + 1
+    `sweep: github-repo` (ADR-0025 §4/§5) + 1 destilador diário ATIVO (ADR-0013 §VIII) —
+    3 entries, timezone explícita, ZERO worker `feed` estático, ZERO flow agendado
+    (FlowEntry aposentado, #110) e ZERO digest no YAML."""
     from kubo.scheduler import SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
@@ -156,7 +169,7 @@ def test_load_schedules_reads_real_repo_config() -> None:
     sweep_entries = [e for e in schedules.schedules if isinstance(e, SweepEntry)]
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 4
+    assert len(schedules.schedules) == 3
     # A coleta de feeds virou um sweep dirigido por Cadastro; nenhum worker `feed` estático.
     assert not any(e.worker == "feed" for e in worker_entries)
     assert {e.sweep for e in sweep_entries} == {"rss", "github-repo"}
@@ -169,10 +182,9 @@ def test_load_schedules_reads_real_repo_config() -> None:
     assert len(distiller_entries) == 1
     assert distiller_entries[0].config == {"max_items": 50}
 
-    # O digest diário (ADR-0015): um job às 09:30, após a destilação das 09:00.
+    # O digest diário saiu do schedules.yaml no KUBO-44 (horário vem do settings no DB).
     digest_entries = [e for e in worker_entries if e.worker == "digest"]
-    assert len(digest_entries) == 1
-    assert digest_entries[0].cron == "30 9 * * *"
+    assert not digest_entries
 
     # O sweep github-repo (#110): fora do trem 08:00-09:30, 07:00, sem config (piso `since` =
     # created_at de cada Cadastro).
@@ -198,16 +210,15 @@ def test_distiller_entry_config_validates() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_scheduler_creates_one_job_per_entry() -> None:
-    """Um job por entry do `schedules.yaml` real, pós corte RSS (#108) e migração GitHub (#110):
-    2 sweeps (rss, github-repo) + 1 destilador + 1 digest = 4 jobs. Não inicia o scheduler
-    (`.start()` bloquearia)."""
+def test_build_scheduler_creates_yaml_digest_and_poll_jobs() -> None:
+    """Com settings, o scheduler monta: 3 jobs do YAML (2 sweeps + distiller) + digest + poll = 5.
+    Não inicia o scheduler (`.start()` bloquearia)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
-    scheduler = build_scheduler(load_schedules())
+    scheduler = build_scheduler(load_schedules(), _scheduler_settings())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 4
+    assert len(scheduler.get_jobs()) == 5
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:
@@ -378,14 +389,15 @@ def test_worker_entry_dict_parses_to_worker_entry_instance() -> None:
 
 
 def test_real_schedules_yaml_loads_the_worker_sweep_mix() -> None:
-    """Regressão: o `schedules.yaml` real da raiz, pós corte RSS (#108) e migração do GitHub pro
-    sweep (#110), carrega sem erro — a união WorkerEntry|SweepEntry desambigua os dois tipos sem
-    `discriminator=`. Sobram 2 workers (distiller, digest) + 2 sweeps (rss, github-repo)."""
+    """Regressão: o `schedules.yaml` real da raiz, pós corte RSS (#108), migração do GitHub pro
+    sweep (#110) e KUBO-44 (digest sai do YAML), carrega sem erro — a união WorkerEntry|SweepEntry
+    desambigua os dois tipos sem `discriminator=`. Sobram 1 worker (distiller) + 2 sweeps
+    (rss, github-repo)."""
     from kubo.scheduler import SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
 
-    assert sum(isinstance(e, WorkerEntry) for e in schedules.schedules) == 2
+    assert sum(isinstance(e, WorkerEntry) for e in schedules.schedules) == 1
     assert sum(isinstance(e, SweepEntry) for e in schedules.schedules) == 2
 
 
@@ -705,3 +717,221 @@ def test_execute_sweep_job_honors_active_filter_against_real_db(
     scheduler.execute_sweep_job("rss")
 
     assert sorted(dispatched) == ["https://a.test/feed", "https://b.test/feed"]
+
+
+# ---------------------------------------------------------------------------
+# Settings / digest / poll (KUBO-44, ADR-0028)
+# ---------------------------------------------------------------------------
+
+
+def _fake_db() -> Any:
+    """Db fake mínimo — `get_settings` é injetada pelo monkeypatch do teste."""
+    return object()
+
+
+def test_build_scheduler_digest_job_uses_settings_cron() -> None:
+    """O job `digest` é registrado com o cron do settings, não do schedules.yaml."""
+    from apscheduler.triggers.cron import CronTrigger
+
+    from kubo.scheduler import Schedules, SweepEntry, build_scheduler
+
+    schedules = Schedules(
+        timezone="America/Sao_Paulo", schedules=[SweepEntry(sweep="rss", cron="0 8 * * *")]
+    )
+    scheduler = build_scheduler(schedules, _scheduler_settings(cron="0 15 * * *"))
+
+    digest_job = scheduler.get_job("digest")
+    assert digest_job is not None
+    assert isinstance(digest_job.trigger, CronTrigger)
+    assert digest_job.kwargs == {"worker_name": "digest", "config": {}}
+
+
+def test_build_scheduler_poll_job_is_interval() -> None:
+    """Além do digest, build_scheduler adiciona um job de poll com IntervalTrigger de 5 min."""
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    from kubo.scheduler import Schedules, build_scheduler
+
+    schedules = Schedules(timezone="America/Sao_Paulo", schedules=[])
+    scheduler = build_scheduler(schedules, _scheduler_settings())
+
+    poll_job = scheduler.get_job("digest_poll")
+    assert poll_job is not None
+    assert isinstance(poll_job.trigger, IntervalTrigger)
+    assert poll_job.trigger.interval.total_seconds() == 5 * 60
+
+
+def test_check_and_reschedule_digest_reschedules_when_cron_changes() -> None:
+    """`_check_and_reschedule_digest` chama `reschedule_job` com novo CronTrigger quando o
+    cron do settings mudou."""
+    from zoneinfo import ZoneInfo
+
+    from kubo.scheduler import _check_and_reschedule_digest
+
+    scheduler = MagicMock()
+    db = _fake_db()
+
+    def _get_settings(_db: Any) -> Settings:
+        return _scheduler_settings(cron="0 20 * * *")
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("kubo.scheduler.settings_store.get_settings", _get_settings)
+        new_cron = _check_and_reschedule_digest(
+            db, scheduler, ZoneInfo("America/Sao_Paulo"), "30 9 * * *"
+        )
+
+    assert new_cron == "0 20 * * *"
+    scheduler.reschedule_job.assert_called_once()
+    args, kwargs = scheduler.reschedule_job.call_args
+    assert args == ("digest",)
+    assert "trigger" in kwargs
+
+
+def test_check_and_reschedule_digest_keeps_current_on_same_cron() -> None:
+    """Sem mudança de cron, `reschedule_job` NÃO é chamado."""
+    from zoneinfo import ZoneInfo
+
+    from kubo.scheduler import _check_and_reschedule_digest
+
+    scheduler = MagicMock()
+    db = _fake_db()
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(
+            "kubo.scheduler.settings_store.get_settings",
+            _get_settings := lambda _db: _scheduler_settings(),
+        )
+        new_cron = _check_and_reschedule_digest(
+            db, scheduler, ZoneInfo("America/Sao_Paulo"), "30 9 * * *"
+        )
+
+    assert new_cron == "30 9 * * *"
+    scheduler.reschedule_job.assert_not_called()
+
+
+def test_check_and_reschedule_digest_keeps_current_on_invalid_cron() -> None:
+    """Cron inválido no settings é logado como erro e NÃO reagenda — mantém o atual."""
+    from zoneinfo import ZoneInfo
+
+    from kubo.scheduler import _check_and_reschedule_digest
+
+    scheduler = MagicMock()
+    db = _fake_db()
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(
+            "kubo.scheduler.settings_store.get_settings",
+            lambda _db: _scheduler_settings(cron="not a cron"),
+        )
+        new_cron = _check_and_reschedule_digest(
+            db, scheduler, ZoneInfo("America/Sao_Paulo"), "30 9 * * *"
+        )
+
+    assert new_cron == "30 9 * * *"
+    scheduler.reschedule_job.assert_not_called()
+
+
+def test_check_and_reschedule_digest_keeps_current_when_settings_missing() -> None:
+    """Settings ausente devolve `last_cron` sem reagendar."""
+    from zoneinfo import ZoneInfo
+
+    from kubo.scheduler import _check_and_reschedule_digest
+
+    scheduler = MagicMock()
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("kubo.scheduler.settings_store.get_settings", lambda _db: None)
+        new_cron = _check_and_reschedule_digest(
+            object(), scheduler, ZoneInfo("America/Sao_Paulo"), "30 9 * * *"
+        )
+
+    assert new_cron == "30 9 * * *"
+    scheduler.reschedule_job.assert_not_called()
+
+
+def test_execute_job_reads_distribution_paused_for_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No disparo do `digest`, `execute_job` lê `distribution_paused` de settings e loga."""
+    from kubo import scheduler
+
+    logged: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(scheduler, "run_worker", lambda db, worker, *, config, embedder: None)
+    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
+
+    settings_read: list[bool] = []
+
+    def _get_settings(_db: Any) -> Settings:
+        settings_read.append(True)
+        return _scheduler_settings(paused=True)  # type: ignore[call-arg]
+
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", _get_settings)
+
+    def _info(event: str, **kwargs: Any) -> None:
+        logged.append({"event": event, **kwargs})
+
+    monkeypatch.setattr(scheduler._log, "info", _info)
+
+    scheduler.execute_job("digest", {})
+
+    assert settings_read
+    assert any(
+        e.get("event") == "digest_pause_read" and e.get("distribution_paused") is True
+        for e in logged
+    )
+
+
+def test_execute_job_runs_paused_digest_as_empty_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Com `distribution_paused=true`, `execute_job` RODA o worker digest com a flag
+    pausada; o worker fecha `ok` sem dispatch e sem avançar watermark."""
+    from kubo import scheduler
+
+    instantiated: list[str] = []
+
+    def _fake_worker(worker_name: str) -> tuple[Any, None]:
+        instantiated.append(worker_name)
+        raise AssertionError("não deve instanciar o digest real quando pausado")
+
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+        calls.append((worker, config))
+
+    monkeypatch.setattr(scheduler, "_instantiate", _fake_worker)
+    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
+    monkeypatch.setattr(
+        scheduler.settings_store,
+        "get_settings",
+        lambda _db: _scheduler_settings(paused=True),
+    )
+
+    scheduler.execute_job("digest", {})
+
+    assert not instantiated
+    assert len(calls) == 1
+    _worker, _config = calls[0]
+    assert _worker.manifest.name == "digest"
+    assert _config.get("paused") is True
+    assert _config.get("max_items") == 50
+
+
+def test_digest_pauses_when_settings_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Falha ao ler settings no disparo do digest deve ser fail-safe: digest pausado."""
+    from kubo import scheduler
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_run_worker(_db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+        calls.append(config)
+
+    monkeypatch.setattr(scheduler, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(scheduler.client, "connect", lambda cfg: _DummyCtx())
+    monkeypatch.setattr(
+        scheduler.settings_store,
+        "get_settings",
+        lambda _db: (_ for _ in ()).throw(Exception("db down")),
+    )
+
+    scheduler.execute_job("digest", {})
+
+    assert calls == [{"max_items": 50, "paused": True}]

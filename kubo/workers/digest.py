@@ -35,11 +35,13 @@ _MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conte
 
 class DigestConfig(BaseModel):
     """Config declarada do worker `digest` (ADR-0015). `max_items` = teto de destilados
-    por digest por destino; o excedente flui para o dia seguinte (watermark)."""
+    por digest por destino; o excedente flui para o dia seguinte (watermark). `paused`
+    é a flag operacional `distribution_paused` do singleton settings (ADR-0028 §5)."""
 
     model_config = ConfigDict(extra="forbid")
 
     max_items: int = 50
+    paused: bool = False
 
 
 class DigestWorker:
@@ -68,12 +70,18 @@ class DigestWorker:
     def run(self, ctx: RunContext) -> RunResult:
         """Para cada destino com novidade, monta e envia o digest e devolve um
         DispatchPayload; sem novidade não gera dispatch (§V). Falha de envio vira
-        dispatch(error) + ErrorInfo(dispatch_partial) — o run fecha com o parcial."""
+        dispatch(error) + ErrorInfo(dispatch_partial) — o run fecha com o parcial.
+
+        Se `config.paused` for true, fecha imediatamente com run `ok` e zero envio
+        (sem avançar watermark), como especificado em ADR-0028 §5."""
         config = ctx.config
         if not isinstance(config, DigestConfig):  # narrowing (padrão do FeedWorker)
             raise ContractError(
                 f"DigestWorker recebeu config {type(config).__name__}, esperava DigestConfig"
             )
+
+        if config.paused:
+            return RunResult()
 
         payloads: list[DispatchPayload] = []
         new_total = 0
