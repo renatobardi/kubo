@@ -280,11 +280,9 @@ def _lifecycle_action(
     request: Request,
     csrf: str,
     action: Callable[[Any], None],
-    *,
-    post_action: Callable[[Any], None] | None = None,
 ) -> Response:
     """Executa uma ação de ciclo de vida no molde ADR-0018:
-    CSRF (403) → connect_rw (503) → ação da store → post_action opcional → redirect 303."""
+    CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
@@ -293,8 +291,6 @@ def _lifecycle_action(
                 action(db)
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-            if post_action is not None:
-                post_action(db)
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
         _log.warning(_WRITE_LOG)
@@ -312,21 +308,6 @@ def disable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
     )
 
 
-def _reset_watermark_post_action(rid: RecordID, mode: str) -> Callable[[Any], None]:
-    """Post-action para reativação: mode='recente' avança o watermark do destino."""
-    if mode not in ("backlog", "recente"):
-        mode = "backlog"
-
-    def _post(db: Any) -> None:
-        if mode != "recente":
-            return
-        destination = destination_store.get_destination(db, rid)
-        if destination is not None:
-            destination_store.reset_destination_watermark(db, destination=destination)
-
-    return _post
-
-
 @router.post("/{did}/enable")
 def enable(
     request: Request,
@@ -336,12 +317,16 @@ def enable(
 ) -> Response:
     """Retoma um destino pausado (`enabled=true`). mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
-        request,
-        csrf,
-        lambda db: destination_store.set_destination_enabled(db, id=rid, enabled=True),
-        post_action=_reset_watermark_post_action(rid, mode),
-    )
+
+    def _action(db: Any) -> None:
+        destination = destination_store.get_destination(db, rid)
+        if destination is None:
+            raise StaleDestinationError(f"destino inexistente: {rid}")
+        destination_store.set_destination_enabled(
+            db, id=rid, enabled=True, mode=mode, destination=destination
+        )
+
+    return _lifecycle_action(request, csrf, _action)
 
 
 @router.post("/{did}/archive")
@@ -362,12 +347,14 @@ def restore(
 ) -> Response:
     """Restaura um destino arquivado. mode=recente avança o watermark."""
     rid = RecordID("destination", did)
-    return _lifecycle_action(
-        request,
-        csrf,
-        lambda db: destination_store.restore_destination(db, id=rid),
-        post_action=_reset_watermark_post_action(rid, mode),
-    )
+
+    def _action(db: Any) -> None:
+        destination = destination_store.get_destination(db, rid)
+        if destination is None:
+            raise StaleDestinationError(f"destino inexistente: {rid}")
+        destination_store.restore_destination(db, id=rid, mode=mode, destination=destination)
+
+    return _lifecycle_action(request, csrf, _action)
 
 
 def _render_delete(

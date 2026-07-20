@@ -7,6 +7,7 @@ se o destino existe e não está arquivado (pausado resolve normalmente).
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,7 @@ from surrealdb import RecordID
 
 from kubo.errors import ConfigError
 from kubo.store import destinations as destination_store
+from kubo.store.transaction import run_transaction
 
 _SETTINGS_ID = RecordID("settings", "global")
 
@@ -63,6 +65,43 @@ def put_settings(
             "dest": default_destination,
         },
     )
+
+
+def put_settings_and_reset(
+    db: Any,
+    *,
+    digest_cron: str,
+    distribution_paused: bool,
+    default_destination: RecordID | None,
+    unpause_recent: bool,
+    destinations: list[destination_store.Destination],
+) -> None:
+    """Atualiza `settings:global` e, se `unpause_recent`, reseta watermarks numa
+    única transação atômica."""
+    statements: list[str] = [
+        "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
+        "default_destination = $dest",
+    ]
+    params: dict[str, Any] = {
+        "r": _SETTINGS_ID,
+        "cron": digest_cron,
+        "paused": distribution_paused,
+        "dest": default_destination,
+    }
+    if unpause_recent:
+        for i, destination in enumerate(destinations):
+            rid = RecordID("dispatch", secrets.token_hex(16))
+            statements.append(
+                f"CREATE $d{i} SET destination = $dest{i}, channel = $ch{i}, status = 'ok', "
+                f"artifact = 'digest', watermark = time::now(), item_count = 0, items = [], "
+                f"error = NONE"
+            )
+            params |= {
+                f"d{i}": rid,
+                f"dest{i}": str(destination.id),
+                f"ch{i}": destination.channel,
+            }
+    run_transaction(db, statements, params)
 
 
 def resolve_default_destination(db: Any, settings: Settings) -> destination_store.Destination:

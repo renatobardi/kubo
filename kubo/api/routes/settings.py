@@ -64,10 +64,7 @@ class SettingsForm(BaseModel):
     @classmethod
     def _valid_unpause_mode(cls, v: str) -> str:
         """Modo de unpause global: backlog (padrão) ou recente."""
-        v = v.strip().lower()
-        if v not in ("backlog", "recente"):
-            raise ValueError("modo de unpause inválido")
-        return v
+        return destination_store.valid_unpause_mode(v)
 
     @model_validator(mode="after")
     def _normalize(self) -> "SettingsForm":
@@ -158,45 +155,41 @@ def update_settings(
             choices,
             notice=format_validation_error(exc),
             status=400,
-            unpause_mode=unpause_mode.strip().lower()
-            if unpause_mode.strip().lower() in ("backlog", "recente")
-            else "backlog",
+            unpause_mode=destination_store.normalize_unpause_mode(unpause_mode),
         )
 
-    if form.default_destination is not None:
-        with client.connect() as ro:
-            try:
+    try:
+        with client.connect_rw() as db:
+            if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),
                     digest_cron=form.digest_cron,
                     distribution_paused=form.distribution_paused,
                     default_destination=form.default_destination,
                 )
-                settings_store.resolve_default_destination(ro, temp)
-            except ConfigError as exc:
-                settings = settings_store.get_settings(ro)
-                choices = settings_store.default_destination_choices(ro)
-                return _render_page(request, settings, choices, notice=str(exc), status=400)
+                try:
+                    settings_store.resolve_default_destination(db, temp)
+                except ConfigError as exc:
+                    settings = settings_store.get_settings(db)
+                    choices = settings_store.default_destination_choices(db)
+                    return _render_page(request, settings, choices, notice=str(exc), status=400)
 
-    try:
-        with client.connect() as ro:
-            old_settings = settings_store.get_settings(ro)
-        unpause_recent = (
-            old_settings is not None
-            and old_settings.distribution_paused
-            and not form.distribution_paused
-            and form.unpause_mode == "recente"
-        )
-        with client.connect_rw() as db:
-            settings_store.put_settings(
+            old_settings = settings_store.get_settings(db)
+            unpause_recent = (
+                old_settings is not None
+                and old_settings.distribution_paused
+                and not form.distribution_paused
+                and form.unpause_mode == "recente"
+            )
+            destinations = destination_store.active_destinations(db) if unpause_recent else []
+            settings_store.put_settings_and_reset(
                 db,
                 digest_cron=form.digest_cron,
                 distribution_paused=form.distribution_paused,
                 default_destination=form.default_destination,
+                unpause_recent=unpause_recent,
+                destinations=destinations,
             )
-            if unpause_recent:
-                for destination in destination_store.active_destinations(db):
-                    destination_store.reset_destination_watermark(db, destination=destination)
     except ConfigError:
         _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
