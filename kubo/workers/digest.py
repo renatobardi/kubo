@@ -8,7 +8,7 @@ pelo payload; o sender é injetável para teste.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -80,10 +80,16 @@ class TelegramDigestWorker:
 
         try:
             self._deliver(ctx, views)
-            payload = _ok_payload(self._destination, watermark, items)
+            payload = _payload(self._destination, watermark, items, status="ok")
             return _run_result(payload, failed=False, new_distilled=len(views))
         except SenderError as exc:
-            payload = _error_payload(self._destination, watermark, items, exc)
+            payload = _payload(
+                self._destination,
+                watermark,
+                items,
+                status="error",
+                error=ErrorInfo(kind="telegram_send", message=str(exc)[:_MSG_CAP]),
+            )
             return _run_result(payload, failed=True, new_distilled=len(views))
 
     def _deliver(self, ctx: RunContext, views: list[DigestView]) -> None:
@@ -107,33 +113,24 @@ def _integration_secret(ctx: RunContext, name: str) -> str:
     return str(secret)
 
 
-def _ok_payload(destination: Destination, watermark: Any, items: list[str]) -> DispatchPayload:
-    """DispatchPayload de entrega bem-sucedida."""
-    return DispatchPayload(
-        destination=str(destination.id),
-        channel="telegram",
-        status="ok",
-        artifact="digest",
-        watermark=watermark,
-        item_count=len(items),
-        items=items,
-    )
-
-
-def _error_payload(
-    destination: Destination, watermark: Any, items: list[str], exc: SenderError
+def _payload(
+    destination: Destination,
+    watermark: Any,
+    items: list[str],
+    *,
+    status: Literal["ok", "error"],
+    error: ErrorInfo | None = None,
 ) -> DispatchPayload:
-    """DispatchPayload de falha: watermark da TENTATIVA (não avança seleção — só
-    `ok` avança) + erro estruturado (mensagem já redigida pelo sender, sem token)."""
+    """DispatchPayload de entrega (ok ou error) com watermark da tentativa."""
     return DispatchPayload(
         destination=str(destination.id),
         channel="telegram",
-        status="error",
+        status=status,
         artifact="digest",
         watermark=watermark,
         item_count=len(items),
         items=items,
-        error=ErrorInfo(kind="telegram_send", message=str(exc)[:_MSG_CAP]),
+        error=error,
     )
 
 
