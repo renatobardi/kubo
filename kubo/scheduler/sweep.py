@@ -20,7 +20,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from kubo.store.destinations import Destination
 from kubo.store.knowledge import ActiveSource
+from kubo.workers.digest import TelegramDigestWorker
 from kubo.workers.feed import FeedWorker
 from kubo.workers.github_releases import GithubReleasesWorker
 
@@ -62,4 +64,18 @@ SWEEP_DISPATCH: dict[str, KindDispatch] = {
     "github-repo": KindDispatch(
         worker_factory=GithubReleasesWorker, build_config=_github_repo_config
     ),
+}
+
+
+# Sweep de destinos do digest (ADR-0029). Cada canal ganha seu próprio worker;
+# o endereço (PII) chega pelo construtor, a config só carrega `max_items`.
+DestinationFactory = Callable[[Destination, str], Any]
+
+
+def _telegram_factory(destination: Destination, base_url: str) -> TelegramDigestWorker:
+    return TelegramDigestWorker(destination=destination, base_url=base_url)
+
+
+DEST_DISPATCH: dict[str, DestinationFactory] = {
+    "telegram": _telegram_factory,
 }

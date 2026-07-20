@@ -18,6 +18,7 @@ from kubo.errors import (
     DuplicateDestinationError,
     StaleDestinationError,
 )
+from kubo.store.knowledge import insert_dispatch
 
 
 @dataclass(frozen=True)
@@ -201,14 +202,36 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
         raise StaleDestinationError(f"destino inexistente: {id}")
 
 
-def active_destinations(db: Any, *, channel: str) -> list[Destination]:
-    """Lista destinos ATIVOS (`enabled=true`, `archived_at IS NONE`) de um canal."""
-    rows = db.query(
-        "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE "
-        "AND channel = $channel;",
-        {"channel": channel},
-    )
+def active_destinations(db: Any, *, channel: str | None = None) -> list[Destination]:
+    """Lista destinos ATIVOS (`enabled=true`, `archived_at IS NONE`). Se `channel`
+    for fornecido, filtra por canal; senão, retorna todos (ADR-0029 §9)."""
+    query = "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE"
+    params: dict[str, Any] = {}
+    if channel is not None:
+        query += " AND channel = $channel"
+        params["channel"] = channel
+    query += ";"
+    rows = db.query(query, params)
     return [_destination_from_row(r) for r in rows]
+
+
+def reset_destination_watermark(db: Any, *, destination: Destination) -> None:
+    """Avança o watermark do destino para `time::now()` do banco sem entregar conteúdo.
+
+    Grava um dispatch `ok` de zero-item (artifact='digest'), auditável na tela de
+    Envios — a opção "recente" da reativação/unpause (ADR-0029 §6).
+    """
+    now = db.query("SELECT time::now() AS now;")[0]["now"]
+    insert_dispatch(
+        db,
+        destination=str(destination.id),
+        channel=destination.channel,
+        status="ok",
+        artifact="digest",
+        watermark=now,
+        item_count=0,
+        items=[],
+    )
 
 
 _LIST_DESTINATIONS_SQL = (
