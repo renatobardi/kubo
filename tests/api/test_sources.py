@@ -182,14 +182,26 @@ def test_create_does_not_reflect_submitted_input(authed_client: TestClient) -> N
     assert "alert(1)" not in resp.text  # nem cru nem escapado — simplesmente não reflete
 
 
-def test_create_without_writer_credential_is_503(authed_client: TestClient) -> None:
-    """Fail-fast do molde ADR-0018: sem a credencial kubo_rw (env ausente no teste), a escrita
-    é indisponível (503) — o resto da UI (kubo_ro) segue vivo. Entrada VÁLIDA para chegar ao
-    connect_rw (a validação já passou)."""
+def test_create_rss_requires_test_before_save(authed_client: TestClient) -> None:
+    """RSS válido sem a flag tested=1 é barrado na rota (400) — 'Testar' é obrigatório."""
     csrf = _csrf(authed_client)
     resp = authed_client.post(
         "/sources",
         data={"kind": "rss", "canonical": "https://x/feed", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "Teste o feed antes de salvar" in resp.text
+
+
+def test_create_without_writer_credential_is_503(authed_client: TestClient) -> None:
+    """Fail-fast do molde ADR-0018: sem a credencial kubo_rw (env ausente no teste), a escrita
+    é indisponível (503) — o resto da UI (kubo_ro) segue vivo. Entrada VÁLIDA e tested=1 para
+    chegar ao connect_rw."""
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/sources",
+        data={"kind": "rss", "canonical": "https://x/feed", "tested": "1", "csrf": csrf},
         follow_redirects=False,
     )
     assert resp.status_code == 503

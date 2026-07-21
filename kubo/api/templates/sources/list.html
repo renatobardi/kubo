@@ -26,6 +26,7 @@
     <form method="post" action="/sources" class="flex h-full flex-col">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" id="src-mode" name="mode" value="feed">
+      <input type="hidden" id="src-tested" name="tested" value="">
       <select id="src-kind" name="kind" hidden>
         <option value="rss" selected>Feed RSS</option>
         <option value="github-repo">Repositório do GitHub</option>
@@ -71,6 +72,7 @@
         <div>
           <label id="value-label" for="src-canonical" class="mb-1.5 block text-xs font-semibold text-muted-foreground">URL do feed</label>
           <input id="src-canonical" name="canonical" required placeholder="https://exemplo.com/feed.xml"
+                 oninput="var t=document.getElementById('src-tested'); if(t) t.value='';"
                  class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
         </div>
 
@@ -109,6 +111,8 @@
       if (title) title.value = '';
       var result = document.getElementById('test-result');
       if (result) result.innerHTML = '';
+      var tested = document.getElementById('src-tested');
+      if (tested) tested.value = '';
       var testBtn = document.getElementById('test-btn');
       if (testBtn) testBtn.hidden = btn.dataset.kind === 'github-repo';
     };

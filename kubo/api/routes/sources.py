@@ -260,19 +260,23 @@ def create(
     kind: Annotated[str, Form()] = "",
     canonical: Annotated[str, Form()] = "",
     title: Annotated[str, Form()] = "",
+    tested: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
     """Cadastra uma fonte nova (RSS ou github-repo) — a escrita da UI (#105/ADR-0025).
 
-    Molde ADR-0018: CSRF (403) → validação pydantic da entrada (400) → `connect_rw` (503 sem a
-    credencial) → `create_source`. Sucesso = redirect 303 (PRG) à lista. Duplicata
-    (kind+canonical, recusada pela store) reabre a lista com aviso SOFT (409), sem gravar."""
+    Molde ADR-0018: CSRF (403) → validação pydantic da entrada (400) → teste obrigatório para
+    RSS (400) → `connect_rw` (503 sem a credencial) → `create_source`. Sucesso = redirect 303
+    (PRG) à lista. Duplicata (kind+canonical, recusada pela store) reabre a lista com aviso SOFT
+    (409), sem gravar."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
     try:
         payload = NewSource(kind=kind, canonical=canonical, title=title)  # type: ignore[arg-type]
     except ValidationError as exc:
         return _render_list(request, notice=format_validation_error(exc), status=400)
+    if payload.kind == "rss" and tested != "1":
+        return _render_list(request, notice="Teste o feed antes de salvar.", status=400)
     try:
         with client.connect_rw() as db:
             try:
