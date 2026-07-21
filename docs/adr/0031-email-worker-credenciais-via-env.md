@@ -24,5 +24,5 @@ O ADR-0029 §2 previu `EmailDigestWorker` com `manifest.integrations=["smtp"]` e
 ## Alternativas rejeitadas
 
 - **Estender `Integration`/`IntegrationAuth` com `host`, `port`, `username`.** Rejeitada: scope creep no catálogo declarativo; afetaria todas as integrações para um único consumidor.
-- **DSN único `smtp://user:pass@host:port` em `secret_ref`.** Rejeitada: parsing frágil com senhas contendo caracteres especiais (`@`, `:`, `/`) e mistura de config (host/porta) com segredo (senha).
+- **DSN único `smtp://user:pass@host:port` em `secret_ref`.** Rejeitada: parsing frágil com senhas contendo caracteres especiais (`@`, `:`, `/`) e mistura de config (host/porta) com segredo (senha).  <!-- pragma: allowlist secret -->
 - **`ConfigError` na factory quando env falta.** Rejeitada: tornaria a falha invisível na tela Execuções; o padrão é `SenderError` → `dispatch(error)`.
