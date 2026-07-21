@@ -41,6 +41,9 @@ _log = structlog.get_logger(__name__)
 _LIST_TEMPLATE = "sources/list.html"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 
+_LABEL_FINDER = "IA (finder)"
+_LABEL_DOMAIN_AUTODISCOVERY = "Autodiscovery no domínio chutado"
+
 
 _FEED_SCHEMES = ("http", "https")
 
@@ -578,13 +581,13 @@ def _test_name_mode(request: Request, value: str) -> Response:
     guess = get_finder().guess(value)
     if not guess:
         return _render_test_result(
-            request, _failure_ctx("IA (finder)", "não conseguiu chutar uma URL")
+            request, _failure_ctx(_LABEL_FINDER, "não conseguiu chutar uma URL")
         )
 
     try:
         url = _normalize_canonical("rss", guess)
         preview = preview_feed(url, trusted=False)
-        return _render_test_result(request, _success_ctx(url, preview, via="IA (finder)"))
+        return _render_test_result(request, _success_ctx(url, preview, via=_LABEL_FINDER))
     except (ValueError, feed_mod.FetchError):
         pass
 
@@ -595,8 +598,8 @@ def _test_name_mode(request: Request, value: str) -> Response:
             request,
             _failure_steps(
                 [
-                    ("IA (finder)", f"{guess} não respondeu"),
-                    ("Autodiscovery no domínio chutado", "domínio não identificado"),
+                    (_LABEL_FINDER, f"{guess} não respondeu"),
+                    (_LABEL_DOMAIN_AUTODISCOVERY, "domínio não identificado"),
                 ]
             ),
         )
@@ -610,9 +613,9 @@ def _test_name_mode(request: Request, value: str) -> Response:
                 request,
                 _failure_steps(
                     [
-                        ("IA (finder)", f"{guess} não respondeu"),
+                        (_LABEL_FINDER, f"{guess} não respondeu"),
                         (
-                            "Autodiscovery no domínio chutado",
+                            _LABEL_DOMAIN_AUTODISCOVERY,
                             'sem <link rel="alternate"> no <head>',
                         ),
                     ]
@@ -625,8 +628,8 @@ def _test_name_mode(request: Request, value: str) -> Response:
             request,
             _failure_steps(
                 [
-                    ("IA (finder)", f"{guess} não respondeu"),
-                    ("Autodiscovery no domínio chutado", str(exc)),
+                    (_LABEL_FINDER, f"{guess} não respondeu"),
+                    (_LABEL_DOMAIN_AUTODISCOVERY, str(exc)),
                 ]
             ),
         )

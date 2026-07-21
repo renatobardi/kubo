@@ -28,9 +28,11 @@
   </ul>
 </div>
 <input id="src-canonical" name="canonical" type="text" hx-swap-oob="true" value="{{ discovered_url }}" required
+       aria-label="Origem do feed"
        oninput="var t=document.getElementById('src-tested'); if(t) t.value='';"
        class="h-9 w-full rounded-4xl border border-primary/40 bg-primary/5 px-4 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
 <input id="src-title" name="title" type="text" hx-swap-oob="true" value="{{ title }}" placeholder="Como aparece na tela"
+       aria-label="Título da fonte"
        class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-<input id="src-tested" name="tested" type="hidden" hx-swap-oob="true" value="1">
+<input id="src-tested" name="tested" type="hidden" hx-swap-oob="true" value="1" aria-label="flag de teste do feed">
 {% endif %}

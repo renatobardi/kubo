@@ -26,7 +26,7 @@
     <form method="post" action="/sources" class="flex h-full flex-col">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" id="src-mode" name="mode" value="feed">
-      <input type="hidden" id="src-tested" name="tested" value="">
+      <input type="hidden" id="src-tested" name="tested" value="" aria-label="flag de teste do feed">
       <select id="src-kind" name="kind" hidden>
         <option value="rss" selected>Feed RSS</option>
         <option value="github-repo">Repositório do GitHub</option>
