@@ -425,6 +425,33 @@ def _feed_server() -> Iterator[str]:
         thread.join(timeout=5)
 
 
+@respx.mock
+def test_fetch_and_parse_reuses_fetch_logic() -> None:
+    """`fetch_and_parse` expõe o mesmo fetch+parse para call sites fora do worker."""
+    respx.get(_FEED_URL).mock(return_value=httpx.Response(200, content=VALID_TWO))
+    parsed = feed_mod.fetch_and_parse(_FEED_URL)
+    assert parsed.feed.title == "Feed Title"
+    assert len(parsed.entries) == 2
+
+
+@respx.mock
+def test_preview_feed_returns_sample() -> None:
+    """`preview_feed` devolve amostra (título + entradas) sem persistir."""
+    respx.get(_FEED_URL).mock(return_value=httpx.Response(200, content=VALID_TWO))
+    preview = feed_mod.preview_feed(_FEED_URL)
+    assert preview.title == "Feed Title"
+    assert len(preview.entries) == 2
+    assert preview.entries[0]["title"] == "Entry One"
+
+
+def test_extract_feed_link_resolves_relative_url() -> None:
+    """`extract_feed_link` acha `<link rel='alternate'>` e resolve URLs relativas."""
+    html = (
+        b'<html><head><link rel="alternate" type="application/rss+xml" href="/rss"></head></html>'
+    )
+    assert feed_mod.extract_feed_link(html, "https://example.com") == "https://example.com/rss"
+
+
 @pytest.mark.integration
 def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
     _feed_server: str,
