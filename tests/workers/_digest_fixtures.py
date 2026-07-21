@@ -34,7 +34,7 @@ def _view(key: str = "abc", minutes: int = 0) -> DigestView:
 
 
 def _destination(
-    key: str = "a1b2c3d4e5f67890",
+    key: str = "a1b2c3d4e5f67890",  # pragma: allowlist secret
     channel: str = "telegram",
     address: str = "42",
 ) -> Destination:
