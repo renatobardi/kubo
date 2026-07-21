@@ -452,6 +452,15 @@ def test_extract_feed_link_resolves_relative_url() -> None:
     assert feed_mod.extract_feed_link(html, "https://example.com") == "https://example.com/rss"
 
 
+def test_extract_feed_link_accepts_multi_token_rel() -> None:
+    """`rel` pode ser uma lista de tokens HTML (ex.: alternate nofollow)."""
+    html = (
+        b'<html><head><link rel="alternate nofollow" type="application/rss+xml" href="/feed">'
+        b"</head></html>"
+    )
+    assert feed_mod.extract_feed_link(html, "https://example.com") == "https://example.com/feed"
+
+
 @pytest.mark.integration
 def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
     _feed_server: str,

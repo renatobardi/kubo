@@ -291,7 +291,8 @@ class _FeedLinkParser(HTMLParser):
             return
         if t == "link":
             attr = {k: (v or "") for k, v in attrs}
-            if attr.get("rel", "").lower() == "alternate" and attr.get("type", "").lower() in {
+            rel = attr.get("rel", "").lower().split()
+            if "alternate" in rel and attr.get("type", "").lower() in {
                 "application/rss+xml",
                 "application/atom+xml",
             }:
