@@ -10,6 +10,7 @@ na borda, fail-fast 503 sem a credencial. Duplicata (kind+canonical) é recusada
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
@@ -28,8 +29,13 @@ from kubo.errors import (
     StaleSourceError,
     format_validation_error,
 )
+from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.runtime.personas import load_persona
 from kubo.store import client, knowledge
 from kubo.store.knowledge import SourceDetail, SourceStat
+from kubo.workers import feed as feed_mod
+from kubo.workers.feed import FeedPreview, preview_feed
+from kubo.workers.finder import Finder
 
 _log = structlog.get_logger(__name__)
 _LIST_TEMPLATE = "sources/list.html"
@@ -170,6 +176,42 @@ class EditSource(BaseModel):
         if not value.strip():
             raise ValueError("a origem é obrigatória")
         return value
+
+
+class SourceTestForm(BaseModel):
+    """Entrada validada do form "Testar" (KUBO-50): modo + valor digitado."""
+
+    mode: Literal["feed", "site", "name"]
+    value: str
+
+    @field_validator("value", mode="after")
+    @classmethod
+    def _strip_and_require(cls, value: str) -> str:
+        """Tira espaços e rejeita vazio — não importa o modo."""
+        value = value.strip()
+        if not value:
+            raise ValueError("o valor é obrigatório")
+        return value
+
+
+_FINDER_PATH = Path(__file__).parents[3] / "catalogs" / "personas" / "finder.yaml"
+_FINDER_INSTANCE: Finder | None = None
+
+
+def get_finder() -> Finder:
+    """Singleton lazy do finder: lê o YAML do catálogo e monta o ApiExecutor."""
+    global _FINDER_INSTANCE
+    if _FINDER_INSTANCE is None:
+        persona = load_persona(_FINDER_PATH)
+        executor = ApiExecutor(
+            ApiExecutorConfig(
+                model=persona.model or "groq/llama-3.3-70b-versatile",
+                max_tokens=256,
+                timeout=15.0,
+            )
+        )
+        _FINDER_INSTANCE = Finder(executor=executor, prompt=persona.prompt)
+    return _FINDER_INSTANCE
 
 
 def _sort_key(s: SourceStat) -> tuple[int, str]:
@@ -469,3 +511,145 @@ def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
     except ConfigError:
         _log.warning("sources.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+
+
+# ── KUBO-50: descoberta e validação assistida de feed RSS ────────────────────────────────
+
+_TEST_TEMPLATE = "sources/test_result.html"
+
+
+def _render_test_result(request: Request, ctx: dict[str, Any]) -> Response:
+    """Renderiza o snippet HTML (HTMX) de sucesso/falha do teste de feed."""
+    return templates.TemplateResponse(request, _TEST_TEMPLATE, ctx)
+
+
+def _failure_ctx(label: str, detail: str) -> dict[str, Any]:
+    return {"ok": False, "steps": [{"label": label, "detail": detail}]}
+
+
+def _failure_steps(steps: list[tuple[str, str]]) -> dict[str, Any]:
+    return {"ok": False, "steps": [{"label": lbl, "detail": det} for lbl, det in steps]}
+
+
+def _success_ctx(url: str, preview: FeedPreview, via: str | None) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "via": via,
+        "discovered_url": url,
+        "title": preview.title or "",
+        "entries": preview.entries,
+    }
+
+
+def _test_feed_mode(request: Request, value: str) -> Response:
+    """Modo (a): URL de feed direto — normaliza e busca uma amostra."""
+    try:
+        url = _normalize_canonical("rss", value)
+        preview = preview_feed(url, trusted=False)
+    except (ValueError, feed_mod.FetchError) as exc:
+        return _render_test_result(request, _failure_ctx("URL do feed", str(exc)))
+    return _render_test_result(request, _success_ctx(url, preview, via=None))
+
+
+def _test_site_mode(request: Request, value: str) -> Response:
+    """Modo (b): URL de site — autodiscovery por `<link rel="alternate">` no `<head>`."""
+    try:
+        base_url = _normalize_canonical("rss", value)
+        html = feed_mod.fetch_page(base_url, trusted=False)
+        feed_url = feed_mod.extract_feed_link(html, base_url)
+        if not feed_url:
+            return _render_test_result(
+                request,
+                _failure_ctx("Autodiscovery no site", 'sem <link rel="alternate"> no <head>'),
+            )
+        preview = preview_feed(feed_url, trusted=False)
+    except (ValueError, feed_mod.FetchError) as exc:
+        return _render_test_result(request, _failure_ctx("Autodiscovery no site", str(exc)))
+    return _render_test_result(request, _success_ctx(feed_url, preview, via="autodiscovery"))
+
+
+def _test_name_mode(request: Request, value: str) -> Response:
+    """Modo (c): nome da empresa — chute da IA (finder) + fallback de autodiscovery."""
+    guess = get_finder().guess(value)
+    if not guess:
+        return _render_test_result(
+            request, _failure_ctx("IA (finder)", "não conseguiu chutar uma URL")
+        )
+
+    try:
+        url = _normalize_canonical("rss", guess)
+        preview = preview_feed(url, trusted=False)
+        return _render_test_result(request, _success_ctx(url, preview, via="IA (finder)"))
+    except (ValueError, feed_mod.FetchError):
+        pass
+
+    parsed = urlparse(guess)
+    domain = parsed.netloc
+    if not domain:
+        return _render_test_result(
+            request,
+            _failure_steps(
+                [
+                    ("IA (finder)", f"{guess} não respondeu"),
+                    ("Autodiscovery no domínio chutado", "domínio não identificado"),
+                ]
+            ),
+        )
+
+    base_url = f"https://{domain}"
+    try:
+        html = feed_mod.fetch_page(base_url, trusted=False)
+        feed_url = feed_mod.extract_feed_link(html, base_url)
+        if not feed_url:
+            return _render_test_result(
+                request,
+                _failure_steps(
+                    [
+                        ("IA (finder)", f"{guess} não respondeu"),
+                        (
+                            "Autodiscovery no domínio chutado",
+                            'sem <link rel="alternate"> no <head>',
+                        ),
+                    ]
+                ),
+            )
+        preview = preview_feed(feed_url, trusted=False)
+        return _render_test_result(request, _success_ctx(feed_url, preview, via="autodiscovery"))
+    except (ValueError, feed_mod.FetchError) as exc:
+        return _render_test_result(
+            request,
+            _failure_steps(
+                [
+                    ("IA (finder)", f"{guess} não respondeu"),
+                    ("Autodiscovery no domínio chutado", str(exc)),
+                ]
+            ),
+        )
+
+
+@router.post("/test")
+def test_source(
+    request: Request,
+    mode: Annotated[str, Form()] = "",
+    canonical: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Testa/descobre um feed RSS sem persistir (dry-run). Retorna HTML parcial para HTMX.
+
+    Modos: `feed` (URL direta), `site` (autodiscovery), `name` (finder + fallback).
+    Falhas renderizam o snippet de erro; sucesso devolve a URL descoberta + amostra de entradas
+    e atualiza os campos do form via hx-swap-oob."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    try:
+        payload = SourceTestForm.model_validate({"mode": mode, "value": canonical})
+    except ValidationError as exc:
+        return _render_test_result(
+            request,
+            _failure_ctx("Entrada inválida", format_validation_error(exc)),
+        )
+    if payload.mode == "feed":
+        return _test_feed_mode(request, payload.value)
+    if payload.mode == "site":
+        return _test_site_mode(request, payload.value)
+    return _test_name_mode(request, payload.value)
