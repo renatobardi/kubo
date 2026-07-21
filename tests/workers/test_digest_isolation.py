@@ -7,60 +7,22 @@ Teste unit puro, sem rede real — os senders são injetáveis.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
-from surrealdb import RecordID
 
-from kubo.contracts.models import DispatchPayload
-from kubo.contracts.worker import DigestView
 from kubo.distribution.email import SmtpConfig
 from kubo.errors import SenderError
-from kubo.store.destinations import Destination
 from kubo.workers.digest import DigestConfig, TelegramDigestWorker
 from kubo.workers.email_digest import EmailDigestConfig, EmailDigestWorker
+from tests.workers._digest_fixtures import (
+    _destination,
+    _dispatch,
+    _FakeKnowledge,
+    _view,
+)
 
 _EMAIL_PASSWORD = "app-password"  # pragma: allowlist secret
-_NOW = datetime(2026, 7, 13, 9, 30, tzinfo=timezone.utc)
-_BASE = "https://kubo.test:3900"
-
-
-def _view(key: str, minutes: int = 0) -> DigestView:
-    return DigestView(
-        id=f"distilled:{key}",
-        title=f"Titulo {key}",
-        summary=f"resumo {key}",
-        created_at=_NOW + timedelta(minutes=minutes),
-        entities=["OpenAI"],
-    )
-
-
-def _dest(key: str, channel: str, address: str) -> Destination:
-    return Destination(
-        id=RecordID("destination", key),
-        name=f"dest-{key}",
-        kind="pessoa",
-        channel=channel,
-        address=address,
-        enabled=True,
-        archived_at=None,
-        dispatches=0,
-    )
-
-
-class _FakeKnowledge:
-    def __init__(self, per_dest: dict[str, list[DigestView]]) -> None:
-        self._per_dest = per_dest
-
-    def items_to_distill(self, limit: int) -> list[Any]:
-        return []
-
-    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
-        return list(self._per_dest.get(destination, []))
-
-    def search_distilled(self, embedding: Any, k: int) -> list[Any]:
-        return []
 
 
 class _FakeTelegramSender:
@@ -100,13 +62,13 @@ def test_email_failure_does_not_stop_telegram_delivery() -> None:
     knowledge = _FakeKnowledge(views)
 
     telegram_worker = TelegramDigestWorker(
-        destination=_dest("telegram1", "telegram", "42"),
-        base_url=_BASE,
+        destination=_destination(key="telegram1", channel="telegram", address="42"),
+        base_url="https://kubo.test:3900",
         sender=_FakeTelegramSender(),
     )
     email_worker = EmailDigestWorker(
-        destination=_dest("email1", "email", "owner@example.com"),
-        base_url=_BASE,
+        destination=_destination(key="email1", channel="email", address="owner@example.com"),
+        base_url="https://kubo.test:3900",
         smtp_config=SmtpConfig(
             host="smtp.example.com",
             port=587,
@@ -136,9 +98,9 @@ def test_email_failure_does_not_stop_telegram_delivery() -> None:
     )
 
     assert len(telegram_result.payloads) == 1
-    tg = telegram_result.payloads[0]
-    assert isinstance(tg, DispatchPayload) and tg.status == "ok" and tg.channel == "telegram"
+    tg = _dispatch(telegram_result.payloads[0])
+    assert tg.status == "ok" and tg.channel == "telegram"
 
     assert len(email_result.payloads) == 1
-    em = email_result.payloads[0]
-    assert isinstance(em, DispatchPayload) and em.status == "error" and em.channel == "email"
+    em = _dispatch(email_result.payloads[0])
+    assert em.status == "error" and em.channel == "email"
