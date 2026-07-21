@@ -214,7 +214,7 @@ def test_delete_refused_when_dispatch_exists(db: Any) -> None:
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
-        destination=str(rid),
+        destination=rid,
         channel="telegram",
         status="ok",
         watermark=now,
@@ -255,7 +255,7 @@ def test_list_destinations_counts_dispatches(db: Any) -> None:
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
-        destination=str(rid),
+        destination=rid,
         channel="telegram",
         status="ok",
         watermark=now,
@@ -293,7 +293,7 @@ def test_reset_destination_watermark_writes_zero_item_dispatch(db: Any) -> None:
 
     rows = db.query(
         "SELECT * FROM dispatch WHERE destination = $d AND artifact = 'digest';",
-        {"d": str(rid)},
+        {"d": rid},
     )
     assert len(rows) == 1
     assert rows[0]["status"] == "ok"

@@ -28,7 +28,6 @@ from kubo.__main__ import (
     run_query,
     run_show,
 )
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.errors import ConfigError
 from kubo.runtime.flow_runner import FlowRunResult
 from kubo.store import client, knowledge, migrations
@@ -345,13 +344,12 @@ def _flow_result(state: str) -> FlowRunResult:
 
 
 def test_parser_parses_flow_run() -> None:
-    """`flow run <template> <pergunta>` roteia, com destino default owner-telegram."""
+    """`flow run <template> <pergunta>` roteia (sem flag --destination)."""
     args = _build_parser().parse_args(["flow", "run", "analysis", "o que é X?"])
     assert args.command == "flow"
     assert args.flow_command == "run"
     assert args.template == "analysis"
     assert args.question == "o que é X?"
-    assert args.destination == "owner-telegram"
 
 
 def test_handle_flow_without_run_subcommand_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
@@ -366,9 +364,7 @@ def test_handle_flow_maps_state_to_exit_code(
 ) -> None:
     """delivered → exit 0; failed → exit 1; ambos imprimem o id do flow e o estado."""
     monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("delivered"))
-    args = argparse.Namespace(
-        flow_command="run", template="analysis", question="q", destination="owner-telegram"
-    )
+    args = argparse.Namespace(flow_command="run", template="analysis", question="q")
     assert _handle_flow(object(), args) == 0
     assert "delivered" in capsys.readouterr().out
 
@@ -376,18 +372,11 @@ def test_handle_flow_maps_state_to_exit_code(
     assert _handle_flow(object(), args) == 1
 
 
-def test_run_flow_command_rejects_unknown_destination(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Destino inexistente em destinations.yaml falha alto (ConfigError), antes de embeddar."""
-    monkeypatch.setattr(
-        "kubo.__main__.resolve_destinations",
-        lambda ds: [
-            ResolvedDestination(
-                id="owner-telegram", name="R", kind="pessoa", channel="telegram", address="c"
-            )
-        ],
-    )
-    with pytest.raises(ConfigError, match="não existe"):
-        run_flow_command(object(), template="analysis", question="q", destination_id="fantasma")
+def test_run_flow_command_rejects_unresolvable_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings ausente -> ConfigError antes de construir embedder/destino."""
+    monkeypatch.setattr("kubo.__main__.settings_store.get_settings", lambda db: None)
+    with pytest.raises(ConfigError, match="configurações"):
+        run_flow_command(object(), template="analysis", question="q")
 
 
 def test_handle_flow_review_state_is_success(
@@ -396,12 +385,7 @@ def test_handle_flow_review_state_is_success(
     """O gate aberto do dev (`review`) é sucesso (exit 0) — o PR espera a decisão no board, como
     `awaiting_review` no analysis. Só `failed` é exit 1."""
     monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("review"))
-    args = argparse.Namespace(
-        flow_command="run",
-        template="dev-mini",
-        question="add hello()",
-        destination="owner-telegram",
-    )
+    args = argparse.Namespace(flow_command="run", template="dev-mini", question="add hello()")
     assert _handle_flow(object(), args) == 0
     assert "review" in capsys.readouterr().out
 
@@ -409,7 +393,7 @@ def test_handle_flow_review_state_is_success(
 def test_run_flow_command_dev_skips_embedder_and_destination(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`kubo flow run dev-mini` NÃO constrói embedder Gemini nem resolve destino Telegram (C1:
+    """`kubo flow run dev-mini` NÃO constrói embedder Gemini nem resolve destino padrão (C1:
     disparo por CLI, gate na UI) — passa embedder=None/destination=None ao run_flow."""
 
     def _boom_embedder() -> None:
@@ -420,7 +404,7 @@ def test_run_flow_command_dev_skips_embedder_and_destination(
     monkeypatch.setattr("kubo.__main__.resolve_base_url", lambda: "https://kubo.example")
     monkeypatch.setattr("kubo.__main__.run_flow", lambda db, **kw: captured.update(kw) or _FLOW)
 
-    run_flow_command(object(), template="dev-mini", question="add hello()", destination_id="x")
+    run_flow_command(object(), template="dev-mini", question="add hello()")
 
     assert captured["template_name"] == "dev-mini"
     assert captured["question"] == "add hello()"

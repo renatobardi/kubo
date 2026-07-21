@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.store import client, destinations, migrations
@@ -25,8 +26,9 @@ pytestmark = pytest.mark.integration
 _DB = "test_settings_write"
 _RW_PASS = secrets.token_urlsafe(24)
 
-# Captura a implementação real antes do conftest sobrescrever settings_store.get_settings.
+# Captura a implementação real antes do conftest sobrescrever atributos da store.
 _real_get_settings_impl = settings_store.get_settings
+_real_active_destinations_impl = destinations.active_destinations
 
 
 def _real_get_settings(db: Any) -> settings_store.Settings | None:
@@ -41,6 +43,9 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
     monkeypatch.setattr("kubo.store.settings.get_settings", _real_get_settings)
+    monkeypatch.setattr(
+        "kubo.store.destinations.active_destinations", _real_active_destinations_impl
+    )
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
@@ -198,7 +203,7 @@ def _digest_dispatch_count(dest: str) -> int:
     with _real_connect(replace(client.config(), database=_DB)) as root:
         rows = root.query(
             "SELECT count() FROM dispatch WHERE destination = $d AND artifact = 'digest';",
-            {"d": f"destination:{dest}"},
+            {"d": RecordID("destination", dest)},
         )
     return rows[0]["count"] if rows else 0
 

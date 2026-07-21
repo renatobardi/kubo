@@ -7,13 +7,13 @@ mapa é ignorado com log.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 from surrealdb import RecordID
 
-from kubo.store.destinations import Destination
+from kubo.store.destinations import Channel, Destination
 from kubo.store.settings import Settings
 
 _EMAIL_PASSWORD = "app-password"  # pragma: allowlist secret
@@ -24,7 +24,7 @@ def _destination(key: str, channel: str = "telegram") -> Destination:
         id=RecordID("destination", key),
         name=f"dest-{key}",
         kind="pessoa",
-        channel=channel,
+        channel=cast(Channel, channel),
         address=f"addr-{key}",
         enabled=True,
         archived_at=None,

@@ -18,15 +18,22 @@ from typing import Any
 
 import pytest
 import structlog
+from surrealdb import RecordID
 
 from kubo.contracts.models import DispatchPayload, ReportPayload
 from kubo.contracts.worker import RetrievedView, validate_worker
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.errors import ConfigError, SenderError
+from kubo.store.destinations import Destination
 from kubo.workers.analyst import AnalystConfig, AnalystWorker, ReportOutput, _truncate_html
 
-_DEST = ResolvedDestination(
-    id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-123"
+_DEST = Destination(
+    id=RecordID("destination", "owner-telegram"),
+    name="Renato",
+    kind="pessoa",
+    channel="telegram",
+    address="chat-123",
+    enabled=True,
+    archived_at=None,
 )
 _BASE = "https://kubo.example"
 _DOCS = [
