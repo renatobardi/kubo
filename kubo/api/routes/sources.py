@@ -208,7 +208,8 @@ def get_finder() -> Finder:
                 model=persona.model or "groq/llama-3.3-70b-versatile",
                 max_tokens=256,
                 timeout=15.0,
-            )
+            ),
+            max_attempts=1,
         )
         _FINDER_INSTANCE = Finder(executor=executor, prompt=persona.prompt)
     return _FINDER_INSTANCE
