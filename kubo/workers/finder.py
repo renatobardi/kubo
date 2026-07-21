@@ -6,18 +6,18 @@ fetch real antes de usar."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from kubo.errors import ExecutorError, MalformedOutputError
 from kubo.executors.base import Executor
 
 
 class FinderGuess(BaseModel):
-    """Saída estruturada da persona finder: uma URL de feed."""
+    """Saída estruturada da persona finder: uma URL de feed (vazia = não sei)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    feed_url: str = Field(min_length=1)
+    feed_url: str = ""
 
 
 class Finder:
@@ -28,9 +28,10 @@ class Finder:
         self._prompt = prompt
 
     def guess(self, name: str) -> str | None:
-        """Devolve a URL chutada ou None se o LLM falhar/malformar."""
+        """Devolve a URL chutada ou None se o LLM falhar, malformar ou devolver vazio."""
         try:
             result = self._executor.complete(self._prompt, name, FinderGuess)
         except (ExecutorError, MalformedOutputError, ValidationError):
             return None
-        return result.feed_url
+        url = result.feed_url.strip()
+        return url or None
