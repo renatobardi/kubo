@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from kubo.errors import ExecutorError, MalformedOutputError
+from kubo.errors import ExecutorError
 from kubo.executors.base import Executor
 
 
@@ -31,7 +31,7 @@ class Finder:
         """Devolve a URL chutada ou None se o LLM falhar, malformar ou devolver vazio."""
         try:
             result = self._executor.complete(self._prompt, name, FinderGuess)
-        except (ExecutorError, MalformedOutputError, ValidationError):
+        except (ExecutorError, ValidationError):
             return None
         url = result.feed_url.strip()
         return url or None
