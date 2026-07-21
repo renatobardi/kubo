@@ -23,7 +23,6 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.contracts.models import WorkerManifest
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.distribution.telegram import send_telegram
 from kubo.embedding import Embedder
 from kubo.errors import ConfigError, PromotionError, SenderError, StateError
@@ -34,6 +33,7 @@ from kubo.runtime.flow_templates import FlowTemplate, load_flow_templates
 from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.runtime.personas import Persona, load_personas
 from kubo.runtime.runner import FlowCtx, run_worker
+from kubo.store.destinations import Destination
 from kubo.store.flows import (
     create_task,
     decide_gate,
@@ -155,7 +155,7 @@ def run_flow(
     template_name: str,
     question: str,
     embedder: Embedder | None = None,
-    destination: ResolvedDestination | None = None,
+    destination: Destination | None = None,
     base_url: str,
     executor: Executor | None = None,
     senders: Mapping[str, Sender] | None = None,
@@ -194,7 +194,7 @@ def _run_analysis(
     question: str,
     *,
     embedder: Embedder,
-    destination: ResolvedDestination,
+    destination: Destination,
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
@@ -239,7 +239,7 @@ def _run_analysis_review(
     question: str,
     *,
     embedder: Embedder,
-    destination: ResolvedDestination,
+    destination: Destination,
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
@@ -309,7 +309,7 @@ def _run_dev(
     question: str,
     *,
     embedder: Embedder | None,
-    destination: ResolvedDestination | None,
+    destination: Destination | None,
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
@@ -401,7 +401,7 @@ def _resume_dev(
     db: Any,
     *,
     gate_task: RecordID,
-    destination: ResolvedDestination,
+    destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None,
 ) -> None:
@@ -591,7 +591,7 @@ def resume_gate(
     db: Any,
     *,
     gate_task: RecordID,
-    destination: ResolvedDestination,
+    destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None = None,
 ) -> None:
@@ -640,7 +640,7 @@ def _resume_review(
     db: Any,
     *,
     gate_task: RecordID,
-    destination: ResolvedDestination,
+    destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None,
 ) -> None:
@@ -689,7 +689,7 @@ def _notify_gate(
     *,
     flow: RecordID,
     gate_task: RecordID,
-    destination: ResolvedDestination,
+    destination: Destination,
     question: str,
     base_url: str,
     senders: Mapping[str, Sender] | None,
@@ -723,7 +723,7 @@ def _notify_gate(
 
 
 def _dispatch_report(
-    db: Any, destination: ResolvedDestination, items: list[RecordID], *, status: str
+    db: Any, destination: Destination, items: list[RecordID], *, status: str
 ) -> None:
     """Grava o dispatch de report da aprovação (artifact=report, watermark None — não move o
     watermark do digest). `items` = as fontes consultadas (auditoria, aparece em Envios)."""
@@ -740,7 +740,7 @@ def _dispatch_report(
 
 
 def _send_telegram(
-    destination: ResolvedDestination,
+    destination: Destination,
     text: str,
     senders: Mapping[str, Sender] | None,
     *,

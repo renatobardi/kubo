@@ -178,7 +178,7 @@ class DispatchPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     type: Literal["dispatch"] = "dispatch"
-    destination: str = Field(min_length=1, max_length=200)
+    destination: str = Field(pattern=r"^destination:.+$")
     channel: Literal["telegram", "email"]
     status: Literal["ok", "error"]
     artifact: Literal["digest", "report", "gate"]

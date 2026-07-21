@@ -10,23 +10,17 @@ import argparse
 import re
 import sys
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 from surrealdb import RecordID
 
-from kubo.distribution.destinations import (
-    load_destinations,
-    resolve_base_url,
-    resolve_destinations,
-)
+from kubo.distribution.config import resolve_base_url
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, EmbeddingError
 from kubo.runtime.flow_runner import FlowRunResult, run_flow
 from kubo.store import client, knowledge
+from kubo.store import settings as settings_store
 from kubo.store.knowledge import DistilledView, SearchHit
-
-_DESTINATIONS_PATH = Path(__file__).parents[1] / "destinations.yaml"
 
 _DISTILLED_TABLE = "distilled"
 
@@ -155,32 +149,28 @@ def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
     return format_distilled(view, provenance=provenance)
 
 
-# Templates cujo flow é dev (executor cli): NÃO usam retrieval (embedder Gemini) nem destino
-# Telegram — disparo por CLI, gate na UI (C1, ADR-0019). Template dev novo = entrada aqui + PR.
+# Templates whose flow is dev (cli executor): do NOT use retrieval (Gemini embedder)
+# nor a Telegram destination — triggered by CLI, gate lives in the UI (C1, ADR-0019).
+# New dev template = add here + PR.
 _DEV_TEMPLATES = frozenset({"dev-mini", "dev-kubo"})
 
 
-def run_flow_command(
-    db: Any, *, template: str, question: str, destination_id: str
-) -> FlowRunResult:
-    """Resolve as dependências do flow e o executa SÍNCRONO no processo do CLI (ADR-0016 §VII).
+def run_flow_command(db: Any, *, template: str, question: str) -> FlowRunResult:
+    """Resolve flow dependencies and run it synchronously in the CLI process (ADR-0016 §VII).
 
-    Flows de análise resolvem embedder Gemini + destino Telegram (por env, invariante 8); flows
-    dev (executor cli) NÃO usam nenhum dos dois — `question` é a instrução para a persona dev, o
-    sandbox vem do env do runtime, e o gate espera na UI (C1). Destino inexistente (nos flows que
-    o usam) falha alto (ConfigError). O flow runner faz o resto."""
+    Analysis flows resolve the Gemini embedder + default destination from settings;
+    dev flows (cli executor) use neither — `question` is the dev persona instruction,
+    the sandbox comes from the runtime env, and the gate waits in the UI (C1). An
+    unresolvable destination (for flows that need one) fails fast (ConfigError).
+    The flow runner does the rest."""
     embedder: Embedder | None = None
     dest = None
-    base_url = ""  # dev ignora base_url; resolvê-lo aqui acoplaria o disparo a KUBO_BASE_URL
+    base_url = ""  # dev ignores base_url; resolving it here would couple CLI runs to KUBO_BASE_URL
     if template not in _DEV_TEMPLATES:
-        raw = next(
-            (d for d in load_destinations(_DESTINATIONS_PATH) if d.id == destination_id), None
-        )
-        if raw is None:
-            raise ConfigError(f"destino '{destination_id}' não existe em destinations.yaml")
-        # Resolve SÓ o destino pedido: `resolve_destinations` falha se a env de QUALQUER destino
-        # faltar; um e-mail sem env não pode quebrar um `flow run` para o Telegram (CodeRabbit).
-        dest = resolve_destinations([raw])[0]
+        settings = settings_store.get_settings(db)
+        if settings is None:
+            raise ConfigError("configurações não encontradas — configure o destino padrão")
+        dest = settings_store.resolve_default_destination(db, settings)
         embedder = GeminiEmbedder.from_env()
         base_url = resolve_base_url()
     return run_flow(
@@ -200,9 +190,7 @@ def _handle_flow(db: Any, args: argparse.Namespace) -> int:
     if args.flow_command != "run":
         print('uso: kubo flow run <template> "pergunta"', file=sys.stderr)
         return 2
-    result = run_flow_command(
-        db, template=args.template, question=args.question, destination_id=args.destination
-    )
+    result = run_flow_command(db, template=args.template, question=args.question)
     print(f"flow {result.flow} — {result.state} (run {result.run})")
     return 1 if result.state == "failed" else 0
 
@@ -225,7 +213,6 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser = flow_sub.add_parser("run", help="flow run <template> <pergunta>")
     run_parser.add_argument("template")
     run_parser.add_argument("question")
-    run_parser.add_argument("--destination", default="owner-telegram")
 
     return parser
 

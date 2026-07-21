@@ -17,6 +17,8 @@ cd ~/kubo
 # (lição do 0010: exportar segredo no shell grava valor velho nos containers).
 export KUBO_BUILD_ID="$build_id"
 docker compose build
+# Quiesce writers before destructive migrations (ADR-0030 §5).
+docker compose stop kubo-api kubo-scheduler
 docker compose up -d surrealdb
 until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)")" = healthy ]; do
   sleep 3

@@ -30,9 +30,9 @@ from kubo.contracts.models import (
     WorkerManifest,
 )
 from kubo.contracts.worker import RetrievedView, RunContext
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.distribution.telegram import send_telegram
 from kubo.errors import ConfigError, ContractError, SenderError
+from kubo.store.destinations import Destination
 
 # Sender de um canal (assinatura por-keyword de `send_telegram`); injetável para teste.
 Sender = Callable[..., None]
@@ -101,7 +101,7 @@ class AnalystWorker:
         executor: object,
         *,
         prompt: str,
-        destination: ResolvedDestination | None,
+        destination: Destination | None,
         base_url: str,
         senders: Mapping[str, Sender] | None = None,
     ) -> None:
@@ -175,7 +175,7 @@ class AnalystWorker:
     def _deliver(
         self,
         ctx: RunContext,
-        dest: ResolvedDestination,
+        dest: Destination,
         report_text: str,
         docs: list[RetrievedView],
         consulted: list[str],
@@ -195,7 +195,7 @@ class AnalystWorker:
     def _send(
         self,
         ctx: RunContext,
-        dest: ResolvedDestination,
+        dest: Destination,
         report_text: str,
         docs: list[RetrievedView],
     ) -> None:
@@ -311,7 +311,7 @@ def _link(doc_id: str, base_url: str) -> str:
 
 
 def _dispatch(
-    dest: ResolvedDestination,
+    dest: Destination,
     consulted: list[str],
     *,
     status: str,
@@ -320,9 +320,9 @@ def _dispatch(
     """DispatchPayload de report (artifact=report, watermark None — NÃO move o watermark do
     digest, fix E1). `items` = as fontes consultadas (auditoria)."""
     return DispatchPayload(
-        destination=dest.id,
+        destination=str(dest.id),
         channel=dest.channel,
-        status=status,  # type: ignore[arg-type]  # "ok"|"error" garantido pelo chamador
+        status=status,  # type: ignore[arg-type]  # ok|error is guaranteed by callers
         artifact="report",
         watermark=None,
         item_count=len(consulted),

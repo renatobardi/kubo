@@ -1,13 +1,12 @@
-"""Camada de acesso ao singleton de config operacional `settings` (ADR-0028 + ADR-0030 §1).
+"""Store layer for the operational settings singleton `settings` (ADR-0028 + ADR-0030 §1).
 
-O registro `settings:global` é a única linha; leitura por id fixo, nunca `LIMIT 1` ambíguo.
-O campo `default_destination` é um ponteiro `option<record<destination>>`; a resolução verifica
-se o destino existe e não está arquivado (pausado resolve normalmente).
+The `settings:global` record is a single row; read by fixed id, never ambiguous `LIMIT 1`.
+The `default_destination` field is an `option<record<destination>>` pointer; resolution checks
+that the destination exists and is not archived (paused resolves normally).
 """
 
 from __future__ import annotations
 
-import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +14,7 @@ from surrealdb import RecordID
 
 from kubo.errors import ConfigError
 from kubo.store import destinations as destination_store
+from kubo.store.destinations import reset_watermark_statement
 from kubo.store.transaction import run_transaction
 
 _SETTINGS_ID = RecordID("settings", "global")
@@ -76,8 +76,8 @@ def put_settings_and_reset(
     unpause_recent: bool,
     destinations: list[destination_store.Destination],
 ) -> None:
-    """Atualiza `settings:global` e, se `unpause_recent`, reseta watermarks numa
-    única transação atômica."""
+    """Update `settings:global` and, if `unpause_recent`, reset watermarks in a
+    single atomic transaction."""
     statements: list[str] = [
         "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
         "default_destination = $dest",
@@ -90,26 +90,18 @@ def put_settings_and_reset(
     }
     if unpause_recent:
         for i, destination in enumerate(destinations):
-            rid = RecordID("dispatch", secrets.token_hex(16))
-            statements.append(
-                f"CREATE $d{i} SET destination = $dest{i}, channel = $ch{i}, status = 'ok', "
-                f"artifact = 'digest', watermark = time::now(), item_count = 0, items = [], "
-                f"error = NONE"
-            )
-            params |= {
-                f"d{i}": rid,
-                f"dest{i}": str(destination.id),
-                f"ch{i}": destination.channel,
-            }
+            stmt, p = reset_watermark_statement(prefix=f"d{i}_", destination=destination)
+            statements.append(stmt)
+            params |= p
     run_transaction(db, statements, params)
 
 
 def resolve_default_destination(db: Any, settings: Settings) -> destination_store.Destination:
-    """Dado o singleton, devolve o destino padrão resolvido.
+    """Resolve the default destination from the settings singleton.
 
-    Levanta `ConfigError` claro se não houver destino padrão, se o registro não
-    existir mais (dangling) ou se estiver arquivado. Um destino pausado resolve
-    normalmente (ADR-0030 §2).
+    Raises a clear `ConfigError` when there is no default, when the record is
+    dangling, or when it is archived. A paused destination resolves normally
+    (ADR-0030 §2).
     """
     if settings.default_destination is None:
         raise ConfigError("destino padrão não definido — configure em Configurações")
@@ -124,9 +116,9 @@ def resolve_default_destination(db: Any, settings: Settings) -> destination_stor
 
 
 def default_destination_choices(db: Any) -> list[destination_store.Destination]:
-    """Destinos elegíveis como padrão: ativos ou pausados, nunca arquivados.
+    """Destinations eligible as default: active or paused, never archived.
 
-    A UI usa `name`/`channel` para o dropdown; o endereço (PII) não é exibido,
-    mas vem no objeto como em toda a store de destinos (repr=False).
+    The UI uses `name`/`channel` for the dropdown; the address (PII) is not shown,
+    but it is part of the object as in all destination store usage (repr=False).
     """
     return [d for d in destination_store.list_destinations(db) if d.archived_at is None]

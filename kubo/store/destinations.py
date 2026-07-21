@@ -1,15 +1,15 @@
-"""Camada de acesso ao Cadastro de destinos (ADR-0027, ticket KUBO-43).
+"""Destination registry store layer (ADR-0027, ticket KUBO-43).
 
-Toda escrita passa por `normalize_address(channel, address)` antes da checagem de
-unicidade. Endereço é PII de roteamento: vive plain no banco, mas nunca em
-log/repr/traceback (o dataclass usa `repr=False` e a store não loga o valor).
+Every write goes through `normalize_address(channel, address)` before uniqueness
+validation. Address is routing PII: stored plain in the database, but never in
+logs/repr/traceback (the dataclass uses `repr=False` and the store never logs it).
 """
 
 from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from surrealdb import RecordID
 
@@ -21,16 +21,18 @@ from kubo.errors import (
 )
 from kubo.store.transaction import run_transaction
 
+Channel = Literal["telegram", "email"]
+
 
 @dataclass(frozen=True)
 class Destination:
-    """Um destino de distribuição. `address` é PII — `repr=False` evita vazamento
-    em log/traceback do objeto."""
+    """A distribution destination. `address` is PII — `repr=False` prevents leaks
+    in object logs/tracebacks."""
 
     id: RecordID
     name: str
     kind: str
-    channel: str
+    channel: Channel
     address: str = field(repr=False)
     enabled: bool
     archived_at: str | None
@@ -38,10 +40,10 @@ class Destination:
 
 
 def normalize_address(channel: str, address: str) -> str:
-    """Normaliza o endereço por canal antes de qualquer escrita.
+    """Normalize the address by channel before any write.
 
-    E-mail → trim + lowercase. Telegram → dígitos, com hífen opcional no início
-    (chat_id de grupo é negativo); todo caractere que não é dígito é removido.
+    Email → trim + lowercase. Telegram → digits, with optional leading minus
+    (group chat_id is negative); any non-digit character is removed.
     """
     raw = address.strip()
     if channel == "email":
@@ -53,29 +55,30 @@ def normalize_address(channel: str, address: str) -> str:
     return raw
 
 
+def record_id_from_destination(destination: str) -> RecordID:
+    """Convert a `destination:<key>` string into a `RecordID` (KUBO-48 cutover)."""
+    _, _, key = destination.partition(":")
+    return RecordID("destination", key)
+
+
 def _fresh_destination_id() -> RecordID:
-    """Id surrogate novo para destination."""
+    """New surrogate id for a destination record."""
     return RecordID("destination", secrets.token_hex(16))
-
-
-def _destination_ref(id: RecordID) -> str:
-    """String `destination:<key>` usada em `dispatch.destination` nesta fase."""
-    return str(id)
 
 
 _UNPAUSE_MODES = ("backlog", "recente")
 
 
 def valid_unpause_mode(raw: str) -> str:
-    """Valida e normaliza o modo de unpause (backlog/recente); levanta em inválido."""
+    """Validate and normalize the unpause mode (backlog/recente); raise on invalid."""
     v = raw.strip().lower()
     if v not in _UNPAUSE_MODES:
-        raise ValueError("modo de unpause inválido")
+        raise ValueError("invalid unpause mode")
     return v
 
 
 def normalize_unpause_mode(raw: str | None) -> str:
-    """Normaliza o modo de unpause; valores inválidos caem no default backlog."""
+    """Normalize the unpause mode; invalid values fall back to the default backlog."""
     if not raw:
         return "backlog"
     v = raw.strip().lower()
@@ -83,7 +86,7 @@ def normalize_unpause_mode(raw: str | None) -> str:
 
 
 def _find_destination_id(db: Any, *, channel: str, address: str) -> RecordID | None:
-    """Resolve o id de um destination pela chave natural (channel, address), ou None."""
+    """Resolve a destination id by its natural key (channel, address), or None."""
     rows = db.query(
         "SELECT id FROM destination WHERE channel = $channel AND address = $address;",
         {"channel": channel, "address": address},
@@ -91,14 +94,21 @@ def _find_destination_id(db: Any, *, channel: str, address: str) -> RecordID | N
     return rows[0]["id"] if rows else None
 
 
+def _parse_channel(raw: Any) -> Channel:
+    """Validate a channel value coming from the database."""
+    if raw in ("telegram", "email"):
+        return raw
+    raise StoreError(f"invalid destination channel in database: {raw!r}")
+
+
 def _destination_from_row(row: dict[str, Any]) -> Destination:
-    """Monta um `Destination` a partir de uma linha do banco."""
+    """Build a `Destination` from a database row."""
     archived = row.get("archived_at")
     return Destination(
         id=row["id"],
         name=row["name"],
         kind=row["kind"],
-        channel=row["channel"],
+        channel=_parse_channel(row["channel"]),
         address=row["address"],
         enabled=bool(row["enabled"]),
         archived_at=str(archived) if archived is not None else None,
@@ -107,7 +117,7 @@ def _destination_from_row(row: dict[str, Any]) -> Destination:
 
 
 def get_destination(db: Any, id: RecordID) -> Destination | None:
-    """Lê UM destino por id, ou None se não existe."""
+    """Read one destination by id, or None if it does not exist."""
     rows = db.query("SELECT * FROM $r;", {"r": id})
     if not rows:
         return None
@@ -115,16 +125,18 @@ def get_destination(db: Any, id: RecordID) -> Destination | None:
 
 
 def create_destination(db: Any, *, name: str, kind: str, channel: str, address: str) -> RecordID:
-    """Cadastra um destino novo, normalizando o endereço. Se um destino arquivado
-    com o mesmo (channel, address) existir, reativa-o (atualiza nome/kind); se estiver
-    ativo/pausado, levanta `DuplicateDestinationError`.
+    """Register a new destination, normalizing the address. If an archived destination
+    with the same (channel, address) exists, reactivate it (update name/kind); if it is
+    active/paused, raise `DuplicateDestinationError`.
     """
+    if channel not in ("telegram", "email"):
+        raise StoreError(f"invalid channel: {channel!r}")
     normalized = normalize_address(channel, address)
     existing = _find_destination_id(db, channel=channel, address=normalized)
     if existing is not None:
         current = get_destination(db, existing)
         if current is None:
-            raise StaleDestinationError(f"destino sumiu durante criação: {existing}")
+            raise StaleDestinationError(f"destination vanished during creation: {existing}")
         if current.archived_at is not None:
             updated = db.query(
                 "UPDATE $r SET name = $name, kind = $kind, enabled = true, "
@@ -132,9 +144,9 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
                 {"r": existing, "name": name, "kind": kind},
             )
             if not updated:
-                raise StaleDestinationError(f"destino sumiu durante reativação: {existing}")
+                raise StaleDestinationError(f"destination vanished during reactivation: {existing}")
             return existing
-        raise DuplicateDestinationError(f"destino já cadastrado: channel={channel}")
+        raise DuplicateDestinationError(f"destination already registered: channel={channel}")
     rid = _fresh_destination_id()
     db.query(
         "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
@@ -145,37 +157,48 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
 
 
 def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
-    """Edita nome e endereço de um destino, preservando id. Rejeita se o destino
-    estiver arquivado ou se o novo (channel, address) colidir com outro destino.
+    """Edit a destination's name and address while preserving its id.
+
+    Rejects if the destination is archived or if the new (channel, address) collides
+    with another destination.
     """
     current = get_destination(db, id)
     if current is None or current.archived_at is not None:
-        raise StaleDestinationError(f"destino não editável (inexistente ou arquivado): {id}")
+        raise StaleDestinationError(f"destination not editable (missing or archived): {id}")
     normalized = normalize_address(current.channel, address)
     if normalized != current.address:
         other = _find_destination_id(db, channel=current.channel, address=normalized)
         if other is not None and str(other) != str(id):
-            raise DuplicateDestinationError(f"destino já cadastrado: channel={current.channel}")
+            raise DuplicateDestinationError(
+                f"destination already registered: channel={current.channel}"
+            )
     updated = db.query(
         "UPDATE $r SET name = $name, address = $address WHERE archived_at IS NONE;",
         {"r": id, "name": name, "address": normalized},
     )
     if not updated:
-        raise StaleDestinationError(f"destino arquivado durante a edição: {id}")
+        raise StaleDestinationError(f"destination archived during edit: {id}")
 
 
-def _reset_watermark_sql_and_params(
+def reset_watermark_statement(
     *, prefix: str, destination: Destination
 ) -> tuple[str, dict[str, Any]]:
-    """Devolve um statement CREATE dispatch de zero-item (watermark=time::now()) e params."""
+    """Return a zero-item `CREATE dispatch` statement (watermark=time::now()) and its params.
+
+    `prefix` scopes the bind keys ($d, $dest, $ch) so the caller can build a multi-statement
+    transaction without key collisions.
+    """
+    d = f"{prefix}d"
+    dest = f"{prefix}dest"
+    ch = f"{prefix}ch"
     rid = RecordID("dispatch", secrets.token_hex(16))
     return (
-        "CREATE $d SET destination = $dest, channel = $ch, status = 'ok', "
-        "artifact = 'digest', watermark = time::now(), item_count = 0, items = [], error = NONE",
+        f"CREATE ${d} SET destination = ${dest}, channel = ${ch}, status = 'ok', "
+        f"artifact = 'digest', watermark = time::now(), item_count = 0, items = [], error = NONE",
         {
-            "d": rid,
-            "dest": _destination_ref(destination.id),
-            "ch": destination.channel,
+            d: rid,
+            dest: destination.id,
+            ch: destination.channel,
         },
     )
 
@@ -189,9 +212,9 @@ def _run_reactivate_transaction(
     mode: str,
     destination: Destination | None,
 ) -> None:
-    """Executa UPDATE + reset de watermark (quando mode='recente') numa transação atômica.
+    """Run UPDATE + watermark reset (when mode='recente') in an atomic transaction.
 
-    Levanta `StaleDestinationError` se o UPDATE não tocar nenhuma linha.
+    Raises `StaleDestinationError` if the UPDATE touches no rows.
     """
     statements: list[str] = [
         f"LET $updated = ({update_statement} RETURN AFTER)",
@@ -200,8 +223,8 @@ def _run_reactivate_transaction(
     params: dict[str, Any] = dict(update_params)
     if mode == "recente":
         if destination is None:
-            raise ValueError("destination é obrigatório para mode='recente'")
-        stmt, p = _reset_watermark_sql_and_params(prefix="", destination=destination)
+            raise ValueError("destination is required for mode='recente'")
+        stmt, p = reset_watermark_statement(prefix="", destination=destination)
         statements.append(stmt)
         params |= p
     try:
@@ -209,7 +232,7 @@ def _run_reactivate_transaction(
     except StoreError as exc:
         if "StaleDestinationError" in str(exc):
             raise StaleDestinationError(
-                f"destino não editável (inexistente ou arquivado): {id}"
+                f"destination not editable (missing or archived): {id}"
             ) from exc
         raise
 
@@ -222,9 +245,10 @@ def set_destination_enabled(
     mode: str | None = None,
     destination: Destination | None = None,
 ) -> None:
-    """Pausa (`enabled=false`) ou retoma (`enabled=true`) um destino NÃO arquivado.
+    """Pause (`enabled=false`) or resume (`enabled=true`) a non-archived destination.
 
-    mode='recente' grava um dispatch zero-item que avança o watermark — atômico com o UPDATE.
+    mode='recente' writes a zero-item dispatch that advances the watermark —
+    atomically with the UPDATE.
     """
     mode = normalize_unpause_mode(mode)
     update = "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE"
@@ -239,13 +263,15 @@ def set_destination_enabled(
 
 
 def archive_destination(db: Any, *, id: RecordID) -> None:
-    """Arquiva um destino: `enabled=false` + `archived_at` atômico."""
+    """Archive a destination: `enabled=false` + `archived_at` atomically."""
     updated = db.query(
         "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
         {"r": id},
     )
     if not updated:
-        raise StaleDestinationError(f"destino não arquivável (inexistente ou já arquivado): {id}")
+        raise StaleDestinationError(
+            f"destination not archivable (missing or already archived): {id}"
+        )
 
 
 def restore_destination(
@@ -255,9 +281,10 @@ def restore_destination(
     mode: str | None = None,
     destination: Destination | None = None,
 ) -> None:
-    """Restaura um destino arquivado ao estado ativo.
+    """Restore an archived destination to active state.
 
-    mode='recente' grava um dispatch zero-item que avança o watermark — atômico com o UPDATE.
+    mode='recente' writes a zero-item dispatch that advances the watermark —
+    atomically with the UPDATE.
     """
     mode = normalize_unpause_mode(mode)
     update = "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE"
@@ -272,34 +299,45 @@ def restore_destination(
 
 
 def destination_dispatch_count(db: Any, id: RecordID) -> int:
-    """Conta quantos dispatches apontam para este destino (string RecordID)."""
+    """Count how many dispatches point to this destination."""
     rows = db.query(
         "SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL;",
-        {"addr": _destination_ref(id)},
+        {"addr": id},
     )
     return int(rows[0]["count"]) if rows else 0
 
 
 def delete_destination(db: Any, *, id: RecordID) -> None:
-    """Hard delete atômico de um destino: só remove se `dispatch.destination` não
-    aponta para ele. O `DELETE ... WHERE` fecha a janela entre a checagem e o delete.
+    """Atomic hard delete of a destination with zero dispatches.
+
+    Also clears `settings.default_destination` inside the same transaction
+    (ADR-0030 §2). Raises `DestinationHasHistoryError` when dispatches exist,
+    and `StaleDestinationError` when the record is gone.
     """
     if get_destination(db, id) is None:
-        raise StaleDestinationError(f"destino inexistente: {id}")
-    deleted = db.query(
-        "DELETE $r WHERE (SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL)"
-        "[0].count = 0 RETURN BEFORE;",
-        {"r": id, "addr": _destination_ref(id)},
-    )
-    if not deleted:
-        if destination_dispatch_count(db, id) > 0:
-            raise DestinationHasHistoryError(f"destino tem envios (arquive): {id}")
-        raise StaleDestinationError(f"destino inexistente: {id}")
+        raise StaleDestinationError(f"destination not found: {id}")
+    try:
+        run_transaction(
+            db,
+            [
+                "UPDATE settings SET default_destination = NONE WHERE default_destination = $r",
+                "LET $deleted = (DELETE $r WHERE (SELECT count() FROM dispatch "
+                "WHERE destination = $r GROUP ALL)[0].count = 0 RETURN BEFORE)",
+                "IF count($deleted) == 0 { THROW 'DestinationHasHistoryError' }",
+            ],
+            {"r": id},
+        )
+    except StoreError as exc:
+        if "DestinationHasHistoryError" in str(exc):
+            raise DestinationHasHistoryError(
+                f"destination has dispatches (archive first): {id}"
+            ) from exc
+        raise
 
 
 def active_destinations(db: Any, *, channel: str | None = None) -> list[Destination]:
-    """Lista destinos ATIVOS (`enabled=true`, `archived_at IS NONE`). Se `channel`
-    for fornecido, filtra por canal; senão, retorna todos (ADR-0029 §9)."""
+    """List ACTIVE destinations (`enabled=true`, `archived_at IS NONE`). If `channel`
+    is provided, filter by channel; otherwise return all (ADR-0029 §9)."""
     query = "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE"
     params: dict[str, Any] = {}
     if channel is not None:
@@ -311,24 +349,23 @@ def active_destinations(db: Any, *, channel: str | None = None) -> list[Destinat
 
 
 def reset_destination_watermark(db: Any, *, destination: Destination) -> None:
-    """Avança o watermark do destino para `time::now()` do banco sem entregar conteúdo.
+    """Advance the destination watermark to database `time::now()` without delivering content.
 
-    Grava um dispatch `ok` de zero-item (artifact='digest'), auditável na tela de
-    Envios — a opção "recente" da reativação/unpause (ADR-0029 §6).
+    Writes a zero-item `ok` dispatch (artifact='digest'), auditable in the Dispatches
+    UI — the "recente" option on reactivation/unpause (ADR-0029 §6).
     """
-    stmt, params = _reset_watermark_sql_and_params(prefix="", destination=destination)
+    stmt, params = reset_watermark_statement(prefix="", destination=destination)
     db.query(stmt + ";", params)
 
 
 _LIST_DESTINATIONS_SQL = (
     "SELECT *, "
-    "(SELECT count() FROM dispatch WHERE destination = "
-    "string::concat('destination:', meta::id($parent.id)) GROUP ALL)[0].count "
+    "(SELECT count() FROM dispatch WHERE destination = $parent.id GROUP ALL)[0].count "
     "AS dispatches FROM destination;"
 )
 
 
 def list_destinations(db: Any) -> list[Destination]:
-    """Lista todos os destinos com contagem de dispatches (para a UI)."""
+    """List all destinations with their dispatch count (for the UI)."""
     rows = db.query(_LIST_DESTINATIONS_SQL)
     return [_destination_from_row(r) for r in rows]
