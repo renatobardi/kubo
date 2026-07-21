@@ -71,14 +71,17 @@ def _send_with_smtplib(msg: EmailMessage, config: SmtpConfig) -> None:
     try:
         if config.port == 465:
             with smtplib.SMTP_SSL(config.host, config.port, timeout=_TIMEOUT) as server:
+                server.ehlo()
                 server.login(config.user, password)
                 server.send_message(msg)
             return
 
         with smtplib.SMTP(config.host, config.port, timeout=_TIMEOUT) as server:
+            server.ehlo()
             if not server.has_extn("starttls"):
                 raise SenderError("servidor SMTP não suporta STARTTLS")
             server.starttls()
+            server.ehlo()
             server.login(config.user, password)
             server.send_message(msg)
     except SenderError:
