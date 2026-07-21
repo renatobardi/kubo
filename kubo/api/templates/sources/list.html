@@ -14,36 +14,107 @@
     {{ macros.view_toggle("sources", ["list", "grid2", "squares"]) }}
   </div>
 
-  {# Adicionar fonte (#105): disclosure nativo (sem JS), reaberto quando há aviso (erro/duplicata)
-     para o dono ver a tentativa. Escrita no molde ADR-0018: POST /sources com CSRF. #}
-  <details class="rounded-xl bg-card ring-1 ring-foreground/10" {% if notice %}open{% endif %}>
-    <summary class="flex cursor-pointer list-none items-center gap-2 p-4 text-sm font-medium text-foreground">
-      <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
-      Adicionar fonte
-    </summary>
-    <form method="post" action="/sources" class="space-y-3 border-t border-border p-4">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <div>
-        <label for="src-kind" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tipo</label>
-        <select id="src-kind" name="kind" class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-          <option value="rss">Feed RSS</option>
-          <option value="github-repo">Repositório do GitHub</option>
-        </select>
+  {# Adicionar fonte (KUBO-50): assistente em sheet (dialog nativo) com 3 modos RSS + GitHub.
+     Testar é dry-run via POST /sources/test; Salvar continua POST /sources (ADR-0018). #}
+  <button type="button" onclick="document.getElementById('rss-wizard').showModal()"
+          class="flex h-9 w-full items-center justify-center gap-2 rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto md:justify-start">
+    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
+    Adicionar fonte
+  </button>
+
+  <dialog id="rss-wizard" class="m-0 h-dvh max-h-full w-full bg-popover text-popover-foreground backdrop:bg-black/40 md:ml-auto md:h-full md:w-[440px] md:max-w-[92vw]">
+    <form method="post" action="/sources" class="flex h-full flex-col">
+      <input type="hidden" name="csrf" value="{{ csrf }}" aria-label="csrf token">
+      <input type="hidden" id="src-mode" name="mode" value="feed" aria-label="wizard mode">
+      <input type="hidden" id="src-kind" name="kind" value="rss" aria-label="source kind">
+      <label for="src-tested" class="sr-only">Flag de teste do feed</label>
+      <input type="hidden" id="src-tested" name="tested" value="" aria-label="flag de teste do feed">
+
+      <div class="flex items-start gap-2.5 border-b border-border p-5">
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Adicionar fonte</div>
+          <h3 class="mt-0.5 font-heading text-base font-semibold">Assistente de fonte</h3>
+        </div>
+        <button type="button" onclick="document.getElementById('rss-wizard').close()" class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Fechar">
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
       </div>
-      <div>
-        <label for="src-canonical" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Origem</label>
-        <input id="src-canonical" name="canonical" required placeholder="https://exemplo.com/feed.xml  ·  owner/repo"
-               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-        <p class="mt-1 text-2xs text-muted-foreground">Feed RSS: a URL do feed. GitHub: <code class="rounded bg-muted px-1 py-0.5">owner/repo</code> ou a URL do repositório.</p>
+
+      <div class="flex-1 space-y-5 overflow-y-auto p-5">
+        <div>
+          <p class="mb-2 text-xs font-semibold text-muted-foreground">O que você tem?</p>
+          <div id="wizard-cards" class="grid gap-2">
+            <button type="button" onclick="ptSelectMode(this)" data-kind="rss" data-mode="feed" data-label="URL do feed" data-placeholder="https://exemplo.com/feed.xml" data-active="true"
+                    class="pt-mode-btn rounded-xl border border-input p-3 text-left transition-colors data-[active=true]:border-primary data-[active=true]:bg-primary/5">
+              <span class="block text-sm font-medium text-foreground">Já tenho a URL do feed</span>
+              <span class="block text-xs text-muted-foreground">Cola o link direto do RSS/Atom.</span>
+            </button>
+            <button type="button" onclick="ptSelectMode(this)" data-kind="rss" data-mode="site" data-label="URL do site" data-placeholder="https://exemplo.com" data-active="false"
+                    class="pt-mode-btn rounded-xl border border-input p-3 text-left transition-colors data-[active=true]:border-primary data-[active=true]:bg-primary/5">
+              <span class="block text-sm font-medium text-foreground">Tenho o site — acha pra mim</span>
+              <span class="block text-xs text-muted-foreground">Procuro o feed na própria página.</span>
+            </button>
+            <button type="button" onclick="ptSelectMode(this)" data-kind="rss" data-mode="name" data-label="Nome da empresa" data-placeholder="ex.: FIFA" data-active="false"
+                    class="pt-mode-btn rounded-xl border border-input p-3 text-left transition-colors data-[active=true]:border-primary data-[active=true]:bg-primary/5">
+              <span class="block text-sm font-medium text-foreground">Só sei o nome</span>
+              <span class="block text-xs text-muted-foreground">A IA (finder) tenta chutar a partir do nome.</span>
+            </button>
+            <button type="button" onclick="ptSelectMode(this)" data-kind="github-repo" data-mode="" data-label="Repositório do GitHub" data-placeholder="owner/repo" data-active="false"
+                    class="pt-mode-btn rounded-xl border border-input p-3 text-left transition-colors data-[active=true]:border-primary data-[active=true]:bg-primary/5">
+              <span class="block text-sm font-medium text-foreground">Repositório do GitHub</span>
+              <span class="block text-xs text-muted-foreground">Cadastra owner/repo ou a URL do repo.</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label id="value-label" for="src-canonical" class="mb-1.5 block text-xs font-semibold text-muted-foreground">URL do feed</label>
+          <input id="src-canonical" name="canonical" required placeholder="https://exemplo.com/feed.xml"
+                 oninput="var t=document.getElementById('src-tested'); if(t) t.value='';"
+                 class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        </div>
+
+        <button type="button" id="test-btn" hx-post="/sources/test" hx-target="#test-result" hx-swap="outerHTML"
+                class="h-9 w-full rounded-4xl border border-input text-sm font-medium text-foreground transition-colors hover:bg-muted">
+          Testar
+        </button>
+
+        <div id="test-result"></div>
+
+        <div>
+          <label for="src-title" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Título <span class="font-normal">(opcional — auto-preenche se achar o feed)</span></label>
+          <input id="src-title" name="title" placeholder="Como aparece na tela"
+                 class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        </div>
       </div>
-      <div>
-        <label for="src-title" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Título <span class="font-normal">(opcional)</span></label>
-        <input id="src-title" name="title" placeholder="Como aparece na tela"
-               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+
+      <div class="border-t border-border p-5">
+        <button class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Cadastrar fonte</button>
       </div>
-      <button class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Cadastrar fonte</button>
     </form>
-  </details>
+  </dialog>
+
+  <script>
+    window.ptSelectMode = function (btn) {
+      var group = document.getElementById('wizard-cards');
+      group.querySelectorAll('.pt-mode-btn').forEach(function (b) { b.dataset.active = 'false'; });
+      btn.dataset.active = 'true';
+      document.getElementById('src-kind').value = btn.dataset.kind;
+      document.getElementById('src-mode').value = btn.dataset.mode || '';
+      var label = document.getElementById('value-label');
+      if (label) label.textContent = btn.dataset.label;
+      var input = document.getElementById('src-canonical');
+      if (input) { input.placeholder = btn.dataset.placeholder; input.value = ''; }
+      var title = document.getElementById('src-title');
+      if (title) title.value = '';
+      var result = document.getElementById('test-result');
+      if (result) result.innerHTML = '';
+      var tested = document.getElementById('src-tested');
+      if (tested) tested.value = '';
+      var testBtn = document.getElementById('test-btn');
+      if (testBtn) testBtn.hidden = btn.dataset.kind === 'github-repo';
+    };
+  </script>
 
   {% if not sources %}
     <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">

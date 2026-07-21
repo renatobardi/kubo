@@ -78,6 +78,7 @@ def test_create_via_real_route_lands_in_the_graph(app_db: Any) -> None:
             "kind": "rss",
             "canonical": "https://feed.example/rss",
             "title": "Feed X",
+            "tested": "1",
             "csrf": csrf,
         },
         follow_redirects=False,
@@ -131,7 +132,7 @@ def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:
     """Duplicata (mesmo kind+canonical) reabre a tela com aviso SOFT (409) e NÃO grava um
     segundo record — a unicidade é garantida pela store, não pela view."""
     tc, csrf = _login_csrf(app_db)
-    data = {"kind": "rss", "canonical": "https://dup.example/rss", "csrf": csrf}
+    data = {"kind": "rss", "canonical": "https://dup.example/rss", "tested": "1", "csrf": csrf}
 
     first = tc.post("/sources", data=data, follow_redirects=False)
     assert first.status_code == 303
@@ -150,8 +151,12 @@ def _edit_csrf(tc: TestClient, sid: str) -> str:
 
 
 def _create_source_via_route(tc: TestClient, csrf: str, **data: str) -> str:
-    """Cadastra pela rota real e devolve o KEY (parte do id) da fonte recém-criada."""
-    resp = tc.post("/sources", data={**data, "csrf": csrf}, follow_redirects=False)
+    """Cadastra pela rota real e devolve o KEY (parte do id) da fonte recém-criada.
+
+    Preenche tested=1 por padrão para simular que o feed já passou pelo teste."""
+    payload = {**data, "csrf": csrf}
+    payload.setdefault("tested", "1")
+    resp = tc.post("/sources", data=payload, follow_redirects=False)
     assert resp.status_code == 303
     with _real_connect(replace(client.config(), database=_DB)) as root:
         rows = root.query("SELECT id FROM source WHERE canonical = $c;", {"c": data["canonical"]})

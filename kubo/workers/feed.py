@@ -24,8 +24,10 @@ import socket
 import time
 import unicodedata
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import feedparser
 import httpx
@@ -158,36 +160,40 @@ def _resolve(host: str) -> list[Any]:
         executor.shutdown(wait=False)
 
 
-def _make_request_guard() -> Callable[[httpx.Request], None]:
+def _make_request_guard(*, trusted: bool) -> Callable[[httpx.Request], None]:
     """Cria o event hook do httpx (um por `_fetch`, com estado próprio).
 
     O hook dispara a CADA request, inclusive em cada hop de redirect. Modelo de
-    confiança: a URL INICIAL vem de `config.feed_url` (schedules.yaml, config do dono
-    — confiável, e é o que permite testar contra loopback); os DESTINOS DE REDIRECT são
-    controlados pelo servidor do feed (não-confiáveis). Logo: esquema é validado em todo
-    hop, mas o IP-não-global só é rejeitado em REDIRECT — a URL inicial confiável é isenta.
-    Fecha o SSRF de redirect (feed 3xx -> host interno) sem barrar o feed que o dono
-    apontou de propósito. Levanta _FetchError (não httpx.HTTPError) — propaga limpo."""
+    confiança: a URL INICIAL é confiável apenas quando vem de `config.feed_url`
+    (schedules.yaml, config do dono) — `trusted=True` isenta o IP-check e permite
+    testar contra loopback; quando `trusted=False` (formulário, autodiscovery ou chute
+    de IA), a URL inicial passa pelo mesmo guard de IP-não-global dos redirects. Os
+    DESTINOS DE REDIRECT são sempre controlados pelo servidor remoto e nunca isentos.
+    Fecha o SSRF de redirect (feed 3xx -> host interno) e de URL inicial hostil.
+    Levanta _FetchError (não httpx.HTTPError) — propaga limpo."""
     state = {"first": True}
 
     def _guard(request: httpx.Request) -> None:
         if request.url.scheme not in _ALLOWED_SCHEMES:
             raise _FetchError("esquema de URL não permitido", {"reason": "scheme"})
         if state["first"]:
-            state["first"] = False  # URL inicial (config do dono): confiável, isenta do IP-check
+            state["first"] = False
+            if not trusted:
+                _reject_non_global_ip(request.url.host)
         else:
             _reject_non_global_ip(request.url.host)  # hop de redirect: destino não-confiável
 
     return _guard
 
 
-def _fetch(url: str) -> bytes:
+def _fetch(url: str, *, trusted: bool = False) -> bytes:
     """Busca o feed com httpx SÍNCRONO; feedparser recebe os BYTES CRUS (nunca a URL).
 
     Segurança do fetch: `Accept-Encoding: identity` + contagem em `iter_raw()` (bytes de
     FIO) fecham a decompression bomb (o decoder do httpx descomprimiria um chunk sem teto
     antes de o cap agir). `_TOTAL_DEADLINE` fecha slowloris (o timeout do httpx é só por
-    chunk). `_guard_request` valida esquema+IP a cada hop de redirect (SSRF)."""
+    chunk). `_guard_request` valida esquema+IP a cada hop de redirect (SSRF) e, quando
+    `trusted=False`, também valida a URL inicial."""
     total = 0
     chunks: list[bytes] = []
     deadline = time.monotonic() + _TOTAL_DEADLINE
@@ -196,7 +202,7 @@ def _fetch(url: str) -> bytes:
             timeout=_TIMEOUT,
             follow_redirects=True,
             max_redirects=_MAX_REDIRECTS,
-            event_hooks={"request": [_make_request_guard()]},
+            event_hooks={"request": [_make_request_guard(trusted=trusted)]},
         ) as client:
             with client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as resp:
                 resp.raise_for_status()
@@ -221,6 +227,97 @@ def _fetch(url: str) -> bytes:
             "falha de transporte ao buscar o feed", {"error": type(exc).__name__}
         ) from exc
     return b"".join(chunks)
+
+
+FetchError = _FetchError  # alias público para call sites fora do worker
+
+
+def fetch_page(url: str, *, trusted: bool = False) -> bytes:
+    """Busca bytes crus de uma URL com o mesmo hardening do FeedWorker.
+
+    Expõe o fetch isolado para reuso (ex.: autodiscovery de site HTML).
+    `trusted=False` é o default seguro para URLs vindas de input/browser/IA."""
+    return _fetch(url, trusted=trusted)
+
+
+def fetch_and_parse(url: str, *, trusted: bool = False) -> Any:
+    """Busca e parseia um feed RSS/Atom — mesmo caminho do FeedWorker."""
+    raw = fetch_page(url, trusted=trusted)
+    return feedparser.parse(raw)
+
+
+@dataclass
+class FeedPreview:
+    """Amostra enxuta de um feed (título + até N entradas) para preview na UI."""
+
+    title: str | None = None
+    entries: list[dict[str, str]] = field(default_factory=list)
+
+
+def _entry_preview(entry: Any) -> dict[str, str]:
+    """Extrai título e link seguro de uma entry para preview."""
+    return {
+        "title": _clean(str(entry.get("title") or ""), _TITLE_CAP),
+        "url": _entry_link(entry) or "",
+    }
+
+
+def preview_feed(url: str, *, trusted: bool = False, max_entries: int = 3) -> FeedPreview:
+    """Busca, parseia e devolve uma amostra do feed sem persistir nada."""
+    parsed = fetch_and_parse(url, trusted=trusted)
+    if parsed.bozo and not parsed.entries:
+        raise _FetchError("feed malformado sem entries parseáveis", {"reason": "parse"})
+    return FeedPreview(
+        title=_clean(str(parsed.feed.get("title") or ""), _TITLE_CAP) or None,
+        entries=[_entry_preview(entry) for entry in parsed.entries[:max_entries]],
+    )
+
+
+class _FeedLinkParser(HTMLParser):
+    """Extrai `<link rel="alternate" type="application/rss+xml|atom+xml" href="...">`
+    do `<head>` de uma página HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.feed_url: str | None = None
+        self._in_head = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        t = tag.lower()
+        if t == "head":
+            self._in_head = True
+            return
+        if not self._in_head or self.feed_url:
+            return
+        if t == "link":
+            attr = {k: (v or "") for k, v in attrs}
+            rel = attr.get("rel", "").lower().split()
+            if "alternate" in rel and attr.get("type", "").lower() in {
+                "application/rss+xml",
+                "application/atom+xml",
+            }:
+                href = attr.get("href", "")
+                if href:
+                    self.feed_url = href
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "head":
+            self._in_head = False
+
+
+def extract_feed_link(html: bytes | str, base_url: str) -> str | None:
+    """Parse determinístico de `<link rel="alternate">` no `<head>` de uma página HTML.
+
+    Resolve URLs relativas contra `base_url`. Não usa LLM nem dependência nova."""
+    text = html if isinstance(html, str) else html.decode("utf-8", errors="replace")
+    parser = _FeedLinkParser()
+    try:
+        parser.feed(text)
+    except Exception:  # noqa: BLE001 — HTML malformado não quebra a rota
+        return None
+    if not parser.feed_url:
+        return None
+    return urljoin(base_url, parser.feed_url)
 
 
 def _entry_to_payload(
@@ -268,7 +365,7 @@ class FeedWorker:
         }
 
         try:
-            raw = _fetch(config.feed_url)
+            parsed = fetch_and_parse(config.feed_url, trusted=True)
         except _FetchError as exc:
             log.warning("feed_fetch_failed")  # sem payload, sem detalhe sensível
             return RunResult(
@@ -276,7 +373,6 @@ class FeedWorker:
                 error=ErrorInfo(kind="http", message=str(exc)[:500], detail=exc.detail),
             )
 
-        parsed = feedparser.parse(raw)  # BYTES crus, nunca URL
         if parsed.bozo:
             stats["bozo"] = 1
         entries = parsed.entries
