@@ -9,7 +9,6 @@
   <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
   {% endif %}
 
-  {# Adicionar destino (#122): canal e-mail é barrado no servidor até KUBO-47. #}
   <details class="rounded-xl bg-card ring-1 ring-foreground/10" {% if notice %}open{% endif %}>
     <summary class="flex cursor-pointer list-none items-center gap-2 p-4 text-sm font-medium text-foreground">
       <svg class="size-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
@@ -42,7 +41,7 @@
         <label for="dst-address" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Endereço</label>
         <input id="dst-address" name="address" required placeholder="chat_id ou e-mail"
                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-        <p class="mt-1 text-2xs text-muted-foreground">Telegram: chat_id (número). E-mail: bloqueado até o worker existir.</p>
+        <p class="mt-1 text-2xs text-muted-foreground">Telegram: chat_id (número). E-mail: endereço completo.</p>
       </div>
       <button class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">Cadastrar destino</button>
     </form>

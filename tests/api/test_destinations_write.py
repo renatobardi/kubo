@@ -100,8 +100,8 @@ def test_create_telegram_normalizes_non_digits(app_db: Any) -> None:
     assert rows[0]["address"] == "-10012345678"
 
 
-def test_create_email_is_blocked_until_worker_exists(app_db: Any) -> None:
-    """Criação com canal e-mail é barrada na UI com mensagem clara (worker ainda não existe)."""
+def test_create_email_is_allowed_and_normalizes(app_db: Any) -> None:
+    """Criação com canal e-mail é permitida e o endereço é normalizado para lowercase."""
     tc, csrf = _login_csrf(app_db)
     resp = tc.post(
         "/destinations",
@@ -109,14 +109,16 @@ def test_create_email_is_blocked_until_worker_exists(app_db: Any) -> None:
             "name": "Email",
             "kind": "pessoa",
             "channel": "email",
-            "address": "owner@example.com",
+            "address": "Owner@Example.COM",
             "csrf": csrf,
         },
         follow_redirects=False,
     )
-    assert resp.status_code == 400
-    assert "e-mail" in resp.text.lower()
-    assert len(_destinations()) == 0
+    assert resp.status_code == 303
+    rows = _destinations()
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "email"
+    assert rows[0]["address"] == "owner@example.com"
 
 
 def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:

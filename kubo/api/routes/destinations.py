@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal
 
 import structlog
 from fastapi import APIRouter, Form, Request
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from surrealdb import RecordID
 
@@ -104,13 +104,6 @@ class NewDestination(BaseModel):
         """Tira espaços antes/depois dos campos de texto."""
         return value.strip()
 
-    @model_validator(mode="after")
-    def _block_email_until_worker(self) -> NewDestination:
-        """Canal e-mail é barrado até o worker de e-mail existir (KUBO-47)."""
-        if self.channel == "email":
-            raise ValueError("Canal e-mail ainda não está habilitado.")
-        return self
-
 
 class EditDestination(BaseModel):
     """Entrada validada do form de edição: nome e endereço são editáveis;
@@ -171,8 +164,7 @@ def create(
     address: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Cadastra um destino novo. E-mail é barrado até KUBO-47; duplicata vira aviso
-    SOFT (409)."""
+    """Cadastra um destino novo. Duplicata vira aviso SOFT (409)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
