@@ -86,6 +86,7 @@ def test_starttls_required_for_non_ssl_port() -> None:
     mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
     mock_smtp.__exit__ = MagicMock(return_value=False)
     mock_smtp.has_extn.return_value = False
+    cfg = _config(port=587)
 
     with (
         patch("kubo.distribution.email.smtplib.SMTP", return_value=mock_smtp),
@@ -96,7 +97,7 @@ def test_starttls_required_for_non_ssl_port() -> None:
             subject="Kubo digest",
             text_body="plain",
             html_body="<p>html</p>",
-            smtp_config=_config(port=587),
+            smtp_config=cfg,
         )
 
     mock_smtp.send_message.assert_not_called()
@@ -109,6 +110,7 @@ def test_auth_error_does_not_leak_password() -> None:
     mock_smtp.__exit__ = MagicMock(return_value=False)
     mock_smtp.has_extn.return_value = True
     mock_smtp.login.side_effect = Exception(f"Authentication failed: {_TEST_PASSWORD} rejected")
+    cfg = _config()
 
     with patch("kubo.distribution.email.smtplib.SMTP", return_value=mock_smtp):
         with pytest.raises(SenderError) as exc:
@@ -117,7 +119,7 @@ def test_auth_error_does_not_leak_password() -> None:
                 subject="Kubo digest",
                 text_body="plain",
                 html_body="<p>html</p>",
-                smtp_config=_config(),
+                smtp_config=cfg,
             )
 
     assert _TEST_PASSWORD not in str(exc.value)

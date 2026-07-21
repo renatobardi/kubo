@@ -38,15 +38,17 @@ def test_renders_subject_and_counts() -> None:
     """Assunto pluraliza corretamente."""
     one = build_email_digest([_view()], _BASE)
     two = build_email_digest([_view(), _view(key="x2")], _BASE)
-    assert one is not None and "1 novo" in one[0]
-    assert two is not None and "2 novos" in two[0]
+    assert one is not None
+    assert two is not None
+    assert "1 novo" in one[0]
+    assert "2 novos" in two[0]
 
 
 def test_html_contains_title_link_summary_entities() -> None:
     """HTML traz título (com link para UI), resumo e entidades."""
     result = build_email_digest([_view(key="deadbeef")], _BASE)
     assert result is not None
-    subject, text, html = result
+    _, _, html = result
     assert "OpenAI lança modelo" in html
     assert "Resumo objetivo do destilado." in html
     assert "OpenAI" in html and "GPT" in html
