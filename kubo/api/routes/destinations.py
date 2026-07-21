@@ -1,17 +1,16 @@
-"""Rota de Destinos (ADR-0027, ticket KUBO-43): Cadastro DB-backed, gerenciável pela UI.
+"""Destinations route (ADR-0027, ticket KUBO-43): DB-backed registry, manageable from the UI.
 
-Espelha 1:1 a tela de Fontes: lista com endereço completo visível, criar/editar/pausar/
-arquivar/reativar/apagar. Escrita no molde ADR-0018: CSRF, kubo_rw por-request,
-validação pydantic na borda, guarda de staleness (409). A seção "Artefatos configurados"
-deriva do cron salvo em `settings` (KUBO-44) e dos destinos do `destinations.yaml`
-(cutover dos destinos para DB é KUBO-48).
+Mirrors the Sources screen 1:1: list with full address visible, create/edit/pause/
+archive/restore/delete. Writes follow ADR-0018: CSRF, per-request kubo_rw, pydantic
+validation at the boundary, staleness guard (409). The "Configured artifacts" section
+derives from the cron saved in `settings` (KUBO-44) and the ACTIVE destinations in the
+database (KUBO-48).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import structlog
@@ -22,7 +21,6 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
-from kubo.distribution.destinations import load_destinations
 from kubo.errors import (
     ConfigError,
     DestinationHasHistoryError,
@@ -37,8 +35,6 @@ from kubo.store import settings as settings_store
 _log = structlog.get_logger(__name__)
 router = APIRouter()
 
-_REPO_ROOT = Path(__file__).parents[3]
-_DESTINATIONS_PATH = _REPO_ROOT / "destinations.yaml"
 _LIST_TEMPLATE = "destinations/list.html"
 _EDIT_TEMPLATE = "destinations/edit.html"
 _DELETE_TEMPLATE = "destinations/delete.html"
@@ -51,8 +47,8 @@ _DESTINATIONS_ROUTE = "/destinations"
 
 @dataclass(frozen=True)
 class Artefato:
-    """Um artefato recorrente configurado (o digest): nome, agenda humana, origem e
-    os destinos que o recebem — derivado de `settings.digest_cron` + destinations.yaml."""
+    """A configured recurring artifact (the digest): name, human agenda, source and
+    the active destinations that receive it — derived from `settings.digest_cron` + database."""
 
     name: str
     agenda: str
@@ -61,7 +57,7 @@ class Artefato:
 
 
 def _humanize_cron(cron: str) -> str:
-    """Traduz um cron diário `M H * * *` para 'diário às HH:MM'; senão devolve o cron cru."""
+    """Translate a daily cron `M H * * *` into 'daily at HH:MM'; otherwise return the raw cron."""
     parts = cron.split()
     if (
         len(parts) == 5
@@ -91,7 +87,7 @@ def _digest_artefatos(cron: str | None, destination_names: list[str]) -> list[Ar
 
 
 class NewDestination(BaseModel):
-    """Entrada validada do form "Adicionar destino" — a fronteira pydantic."""
+    """Validated input for the "Add destination" form — the pydantic boundary."""
 
     name: str = Field(min_length=1, max_length=100)
     kind: Literal["pessoa", "sistema"]
@@ -101,13 +97,13 @@ class NewDestination(BaseModel):
     @field_validator("name", "address", mode="after")
     @classmethod
     def _strip(cls, value: str) -> str:
-        """Tira espaços antes/depois dos campos de texto."""
+        """Trim leading/trailing whitespace from text fields."""
         return value.strip()
 
 
 class EditDestination(BaseModel):
-    """Entrada validada do form de edição: nome e endereço são editáveis;
-    kind/channel são read-only (vêm do banco)."""
+    """Validated input for the edit form: name and address are editable;
+    kind/channel are read-only (they come from the database)."""
 
     name: str = Field(min_length=1, max_length=100)
     address: str = Field(min_length=1, max_length=200)
@@ -125,17 +121,16 @@ def _render_list(
     status: int = 200,
     db: Any = None,
 ) -> Response:
-    """Renderiza a lista de Destinos: artefatos (settings + YAML) + destinos (DB) + form."""
+    """Render the destinations list: settings cron + active destinations + all
+    destinations + the create form."""
     if db is None:
         with client.connect() as ro:
-            db_destinations = destination_store.list_destinations(ro)
-            settings = settings_store.get_settings(ro)
-    else:
-        db_destinations = destination_store.list_destinations(db)
-        settings = settings_store.get_settings(db)
-    yaml_destinations = load_destinations(_DESTINATIONS_PATH)
+            return _render_list(request, notice=notice, status=status, db=ro)
+    db_destinations = destination_store.list_destinations(db)
+    settings = settings_store.get_settings(db)
+    active = destination_store.active_destinations(db)
     cron = settings.digest_cron if settings else None
-    artefatos = _digest_artefatos(cron, [d.name for d in yaml_destinations])
+    artefatos = _digest_artefatos(cron, [d.name for d in active])
     return templates.TemplateResponse(
         request,
         _LIST_TEMPLATE,
@@ -151,7 +146,7 @@ def _render_list(
 
 @router.get("")
 def list_page(request: Request) -> Response:
-    """Lista os destinos do banco e os artefatos configurados (YAML, ainda não cutover)."""
+    """List database destinations and configured artifacts (settings + active destinations)."""
     return _render_list(request)
 
 
@@ -164,7 +159,7 @@ def create(
     address: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Cadastra um destino novo. Duplicata vira aviso SOFT (409)."""
+    """Register a new destination. Duplicate becomes a SOFT notice (409)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
@@ -183,7 +178,7 @@ def create(
                 )
             except DuplicateDestinationError:
                 return _render_list(
-                    request, notice="Esse destino já está cadastrado.", status=409, db=db
+                    request, notice="Este destino já está cadastrado.", status=409, db=db
                 )
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
@@ -196,7 +191,7 @@ def create(
 def _render_edit(
     request: Request, detail: Any, *, notice: str | None = None, status: int = 200
 ) -> Response:
-    """Renderiza o form de edição a partir do destino do BANCO."""
+    """Render the edit form from a destination read from the DATABASE."""
     return templates.TemplateResponse(
         request,
         _EDIT_TEMPLATE,
@@ -211,7 +206,7 @@ def _render_edit(
 
 @router.get("/{did}/edit")
 def edit_page(request: Request, did: str) -> Response:
-    """Form de edição de UM destino. Arquivado/inexistente volta para a lista."""
+    """Edit form for ONE destination. Archived/missing redirects back to the list."""
     with client.connect() as ro:
         detail = destination_store.get_destination(ro, RecordID("destination", did))
     if detail is None or detail.archived_at is not None:
@@ -227,7 +222,7 @@ def edit(
     address: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Edita nome e endereço de um destino, preservando id."""
+    """Edit a destination's name and address while preserving its id."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     destination_id = RecordID("destination", did)
@@ -249,7 +244,7 @@ def edit(
 def _apply_edit(
     request: Request, destination_id: RecordID, detail: Any, payload: EditDestination
 ) -> Response:
-    """Aplica a edição, mapeando duplicata (409 no form) e staleness (409 na lista)."""
+    """Apply the edit, mapping duplicate (409 on the form) and staleness (409 on the list)."""
     try:
         with client.connect_rw() as db:
             try:
@@ -258,7 +253,10 @@ def _apply_edit(
                 )
             except DuplicateDestinationError:
                 return _render_edit(
-                    request, detail, notice="Já existe um destino com esse endereço.", status=409
+                    request,
+                    detail,
+                    notice="Um destino com este endereço já existe.",
+                    status=409,
                 )
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
@@ -273,8 +271,8 @@ def _lifecycle_action(
     csrf: str,
     action: Callable[[Any], None],
 ) -> Response:
-    """Executa uma ação de ciclo de vida no molde ADR-0018:
-    CSRF (403) → connect_rw (503) → ação da store → redirect 303."""
+    """Run a lifecycle action following ADR-0018:
+    CSRF (403) → connect_rw (503) → store action → redirect 303."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
@@ -291,7 +289,7 @@ def _lifecycle_action(
 
 @router.post("/{did}/disable")
 def disable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Pausa o destino (`enabled=false`)."""
+    """Pause the destination (`enabled=false`)."""
     rid = RecordID("destination", did)
     return _lifecycle_action(
         request,
@@ -307,13 +305,13 @@ def enable(
     csrf: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "backlog",
 ) -> Response:
-    """Retoma um destino pausado (`enabled=true`). mode=recente avança o watermark."""
+    """Resume a paused destination (`enabled=true`). mode=recente advances the watermark."""
     rid = RecordID("destination", did)
 
     def _action(db: Any) -> None:
         destination = destination_store.get_destination(db, rid)
         if destination is None:
-            raise StaleDestinationError(f"destino inexistente: {rid}")
+            raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.set_destination_enabled(
             db, id=rid, enabled=True, mode=mode, destination=destination
         )
@@ -323,7 +321,7 @@ def enable(
 
 @router.post("/{did}/archive")
 def archive(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Arquiva um destino (soft delete)."""
+    """Archive a destination (soft delete)."""
     rid = RecordID("destination", did)
     return _lifecycle_action(
         request, csrf, lambda db: destination_store.archive_destination(db, id=rid)
@@ -337,13 +335,13 @@ def restore(
     csrf: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "backlog",
 ) -> Response:
-    """Restaura um destino arquivado. mode=recente avança o watermark."""
+    """Restore an archived destination. mode=recente advances the watermark."""
     rid = RecordID("destination", did)
 
     def _action(db: Any) -> None:
         destination = destination_store.get_destination(db, rid)
         if destination is None:
-            raise StaleDestinationError(f"destino inexistente: {rid}")
+            raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.restore_destination(db, id=rid, mode=mode, destination=destination)
 
     return _lifecycle_action(request, csrf, _action)
@@ -352,7 +350,7 @@ def restore(
 def _render_delete(
     request: Request, detail: Any, dispatches: int, *, notice: str | None = None, status: int = 200
 ) -> Response:
-    """Tela de confirmação de apagar: zero dispatches → oferece POST; >0 → orienta arquivar."""
+    """Delete confirmation screen: zero dispatches → offer POST; >0 → advise to archive."""
     return templates.TemplateResponse(
         request,
         _DELETE_TEMPLATE,
@@ -368,7 +366,7 @@ def _render_delete(
 
 @router.get("/{did}/delete")
 def delete_page(request: Request, did: str) -> Response:
-    """Tela de confirmação de apagar: a dupla verificação."""
+    """Delete confirmation screen: the double-check."""
     rid = RecordID("destination", did)
     with client.connect() as ro:
         detail = destination_store.get_destination(ro, rid)
@@ -382,19 +380,17 @@ def delete_page(request: Request, did: str) -> Response:
 
 @router.post("/{did}/delete")
 def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Apaga de vez um destino com ZERO dispatches."""
+    """Hard-delete a destination with zero dispatches (also clears default settings pointer)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     rid = RecordID("destination", did)
     try:
         with client.connect_rw() as db:
-            try:
-                destination_store.delete_destination(db, id=rid)
-            except DestinationHasHistoryError:
-                detail = destination_store.get_destination(db, rid)
-                if detail is None:
-                    return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-                dispatches = destination_store.destination_dispatch_count(db, rid)
+            detail = destination_store.get_destination(db, rid)
+            if detail is None:
+                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            dispatches = destination_store.destination_dispatch_count(db, rid)
+            if dispatches > 0:
                 return _render_delete(
                     request,
                     detail,
@@ -402,8 +398,16 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
                     notice="Esse destino tem envios e não pode ser apagado — arquive.",
                     status=409,
                 )
-            except StaleDestinationError:
-                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+            try:
+                destination_store.delete_destination(db, id=rid)
+            except DestinationHasHistoryError:
+                return _render_delete(
+                    request,
+                    detail,
+                    destination_store.destination_dispatch_count(db, rid),
+                    notice="Esse destino tem envios e não pode ser apagado — arquive.",
+                    status=409,
+                )
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
         _log.warning(_WRITE_LOG)

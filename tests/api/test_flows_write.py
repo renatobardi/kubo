@@ -17,12 +17,15 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.runtime.flow_runner import run_flow
 from kubo.store import client, knowledge, migrations
+from kubo.store import destinations as destinations_store
+from kubo.store import settings as settings_store
 from kubo.store.client import connect as _real_connect
+from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
 from kubo.workers.analyst import ReportOutput
 from tests.api.conftest import UI_PASSWORD
@@ -31,8 +34,14 @@ pytestmark = pytest.mark.integration
 
 _DB = "test_flows_write"
 _RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca um literal no repo (invariante 8)
-_DEST = ResolvedDestination(
-    id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+_DEST = Destination(
+    id=RecordID("destination", "owner-telegram"),
+    name="Renato",
+    kind="pessoa",
+    channel="telegram",
+    address="chat-1",
+    enabled=True,
+    archived_at=None,
 )
 
 
@@ -82,6 +91,15 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
         # finally e vazar o usuário kubo_rw no nível ROOT (afeta a instância inteira).
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
         try:
+            dest_rid = destinations_store.create_destination(
+                root, name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+            )
+            settings_store.put_settings(
+                root,
+                digest_cron="30 9 * * *",
+                distribution_paused=False,
+                default_destination=dest_rid,
+            )
             _seed_distilled(root, "Rust")
             result = run_flow(
                 root,

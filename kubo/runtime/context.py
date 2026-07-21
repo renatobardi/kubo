@@ -18,6 +18,7 @@ from surrealdb import RecordID
 from kubo.contracts.worker import DigestView, ItemView, RetrievedView
 from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
+from kubo.store.destinations import record_id_from_destination
 from kubo.store.knowledge import distilled_for_digest, items_without_distilled, search_distilled
 
 
@@ -66,9 +67,12 @@ class GraphKnowledge:
         return self._ref_map.get(ref)
 
     def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
-        """Seleção de digest (ADR-0015 §IV): delega à store (que resolve watermark +
-        bootstrap) e mapeia cada `DigestRow` a `DigestView` — o id vira forma STRING
-        opaca (`distilled:<hex>`), a única exposição de id ao digest worker."""
+        """Digest selection (ADR-0015 §IV): delegates to the store (which resolves watermark +
+        bootstrap) and maps each `DigestRow` to `DigestView` — the id becomes an opaque STRING
+        (`distilled:<hex>`), the only id exposure to the digest worker.
+
+        `destination` arrives as a `destination:<key>` string from the worker; convert it to a
+        `RecordID` before calling the store (KUBO-48 cutover)."""
         return [
             DigestView(
                 id=str(row.id),
@@ -77,7 +81,9 @@ class GraphKnowledge:
                 created_at=row.created_at,
                 entities=row.entities,
             )
-            for row in distilled_for_digest(self._db, destination=destination, limit=limit)
+            for row in distilled_for_digest(
+                self._db, destination=record_id_from_destination(destination), limit=limit
+            )
         ]
 
 

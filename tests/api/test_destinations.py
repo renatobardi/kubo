@@ -1,6 +1,5 @@
-"""Testes da tela de Destinos (12.8, paridade DestinosScreen): auth guard + render
-dos artefatos configurados (do schedules.yaml) e dos destinos (do destinations.yaml).
-Lê os YAML reais do repo (config declarativa, sem banco)."""
+"""Destinations screen tests (12.8, DestinosScreen parity): auth guard + rendering of
+configured artifacts (settings + active DB destinations) and destinations (DB)."""
 
 from __future__ import annotations
 
@@ -10,13 +9,13 @@ from kubo.api.routes.destinations import _humanize_cron
 
 
 def test_destinations_requires_auth(client: TestClient) -> None:
-    """Sem sessão, a tela redireciona pro login (guard antes de tudo)."""
+    """Without a session, the screen redirects to login (guard before everything)."""
     assert client.get("/destinations", follow_redirects=False).status_code == 303
 
 
 def test_destinations_renders_owner_and_digest_artefato(authed_client: TestClient) -> None:
-    """A tela mostra o destino do dono (do destinations.yaml) e o artefato Digest com
-    a agenda humana (do schedules.yaml)."""
+    """The screen shows the owner destination (from DB stub) and the Digest artifact with
+    the human agenda (from settings digest_cron)."""
     html = authed_client.get("/destinations").text
     assert "Renato (Telegram)" in html
     assert "telegram" in html
@@ -25,7 +24,7 @@ def test_destinations_renders_owner_and_digest_artefato(authed_client: TestClien
 
 
 def test_humanize_cron_daily() -> None:
-    """Cron diário `M H * * *` vira 'diário às HH:MM'; não-diário devolve o cru."""
+    """Daily cron `M H * * *` becomes 'diário às HH:MM'; non-daily returns the raw cron."""
     assert _humanize_cron("30 9 * * *") == "diário às 09:30"
     assert _humanize_cron("0 8 * * *") == "diário às 08:00"
     assert _humanize_cron("*/5 * * * *") == "*/5 * * * *"

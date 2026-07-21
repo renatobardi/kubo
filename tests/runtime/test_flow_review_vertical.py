@@ -15,19 +15,26 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.errors import SenderError
 from kubo.runtime.flow_runner import reject_gate, resume_gate, run_flow
 from kubo.store import client, knowledge, migrations
+from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
 from kubo.workers.analyst import ReportOutput
 
 pytestmark = pytest.mark.integration
 
 _DB = "test_flow_review_vertical"
-_DEST = ResolvedDestination(
-    id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+_DEST = Destination(
+    id=RecordID("destination", "owner-telegram"),
+    name="Renato",
+    kind="pessoa",
+    channel="telegram",
+    address="chat-1",
+    enabled=True,
+    archived_at=None,
 )
 _BASE = "https://kubo.example"
 
@@ -150,7 +157,7 @@ def test_approve_sends_and_delivers_both_tasks(db: Any) -> None:
     assert gate["decided_at"] is not None
     arts = {r["artifact"] for r in db.query("SELECT artifact FROM dispatch;")}
     assert arts == {"gate", "report"}
-    assert knowledge.last_dispatch_watermark(db, "owner-telegram") is None
+    assert knowledge.last_dispatch_watermark(db, _DEST.id) is None
 
 
 def test_reject_archives_both_tasks_with_reason(db: Any) -> None:

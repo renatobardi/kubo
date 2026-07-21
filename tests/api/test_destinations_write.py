@@ -292,7 +292,7 @@ def test_delete_with_dispatches_is_blocked_via_real_route(app_db: Any) -> None:
         root.query(
             "CREATE dispatch SET destination = $d, channel = 'telegram', status = 'ok', "
             "watermark = time::now(), item_count = 0, items = [];",
-            {"d": f"destination:{key}"},
+            {"d": RecordID("destination", key)},
         )
     resp = tc.post(f"/destinations/{key}/delete", data={"csrf": csrf}, follow_redirects=False)
     assert resp.status_code == 409
@@ -317,7 +317,7 @@ def _last_digest_dispatch(key: str) -> dict[str, Any] | None:
         rows = root.query(
             "SELECT * FROM dispatch WHERE destination = $d AND artifact = 'digest' "
             "ORDER BY watermark DESC LIMIT 1;",
-            {"d": f"destination:{key}"},
+            {"d": RecordID("destination", key)},
         )
     return rows[0] if rows else None
 

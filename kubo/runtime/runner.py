@@ -33,6 +33,7 @@ from kubo.embedding import Embedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import GraphKnowledge, RunContext
 from kubo.runtime.integrations import load_integrations, resolve_integrations
+from kubo.store.destinations import record_id_from_destination
 from kubo.store.flows import insert_deliverable
 from kubo.store.knowledge import (
     Chunk,
@@ -162,12 +163,13 @@ def _persist(
                 db, item=item, summary=payload.summary, chunks=chunks, run=run_id, entities=entities
             )
         elif isinstance(payload, DispatchPayload):
-            # `items` (strings validadas na borda pydantic) → RecordID para a store.
-            # `run_id` NÃO entra: dispatch é fato de entrega, não tem aresta produced_by
-            # (sem consumidor — ADR-0015 §II); a proveniência de execução é o próprio run.
+            # `items` (strings validated by pydantic boundary) → RecordID for the store.
+            # `destination` (a `destination:<key>` string validated by payload) → RecordID.
+            # `run_id` is NOT included: dispatch is a delivery fact, it has no `produced_by` edge
+            # (no consumer — ADR-0015 §II); the run itself is the execution provenance.
             insert_dispatch(
                 db,
-                destination=payload.destination,
+                destination=record_id_from_destination(payload.destination),
                 channel=payload.channel,
                 status=payload.status,
                 artifact=payload.artifact,

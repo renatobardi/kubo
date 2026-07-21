@@ -246,7 +246,7 @@ _WM = "2026-07-13T09:30:00+00:00"
 def _dispatch(**kw: object) -> dict[str, object]:
     base: dict[str, object] = {
         "type": "dispatch",
-        "destination": "owner-telegram",
+        "destination": "destination:owner-telegram",
         "channel": "telegram",
         "status": "ok",
         "artifact": "digest",

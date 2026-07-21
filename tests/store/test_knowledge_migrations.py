@@ -83,6 +83,7 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0010_github_repo_cadastro.surql",
         "0011_destination_cadastro.surql",
         "0012_settings_singleton.surql",
+        "0013_dispatch_destination_record.surql",
     }
 
 

@@ -14,18 +14,25 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.runtime.flow_runner import run_flow
 from kubo.store import client, knowledge, migrations
+from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
 from kubo.workers.analyst import ReportOutput
 
 pytestmark = pytest.mark.integration
 
 _DB = "test_flow_vertical"
-_DEST = ResolvedDestination(
-    id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+_DEST = Destination(
+    id=RecordID("destination", "owner-telegram"),
+    name="Renato",
+    kind="pessoa",
+    channel="telegram",
+    address="chat-1",
+    enabled=True,
+    archived_at=None,
 )
 _BASE = "https://kubo.example"
 
@@ -146,7 +153,7 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
     assert dispatch["artifact"] == "report"
     assert dispatch["status"] == "ok"
     assert dispatch["watermark"] is None
-    assert knowledge.last_dispatch_watermark(db, "owner-telegram") is None
+    assert knowledge.last_dispatch_watermark(db, _DEST.id) is None
     assert len(sender.calls) == 1
     assert executor.calls == 1  # a etapa de síntese foi de fato exercitada (não pulou o LLM)
 

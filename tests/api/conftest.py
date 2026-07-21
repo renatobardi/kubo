@@ -8,6 +8,7 @@ env mínimo. `KUBO_ALLOWED_HOSTS` fica sem setar de propósito: o default inclui
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.api.auth import hash_password
+from kubo.store.destinations import Destination
 from kubo.store.knowledge import DashboardCounts
 from kubo.store.settings import Settings
 
@@ -65,18 +67,30 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.list_dispatches", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.count_dispatches", lambda db, **kw: 0)
-    monkeypatch.setattr(
-        "kubo.api.routes.destinations.destination_store.list_destinations", lambda db: []
+    _OWNER = Destination(
+        id=RecordID("destination", "owner"),
+        name="Renato (Telegram)",
+        kind="pessoa",
+        channel="telegram",
+        address="1",
+        enabled=True,
+        archived_at=None,
     )
     monkeypatch.setattr(
-        "kubo.api.routes.destinations.settings_store.get_settings",
-        lambda db: Settings(
+        "kubo.api.routes.destinations.destination_store.list_destinations", lambda db: [_OWNER]
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.destinations.destination_store.active_destinations", lambda db: [_OWNER]
+    )
+    _settings_store_stub = SimpleNamespace(
+        get_settings=lambda db: Settings(
             id=RecordID("settings", "global"),
             digest_cron="30 9 * * *",
             distribution_paused=False,
             default_destination=None,
-        ),
+        )
     )
+    monkeypatch.setattr("kubo.api.routes.destinations.settings_store", _settings_store_stub)
 
 
 @pytest.fixture(autouse=True)

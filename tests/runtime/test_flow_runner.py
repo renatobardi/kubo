@@ -30,10 +30,18 @@ class _FakeEmbedder:
 
 
 def _dest() -> Any:
-    from kubo.distribution.destinations import ResolvedDestination
+    from surrealdb import RecordID
 
-    return ResolvedDestination(
-        id="owner-telegram", name="R", kind="pessoa", channel="telegram", address="c"
+    from kubo.store.destinations import Destination
+
+    return Destination(
+        id=RecordID("destination", "owner-telegram"),
+        name="R",
+        kind="pessoa",
+        channel="telegram",
+        address="c",
+        enabled=True,
+        archived_at=None,
     )
 
 

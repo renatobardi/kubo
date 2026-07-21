@@ -1353,7 +1353,7 @@ class DigestRow:
 def insert_dispatch(
     db: Any,
     *,
-    destination: str,
+    destination: RecordID,
     channel: str,
     status: str,
     watermark: Any,
@@ -1364,8 +1364,7 @@ def insert_dispatch(
 ) -> RecordID:
     """Grava um fato de entrega (ADR-0015 §II). `sent_at` é DEFAULT do schema (relógio
     do servidor). `items` são record<distilled> para AUDITORIA — não é aresta (sem
-    consumidor de drill-down). `destination` é o id do destinations.yaml (string): o
-    destino é YAML+env, não tabela (E1).
+    consumidor de drill-down). `destination` é `record<destination>` (cutover KUBO-48).
 
     `artifact` (`digest`|`report`, ADR-0016 §V) discrimina a entrega. Default `digest`
     é só conveniência de borda da store; a explicitude real mora no contrato
@@ -1389,7 +1388,7 @@ def insert_dispatch(
     return rid
 
 
-def last_dispatch_watermark(db: Any, destination: str) -> Any | None:
+def last_dispatch_watermark(db: Any, destination: RecordID) -> Any | None:
     """Watermark do último dispatch de DIGEST `ok` daquele destino, ou None se não há
     nenhum (sinal de bootstrap, ADR-0015 §III.2/§III.3). SÓ `ok` avança: um error
     posterior com watermark maior é ignorado — é assim que o retry-de-graça funciona (o
@@ -1407,7 +1406,7 @@ def last_dispatch_watermark(db: Any, destination: str) -> Any | None:
     return rows[0]["watermark"] if rows else None
 
 
-def distilled_for_digest(db: Any, *, destination: str, limit: int) -> list[DigestRow]:
+def distilled_for_digest(db: Any, *, destination: RecordID, limit: int) -> list[DigestRow]:
     """Seleciona os destilados NOVOS para o digest de um destino (ADR-0015 §IV).
 
     Encapsula a mecânica inteira do watermark num lugar (testável por integração):
@@ -1479,12 +1478,13 @@ class DispatchListItem:
 
 def _dispatch_filter(query: str | None) -> tuple[str, dict[str, Any]]:
     """WHERE + bind para a busca de envio por canal/destino/status (substring,
-    case-insensitive). Vazia = sem filtro."""
+    case-insensitive). Vazia = sem filtro. `destination` é `record<destination>`;
+    a busca atua na forma string `destination:<key>`."""
     if not query or not query.strip():
         return "", {}
     return (
         " WHERE string::contains(string::lowercase(channel), $q) "
-        "OR string::contains(string::lowercase(destination), $q) "
+        "OR string::contains(string::lowercase(meta::id(destination)), $q) "
         "OR string::contains(string::lowercase(status), $q)",
         {"q": query.strip().lower()},
     )
@@ -1501,7 +1501,7 @@ def list_dispatches(
     start = max(0, int(start))
     where, params = _dispatch_filter(query)
     q = (
-        "SELECT channel, destination, status, item_count, error, "  # noqa: S608
+        "SELECT channel, meta::id(destination) AS destination, status, item_count, error, "  # noqa: S608
         f"error.kind AS error_kind, sent_at FROM dispatch{where} "
         f"ORDER BY sent_at DESC LIMIT {limit} START {start};"
     )

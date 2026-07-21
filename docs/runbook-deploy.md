@@ -83,6 +83,14 @@ BUILD_ID** (os dois containers de app DEVEM reportar o token do deploy); (3) smo
 `GET /healthz` na tailnet, exigindo `ok`. Overrides: `KUBO_DEPLOY_HOST`, `KUBO_HEALTH_URL`.
 Pré-requisito: env do servidor com `KUBO_RO_SURREAL_PASS` (§2c) — senão a `kubo-api` faz fail-fast.
 
+> **Cutover destrutivo (KUBO-48 / ADR-0030):** a migration `0013` apaga todos os
+> `dispatch` e retipa `dispatch.destination` para `record<destination>`. No deploy que
+> a contém, pare os **escritores** antes da migration: `docker compose stop kubo-api
+> kubo-scheduler` → `docker compose up -d surrealdb`
+> → `docker compose run -T --rm kubo-scheduler python -m kubo.store.migrations`
+> → `docker compose run -T --rm kubo-scheduler python -m kubo.store.seed`
+> → `up -d` → `GET /healthz` antes de declarar ok. Evite a janela 08:00–09:30.
+
 > **Por que guard por BUILD_ID, não por image-ID (incidente pós-#37):** o host roda Docker
 > com o **containerd image store**, cujo build gera digest **não-determinístico** (attestations
 > de provenance/sbom: rebuild cacheado do MESMO fonte muda o digest de `kubo:latest`). Pior:

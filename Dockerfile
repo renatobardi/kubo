@@ -58,11 +58,11 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Código + dados de runtime: o scheduler lê schedules.yaml + destinations.yaml
-# (ADR-0015); o runner lê catalogs/integrations.
+# Código + dados de runtime: o scheduler lê schedules.yaml (ADR-0010) e o banco
+# para destinos (KUBO-48); o runner lê catalogs/integrations.
 COPY kubo/ ./kubo/
 COPY catalogs/ ./catalogs/
-COPY schedules.yaml destinations.yaml ./
+COPY schedules.yaml ./
 # Scripts one-off (import legado, backfill, e a Trilha B do dreno 0014): rodam no
 # servidor via `docker compose run --rm kubo-scheduler python -m scripts.X` (mesmo
 # esquema do `python -m` do scheduler, CWD /app). Sem eles na imagem, o one-off não

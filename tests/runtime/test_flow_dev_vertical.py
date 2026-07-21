@@ -16,12 +16,13 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
-from kubo.distribution.destinations import ResolvedDestination
 from kubo.errors import PromotionError, StateError
 from kubo.executors.cli import CliOutcome
 from kubo.runtime import flow_runner
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate, run_flow
+from kubo.store.destinations import Destination
 from kubo.store.flows import read_gate_context
 from kubo.workers import github_api
 from kubo.workers.github_api import PrRef, PrStatus
@@ -30,8 +31,14 @@ from tests.runtime.conftest import FakeCli, fake_gitops, promotion_gate
 pytestmark = pytest.mark.integration
 
 _DB = "test_flow_dev_vertical"
-_DEST = ResolvedDestination(
-    id="owner-telegram", name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+_DEST = Destination(
+    id=RecordID("destination", "owner-telegram"),
+    name="Renato",
+    kind="pessoa",
+    channel="telegram",
+    address="chat-1",
+    enabled=True,
+    archived_at=None,
 )
 _BASE = "https://kubo.example"
 _PAT = "fake-forge-pat-do-not-leak"

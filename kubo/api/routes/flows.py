@@ -10,8 +10,7 @@ Leituras usam `client.connect` (kubo_ro). Rotas SÍNCRONAS (`def`, threadpool �
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Form, Query, Request
@@ -22,15 +21,12 @@ from surrealdb import RecordID
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
-from kubo.distribution.destinations import (
-    ResolvedDestination,
-    load_destinations,
-    resolve_base_url,
-    resolve_destinations,
-)
+from kubo.distribution.config import resolve_base_url
 from kubo.errors import ConfigError, ForgeError, PromotionError, SenderError, StateError
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate
 from kubo.store import client
+from kubo.store import settings as settings_store
+from kubo.store.destinations import Destination
 from kubo.store.flows import (
     FlowBoardView,
     count_flows,
@@ -44,8 +40,6 @@ _log = structlog.get_logger(__name__)
 router = APIRouter()
 
 _PAGE_SIZE = 20
-_OWNER_DESTINATION = "owner-telegram"
-_DESTINATIONS_PATH = Path(__file__).parents[3] / "destinations.yaml"
 _LIST_PATH = "/flows"
 _LIST_TEMPLATE = "flows/list.html"
 _BOARD_TEMPLATE = "flows/board.html"
@@ -214,7 +208,7 @@ def _apply_decision(
         )
     try:
         if approve:
-            destination, base_url = _owner_delivery()
+            destination, base_url = _owner_delivery(db)
             resume_gate(db, gate_task=gate_task, destination=destination, base_url=base_url)
         else:
             reject_gate(db, gate_task=gate_task, reason=reason)
@@ -241,15 +235,16 @@ def _apply_decision(
     return RedirectResponse(f"/flows/{_flow_key(db, gate_task)}", status_code=303)
 
 
-def _owner_delivery() -> tuple[ResolvedDestination, str]:
-    """Resolve o destino do dono (owner-telegram) + a base URL dos links, só do que a aprovação
-    precisa (resolve SÓ esse destino — um e-mail sem env não pode quebrar a aprovação)."""
-    raw = next(
-        (d for d in load_destinations(_DESTINATIONS_PATH) if d.id == _OWNER_DESTINATION), None
-    )
-    if raw is None:
-        raise ConfigError(f"destino '{_OWNER_DESTINATION}' não existe em destinations.yaml")
-    return resolve_destinations([raw])[0], resolve_base_url()
+def _owner_delivery(db: Any) -> tuple[Destination, str]:
+    """Resolve o destino padrão nas configurações + a base URL para links.
+
+    Aprovação ignora `distribution_paused` (ação explícita do dono, ADR-0028 §6).
+    Um destino arquivado/dangling/NONE falha com uma mensagem apontando para Configurações."""
+    settings = settings_store.get_settings(db)
+    if settings is None:
+        raise ConfigError("configurações não encontradas — configure o destino padrão")
+    destination = settings_store.resolve_default_destination(db, settings)
+    return destination, resolve_base_url()
 
 
 def _gate_context(db: object, board: FlowBoardView) -> object | None:
