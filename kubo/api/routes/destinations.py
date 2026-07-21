@@ -23,6 +23,7 @@ from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
 from kubo.errors import (
     ConfigError,
+    DestinationHasHistoryError,
     DuplicateDestinationError,
     StaleDestinationError,
     format_validation_error,
@@ -177,7 +178,7 @@ def create(
                 )
             except DuplicateDestinationError:
                 return _render_list(
-                    request, notice="This destination is already registered.", status=409, db=db
+                    request, notice="Este destino já está cadastrado.", status=409, db=db
                 )
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
@@ -254,7 +255,7 @@ def _apply_edit(
                 return _render_edit(
                     request,
                     detail,
-                    notice="A destination with this address already exists.",
+                    notice="Um destino com este endereço já existe.",
                     status=409,
                 )
             except StaleDestinationError:
@@ -399,7 +400,7 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
                 )
             try:
                 destination_store.delete_destination(db, id=rid)
-            except destination_store.DestinationHasHistoryError:
+            except DestinationHasHistoryError:
                 return _render_delete(
                     request,
                     detail,

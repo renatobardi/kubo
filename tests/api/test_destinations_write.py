@@ -135,7 +135,7 @@ def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:
     assert first.status_code == 303
     again = tc.post("/destinations", data=data, follow_redirects=False)
     assert again.status_code == 409
-    assert "already registered" in again.text.lower()
+    assert "já está cadastrado" in again.text.lower()
     assert len(_destinations()) == 1
 
 

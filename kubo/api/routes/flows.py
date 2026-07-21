@@ -236,13 +236,13 @@ def _apply_decision(
 
 
 def _owner_delivery(db: Any) -> tuple[Destination, str]:
-    """Resolve the default destination from settings + the base URL for links.
+    """Resolve o destino padrão nas configurações + a base URL para links.
 
-    Approval ignores `distribution_paused` (explicit owner action, ADR-0028 §6).
-    An archived/dangling/NONE destination fails with a message pointing to Settings."""
+    Aprovação ignora `distribution_paused` (ação explícita do dono, ADR-0028 §6).
+    Um destino arquivado/dangling/NONE falha com uma mensagem apontando para Configurações."""
     settings = settings_store.get_settings(db)
     if settings is None:
-        raise ConfigError("settings not found — configure a default destination")
+        raise ConfigError("configurações não encontradas — configure o destino padrão")
     destination = settings_store.resolve_default_destination(db, settings)
     return destination, resolve_base_url()
 

@@ -57,7 +57,9 @@ def normalize_address(channel: str, address: str) -> str:
 
 def record_id_from_destination(destination: str) -> RecordID:
     """Convert a `destination:<key>` string into a `RecordID` (KUBO-48 cutover)."""
-    _, _, key = destination.partition(":")
+    table, sep, key = destination.partition(":")
+    if not sep or table != "destination" or not key:
+        raise StoreError(f"invalid destination reference: {destination!r}")
     return RecordID("destination", key)
 
 
@@ -73,7 +75,7 @@ def valid_unpause_mode(raw: str) -> str:
     """Validate and normalize the unpause mode (backlog/recente); raise on invalid."""
     v = raw.strip().lower()
     if v not in _UNPAUSE_MODES:
-        raise ValueError("invalid unpause mode")
+        raise StoreError("invalid unpause mode")
     return v
 
 
@@ -223,7 +225,7 @@ def _run_reactivate_transaction(
     params: dict[str, Any] = dict(update_params)
     if mode == "recente":
         if destination is None:
-            raise ValueError("destination is required for mode='recente'")
+            raise StoreError("destination is required for mode='recente'")
         stmt, p = reset_watermark_statement(prefix="", destination=destination)
         statements.append(stmt)
         params |= p
@@ -314,13 +316,13 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
     (ADR-0030 §2). Raises `DestinationHasHistoryError` when dispatches exist,
     and `StaleDestinationError` when the record is gone.
     """
-    if get_destination(db, id) is None:
-        raise StaleDestinationError(f"destination not found: {id}")
     try:
         run_transaction(
             db,
             [
                 "UPDATE settings SET default_destination = NONE WHERE default_destination = $r",
+                "LET $exists = (SELECT id FROM $r)",
+                "IF count($exists) == 0 { THROW 'StaleDestinationError' }",
                 "LET $deleted = (DELETE $r WHERE (SELECT count() FROM dispatch "
                 "WHERE destination = $r GROUP ALL)[0].count = 0 RETURN BEFORE)",
                 "IF count($deleted) == 0 { THROW 'DestinationHasHistoryError' }",
@@ -328,6 +330,8 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
             {"r": id},
         )
     except StoreError as exc:
+        if "StaleDestinationError" in str(exc):
+            raise StaleDestinationError(f"destination not found: {id}") from exc
         if "DestinationHasHistoryError" in str(exc):
             raise DestinationHasHistoryError(
                 f"destination has dispatches (archive first): {id}"
