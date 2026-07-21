@@ -16,6 +16,8 @@ from surrealdb import RecordID
 from kubo.store.destinations import Destination
 from kubo.store.settings import Settings
 
+_EMAIL_PASSWORD = "app-password"  # pragma: allowlist secret
+
 
 def _destination(key: str, channel: str = "telegram") -> Destination:
     return Destination(
@@ -130,7 +132,7 @@ def test_unknown_channel_is_ignored_without_run(monkeypatch: pytest.MonkeyPatch)
     """Destino com canal fora de DEST_DISPATCH é logado e skipped; nenhum run aberto."""
     from kubo import scheduler
 
-    destinations = [_destination("tg"), _destination("email", channel="email")]
+    destinations = [_destination("tg"), _destination("matrix", channel="matrix")]
     monkeypatch.setattr(scheduler.client, "config", lambda: None)
     monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
     monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings())
@@ -151,5 +153,36 @@ def test_unknown_channel_is_ignored_without_run(monkeypatch: pytest.MonkeyPatch)
     scheduler.execute_digest_sweep_job()
 
     assert len(calls) == 1
-    assert "email" not in calls[0]
+    assert "matrix" not in calls[0]
     assert any(w.get("event") == "digest_sweep_channel_ignored" for w in warnings)
+
+
+def test_email_failure_does_not_affect_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Falha no envio de e-mail não impede o Telegram de entregar no mesmo sweep."""
+    from kubo import scheduler
+
+    destinations = [_destination("tg", channel="telegram"), _destination("em", channel="email")]
+    monkeypatch.setattr(scheduler.client, "config", lambda: None)
+    monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings())
+    monkeypatch.setattr(scheduler.destination_store, "active_destinations", lambda db: destinations)
+    monkeypatch.setattr(scheduler, "resolve_base_url", lambda: "https://kubo.test")
+    monkeypatch.setenv("KUBO_EMAIL_HOST", "smtp.example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PORT", "587")
+    monkeypatch.setenv("KUBO_EMAIL_USER", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PASSWORD", _EMAIL_PASSWORD)
+    monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
+    calls: list[tuple[str, str]] = []
+
+    def _run_worker(db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+        calls.append((str(worker._destination.id), worker._destination.channel))
+        if worker._destination.channel == "email":
+            raise RuntimeError("SMTP fora do ar")
+
+    monkeypatch.setattr(scheduler, "run_worker", _run_worker)
+
+    scheduler.execute_digest_sweep_job()
+
+    assert len(calls) == 2
+    channels = [c[1] for c in calls]
+    assert "telegram" in channels and "email" in channels

@@ -8,38 +8,30 @@ pelo payload; o sender é injetável para teste.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
-
-from kubo.contracts.models import DispatchPayload, ErrorInfo, RunResult, Stats, WorkerManifest
+from kubo.contracts.models import WorkerManifest
 from kubo.contracts.worker import DigestView, RunContext
 from kubo.distribution.digest import build_telegram_digest
 from kubo.distribution.telegram import send_telegram
-from kubo.errors import ContractError, SenderError
+from kubo.errors import SenderError
 from kubo.store.destinations import Destination
+from kubo.workers._digest_common import DigestConfig, _DigestWorker
 
 # Sender de um canal: recebe segredo/endereço/texto e ENVIA (ou levanta SenderError).
 # Assinatura por-keyword para casar com `send_telegram`; injetável para teste.
 Sender = Callable[..., None]
-_MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conteúdo/segredo
 
 
-class DigestConfig(BaseModel):
-    """Config declarada do worker de digest: só `max_items` (constante pinada
-    pelo scheduler). O endereço do destino NÃO entra aqui (ADR-0029 §3)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_items: int = 50
-
-
-class TelegramDigestWorker:
+class TelegramDigestWorker(_DigestWorker):
     """Envia o digest dos destilados novos para UM destino Telegram.
 
     `destination` e `base_url` são injetados na construção (o scheduler resolve
     do banco + env). `sender` é injetável para teste; padrão usa o sender real.
     """
+
+    _channel = "telegram"
+    _error_kind = "telegram_send"
+    _config_class = DigestConfig
 
     manifest = WorkerManifest(
         name="telegram-digest",
@@ -55,42 +47,8 @@ class TelegramDigestWorker:
         base_url: str,
         sender: Sender | None = None,
     ) -> None:
-        """Guarda destino (address é PII, repr=False), base URL do link e sender."""
-        self._destination = destination
-        self._base_url = base_url
+        super().__init__(destination=destination, base_url=base_url)
         self._sender: Sender = sender or send_telegram
-
-    def run(self, ctx: RunContext) -> RunResult:
-        """Para o destino configurado, monta e envia o digest e devolve um
-        DispatchPayload ok ou error. Sem novidade devolve RunResult vazio."""
-        config = ctx.config
-        if not isinstance(config, DigestConfig):  # narrowing (padrão do FeedWorker)
-            raise ContractError(
-                f"TelegramDigestWorker recebeu config {type(config).__name__}, "
-                f"esperava DigestConfig"
-            )
-
-        destination_id = str(self._destination.id)
-        views = ctx.knowledge.distilled_for_digest(destination_id, config.max_items)
-        if not views:
-            return _empty_run()
-
-        watermark = max(v.created_at for v in views)
-        items = [v.id for v in views]
-
-        try:
-            self._deliver(ctx, views)
-            payload = _payload(self._destination, watermark, items, status="ok")
-            return _run_result(payload, failed=False, new_distilled=len(views))
-        except SenderError as exc:
-            payload = _payload(
-                self._destination,
-                watermark,
-                items,
-                status="error",
-                error=ErrorInfo(kind="telegram_send", message=str(exc)[:_MSG_CAP]),
-            )
-            return _run_result(payload, failed=True, new_distilled=len(views))
 
     def _deliver(self, ctx: RunContext, views: list[DigestView]) -> None:
         """Monta a mensagem do Telegram e envia; levanta SenderError se não puder
@@ -111,44 +69,3 @@ def _integration_secret(ctx: RunContext, name: str) -> str:
     if not secret:
         raise SenderError(f"integração {name!r} sem segredo resolvido no ctx")
     return str(secret)
-
-
-def _payload(
-    destination: Destination,
-    watermark: Any,
-    items: list[str],
-    *,
-    status: Literal["ok", "error"],
-    error: ErrorInfo | None = None,
-) -> DispatchPayload:
-    """DispatchPayload de entrega (ok ou error) com watermark da tentativa."""
-    return DispatchPayload(
-        destination=str(destination.id),
-        channel="telegram",
-        status=status,
-        artifact="digest",
-        watermark=watermark,
-        item_count=len(items),
-        items=items,
-        error=error,
-    )
-
-
-def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -> RunResult:
-    """Envelope de RunResult com o payload único e stats."""
-    stats = Stats.model_validate(
-        {
-            "new_distilled": new_distilled,
-            "dispatched": 0 if failed else 1,
-            "failed": 1 if failed else 0,
-        }
-    )
-    return RunResult(payloads=[payload], stats=stats, error=payload.error)
-
-
-def _empty_run() -> RunResult:
-    """RunResult para quando não há novidade (só-se-novidade, ADR-0015 §V)."""
-    return RunResult(
-        payloads=[],
-        stats=Stats.model_validate({"new_distilled": 0, "dispatched": 0, "failed": 0}),
-    )
