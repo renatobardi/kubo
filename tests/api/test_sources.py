@@ -95,7 +95,8 @@ def test_sources_has_add_form(authed_client: TestClient) -> None:
     assert "Adicionar fonte" in html
     assert 'action="/sources"' in html and 'method="post"' in html
     assert 'name="csrf"' in html
-    assert 'value="rss"' in html and 'value="github-repo"' in html
+    assert 'name="kind"' in html and 'id="src-kind"' in html
+    assert 'data-kind="github-repo"' in html
 
 
 def test_create_rejects_bad_csrf(authed_client: TestClient) -> None:

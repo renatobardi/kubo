@@ -24,14 +24,11 @@
 
   <dialog id="rss-wizard" class="m-0 h-dvh max-h-full w-full bg-popover text-popover-foreground backdrop:bg-black/40 md:ml-auto md:h-full md:w-[440px] md:max-w-[92vw]">
     <form method="post" action="/sources" class="flex h-full flex-col">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="hidden" id="src-mode" name="mode" value="feed">
+      <input type="hidden" name="csrf" value="{{ csrf }}" aria-label="csrf token">
+      <input type="hidden" id="src-mode" name="mode" value="feed" aria-label="wizard mode">
+      <input type="hidden" id="src-kind" name="kind" value="rss" aria-label="source kind">
       <label for="src-tested" class="sr-only">Flag de teste do feed</label>
       <input type="hidden" id="src-tested" name="tested" value="" aria-label="flag de teste do feed">
-      <select id="src-kind" name="kind" hidden>
-        <option value="rss" selected>Feed RSS</option>
-        <option value="github-repo">Repositório do GitHub</option>
-      </select>
 
       <div class="flex items-start gap-2.5 border-b border-border p-5">
         <div class="min-w-0 flex-1">
