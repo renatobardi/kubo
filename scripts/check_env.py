@@ -54,7 +54,7 @@ def _parse_env(path: Path) -> dict[str, str]:
             continue
         # strip a leading "export " so "export KEY=value" works too
         if line.startswith("export "):
-            line = line[len("export "):].strip()
+            line = line[len("export ") :].strip()
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
