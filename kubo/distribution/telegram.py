@@ -13,9 +13,11 @@ reenviar sem `parse_mode` (texto puro) — decisão do worker, não deste sender
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
-from kubo.errors import SenderError
+from kubo.errors import ConfigError, SenderError
 
 _TELEGRAM_API = "https://api.telegram.org"
 _TIMEOUT = httpx.Timeout(15.0)
@@ -78,3 +80,15 @@ def _describe(exc: httpx.HTTPError) -> str:
 def _redact(text: str, token: str) -> str:
     """Remove qualquer ocorrência do token do texto — 2ª cerca contra vazamento."""
     return text.replace(token, _REDACTED) if token else text
+
+
+def invite_link(token: str) -> str:
+    """Deep link do Telegram para que o convidado clique e mande `/start <token>`.
+
+    O username do bot é dado por `TELEGRAM_BOT_USERNAME` (público; não é o token).
+    O link não carrega segredos: só o username e o token do convite.
+    """
+    username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+    if not username:
+        raise ConfigError("TELEGRAM_BOT_USERNAME não está configurado")
+    return f"https://t.me/{username}?start={token}"

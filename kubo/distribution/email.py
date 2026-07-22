@@ -7,6 +7,7 @@ STARTTLS é obrigatório em portas não-465; 465 usa SMTP_SSL.
 
 from __future__ import annotations
 
+import os
 import smtplib
 from dataclasses import dataclass, field
 from email.message import EmailMessage
@@ -28,6 +29,31 @@ class SmtpConfig:
     user: str
     password: str = field(repr=False)
     from_address: str
+
+
+def email_smtp_config() -> SmtpConfig | None:
+    """Monta `SmtpConfig` a partir do ambiente; retorna None se dados estiverem incompletos.
+
+    Falta silenciosa aqui: a rota/worker levanta `SenderError` no uso (ADR-0031).
+    """
+    host = os.environ.get("KUBO_EMAIL_HOST", "").strip()
+    port_raw = os.environ.get("KUBO_EMAIL_PORT", "").strip()
+    user = os.environ.get("KUBO_EMAIL_USER", "").strip()
+    password = os.environ.get("KUBO_EMAIL_PASSWORD", "").strip()
+    from_address = os.environ.get("KUBO_EMAIL_FROM", "").strip()
+    if not all((host, port_raw, user, password, from_address)):
+        return None
+    try:
+        port = int(port_raw)
+    except ValueError:
+        return None
+    return SmtpConfig(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        from_address=from_address,
+    )
 
 
 def send_email(

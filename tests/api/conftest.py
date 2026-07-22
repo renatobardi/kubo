@@ -7,6 +7,7 @@ env mínimo. `KUBO_ALLOWED_HOSTS` fica sem setar de propósito: o default inclui
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,10 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
+
+# Valores defaults para a fábrica subir durante a importação do módulo.
+# `ui_env` sobrescreve em runtime; o webhook cacheia o secret no import.
+os.environ.setdefault("KUBO_TELEGRAM_WEBHOOK_SECRET", "test-webhook-secret")
 
 from kubo.api.app import create_app
 from kubo.api.auth import hash_password
@@ -82,6 +87,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.destinations.destination_store.active_destinations", lambda db: [_OWNER]
     )
+    monkeypatch.setattr("kubo.api.routes.destinations.invite_store.list_invites", lambda db: [])
     _settings_store_stub = SimpleNamespace(
         get_settings=lambda db: Settings(
             id=RecordID("settings", "global"),
@@ -100,6 +106,11 @@ def ui_env(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(
         "SESSION_SECRET",
         "test-session-secret-0123456789abcdef",  # pragma: allowlist secret
+    )
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "kubo_notify_bot")
+    monkeypatch.setenv(
+        "KUBO_TELEGRAM_WEBHOOK_SECRET",
+        "test-webhook-secret",  # pragma: allowlist secret
     )
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
     return UI_PASSWORD

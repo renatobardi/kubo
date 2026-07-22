@@ -12,8 +12,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from kubo.distribution.telegram import send_telegram
-from kubo.errors import SenderError
+from kubo.distribution.telegram import invite_link, send_telegram
+from kubo.errors import ConfigError, SenderError
 
 _TOKEN = "123456:AA-secret-bot-token"
 _CHAT = "42"
@@ -73,3 +73,25 @@ def test_network_error_does_not_leak_token() -> None:
     with pytest.raises(SenderError) as exc:
         send_telegram(token=_TOKEN, chat_id=_CHAT, text="x", transport=transport)
     assert _TOKEN not in str(exc.value)
+
+
+def test_invite_link_uses_bot_username_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Link de convite usa o username do bot (público) e o token como start parameter."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "kubo_notify_bot")
+    assert invite_link("abc123") == "https://t.me/kubo_notify_bot?start=abc123"
+
+
+def test_invite_link_without_bot_username_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sem TELEGRAM_BOT_USERNAME não é possível formar o deep link."""
+    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    with pytest.raises(ConfigError):
+        invite_link("abc123")
+
+
+def test_invite_link_does_not_contain_bot_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O link de convite NUNCA expõe o token de API do bot."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "kubo_notify_bot")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _TOKEN)  # pragma: allowlist secret
+    link = invite_link("abc123")
+    assert _TOKEN not in link
+    assert "https://t.me/kubo_notify_bot" in link
