@@ -16,12 +16,11 @@ chaves hoje: `rss`→`feed` (#108) e `github-repo`→`github-releases` (#110). T
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from kubo.distribution.email import SmtpConfig
+from kubo.distribution.email import email_smtp_config
 from kubo.store.destinations import Destination
 from kubo.store.knowledge import ActiveSource
 from kubo.workers.digest import TelegramDigestWorker
@@ -79,37 +78,11 @@ def _telegram_factory(destination: Destination, base_url: str) -> TelegramDigest
     return TelegramDigestWorker(destination=destination, base_url=base_url)
 
 
-def _email_smtp_config() -> SmtpConfig | None:
-    """Monta SmtpConfig a partir de env; retorna None se dados estiverem incompletos.
-
-    A ausência não levanta aqui — o worker levanta SenderError no run, tornando a
-    falha visível na tela Execuções (ADR-0031).
-    """
-    host = os.environ.get("KUBO_EMAIL_HOST", "").strip()
-    port_raw = os.environ.get("KUBO_EMAIL_PORT", "").strip()
-    user = os.environ.get("KUBO_EMAIL_USER", "").strip()
-    password = os.environ.get("KUBO_EMAIL_PASSWORD", "").strip()
-    from_address = os.environ.get("KUBO_EMAIL_FROM", "").strip()
-    if not all((host, port_raw, user, password, from_address)):
-        return None
-    try:
-        port = int(port_raw)
-    except ValueError:
-        return None
-    return SmtpConfig(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        from_address=from_address,
-    )
-
-
 def _email_factory(destination: Destination, base_url: str) -> EmailDigestWorker:
     return EmailDigestWorker(
         destination=destination,
         base_url=base_url,
-        smtp_config=_email_smtp_config(),
+        smtp_config=email_smtp_config(),
     )
 
 

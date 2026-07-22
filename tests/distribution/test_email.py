@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kubo.distribution.email import SmtpConfig, send_email
+from kubo.distribution.email import SmtpConfig, email_smtp_config, send_email
 from kubo.errors import SenderError
 
 _TEST_PASSWORD = "app-password"  # pragma: allowlist secret
@@ -157,3 +157,34 @@ def test_injected_sender_is_called() -> None:
     assert len(calls) == 1
     assert calls[0]["to"] == "owner@example.com"
     assert calls[0]["from_address"] == "kubo@example.com"
+
+
+def test_email_smtp_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`email_smtp_config` monta SmtpConfig a partir das variáveis de ambiente padrão."""
+    monkeypatch.setenv("KUBO_EMAIL_HOST", "smtp.example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PORT", "587")
+    monkeypatch.setenv("KUBO_EMAIL_USER", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PASSWORD", _TEST_PASSWORD)  # pragma: allowlist secret
+    monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
+
+    cfg = email_smtp_config()
+    assert cfg is not None
+    assert cfg.host == "smtp.example.com"
+    assert cfg.port == 587
+    assert cfg.user == "kubo@example.com"
+    assert cfg.password == _TEST_PASSWORD
+    assert cfg.from_address == "kubo@example.com"
+
+
+def test_email_smtp_config_returns_none_when_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Se algum campo obrigatório falta, retorna None sem levantar."""
+    for var in (
+        "KUBO_EMAIL_HOST",
+        "KUBO_EMAIL_PORT",
+        "KUBO_EMAIL_USER",
+        "KUBO_EMAIL_PASSWORD",
+        "KUBO_EMAIL_FROM",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    assert email_smtp_config() is None
