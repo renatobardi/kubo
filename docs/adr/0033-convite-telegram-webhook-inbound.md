@@ -1,6 +1,6 @@
 # ADR-0033 — Convite de onboarding Telegram: webhook inbound + tabela `invite` extra-spec
 
-> Status: proposto · Data: 2026-07-21
+> Status: **aceito** · Data: 2026-07-21 · Validado pelo advisor (Fable 5) antes do crave.
 
 ## Contexto
 
