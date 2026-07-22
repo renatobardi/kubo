@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
 import structlog
@@ -21,15 +22,20 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
+from kubo.distribution import email as email_distribution
+from kubo.distribution import telegram as telegram_distribution
 from kubo.errors import (
     ConfigError,
     DestinationHasHistoryError,
     DuplicateDestinationError,
+    InviteNotResendableError,
+    SenderError,
     StaleDestinationError,
     format_validation_error,
 )
 from kubo.store import client
 from kubo.store import destinations as destination_store
+from kubo.store import invites as invite_store
 from kubo.store import settings as settings_store
 
 _log = structlog.get_logger(__name__)
@@ -43,6 +49,9 @@ _STALE_NOTICE = "Esse destino não está mais disponível para edição."
 _CSRF_INVALID = "CSRF inválido — recarregue a página."
 _WRITE_LOG = "destinations.write_unavailable"
 _DESTINATIONS_ROUTE = "/destinations"
+_INVITE_RESEND_NOT_EXPIRED = (
+    "Esse convite ainda não expirou — só é possível reenviar depois do prazo."
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,27 @@ class EditDestination(BaseModel):
         return value.strip()
 
 
+class NewInvite(BaseModel):
+    """Validated input for the 'Add Telegram invite' form.
+
+    `email` is optional; when provided, Kubo sends the invite automatically.
+    """
+
+    name: str = Field(min_length=1, max_length=100)
+    email: str | None = Field(default=None, max_length=200)
+
+    @field_validator("name", "email", mode="after")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email", mode="after")
+    @classmethod
+    def _optional_email(cls, value: str) -> str | None:
+        """Empty email becomes None; otherwise keep the provided value."""
+        return value or None
+
+
 def _render_list(
     request: Request,
     *,
@@ -122,11 +152,12 @@ def _render_list(
     db: Any = None,
 ) -> Response:
     """Render the destinations list: settings cron + active destinations + all
-    destinations + the create form."""
+    destinations + invites."""
     if db is None:
         with client.connect() as ro:
             return _render_list(request, notice=notice, status=status, db=ro)
     db_destinations = destination_store.list_destinations(db)
+    db_invites = [i for i in invite_store.list_invites(db) if i.accepted_at is None]
     settings = settings_store.get_settings(db)
     active = destination_store.active_destinations(db)
     cron = settings.digest_cron if settings else None
@@ -136,7 +167,10 @@ def _render_list(
         _LIST_TEMPLATE,
         {
             "destinations": db_destinations,
+            "invites": db_invites,
             "artefatos": artefatos,
+            "invite_link": telegram_distribution.invite_link,
+            "now": datetime.now(timezone.utc),
             "csrf": csrf_token(request),
             "notice": notice,
         },
@@ -186,6 +220,98 @@ def create(
     except ConfigError:
         _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+
+
+def _send_invite_email(email: str, name: str, token: str) -> None:
+    """Envia o convite por e-mail, reusando o sender SMTP (KUBO-70)."""
+    smtp_config = email_distribution.email_smtp_config()
+    if smtp_config is None:
+        raise SenderError("configuração SMTP incompleta")
+    link = telegram_distribution.invite_link(token)
+    email_distribution.send_email(
+        to=email,
+        subject="Convite Kubo — ative notificações no Telegram",
+        text_body=f"Oi {name},\n\nClique no link para ativar o Kubo no Telegram: {link}",
+        html_body=(
+            f"<p>Oi {name},</p><p><a href='{link}'>Clique aqui</a> "
+            f"para ativar o Kubo no Telegram.</p>"
+        ),
+        smtp_config=smtp_config,
+    )
+
+
+@router.post("/invites")
+def create_invite(
+    request: Request,
+    name: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Cria um convite Telegram. Com e-mail, tenta enviar automaticamente."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    try:
+        payload = NewInvite(name=name, email=email)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        return _render_list(request, notice=format_validation_error(exc), status=400)
+    try:
+        with client.connect_rw() as db:
+            invite = invite_store.create_invite(db, name=payload.name, email=payload.email)
+    except ConfigError:
+        _log.warning(_WRITE_LOG)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    if payload.email:
+        try:
+            _send_invite_email(payload.email, payload.name, invite.token)
+        except SenderError:
+            link = telegram_distribution.invite_link(invite.token)
+            return _render_list(
+                request,
+                notice=(
+                    f"Convite criado, mas o e-mail não foi enviado. "
+                    f"Envie o link manualmente: {link}"
+                ),
+                status=200,
+            )
+        except ConfigError:
+            return PlainTextResponse(
+                "Convite criado, mas TELEGRAM_BOT_USERNAME não está configurado.",
+                status_code=503,
+            )
+    return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
+
+
+@router.post("/invites/{iid}/resend")
+def resend_invite(request: Request, iid: str, csrf: Annotated[str, Form()] = "") -> Response:
+    """Reenvia um convite expirado (novo token + novo e-mail, se houver)."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    invite_id = RecordID("invite", iid)
+    try:
+        with client.connect_rw() as db:
+            try:
+                invite = invite_store.resend_invite(db, invite_id)
+            except InviteNotResendableError:
+                return _render_list(request, notice=_INVITE_RESEND_NOT_EXPIRED, status=409, db=db)
+    except ConfigError:
+        _log.warning(_WRITE_LOG)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    if invite.email:
+        try:
+            _send_invite_email(invite.email, invite.name, invite.token)
+        except SenderError:
+            link = telegram_distribution.invite_link(invite.token)
+            return _render_list(
+                request,
+                notice=f"Convite reenviado, mas o e-mail falhou. Envie o link: {link}",
+                status=200,
+            )
+        except ConfigError:
+            return PlainTextResponse(
+                "Convite reenviado, mas TELEGRAM_BOT_USERNAME não está configurado.",
+                status_code=503,
+            )
+    return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
 
 
 def _render_edit(

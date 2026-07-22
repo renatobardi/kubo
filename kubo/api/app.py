@@ -41,6 +41,7 @@ from kubo.api.routes import (
     runs,
     settings,
     sources,
+    telegram_webhook,
 )
 from kubo.errors import ConfigError
 
@@ -51,9 +52,10 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _SESSION_MAX_AGE = 14 * 24 * 3600
 _SESSION_COOKIE = "kubo_session"
 
-# Sem sessão exigida: a tela de login, o liveness e os estáticos (a tela de login
-# precisa carregar CSS/JS). Tudo mais passa pelo guard.
-_PUBLIC_PATHS = frozenset({"/login", "/healthz"})
+# Sem sessão exigida: a tela de login, o liveness, os estáticos e o webhook do
+# Telegram (a tela de login precisa carregar CSS/JS; o webhook carrega seu próprio
+# secret). Tudo mais passa pelo guard.
+_PUBLIC_PATHS = frozenset({"/login", "/healthz", "/telegram/webhook"})
 # Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
 # futura chamada, digamos, /statics passaria pelo guard sem sessão.
 _PUBLIC_PREFIXES = ("/static/",)
@@ -140,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(entities.router, prefix="/entities")
     app.include_router(destinations.router, prefix="/destinations")
     app.include_router(dispatches.router, prefix="/dispatches")
+    app.include_router(telegram_webhook.router, prefix="/telegram")
     app.include_router(settings.router, prefix="/settings")
 
     # add_middleware empilha do interno para o externo: o ÚLTIMO é o mais externo.
