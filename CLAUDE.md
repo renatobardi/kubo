@@ -233,12 +233,8 @@ Os hooks são parte do repo e evoluem por PR como qualquer código. Se um hook b
 
 ## Jira / Issue tracker workflow
 
-Quando uma sessão atuar em um ticket Jira, o estado e a tag da issue devem refletir o passo exato do ciclo:
-
-1. **Ao iniciar** — movimentar a issue para o status **Running** e alterar a tag/label para `running`.
-2. **Ao terminar** — movimentar a issue para o status **Validate** e alterar a tag/label para `validate`.
-
-Use o MCP `atlassian` (`getJiraIssue`, `getTransitionsForJiraIssue`, `transitionJiraIssue`, `editJiraIssue`) para fazer as transições e atualizar `labels`. Se o status alvo não for alcançável diretamente, transicione pelo caminho do workflow (por exemplo, *Tarefas pendentes* → **Running** → **Validate**) e ajuste a label apenas no estado final. Nunca deixe a issue no status de início após o trabalho concluído.
+Ao atuar num ticket KUBO: **início da sessão** → claim (`assignee`) + status **Running** + label `running`; **fim** → status **Validate** + label `validate`. Nunca deixe o ticket no status em que a sessão o encontrou. Exceções: ticket já em `Concluído` é terminal (não faça claim nem transição) e ticket de decisão do `/wayfinder` resolve direto para `Concluído`.
+O workflow é sequencial, sem saltos (Backlog→Running direto **falha na API**) — caminho completo, ids de transição e chamadas MCP: `docs/agents/issue-tracker.md` §"Ciclo de vida de trabalho".
 
 ## Como trabalhar comigo (o dono)
 

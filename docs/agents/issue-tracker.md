@@ -55,6 +55,45 @@ Todas as chamadas levam `cloudId` e, quando criam/leem no projeto, `projectKey="
   `getTransitionsForJiraIssue` para achar o id da transição (ex.: "Concluído") e
   `transitionJiraIssue` para aplicá-la. Deixe o comentário de fecho via `addCommentToJiraIssue`.
 
+## Ciclo de vida de trabalho (sessões de agente)
+
+O workflow do KUBO é **sequencial, sem atalhos**: transicionar Backlog → Running direto **falha na
+API** — cada status só alcança o vizinho. Mapa verificado empiricamente em 2026-07-22
+(nome da transição e id entre parênteses):
+
+```text
+Backlog ─Priorizado (2)→ Tarefas pendentes ─Iniciado (3)→ Running ─Homologar (4)→ Validate ─Entregue (5)→ Concluído
+```
+
+Retornos: *Despriorizado* (6): Tarefas pendentes → Backlog; *À corrigir* (7): Validate → Running.
+`Concluído` é **terminal** (zero transições de saída).
+Os ids podem mudar se o dono editar o workflow: em erro de transição, **não desista em silêncio** —
+rode `getTransitionsForJiraIssue` e siga hop a hop até o status alvo.
+
+**Ao iniciar trabalho num ticket** (primeira escrita da sessão):
+
+1. Claim: `editJiraIssue` com `assignee` (accountId via `atlassianUserInfo`).
+2. Transicionar até **Running**, hop a hop (de Backlog: *Priorizado* → *Iniciado*).
+3. Label: adicionar `running` **preservando as demais labels** (`needs-*`, `wayfinder:*`...).
+   Preferir o `update` da própria `transitionJiraIssue`
+   (`{"labels": [{"add": "running"}]}` — add/remove, nunca `set`). Via `editJiraIssue` não há
+   add/remove: `fields.labels` **substitui o array inteiro** — leia as labels atuais
+   (`getJiraIssue`) e regrave a lista completa com a troca feita.
+
+**Ao terminar o trabalho da sessão:**
+
+1. Transicionar para **Validate** (*Homologar*), com `update`
+   `{"labels": [{"add": "validate"}, {"remove": "running"}]}`.
+
+Nunca deixe o ticket no status em que a sessão o encontrou — com duas exceções:
+
+- **Ticket já em `Concluído`**: terminal — não faça claim nem transição; se precisar de retrabalho,
+  quem reabre é o dono, pela UI.
+- **Ticket de decisão do `/wayfinder`**: segue a prática da skill (resolver → `Concluído` direto,
+  ver §Operações de wayfinding), sem passar por Running/Validate.
+
+Fora essas exceções, quem move para `Concluído` é o dono, após validar.
+
 ## Pull requests como superfície de triagem
 
 **PRs como superfície de pedido: não.** _(Mude para `sim` se este projeto tratar PRs externos
