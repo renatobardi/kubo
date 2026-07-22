@@ -55,6 +55,35 @@ Todas as chamadas levam `cloudId` e, quando criam/leem no projeto, `projectKey="
   `getTransitionsForJiraIssue` para achar o id da transição (ex.: "Concluído") e
   `transitionJiraIssue` para aplicá-la. Deixe o comentário de fecho via `addCommentToJiraIssue`.
 
+## Ciclo de vida de trabalho (sessões de agente)
+
+O workflow do KUBO é **sequencial, sem atalhos**: transicionar Backlog → Running direto **falha na
+API** — cada status só alcança o vizinho. Mapa verificado empiricamente em 2026-07-22
+(nome da transição e id entre parênteses):
+
+```
+Backlog ─Priorizado (2)→ Tarefas pendentes ─Iniciado (3)→ Running ─Homologar (4)→ Validate ─Entregue (5)→ Concluído
+```
+
+Retornos: *Despriorizado* (6): Tarefas pendentes → Backlog; *À corrigir* (7): Validate → Running.
+`Concluído` é **terminal** (zero transições de saída) — só o dono fecha ou reabre pela UI.
+Os ids podem mudar se o dono editar o workflow: em erro de transição, **não desista em silêncio** —
+rode `getTransitionsForJiraIssue` e siga hop a hop até o status alvo.
+
+**Ao iniciar trabalho num ticket** (primeira escrita da sessão):
+
+1. Claim: `editJiraIssue` com `assignee` (accountId via `atlassianUserInfo`).
+2. Transicionar até **Running**, hop a hop (de Backlog: *Priorizado* → *Iniciado*).
+3. Label: trocar para `running` (`editJiraIssue`; troque, não acumule).
+
+**Ao terminar o trabalho da sessão:**
+
+1. Transicionar para **Validate** (*Homologar*).
+2. Label: trocar `running` → `validate`.
+
+Nunca deixe o ticket no status em que a sessão o encontrou. Quem move para `Concluído` é o dono,
+após validar.
+
 ## Pull requests como superfície de triagem
 
 **PRs como superfície de pedido: não.** _(Mude para `sim` se este projeto tratar PRs externos
