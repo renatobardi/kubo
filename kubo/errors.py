@@ -86,6 +86,17 @@ class DestinationHasHistoryError(KuboError):
     ser preservada, então a UI oferece arquivar. A mensagem carrega só o id."""
 
 
+class InviteNotResendableError(KuboError):
+    """Reenvio de convite recusado porque ainda não expirou ou já foi aceito."""
+
+
+class StaleInviteError(KuboError):
+    """O convite-alvo saiu do estado aceitável entre a leitura e a escrita.
+
+    Usado no aceite: token inválido, expirado ou já consumido são tratados como um
+    caso genérico para não virar oráculo de estado (ADR-0033, KUBO-62)."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 
