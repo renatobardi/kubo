@@ -233,7 +233,7 @@ Os hooks são parte do repo e evoluem por PR como qualquer código. Se um hook b
 
 ## Jira / Issue tracker workflow
 
-Ao atuar num ticket KUBO: **início da sessão** → claim (`assignee`) + status **Running** + label `running`; **fim** → status **Validate** + label `validate`. Nunca deixe o ticket no status em que a sessão o encontrou.
+Ao atuar num ticket KUBO: **início da sessão** → claim (`assignee`) + status **Running** + label `running`; **fim** → status **Validate** + label `validate`. Nunca deixe o ticket no status em que a sessão o encontrou. Exceções: ticket já em `Concluído` é terminal (não faça claim nem transição) e ticket de decisão do `/wayfinder` resolve direto para `Concluído`.
 O workflow é sequencial, sem saltos (Backlog→Running direto **falha na API**) — caminho completo, ids de transição e chamadas MCP: `docs/agents/issue-tracker.md` §"Ciclo de vida de trabalho".
 
 ## Como trabalhar comigo (o dono)
