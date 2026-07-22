@@ -270,7 +270,7 @@
 
 <script>
 function copyInviteLink(button) {
-  var link = button.getAttribute('data-link');
+  var link = button.dataset.link;
   if (navigator.clipboard) {
     navigator.clipboard.writeText(link).then(function () {
       button.setAttribute('title', 'Copiado!');
@@ -288,7 +288,7 @@ function copyInviteLink(button) {
     document.body.appendChild(input);
     input.select();
     document.execCommand('copy');
-    document.body.removeChild(input);
+    input.remove();
   }
 }
 </script>

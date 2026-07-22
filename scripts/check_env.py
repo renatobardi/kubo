@@ -42,6 +42,28 @@ _OPTIONAL_GROUPS: dict[str, list[str]] = {
 }
 
 
+def _unquote(value: str) -> str:
+    """Strip matching surrounding single or double quotes."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        return value[1:-1]
+    return value
+
+
+def _parse_line(raw: str) -> tuple[str, str] | None:
+    """Return (key, value) for a single .env line, or None when ignored."""
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("export "):
+        line = line[len("export ") :].strip()
+    if "=" not in line:
+        return None
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = _unquote(value.strip())
+    return (key, value) if key else None
+
+
 def _parse_env(path: Path) -> dict[str, str]:
     """Very small .env parser; supports unquoted and double/single quoted values."""
     values: dict[str, str] = {}
@@ -49,22 +71,9 @@ def _parse_env(path: Path) -> dict[str, str]:
         return values
 
     for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        # strip a leading "export " so "export KEY=value" works too
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (
-            value.startswith("'") and value.endswith("'")
-        ):
-            value = value[1:-1]
-        if key:
+        parsed = _parse_line(raw)
+        if parsed is not None:
+            key, value = parsed
             values[key] = value
     return values
 
@@ -81,6 +90,17 @@ def _validate_webhook_secret(secret: str) -> list[str]:
     return warnings
 
 
+def _entry_status(key: str, value: str) -> tuple[str, str]:
+    """Return (status, extra_note) for a present env entry."""
+    if key == "KUBO_TELEGRAM_WEBHOOK_SECRET":
+        warnings = _validate_webhook_secret(value)
+        if warnings:
+            return "WARN", f" ({'; '.join(warnings)})"
+    if key == "TELEGRAM_BOT_USERNAME" and value.startswith("@"):
+        return "WARN", " (remove the leading @)"
+    return "OK", ""
+
+
 def _check_group(env: dict[str, str], group: str, keys: list[str], required: bool) -> int:
     """Print one group and return the number of missing required keys."""
     missing = 0
@@ -88,21 +108,12 @@ def _check_group(env: dict[str, str], group: str, keys: list[str], required: boo
     for key in keys:
         value = env.get(key, "").strip()
         if value:
-            status = "OK"
-            extra = ""
-            if key == "KUBO_TELEGRAM_WEBHOOK_SECRET":
-                warnings = _validate_webhook_secret(value)
-                if warnings:
-                    status = "WARN"
-                    extra = f" ({'; '.join(warnings)})"
-            if key == "TELEGRAM_BOT_USERNAME" and value.startswith("@"):
-                status = "WARN"
-                extra = " (remove the leading @)"
-            print(f"  {key:<40} {status}{extra}")
+            status, extra = _entry_status(key, value)
         else:
             missing += 1
             status = "MISSING" if required else "optional missing"
-            print(f"  {key:<40} {status}")
+            extra = ""
+        print(f"  {key:<40} {status}{extra}")
     return missing
 
 
