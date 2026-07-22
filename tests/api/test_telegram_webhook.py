@@ -21,7 +21,7 @@ pytestmark = pytest.mark.integration
 
 _DB = "test_telegram_webhook"
 _RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca literal no repo (invariante 8)
-_SECRET = "test-webhook-secret"
+_SECRET = "test-webhook-secret"  # pragma: allowlist secret
 _BOT_USERNAME = "kubo_notify_bot"
 
 
