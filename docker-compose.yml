@@ -109,6 +109,13 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       KUBO_OWNER_TELEGRAM_CHAT_ID: ${KUBO_OWNER_TELEGRAM_CHAT_ID:-}
       KUBO_BASE_URL: ${KUBO_BASE_URL:-}
+      # Credenciais SMTP para envio de digest/e-mail (ADR-0031). SEM `:?` fail-fast —
+      # o scheduler sobe sem SMTP; só o job `digest` falha no uso se ausente.
+      KUBO_EMAIL_HOST: ${KUBO_EMAIL_HOST:-}
+      KUBO_EMAIL_PORT: ${KUBO_EMAIL_PORT:-}
+      KUBO_EMAIL_USER: ${KUBO_EMAIL_USER:-}
+      KUBO_EMAIL_PASSWORD: ${KUBO_EMAIL_PASSWORD:-}  # pragma: allowlist secret
+      KUBO_EMAIL_FROM: ${KUBO_EMAIL_FROM:-}
       # Worker github-releases (#110): o sweep github-repo (07:00) coleta releases dos Cadastros
       # via integração github-readonly (leitura pública pura — sem descoberta, o PAT dedicado
       # github-watch/escopo notifications foi aposentado). MESMO token do rito de promoção do
@@ -192,8 +199,20 @@ services:
       # analista; GEMINI (acima) = embedding do retrieval.
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
       KUBO_OWNER_TELEGRAM_CHAT_ID: ${KUBO_OWNER_TELEGRAM_CHAT_ID:-}
       KUBO_BASE_URL: ${KUBO_BASE_URL:-}
+      # Webhook inbound do Telegram (ADR-0033, KUBO-62): secret obrigatório para validar
+      # o header `X-Telegram-Bot-Api-Secret-Token`. SEM `:?` fail-fast — ausente, a rota
+      # /telegram/webhook dá 503 no uso (o módulo levanta ConfigError), o resto da UI segue.
+      KUBO_TELEGRAM_WEBHOOK_SECRET: ${KUBO_TELEGRAM_WEBHOOK_SECRET:-}
+      # Credenciais SMTP para envio de convites por e-mail (ADR-0031). SEM `:?` fail-fast —
+      # a UI sobe sem SMTP; só a criação de convite com e-mail falha no uso se ausente.
+      KUBO_EMAIL_HOST: ${KUBO_EMAIL_HOST:-}
+      KUBO_EMAIL_PORT: ${KUBO_EMAIL_PORT:-}
+      KUBO_EMAIL_USER: ${KUBO_EMAIL_USER:-}
+      KUBO_EMAIL_PASSWORD: ${KUBO_EMAIL_PASSWORD:-}  # pragma: allowlist secret
+      KUBO_EMAIL_FROM: ${KUBO_EMAIL_FROM:-}
       # Reject do gate dev (ADR-0019 §IX): a UI FECHA o PR via API na rejeição, logo carrega
       # o PAT do forge + as coordenadas do sandbox. Custo de superfície NOMEADO (§X): a
       # kubo-api NÃO roda o executor cli (sem scrub, sem agente) — só a chamada REST de close.
