@@ -145,7 +145,7 @@
           </div>
           <div class="flex w-full items-center gap-1.5 md:w-auto">
             <button type="button"
-                    data-link="{{ invite_link(i.token) }}"
+                    data-link="{{ invite_links.get(iid, '') }}"
                     onclick="copyInviteLink(this)"
                     aria-label="Copiar link de convite de {{ i.name }}"
                     class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground"
@@ -271,6 +271,10 @@
 <script>
 function copyInviteLink(button) {
   var link = button.dataset.link;
+  if (!link) {
+    button.setAttribute('title', 'Link indisponível');
+    return;
+  }
   if (navigator.clipboard) {
     navigator.clipboard.writeText(link).then(function () {
       button.setAttribute('title', 'Copiado!');

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import hmac
 import os
-from typing import Any
 
 import structlog
 from anyio import to_thread
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.responses import Response
 
 from kubo.errors import (
@@ -25,6 +25,23 @@ from kubo.errors import (
 )
 from kubo.store import client
 from kubo.store import invites as invite_store
+
+
+class TelegramChat(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: int | str
+
+
+class TelegramMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    text: str = ""
+    chat: TelegramChat | None = None
+
+
+class TelegramUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    message: TelegramMessage | None = None
+
 
 _SECRET_TOKEN = os.environ.get("KUBO_TELEGRAM_WEBHOOK_SECRET", "").strip()
 if not _SECRET_TOKEN:
@@ -42,19 +59,15 @@ def _verify_secret(request: Request) -> bool:
     return hmac.compare_digest(received, _SECRET_TOKEN)
 
 
-def _extract_start_token(body: dict[str, Any]) -> str | None:
+def _extract_start_token(message: TelegramMessage | None) -> str | None:
     """Extrai o token de convite de uma mensagem `/start <token>`.
 
     Telegram envia `/start <payload>` quando o usuário clica num deep link.
     Ignora variações como `/start@botname token`.
     """
-    message = body.get("message")
-    if not isinstance(message, dict):
+    if message is None:
         return None
-    text = message.get("text", "")
-    if not isinstance(text, str):
-        return None
-    parts = text.strip().split()
+    parts = message.text.strip().split()
     if len(parts) < 2:
         return None
     if not parts[0].lower().startswith("/start"):
@@ -62,44 +75,43 @@ def _extract_start_token(body: dict[str, Any]) -> str | None:
     return parts[1].strip()
 
 
-def _process_invite(body: dict[str, Any]) -> None:
+def _process_invite(update: TelegramUpdate) -> None:
     """Lógica síncrona de aceite do convite — roda num worker thread."""
-    token = _extract_start_token(body)
-    if token is None:
-        _log.debug("telegram_webhook_no_start_token")
-        return
-
     try:
+        token = _extract_start_token(update.message)
+        if token is None:
+            _log.debug("telegram_webhook_no_start_token")
+            return
+
         with client.connect_rw() as db:
             invite = invite_store.get_invite_by_token(db, token)
             if invite is None:
-                _log.info("telegram_webhook_invite_not_found", token=token)
+                _log.info("telegram_webhook_invite_not_found")
                 return
 
-            chat = body["message"].get("chat", {})
-            chat_id = chat.get("id")
-            if chat_id is None:
+            if update.message is None or update.message.chat is None:
                 _log.warning("telegram_webhook_missing_chat_id")
                 return
 
+            chat_id = update.message.chat.id
             try:
                 invite_store.accept_invite(db, invite_id=invite.id, chat_id=str(chat_id))
             except DuplicateDestinationError:
                 _log.warning(
                     "telegram_webhook_chat_id_already_registered",
                     invite_id=str(invite.id),
-                    token=token,
                 )
             except StaleInviteError:
                 _log.info(
                     "telegram_webhook_stale_invite",
                     invite_id=str(invite.id),
-                    token=token,
                 )
             except StoreError:
                 _log.exception("telegram_webhook_store_error", invite_id=str(invite.id))
     except ConfigError:
         _log.error("telegram_webhook_config_error")
+    except Exception:
+        _log.exception("telegram_webhook_unexpected_error")
 
 
 @router.post("/webhook")
@@ -115,5 +127,11 @@ async def telegram_webhook(request: Request) -> Response:
         _log.warning("telegram_webhook_invalid_json")
         return JSONResponse({"status": "ok"}, status_code=200)
 
-    await to_thread.run_sync(_process_invite, body)
+    try:
+        update = TelegramUpdate.model_validate(body)
+    except ValidationError:
+        _log.warning("telegram_webhook_invalid_payload")
+        return JSONResponse({"status": "ok"}, status_code=200)
+
+    await to_thread.run_sync(_process_invite, update)
     return JSONResponse({"status": "ok"}, status_code=200)

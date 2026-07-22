@@ -132,14 +132,17 @@ class NewInvite(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: str | None = Field(default=None, max_length=200)
 
-    @field_validator("name", "email", mode="after")
+    @field_validator("name", "email", mode="before")
     @classmethod
-    def _strip(cls, value: str) -> str:
-        return value.strip()
+    def _strip(cls, value: Any) -> Any:
+        """Trim whitespace before type/length checks; leave None untouched."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @field_validator("email", mode="after")
     @classmethod
-    def _optional_email(cls, value: str) -> str | None:
+    def _optional_email(cls, value: str | None) -> str | None:
         """Empty email becomes None; otherwise keep the provided value."""
         return value or None
 
@@ -162,6 +165,14 @@ def _render_list(
     active = destination_store.active_destinations(db)
     cron = settings.digest_cron if settings else None
     artefatos = _digest_artefatos(cron, [d.name for d in active])
+
+    invite_links: dict[str, str] = {}
+    for invite in db_invites:
+        try:
+            invite_links[str(invite.id.id)] = telegram_distribution.invite_link(invite.token)
+        except ConfigError:
+            break
+
     return templates.TemplateResponse(
         request,
         _LIST_TEMPLATE,
@@ -169,7 +180,7 @@ def _render_list(
             "destinations": db_destinations,
             "invites": db_invites,
             "artefatos": artefatos,
-            "invite_link": telegram_distribution.invite_link,
+            "invite_links": invite_links,
             "now": datetime.now(timezone.utc),
             "csrf": csrf_token(request),
             "notice": notice,
@@ -240,6 +251,18 @@ def _send_invite_email(email: str, name: str, token: str) -> None:
     )
 
 
+def _render_fallback_link(request: Request, token: str, notice: str) -> Response:
+    """Render the list with a manual invite link or 503 if the link can't be built."""
+    try:
+        link = telegram_distribution.invite_link(token)
+    except ConfigError:
+        return PlainTextResponse(
+            "Convite criado, mas TELEGRAM_BOT_USERNAME não está configurado.",
+            status_code=503,
+        )
+    return _render_list(request, notice=f"{notice} {link}", status=200)
+
+
 @router.post("/invites")
 def create_invite(
     request: Request,
@@ -264,14 +287,10 @@ def create_invite(
         try:
             _send_invite_email(payload.email, payload.name, invite.token)
         except SenderError:
-            link = telegram_distribution.invite_link(invite.token)
-            return _render_list(
+            return _render_fallback_link(
                 request,
-                notice=(
-                    f"Convite criado, mas o e-mail não foi enviado. "
-                    f"Envie o link manualmente: {link}"
-                ),
-                status=200,
+                invite.token,
+                "Convite criado, mas o e-mail não foi enviado. Envie o link manualmente:",
             )
         except ConfigError:
             return PlainTextResponse(
@@ -300,11 +319,10 @@ def resend_invite(request: Request, iid: str, csrf: Annotated[str, Form()] = "")
         try:
             _send_invite_email(invite.email, invite.name, invite.token)
         except SenderError:
-            link = telegram_distribution.invite_link(invite.token)
-            return _render_list(
+            return _render_fallback_link(
                 request,
-                notice=f"Convite reenviado, mas o e-mail falhou. Envie o link: {link}",
-                status=200,
+                invite.token,
+                "Convite reenviado, mas o e-mail falhou. Envie o link:",
             )
         except ConfigError:
             return PlainTextResponse(
