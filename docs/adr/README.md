@@ -31,3 +31,18 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0021](0021-rito-promocao.md) | Rito de promoção: worker → grafo (deploy-gap, import-oráculo, gate sequencial) | aceito |
 | [0022](0022-pipeline-agendado.md) | Pipeline agendado: watch list, flow por cron, agendamento de flow | aceito |
 | [0023](0023-renuncia-scribe-harvest-side-effect-repo.md) | Renúncia: port de `scribe`/`harvest` e side-effect "criar repo na instanciação" | aceito |
+| [0024](0024-issues-github-dois-regimes.md) | Issues do GitHub: dois regimes (registro vs andaime wayfinder) | aceito |
+| [0025](0025-source-vira-cadastro-no-db.md) | `source` vira Cadastro no DB: registro gerível pela UI que dirige a coleta | aceito |
+| [0026](0026-revoga-issue-ponteiro.md) | Revoga a regra issue-ponteiro (substitui ADR-0024) | aceito |
+| [0027](0027-destino-vira-cadastro-no-db.md) | `destination` vira Cadastro no DB: destinos geríveis pela UI, multi-canal, endereço no banco | aceito |
+| [0028](0028-config-operacional-global-no-db.md) | Config operacional global no DB: horário do digest e pausa de distribuição editáveis pela UI | aceito |
+| [0029](0029-digest-vira-sweep-de-destinos.md) | Digest vira sweep de destinos: 1 run por destino, worker por canal, reativação escolhe backlog ou recente | aceito |
+| [0030](0030-destino-padrao-e-cutover-destinations.md) | Destino padrão no `settings` + fechamento do cutover: aposenta o `destinations.yaml` | aceito |
+| [0031](0031-email-worker-credenciais-via-env.md) | Worker de e-mail: credenciais via env e manifest sem integração | aceito |
+| [0032](0032-llm-sincrono-rota-rss-discovery.md) | LLM síncrono em rota HTTP para descoberta de feed RSS | aceito |
+| [0033](0033-convite-telegram-webhook-inbound.md) | Convite de onboarding Telegram: webhook inbound + tabela `invite` extra-spec | aceito |
+| [0034](0034-topologia-prd-lxc-irmao.md) | Topologia da PRD: LXC irmão no oute-server (emenda ADR-0011 §IV) | aceito |
+| [0035](0035-exposicao-prd-porta-aberta-caddy.md) | Exposição da PRD: porta aberta + TLS próprio (Caddy) | aceito |
+| [0036](0036-auth-prd-firebase-scrypt.md) | Autenticação da PRD: Firebase (Google + GitHub) + scrypt break-glass | aceito |
+| [0037](0037-esteira-cd-build-once-promocao-gated.md) | Esteira de CD: build-once, promoção via Tailscale, gate de aprovação | aceito |
+| [0038](0038-identidade-distribuicao-prd.md) | Identidade de distribuição da PRD: e-mail (Resend) + canais Telegram | aceito |

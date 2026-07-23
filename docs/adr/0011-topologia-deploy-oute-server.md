@@ -1,6 +1,8 @@
 # ADR-0011 — Topologia de deploy no oute-server (LXD + Docker aninhado)
 
 > Status: **aceito** · Data: 2026-07-05
+> · **Emendado por ADR-0034** (§IV: a promessa "PRD/OCI mantém AppArmor intocado" cai — a PRD é LXC irmão, mesmo Docker aninhado do kubo-test)
+> · **Estendido por ADR-0037** (a direção não-normativa "build-once / promote-by-tag" vira normativa na esteira de CD).
 
 ## Contexto
 
@@ -83,6 +85,8 @@ CLAUDE.md).
 > DEV. Setup, smoke e reversão em `runbook-deploy.md` §2b.
 
 ### IV. AppArmor userspace desabilitado no kubo-test (efeito: o dockerd deixa de aplicar perfis) — decisão de segurança explícita
+
+> **Emenda (ADR-0034, 2026-07-22):** a nota "PRD/OCI mantém AppArmor intocado" abaixo assumia a PRD como instância OCI dedicada com Docker nativo. A PRD nasceu como **LXC irmão** do kubo-test (mesmo Docker aninhado), então ela também roda `unconfined` + `dpkg-divert` — o risco é reaceito por nome no ADR-0034.
 
 **AppArmor userspace é desabilitado no kubo-test** via `dpkg-divert` do
 `/usr/sbin/apparmor_parser`. O divert remove o parser do caminho, então o dockerd
@@ -177,6 +181,8 @@ servidor; deploy key fica como alternativa futura.
   do `apparmor_parser` (em vez de degradar), revisitar divert vs. `allow_nesting`.
 
 ## Estado-alvo (seção NÃO-NORMATIVA — direção, não decisão)
+
+> **Realizado (2026-07-22):** a direção abaixo virou decisão nos **ADR-0034** (topologia PRD como LXC irmão), **ADR-0035** (exposição), **ADR-0037** (build-once/promote-by-tag, agora **normativo**) e **ADR-0038** (distribuição). A PRD deixou de ser direção não-normativa — é decisão aceita nesses ADRs. O texto abaixo fica como registro histórico do que se antecipava aqui.
 
 DEV (kubo-test) → Aprovação → PRD (OCI). Direção registrada: **build-once /
 promote-by-tag** (imagem construída uma vez, promovida por tag; sem rebuild por

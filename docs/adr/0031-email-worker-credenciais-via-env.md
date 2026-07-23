@@ -1,6 +1,7 @@
 # ADR-0031 — Worker de e-mail: credenciais via env e manifest sem integração
 
 > Status: **aceito** · Data: 2026-07-20 · Emenda o **ADR-0029 §2** (worker por canal e credenciais SMTP).
+> · **Estendido por ADR-0038** (a PRD escolhe Resend como provedor, envia de `@kubo.oute.pro` e adiciona header `Reply-To`; o schema de credenciais deste ADR permanece).
 
 ## Contexto
 
