@@ -127,7 +127,7 @@ Usuário read-only do Surreal é achado de segurança (R4 do plano 0009). Impede
 
 - **(d) Renderizar Markdown em summaries** — VULNerável a XSS se sanitizador for negligente. `bleach` é nova dependência + decisão de tags. `pre-wrap` em CSS + texto plano resolve apresentação — sessão futura com risco-benefício revisado.
 
-- **(e) Multiusuário/SAML/OIDC** — manutenção de identidade central para dono solo é anti-premissa. Bearer+password-grant para outro app futuro é cenário coberto por item (c).
+- **(e) Multiusuário/SAML/OIDC** — manutenção de identidade central para dono solo é anti-premissa. Bearer+password-grant para outro app futuro é cenário coberto por item (c). **[Revogada por ADR-0036, 2026-07-22:** a PRD exposta à internet adota Firebase (Google + GitHub) como portão único, com scrypt break-glass mantido — o custo do vendor de identidade foi reaceito com o trade-off à vista.**]**
 
 ---
 
