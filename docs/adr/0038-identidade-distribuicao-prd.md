@@ -16,7 +16,7 @@ Fatos que dissolveram as preocupações (KUBO-76): a **porta 25 da OCI é irrele
 
 **DNS** (na zona Hostinger — a PRD não migrou para a Cloudflare, ADR-0035): SPF e DKIM saem do painel do Resend ao verificar `kubo.oute.pro`; **DMARC** em `_dmarc.kubo.oute.pro` começando em **`p=none`** com `rua` para o e-mail pessoal (observar, ler relatórios, só então endurecer). **Env** (ADR-0031): `KUBO_EMAIL_HOST=smtp.resend.com`, porta 465/587, `KUBO_EMAIL_USER=resend`, `KUBO_EMAIL_PASSWORD` = a API key do Resend (**segredo** — só no `.env` da PRD), `KUBO_EMAIL_FROM=kubo@kubo.oute.pro`.
 
-**Build:** adicionar o header `Reply-To` na construção do e-mail (o `SmtpConfig` do ADR-0031 só tem `from`) — a caixa `@kubo.oute.pro` não recebe.
+**Dependência de build BLOQUEANTE para a PRD:** adicionar o header `Reply-To` (→ e-mail pessoal do dono) na construção do e-mail em `kubo/distribution/` (o `SmtpConfig` do ADR-0031 só carrega `from`) — sem ele, uma resposta a `@kubo.oute.pro` cai no vazio, pois a caixa não recebe. Deve estar **implementado e testado antes do cutover**.
 
 ### II. Canais Telegram: o bot real migra para a PRD
 
@@ -24,14 +24,14 @@ O **bot Telegram real reusa o token atual na PRD** (mantém o histórico e o cha
 
 ### III. Fail-safe do DEV: estrutural, sem flag de runtime
 
-O DEV é impedido de escrever nos canais reais por **separação de credencial e de dado**, não por convenção:
+O DEV é impedido de escrever nos canais reais por **separação de credencial e de dado** — não por convenção nem por qualquer particularidade do protocolo de envio:
 
-1. **Token:** o Telegram aceita **um consumidor por token** (um webhook / um polling). O token real fica preso ao consumidor da PRD; o DEV tem token de teste próprio → o DEV **fisicamente não consegue** enviar como o bot real.
+1. **Credencial:** o token real do bot vive **só no `.env` da PRD**; o DEV tem token de teste próprio. Sem o token real, o DEV não envia como o bot real.
 2. **Destino:** o chat real e o e-mail real vivem **só no banco da PRD** (D-d não migrou destinos); o banco do DEV só tem destinos de teste → o DEV **não conhece** os canais reais.
 
 Ambas caem das decisões já tomadas: credenciais separadas por ambiente (ADR-0034 §IV) + PRD com banco vazio (D-d). O que sustenta = o rito do `.env`/banco por-ambiente (invariante 8): o token real e o chat real só existem na PRD.
 
-**Cutover:** o `kubo-test` **solta o token real primeiro** (para o scheduler / limpa o consumidor) → a PRD assume o token → o `kubo-test` recebe o token de teste novo. Sem essa ordem, os dois brigam pelo token durante a virada.
+**Nota sobre o token do Telegram (recebimento, não envio):** um token aceita **um consumidor de updates por vez** (um webhook / um polling) — isso restringe o lado de **recebimento** (relevante para o webhook de onboarding, ADR-0033), **não** o `sendMessage`. Daí a **regra de cutover:** o `kubo-test` **solta o consumidor do token real primeiro** (para o scheduler / limpa o webhook) → a PRD assume o token → o `kubo-test` recebe o token de teste novo. Sem essa ordem, os dois pollers brigam pelo **recebimento** durante a virada. O envio do DEV, esse, já está barrado pela separação de credencial+dado acima.
 
 ## Consequências
 

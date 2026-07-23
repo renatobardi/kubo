@@ -27,7 +27,7 @@ Fato favorável levantado: do lado público, `80/443/2900` estão **fechados** n
 
 ### III. Risco de segurança nomeado
 
-A exposição por porta-aberta é um **passo abaixo na superfície de rede** (porta aberta na internet, sem shield de DDoS de terceiro, IP de origem visível — mas já estava via wildcard). Isso **eleva a auth a portão único**: sem CF na frente, a autenticação (ADR-0036) + rate-limit se tornam o único portão. Em troca, um **ganho honesto**: o TLS termina na própria caixa, matando o MITM-na-borda que o túnel obrigava a aceitar. A regra da security list é **host-wide** (a VCN é compartilhada com os vizinhos do `oute-server`), não escopada ao Kubo.
+A exposição por porta-aberta é um **passo abaixo na superfície de rede** (porta aberta na internet, sem shield de DDoS de terceiro, IP de origem visível — mas já estava via wildcard). Isso **eleva a auth a portão único**: sem CF na frente, o `RequireLoginMiddleware` (que guarda **todas** as rotas, ADR-0014/ADR-0036) é a única defesa da superfície pública — o rate-limit do ADR-0014 §9 (`threading.Semaphore(1)`) guarda só o brute-force no `/login`, não a superfície inteira. Em troca, um **ganho honesto**: o TLS termina na própria caixa, matando o MITM-na-borda que o túnel obrigava a aceitar. A regra da security list é **host-wide** (a VCN é compartilhada com os vizinhos do `oute-server`), não escopada ao Kubo.
 
 ## Consequências
 

@@ -18,7 +18,7 @@ O **Firebase JS SDK** com `signInWithPopup` roda **só na tela de login** (o res
 
 ### II. Verificação no servidor: `pyjwt`, zero segredo
 
-O servidor verifica o ID token com **`pyjwt`** contra as chaves públicas do Google (`aud` = project id, `iss` = `securetoken.google.com/<pid>`, `exp`, `sub` não-vazio, **`email_verified=true`**). **Não** usa `firebase-admin` (traz gRPC/Firestore, ~40–60 MB) nem `createSessionCookie` (exige service account em disco → furaria o invariante 8). Verificar exige só chave pública + project id — nenhum segredo.
+O servidor verifica o ID token com **`pyjwt`** contra as chaves públicas do Google, buscadas no **endpoint oficial de certificados** e selecionadas pelo **`kid`** do header, respeitando o `Cache-Control`/`max-age` das chaves para renovação e rotação. A validação **aceita exclusivamente RS256** (previne confusão de algoritmo) e **falha fechado** quando o `kid` ou o algoritmo não são suportados. Claims exigidas: `aud` = project id, `iss` = `securetoken.google.com/<pid>`, `exp`, `sub` não-vazio, **`email_verified=true`**. **Não** usa `firebase-admin` (traz gRPC/Firestore, ~40–60 MB) nem `createSessionCookie` (exige service account em disco → furaria o invariante 8). Verificar exige só chave pública + project id — nenhum segredo.
 
 No sucesso, emite o **cookie `itsdangerous` existente** (`role=owner` + `uid`), com `Secure=True` global (ADR-0035) e **regeneração de sessão no login** (fixation). O CSRF do POST do ID token é auto-mitigado (o token no corpo é a prova; não se forja ID token válido para o `uid` do dono).
 
@@ -26,7 +26,7 @@ No sucesso, emite o **cookie `itsdangerous` existente** (`role=owner` + `uid`), 
 
 ### III. Allowlist FAIL-CLOSED + scrypt break-glass
 
-- **Allowlist por identificador imutável** = o `uid` do Firebase, vivendo em **env** (invariante 8; sem caminho de escrita de auth no banco). **FAIL-CLOSED:** allowlist vazia ou malformada **nega tudo**, nunca libera — é o portão único. Bootstrap: primeiro login loga o `uid`, dono pina no env. Mapeia as identidades do dono (Google + GitHub) → `owner`.
+- **Allowlist por identificador imutável** = o `uid` do Firebase, vivendo em **env** (invariante 8; sem caminho de escrita de auth no banco). **FAIL-CLOSED:** allowlist vazia ou malformada **nega tudo**, nunca libera — é o portão único, sem nenhum caminho de auto-cadastro pela internet. **Provisionamento fora de banda:** como o fail-closed nega todos enquanto a allowlist estiver vazia, os `uid`s do dono são obtidos **fora de banda** (console do Firebase, ou um bootstrap único pela tailnet **antes** da exposição pública) e pinados no env **antes** de o endpoint ir ao ar — nunca por "primeiro login público". Mapeia as identidades do dono (Google + GitHub) → `owner`.
 - **Login scrypt (ADR-0014) MANTIDO** como break-glass — dependência **disjunta** (nenhum vendor no caminho), alcançável pela tailnet (cookie `Secure` via `tailscale serve`). É o único caminho que não depende de Firebase/Google/GitHub; escape de lockout de um mantenedor solo cujo portão único é um vendor.
 
 ### IV. Papéis, endurecimento e superfície

@@ -182,6 +182,8 @@ servidor; deploy key fica como alternativa futura.
 
 ## Estado-alvo (seção NÃO-NORMATIVA — direção, não decisão)
 
+> **Realizado (2026-07-22):** a direção abaixo virou decisão nos **ADR-0034** (topologia PRD como LXC irmão), **ADR-0035** (exposição), **ADR-0037** (build-once/promote-by-tag, agora **normativo**) e **ADR-0038** (distribuição). A PRD deixou de ser direção não-normativa — é decisão aceita nesses ADRs. O texto abaixo fica como registro histórico do que se antecipava aqui.
+
 DEV (kubo-test) → Aprovação → PRD (OCI). Direção registrada: **build-once /
 promote-by-tag** (imagem construída uma vez, promovida por tag; sem rebuild por
 ambiente), CD/registry como evolução. **A questão dos dados na promoção fica

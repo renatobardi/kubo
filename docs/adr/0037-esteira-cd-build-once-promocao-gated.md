@@ -22,9 +22,13 @@ Environment de produção com **required reviewer = o dono**, **sem `prevent sel
 
 ### IV. Disparo da PRD: `workflow_dispatch` com binding mecânico do digest
 
-O disparo da promoção é **manual** (`workflow_dispatch`). Para não repetir o pecado do rebuild-por-ambiente (promover-qualquer-coisa = homologação sem sentido), o binding é **mecânico**: o job **lê o digest vivo no `kubo-test`** (inspeção do container em execução, pela ssh que já existe) e promove **exatamente aquele** — sem rebuild, sem "latest", sem digitar SHA.
+O disparo da promoção é **manual** (`workflow_dispatch`). Para não repetir o pecado do rebuild-por-ambiente (promover-qualquer-coisa = homologação sem sentido), o binding é **mecânico e em três etapas separadas**:
 
-**Race do DEV-que-andou:** o DEV faz auto-deploy a cada merge, então entre homologar o digest X e disparar a promoção, um merge novo pode ter trocado o digest. Guarda: a **tela de aprovação do Environment mostra o digest + o commit de origem** — a aprovação confirma os *bytes*, não é carimbo.
+1. **Coleta (antes do gate):** um passo lê o **digest vivo no `kubo-test`** (inspeção do container em execução, via ssh) e **publica `digest` + commit de origem** como dados visíveis ao reviewer (output/summary do run).
+2. **Aprovação:** o gate do Environment ocorre **depois** dessa publicação — o dono confirma os *bytes* na tela de aprovação, não é carimbo.
+3. **Promoção (job protegido):** **revalida o digest** imediatamente antes do deploy e **aborta se divergir**; promove **exatamente aquele** — sem rebuild, sem "latest", sem digitar SHA.
+
+**Race do DEV-que-andou:** o DEV faz auto-deploy a cada merge, então entre homologar o digest X e disparar a promoção, um merge novo pode ter trocado o digest vivo. A publicação-antes-do-gate (2) + a revalidação-no-job-protegido (3) fecham a janela: o que o dono aprovou é o que é deployado, ou o job aborta.
 
 **Rollback:** disparar o último digest bom.
 
@@ -36,7 +40,7 @@ O disparo da promoção é **manual** (`workflow_dispatch`). Para não repetir o
 
 ### VI. Segredos e edição
 
-- **Tailscale por OIDC/WIF** (`id-token: write`, sem segredo de longa duração — preferível ao OAuth client) + **chave ssh de deploy**; a ACL com tag alcança **kubo-test E kubo-prd**.
+- **Tailscale por OIDC/WIF** (`id-token: write`, sem segredo de longa duração — preferível ao OAuth client), com **identidades e tags DISTINTAS por ambiente**: o job de auto-deploy do DEV usa uma identidade que alcança **só o `kubo-test`**; a promoção da PRD usa uma identidade **restrita ao job protegido (gated)** que alcança **só o `kubo-prd`** — não existe caminho de auto-deploy não-gated para a PRD. A **chave ssh de produção** vive **exclusivamente** nos Environment secrets do `prd`; o DEV usa a própria identidade e credenciais.
 - **GHCR público:** zero credencial no host → **preserva a propriedade "nenhum segredo persistente no host"** que motivou o push-via-Tailscale. Pré-condição: o build **não assa nenhum segredo** na imagem (segredos vêm do `.env` em runtime).
 - Segredos de deploy vivem como **Environment secrets do `prd`** (só existem após a aprovação); o **`.env` do servidor segue do dono** (invariante 8), nunca lido por agente.
 - O arquivo de workflow de CD é **infra security-critical** (o PAT de agente não toca `.github/workflows/`); só o dono edita, por PR humano.
