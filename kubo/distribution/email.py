@@ -22,7 +22,7 @@ _TIMEOUT = 15.0
 
 @dataclass(frozen=True)
 class SmtpConfig:
-    """SMTP config. `password` and `reply_to` are sensitive — `repr=False`."""
+    """Configuração SMTP. `password` e `reply_to` são sensíveis — `repr=False`."""
 
     host: str
     port: int

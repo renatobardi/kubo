@@ -219,6 +219,20 @@ def test_email_smtp_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.reply_to == "dono@example.com"
 
 
+def test_email_smtp_config_reply_to_empty_becomes_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`KUBO_EMAIL_REPLY_TO` vazio é normalizado para None."""
+    monkeypatch.setenv("KUBO_EMAIL_HOST", "smtp.example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PORT", "587")
+    monkeypatch.setenv("KUBO_EMAIL_USER", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PASSWORD", _TEST_PASSWORD)  # pragma: allowlist secret
+    monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_REPLY_TO", "   ")
+
+    cfg = email_smtp_config()
+    assert cfg is not None
+    assert cfg.reply_to is None
+
+
 def test_email_smtp_config_returns_none_when_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     """Se algum campo obrigatório falta, retorna None sem levantar."""
     for var in (

@@ -137,8 +137,9 @@ services:
 
   # UI da fase 2 (ADR-0014): FastAPI + HTMX servindo Destilados e Painel atrás de
   # login. MESMA imagem do scheduler; só o command muda. O publish NÃO fica aqui
-  # (base = PRD/OCI): o overlay compose.dev-lxc.yml publica no IP Tailscale
-  # (100.66.254.24:3900, E2); o publish de PRD/OCI é decisão futura (como o backup).
+  # (base = PRD/OCI): overlays de ambiente LXC (compose.dev-lxc.yml: 3900,
+  # compose.prd-lxc.yml: 2900) publicam no IP de bridge do LXC via proxy device do
+  # host; OCI usa o mesmo esquema quando a decisão for tomada.
   kubo-api:
     # MESMA imagem do kubo-scheduler (só o `command` muda). NÃO tem `build:` de propósito:
     # o kubo-scheduler é o único builder de `kubo:latest` (evita o race de dois `build:` na
