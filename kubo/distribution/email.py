@@ -22,13 +22,14 @@ _TIMEOUT = 15.0
 
 @dataclass(frozen=True)
 class SmtpConfig:
-    """Configuração SMTP. `password` é segredo — `repr=False`."""
+    """Configuração SMTP. `password` e `reply_to` são sensíveis — `repr=False`."""
 
     host: str
     port: int
     user: str
     password: str = field(repr=False)
     from_address: str
+    reply_to: str | None = field(default=None, repr=False)
 
 
 def email_smtp_config() -> SmtpConfig | None:
@@ -41,6 +42,7 @@ def email_smtp_config() -> SmtpConfig | None:
     user = os.environ.get("KUBO_EMAIL_USER", "").strip()
     password = os.environ.get("KUBO_EMAIL_PASSWORD", "").strip()
     from_address = os.environ.get("KUBO_EMAIL_FROM", "").strip()
+    reply_to = os.environ.get("KUBO_EMAIL_REPLY_TO", "").strip() or None
     if not all((host, port_raw, user, password, from_address)):
         return None
     try:
@@ -53,6 +55,7 @@ def email_smtp_config() -> SmtpConfig | None:
         user=user,
         password=password,
         from_address=from_address,
+        reply_to=reply_to,
     )
 
 
@@ -81,6 +84,8 @@ def send_email(
     msg["From"] = smtp_config.from_address or smtp_config.user
     msg["To"] = to
     msg["Subject"] = subject
+    if smtp_config.reply_to:
+        msg["Reply-To"] = smtp_config.reply_to
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
 
