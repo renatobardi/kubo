@@ -160,7 +160,7 @@ def test_injected_sender_is_called() -> None:
 
 
 def test_send_with_reply_to_success() -> None:
-    """`Reply-To` é adicionado ao header quando configurado no SmtpConfig."""
+    """`Reply-To` header is added when configured in SmtpConfig."""
     mock_smtp = MagicMock()
     mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
     mock_smtp.__exit__ = MagicMock(return_value=False)
@@ -181,7 +181,7 @@ def test_send_with_reply_to_success() -> None:
 
 
 def test_send_without_reply_to_omits_header() -> None:
-    """`Reply-To` não aparece no header quando não configurado."""
+    """`Reply-To` header is omitted when not configured."""
     mock_smtp = MagicMock()
     mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
     mock_smtp.__exit__ = MagicMock(return_value=False)

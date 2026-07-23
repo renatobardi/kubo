@@ -604,6 +604,7 @@ Copie `.env.example` para `~/kubo/.env` no `kubo-prd` e preencha com os segredos
   aleatórios.
 * `KUBO_PASSWORD_HASH`/`SESSION_SECRET`: próprios da PRD.
 * `KUBO_ALLOWED_HOSTS=100.66.254.24` (IP Tailscale do publish PRD).
+* `KUBO_BASE_URL=http://100.66.254.24:2900` (link do digest aponta para a UI da PRD).
 * `TELEGRAM_BOT_TOKEN`: **token real** do bot atual.
 * `KUBO_OWNER_TELEGRAM_CHAT_ID`: **chat real** do dono.
 * `KUBO_EMAIL_REPLY_TO`: e-mail pessoal do dono (ADR-0038) — por enquanto só
@@ -628,16 +629,16 @@ próprias e apontando para o `surrealdb` do `kubo-prd`.
 
 Ordem importante — o token real aceita **um consumidor de updates por vez**:
 
-1. No `kubo-test`, pare o scheduler (e limpe o webhook, se houver):
+1. No `kubo-test`, pare o scheduler para soltar o consumidor do token real
+   (polling). Se houver webhook inbound ativo, delete-o pelo Bot API com o
+   token real:
    ```bash
    ssh kubo-test
    cd ~/kubo
    docker compose stop kubo-scheduler
-   docker compose exec kubo-api python -c "
-   from kubo.distribution.telegram import TelegramClient
-   TelegramClient().set_webhook('')  # ou delete via Bot API
-   "
-   # ou, se não houver webhook, apenas garanta que nenhum poller está ativo.
+   set -a; . ./.env; set +a
+   curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook"
+   unset TELEGRAM_BOT_TOKEN
    ```
 2. Troque o `.env` do `kubo-test` para o **bot de teste** e **chat de teste**.
 3. Atualize o destino semeado no DEV para o chat de teste (UI ou re-seed com
