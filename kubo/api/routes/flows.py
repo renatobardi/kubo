@@ -10,6 +10,7 @@ Leituras usam `client.connect` (kubo_ro). Rotas SÍNCRONAS (`def`, threadpool �
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any
 
 import structlog
@@ -21,6 +22,7 @@ from surrealdb import RecordID
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
+from kubo.api.urls import safe_next
 from kubo.distribution.config import resolve_base_url
 from kubo.errors import ConfigError, ForgeError, PromotionError, SenderError, StateError
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate
@@ -102,6 +104,18 @@ def reject(
     return _decide(request, task=task, csrf=csrf, approve=False, reason=reason)
 
 
+def _session_is_fresh(request: Request) -> bool:
+    """Step-up (KUBO-95): True se auth_at está dentro de SESSION_FRESH_MAX_AGE."""
+    auth_at = request.session.get("auth_at")
+    if not isinstance(auth_at, int):
+        return False
+    age = time.time() - auth_at
+    if age < 0:
+        return False
+    max_age = getattr(request.app.state, "session_fresh_max_age", 600)
+    return age <= max_age
+
+
 @router.post("/gate/promote")
 def promote(
     request: Request,
@@ -111,9 +125,13 @@ def promote(
 ) -> Response:
     """Confirma a promoção (ADR-0021 §9) — a 3ª porta de escrita da UI, rota PRÓPRIA (a validação
     de segurança do import-oráculo não fica escondida atrás de um `if` no approve genérico). CSRF
-    + staleness + fail-fast 503. `worker_name` vazio → 400 com o board reaberto."""
+    + step-up (KUBO-95) + staleness + fail-fast 503. `worker_name` vazio → 400 com o board
+    reaberto."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    if not _session_is_fresh(request):
+        referer = request.headers.get("referer", "/flows")
+        return RedirectResponse(f"/login?next={safe_next(referer, '/flows')}", status_code=303)
     gate_task = _parse_task_id(task)
     if gate_task is None:
         return PlainTextResponse("id de task inválido.", status_code=400)

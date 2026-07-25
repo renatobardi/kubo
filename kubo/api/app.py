@@ -17,6 +17,7 @@ compose bate em `http://localhost:8000/healthz` de dentro do container.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,10 +53,10 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _SESSION_MAX_AGE = 14 * 24 * 3600
 _SESSION_COOKIE = "kubo_session"
 
-# Sem sessão exigida: a tela de login, o liveness, os estáticos e o webhook do
-# Telegram (a tela de login precisa carregar CSS/JS; o webhook carrega seu próprio
-# secret). Tudo mais passa pelo guard.
-_PUBLIC_PATHS = frozenset({"/login", "/healthz", "/telegram/webhook"})
+# Sem sessão exigida: a tela de login, o handler de login Firebase, o liveness,
+# os estáticos e o webhook do Telegram (a tela de login precisa carregar CSS/JS;
+# o webhook carrega seu próprio secret). Tudo mais passa pelo guard.
+_PUBLIC_PATHS = frozenset({"/login", "/auth/firebase", "/healthz", "/telegram/webhook"})
 # Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
 # futura chamada, digamos, /statics passaria pelo guard sem sessão.
 _PUBLIC_PREFIXES = ("/static/",)
@@ -64,15 +65,47 @@ _PUBLIC_PREFIXES = ("/static/",)
 # (+ MagicDNS). `testserver` é o Host do TestClient do Starlette.
 _DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "testserver")
 
+# UID do Firebase: até 128 chars, alfanumérico + underscore/hífen/ponto/dois-pontos.
+# Se a allowlist não seguir esse padrão, consideramos malformada e negamos tudo.
+_UID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def _parse_owner_uids(raw: str) -> set[str]:
+    """Parseia KUBO_FIREBASE_OWNER_UIDS; malformado ou vazio devolve set vazio."""
+    uids = {uid.strip() for uid in raw.split(",") if uid.strip()}
+    if not uids or not all(_UID_RE.match(uid) for uid in uids):
+        return set()
+    return uids
+
+
+@dataclass(frozen=True)
+class FirebaseConfig:
+    """Configuração pública do Firebase (apiKey, authDomain, projectId)."""
+
+    api_key: str
+    auth_domain: str
+    project_id: str
+
+    def as_firebase_js_dict(self) -> dict[str, str]:
+        """Serializa no formato camelCase exigido pelo Firebase JS SDK."""
+        return {
+            "apiKey": self.api_key,
+            "authDomain": self.auth_domain,
+            "projectId": self.project_id,
+        }
+
 
 @dataclass(frozen=True)
 class UiConfig:
     """Config da UI vinda só de env (invariante 8): hash da senha, secret da
-    sessão e hosts confiáveis."""
+    sessão, hosts confiáveis, identidades Firebase autorizadas e freshness."""
 
     password_hash: str
     session_secret: str
     allowed_hosts: list[str]
+    session_fresh_max_age: int
+    firebase_config: FirebaseConfig
+    firebase_owner_uids: set[str]
 
 
 def _ui_config() -> UiConfig:
@@ -96,21 +129,40 @@ def _ui_config() -> UiConfig:
     for loopback in ("localhost", "127.0.0.1"):
         if loopback not in allowed:
             allowed.append(loopback)
+    project_id = os.environ.get("KUBO_FIREBASE_PROJECT_ID", "")
+    owner_uids = _parse_owner_uids(os.environ.get("KUBO_FIREBASE_OWNER_UIDS", ""))
+    auth_domain = os.environ.get("KUBO_FIREBASE_AUTH_DOMAIN", "")
+    if not auth_domain and project_id:
+        auth_domain = f"{project_id}.firebaseapp.com"
+    firebase_config = FirebaseConfig(
+        api_key=os.environ.get("KUBO_FIREBASE_API_KEY", ""),
+        auth_domain=auth_domain,
+        project_id=project_id,
+    )
+    try:
+        fresh_max_age = int(os.environ.get("SESSION_FRESH_MAX_AGE", "600"))
+    except ValueError:
+        fresh_max_age = 600
     return UiConfig(
-        password_hash=password_hash, session_secret=session_secret, allowed_hosts=allowed
+        password_hash=password_hash,
+        session_secret=session_secret,
+        allowed_hosts=allowed,
+        session_fresh_max_age=fresh_max_age,
+        firebase_config=firebase_config,
+        firebase_owner_uids=owner_uids,
     )
 
 
 class RequireLoginMiddleware(BaseHTTPMiddleware):
-    """Redireciona toda requisição sem sessão para /login, exceto rotas públicas.
+    """Redireciona toda requisição sem sessão válida para /login, exceto rotas públicas.
 
     Guard num único ponto (não uma dependency por rota) — não há como esquecer de
-    proteger uma rota nova. Não faz trabalho bloqueante (só lê o dict de sessão)."""
+    proteger uma rota nova. Sessão válida = `role == "owner"` (KUBO-92)."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         public = path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES)
-        if public or request.session.get("auth"):
+        if public or request.session.get("role") == "owner":
             return await call_next(request)
         return RedirectResponse("/login", status_code=303)
 
@@ -121,6 +173,9 @@ def create_app() -> FastAPI:
     cfg = _ui_config()
     app = FastAPI(title="Kubo", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.password_hash = cfg.password_hash
+    app.state.session_fresh_max_age = cfg.session_fresh_max_age
+    app.state.firebase_config = cfg.firebase_config
+    app.state.firebase_owner_uids = cfg.firebase_owner_uids
 
     # Estáticos: htmx vendorizado, font Inter self-hosted, favicon sakura e o
     # app.css gerado pelo Tailwind. O diretório existe no repo (htmx/font/favicon
@@ -153,7 +208,7 @@ def create_app() -> FastAPI:
         session_cookie=_SESSION_COOKIE,
         max_age=_SESSION_MAX_AGE,
         same_site="lax",
-        https_only=False,  # tailnet cifra o transporte (ADR-0014); pré-condição de TLS registrada
+        https_only=True,  # ADR-0035: exposição HTTPS pública exige Secure global
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=cfg.allowed_hosts)
 

@@ -692,6 +692,102 @@ Use um `LaunchAgent` separado (ou outro mecanismo) puxando `oute-server:backups/
 
 ---
 
+### 5.8 Exposição à internet (Fatia B) — vhost Nginx
+
+A PRD é exposta em `https://kubo.oute.pro` pelo Nginx do **host** `oute-server`
+(ADR-0035). O container LXC continua ouvindo `10.173.117.21:2900`; o Nginx apenas
+termina TLS e faz proxy reverso, adicionando os headers `X-Forwarded-*` para que
+o Uvicorn reconnheça o scheme `https` e o cookie `Secure` funcione.
+
+> O IP do LXC é fixo no host (`10.173.117.21` confirmado por `lxc list` em
+> 2026-07-25, ADR-0035 §Atualização). Se mudar, o vhost quebra com 502.
+
+Pré-requisitos no host:
+
+```bash
+apt-get install -y certbot
+```
+
+Arquivo `/etc/nginx/sites-available/kubo.oute.pro` (Certbot gerencia o bloco
+`443` via HTTP-01 com webroot `/var/www/certbot`; edite com `certbot
+reinstall --cert-name kubo.oute.pro`):
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name kubo.oute.pro;
+
+    location /.well-known/acme-challenge/ {
+        alias /var/www/certbot/.well-known/acme-challenge/;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+```
+
+Após o Certbot emitir o certificado, ele adiciona o bloco `443`. Verifique que
+o `location /` do bloco `443` contenha:
+
+```nginx
+    location / {
+        proxy_pass http://10.173.117.21:2900;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+        client_max_body_size 10m;
+    }
+```
+
+Obtenha/renove o certificado:
+
+```bash
+# Crie o webroot se não existir:
+mkdir -p /var/www/certbot
+
+# Certbot HTTP-01 (não pede credencial de DNS):
+certbot certonly --webroot -w /var/www/certbot -d kubo.oute.pro --dry-run
+# Sem erros:
+certbot certonly --webroot -w /var/www/certbot -d kubo.oute.pro
+
+# O Nginx foi validado e recarregado pelo Certbot; se não:
+nginx -t && systemctl reload nginx
+```
+
+Configuração do `.env` do `kubo-prd`:
+
+```
+# Hosts confiáveis: o domínio público + o IP Tailscale do proxy.
+KUBO_ALLOWED_HOSTS=kubo.oute.pro,100.66.254.24
+# Uvicorn só confia X-Forwarded-Proto do peer da conexão. No LXC aninhado,
+# o peer geralmente é o gateway da bridge (ex.: 10.173.117.1). Verifique
+# request.client.host na primeira subida e preencha:
+FORWARDED_ALLOW_IPS=10.173.117.1
+```
+
+Smoke:
+
+```bash
+# de fora (internet):
+curl -I https://kubo.oute.pro/healthz
+# deve retornar HTTP 200 com header Set-Cookie Secure no login.
+```
+
+> **Aceite de produção (KUBO-94 / ADR-0036 §V):** antes de declarar a Fatia B
+> pronta, testar `signInWithPopup` (Google e GitHub) no **celular do dono pelo
+> caminho público** (`https://kubo.oute.pro/login`). Se o popup falhar em
+> mobile, a decisão de popup versus redirect reabre.
+
+---
+
 ## 6. Cheat-sheet
 
 | Ação | Comando |

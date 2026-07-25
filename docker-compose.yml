@@ -166,7 +166,12 @@ services:
       - "8000"
       - --workers
       - "1"
+      - --proxy-headers
+    # Uvicorn só confia em X-Forwarded-Proto se o peer estiver nesta lista.
+    # No deploy LXC o peer é o gateway da bridge (ex.: 10.173.117.1); ajuste
+    # pelo valor real visto em `request.client.host` no primeiro deploy.
     environment:
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       SURREAL_URL: ws://surrealdb:8000/rpc
       # A UI usa o usuário READ-ONLY (ROOT-level VIEWER, ADR-0014 amendment 0010):
       # só GET/leituras, nunca escreve. Credencial DISTINTA da de escrita (scheduler/
@@ -186,6 +191,13 @@ services:
       # Hosts confiáveis (TrustedHost, anti-DNS-rebinding). Default = IP Tailscale do
       # publish; localhost é sempre permitido no código (healthcheck). Vírgula separa.
       KUBO_ALLOWED_HOSTS: ${KUBO_ALLOWED_HOSTS:-100.66.254.24}
+      # Firebase Auth (ADR-0036, KUBO-93): apiKey (publicável), project id, auth
+      # domain + allowlist de uids owner. SEM `:?` fail-fast — ausentes, o login
+      # Firebase dá 503; o login scrypt segue.
+      KUBO_FIREBASE_API_KEY: ${KUBO_FIREBASE_API_KEY:-}
+      KUBO_FIREBASE_PROJECT_ID: ${KUBO_FIREBASE_PROJECT_ID:-}
+      KUBO_FIREBASE_AUTH_DOMAIN: ${KUBO_FIREBASE_AUTH_DOMAIN:-}
+      KUBO_FIREBASE_OWNER_UIDS: ${KUBO_FIREBASE_OWNER_UIDS:-}
       # Busca: SEM fail-fast (E-f) — a UI sobe sem a key e serve Painel + listas; só a
       # busca degrada (alerta tinted). GEMINI = embedding da busca semântica.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

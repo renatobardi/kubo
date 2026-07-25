@@ -23,6 +23,15 @@ class KuboError(Exception):
     """Base de todas as exceções do domínio Kubo."""
 
 
+class FirebaseTokenError(KuboError):
+    """ID token Firebase inválido, não confiável ou fora da allowlist."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class ConfigError(KuboError):
     """Configuração ausente ou inconsistente (ex.: credencial obrigatória faltando)."""
 

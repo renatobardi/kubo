@@ -122,7 +122,7 @@ def _login_and_csrf(app: Any, flow_key: str) -> tuple[TestClient, str]:
     """Autentica e devolve (client, csrf) lido do board renderizado."""
     import re
 
-    tc = TestClient(app)
+    tc = TestClient(app, base_url="https://testserver")
     login = tc.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert login.status_code == 303
     html = tc.get(f"/flows/{flow_key}").text

@@ -10,6 +10,8 @@ parte (o footgun do no-op silencioso).
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -344,3 +346,107 @@ def test_reject_pr_close_failure_reopens_board(
     )
     assert resp.status_code == 502
     assert "PR" in resp.text
+
+
+def _fresh_age_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configura SESSION_FRESH_MAX_AGE=10s para testes de step-up."""
+    monkeypatch.setenv("SESSION_FRESH_MAX_AGE", "10")
+
+
+def _step_up_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    auth_at: float,
+    promote_at: float,
+) -> tuple[TestClient, str]:
+    """Cria client logado em `auth_at` e devolve (client, csrf) para promote em `promote_at`.
+
+    `time.time` é mockado para `auth_at` durante o login e restaurado antes do board/promote.
+    """
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+
+    from kubo.api.app import create_app
+    from tests.api.conftest import UI_PASSWORD
+
+    monkeypatch.setattr("kubo.api.routes.auth.time.time", lambda: auth_at)
+    client = TestClient(create_app(), base_url="https://testserver")
+    client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
+    # time.time é mockado novamente para o momento do promote (step-up compara auth_at vs agora).
+
+    @contextmanager
+    def _fake_rw(cfg: object = None) -> Iterator[object]:
+        yield object()
+
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+
+    monkeypatch.setattr("kubo.api.routes.flows.time.time", lambda: promote_at)
+    csrf = _csrf_from(client.get("/flows/d1").text)
+    return client, csrf
+
+
+def test_promote_requires_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirmar promoção exige sessão fresca (KUBO-95): velha demais → 303 para login."""
+    _fresh_age_seconds(monkeypatch)
+    client, csrf = _step_up_client(monkeypatch, auth_at=1000.0, promote_at=1101.0)
+
+    def _should_not_be_called(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("promote_gate não deve ser chamado quando a sessão não é fresca")
+
+    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _should_not_be_called)
+
+    resp = client.post(
+        "/flows/gate/promote",
+        data={"task": "task:h2", "csrf": csrf, "worker_name": "feed"},
+        headers={"referer": "https://testserver/flows/d1"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login?next=/flows/d1"
+
+
+def test_session_is_fresh_rejects_future_auth_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    """auth_at no futuro é rejeitado antes mesmo de comparar max_age."""
+    from kubo.api.routes.flows import _session_is_fresh
+
+    class _FakeRequest:
+        def __init__(self, session: dict[str, Any]) -> None:
+            self.session = session
+            self.app = SimpleNamespace(state=SimpleNamespace(session_fresh_max_age=600))
+
+    monkeypatch.setattr("kubo.api.routes.flows.time.time", lambda: 1000.0)
+    request = _FakeRequest({"auth_at": 2000})
+    assert _session_is_fresh(request) is False  # type: ignore[arg-type]
+
+
+def test_promote_allows_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sessão fresca permite a promoção prosseguir (não redireciona para login)."""
+    _fresh_age_seconds(monkeypatch)
+    client, csrf = _step_up_client(monkeypatch, auth_at=1000.0, promote_at=1005.0)
+
+    called: dict[str, Any] = {}
+
+    def _spy_promote_gate(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+        called["db"] = db
+        called["gate_task"] = gate_task
+        called["worker_name"] = worker_name
+
+    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _spy_promote_gate)
+
+    resp = client.post(
+        "/flows/gate/promote",
+        data={"task": "task:h2", "csrf": csrf, "worker_name": "feed"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/flows/d1"
+    assert called.get("gate_task") == RecordID("task", "h2")
+    assert called.get("worker_name") == "feed"

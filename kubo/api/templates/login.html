@@ -28,7 +28,7 @@
       </div>
 
       <h1 class="text-xl font-semibold tracking-tight">Entrar</h1>
-      <p class="mt-1 text-sm text-muted-foreground">Informe a senha para acessar o ateliê.</p>
+      <p class="mt-1 text-sm text-muted-foreground">Escolha como acessar o ateliê.</p>
 
       {% if error %}
         <div class="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -36,13 +36,36 @@
         </div>
       {% endif %}
 
-      <form method="post" action="/login" class="mt-4 space-y-3">
+      <div class="mt-4 space-y-2.5">
+        <button
+          id="btn-login-google"
+          type="button"
+          class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px"
+        >
+          Entrar com Google
+        </button>
+        <button
+          id="btn-login-github"
+          type="button"
+          class="h-9 w-full rounded-4xl bg-card px-3 text-sm font-medium text-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted active:translate-y-px"
+        >
+          Entrar com GitHub
+        </button>
+      </div>
+
+      <div class="relative my-4 flex items-center">
+        <span class="grow border-t border-border"></span>
+        <span class="shrink-0 px-2 text-xs text-muted-foreground">ou use a senha</span>
+        <span class="grow border-t border-border"></span>
+      </div>
+
+      <form method="post" action="/login" class="space-y-3">
+        <input type="hidden" name="next" value="{{ next }}" />
         <label for="password" class="sr-only">Senha</label>
         <input
           id="password"
           type="password"
           name="password"
-          autofocus
           autocomplete="current-password"
           placeholder="Senha"
           class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -54,7 +77,78 @@
           Entrar
         </button>
       </form>
+      <div
+        id="login-error"
+        class="mt-4 hidden rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      ></div>
     </div>
   </main>
+
+  <script>
+    window.__KUBO_FIREBASE_CONFIG = {{ firebase | tojson }};
+    window.__KUBO_NEXT = {{ next | tojson }};
+  </script>
+  <!-- pragma: allowlist nextline secret -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" integrity="sha384-AQ3POAMqIhwS81FrUH95ekxqBZHeP5tG2JfEL3+7GuTtfRLWnrRh32UxwzM+//A9" crossorigin="anonymous"></script>
+  <!-- pragma: allowlist nextline secret -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" integrity="sha384-TnlRYaR4JYz/lpaGuaiU61PjNberSA4vjLjtF+oRC/IkohkJqnWxw5EmDSOt1vA1" crossorigin="anonymous"></script>
+  <script>
+    (function () {
+      const cfg = window.__KUBO_FIREBASE_CONFIG;
+      if (!cfg || !cfg.apiKey || !cfg.projectId) {
+        document.getElementById("btn-login-google").disabled = true;
+        document.getElementById("btn-login-github").disabled = true;
+        return;
+      }
+
+      firebase.initializeApp(cfg);
+      const auth = firebase.auth();
+
+      function showError() {
+        const box = document.getElementById("login-error");
+        if (box) {
+          box.textContent = "Não foi possível autenticar. Tente novamente.";
+          box.classList.remove("hidden");
+        }
+      }
+
+      async function sendIdToken(idToken) {
+        try {
+          const next = encodeURIComponent(window.__KUBO_NEXT || "/");
+          const resp = await fetch("/auth/firebase?next=" + next, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id_token: idToken }),
+            credentials: "same-origin",
+            redirect: "follow",
+          });
+          if (resp.ok) {
+            window.location.href = window.__KUBO_NEXT || "/";
+          } else {
+            showError();
+          }
+        } catch (e) {
+          showError();
+        }
+      }
+
+      async function signIn(provider) {
+        try {
+          const result = await auth.signInWithPopup(provider);
+          const idToken = await result.user.getIdToken();
+          await sendIdToken(idToken);
+        } catch (e) {
+          showError();
+        }
+      }
+
+      document.getElementById("btn-login-google").addEventListener("click", function () {
+        signIn(new firebase.auth.GoogleAuthProvider());
+      });
+      document.getElementById("btn-login-github").addEventListener("click", function () {
+        signIn(new firebase.auth.GithubAuthProvider());
+      });
+    })();
+  </script>
 </body>
 </html>
