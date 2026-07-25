@@ -141,7 +141,7 @@ def test_duplicate_is_soft_warning_without_second_record(app_db: Any) -> None:
 
 def test_csrf_is_required_for_create(app_db: Any) -> None:
     """POST sem CSRF válido é 403."""
-    tc = TestClient(app_db)
+    tc = TestClient(app_db, base_url="https://testserver")
     tc.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     resp = tc.post(
         "/destinations",
