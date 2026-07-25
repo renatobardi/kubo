@@ -1,0 +1,26 @@
+# compose.prd-lxc.yml — overlay do deploy PRD no container LXC kubo-prd.
+#
+# NÃO é um compose autônomo: sobrepõe o docker-compose.yml via
+# `COMPOSE_FILE=docker-compose.yml:compose.prd-lxc.yml` no .env do servidor
+# (ambiente-específico, não commitado). Verifique o merge com `docker compose config`.
+#
+# O kubo-prd é LXC irmão do kubo-test, com IP estático próprio na lxdbr0 e proxy
+# device no IP Tailscale do host encaminhando 2900 → kubo-prd:2900 (nat=true).
+# Ver ADR-0034 e a seção PRD do docs/runbook-deploy.md.
+#
+# Backup separado do DEV: o volume surreal-backups é redefinido para
+# `/backups/prd`, mapeado pelo disk device do LXD para `~/backups/kubo-prd`
+# no host. Assim os dumps da PRD não cruzam com os do kubo-test.
+
+services:
+  kubo-api:
+    ports:
+      - "${KUBO_PRD_LXC_IP:?defina KUBO_PRD_LXC_IP no .env do servidor}:2900:8000"
+
+volumes:
+  surreal-backups:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /backups/prd

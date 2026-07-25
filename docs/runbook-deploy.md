@@ -519,13 +519,190 @@ Ativar: `mkdir -p ~/Backups/kubo && launchctl load ~/Library/LaunchAgents/pro.ou
 
 ---
 
-## 5. Cheat-sheet
+## 5. Produção (kubo-prd) — Fatia A
+
+Ambiente PRD no LXC irmão do `kubo-test` (`10.173.117.19` aqui como exemplo; ajuste
+ao IP que for designado para a PRD na `lxdbr0`). Acessível **só pela tailnet** na
+porta 2900 (ADR-0034). Exposição à internet, Firebase e e-mail `@kubo.oute.pro`
+são fatias seguintes — aqui a PRD já roda o digest real no Telegram e a UI fica
+dentro da tailnet.
+
+> **Segredos:** o `.env` de `~/kubo/.env` no `kubo-prd` é criado e verificado
+> **pelo dono**, `chmod 600`. Nenhum passo aqui lê ou escreve o `.env`.
+
+### 5.1 Provisionamento do LXC (uma vez, no host oute-server)
+
+**Gate de viabilidade:** antes de cravar os limites, rode no host
+`free -h`, `nproc` e `df -h`. Se a folga de RAM/CPU/disco for magra, reduza
+primeiro o `kubo-test` (§5.1 “capar DEV”) e só então fixe os números da PRD.
+
+```bash
+# No host oute-server:
+# Storage pool próprio da PRD (disco cheio no DEV não mata a PRD):
+lxc storage create kubo-prd dir source=/var/lib/lxc/kubo-prd 2>/dev/null || true
+
+lxc init ubuntu:24.04 kubo-prd --storage kubo-prd
+lxc config set kubo-prd raw.lxc "lxc.apparmor.profile=unconfined"
+# Valores de exemplo — confirmados pelo gate de viabilidade acima:
+lxc config set kubo-prd limits.memory 3GiB
+lxc config set kubo-prd limits.cpu 2
+lxc config set kubo-prd boot.autostart true
+lxc config set kubo-prd boot.priority 101       # maior que o kubo-test
+lxc config device override kubo-prd eth0 ipv4.address=10.173.117.19
+lxc start kubo-prd
+
+# Capar o DEV para não disputar recurso com a PRD:
+lxc config set kubo-test limits.memory 2GiB
+lxc config set kubo-test limits.cpu 1
+lxc config set kubo-test boot.priority 100
+
+# Backup separado do DEV:
+mkdir -p ~/backups/kubo-prd
+lxc config device add kubo-prd backups disk source=$HOME/backups/kubo-prd path=/backups/prd shift=true
+```
+
+Dentro do `kubo-prd`, os mesmos ajustes de ambiente do `kubo-test` (ADR-0011 §I,II,IV):
+
+```bash
+# IP estático (DHCP não dispara com lease estático do LXD):
+cat > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg <<'EOF'
+network: {config: disabled}
+EOF
+cat > /etc/netplan/50-cloud-init.yaml <<'EOF'
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: false
+      addresses: [10.173.117.19/24]
+      routes: [{to: default, via: 10.173.117.1}]
+      nameservers: {addresses: [10.173.117.1]}
+EOF
+chmod 600 /etc/netplan/50-cloud-init.yaml && netplan apply
+
+# Docker distro + DNS + AppArmor (dpkg-divert):
+apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker
+usermod -aG docker ubuntu
+cat > /etc/docker/daemon.json <<'EOF'
+{ "dns": ["1.1.1.1", "1.0.0.1"] }
+EOF
+dpkg-divert --local --rename --divert /usr/sbin/apparmor_parser.disabled --add /usr/sbin/apparmor_parser
+systemctl restart docker
+```
+
+Verificação: `docker run --rm hello-world` e
+`docker run -d --name t alpine sleep 5 && docker exec t echo ok && docker rm -f t`.
+
+**Proxy device no host** (Tailscale-only, porta 2900):
+
+```bash
+lxc config device add kubo-prd kubo-ui-prd proxy \
+  listen=tcp:100.66.254.24:2900 connect=tcp:10.173.117.19:2900 nat=true
+lxc config device show kubo-prd
+```
+
+Risco aceito: o publish em `10.173.117.19` é alcançável pelos outros LXCs da
+`lxdbr0`; a auth (ADR-0036, fatia seguinte) é a defesa. Nesta fatia a UI usa
+scrypt existente (ADR-0014) e `Secure` do cookie **não** é ligado — HTTPS/TLS são
+pré-requisitos de exposição à internet.
+
+### 5.2 `.env` do servidor no kubo-prd
+
+Copie `.env.example` para `~/kubo/.env` no `kubo-prd` e preencha com os segredos
+**reais** da PRD (invariante 8). Destaques:
+
+* `COMPOSE_FILE=docker-compose.yml:compose.prd-lxc.yml`
+* `KUBO_PRD_LXC_IP=10.173.117.19`
+* `SURREAL_PASS`/`KUBO_RO_SURREAL_PASS`/`KUBO_RW_SURREAL_PASS`: próprios da PRD, 32+
+  aleatórios.
+* `KUBO_PASSWORD_HASH`/`SESSION_SECRET`: próprios da PRD.
+* `KUBO_ALLOWED_HOSTS=100.66.254.24` (IP Tailscale do publish PRD).
+* `KUBO_BASE_URL=http://100.66.254.24:2900` (link do digest aponta para a UI da PRD).
+* `TELEGRAM_BOT_TOKEN`: **token real** do bot atual.
+* `KUBO_OWNER_TELEGRAM_CHAT_ID`: **chat real** do dono.
+* `KUBO_EMAIL_REPLY_TO`: e-mail pessoal do dono (ADR-0038) — por enquanto só
+  prepara o header; o envio real de e-mail depende da conta Resend/DNS (fatia D).
+
+### 5.3 Deploy PRD
+
+Do Mac, na raiz do repo:
+
+```bash
+KUBO_DEPLOY_HOST=kubo-prd \
+KUBO_HEALTH_URL=http://100.66.254.24:2900/healthz \
+  ./scripts/deploy.sh
+```
+
+Ele rsynca o repo (sem o `.env` do servidor), builda, aplica migrations, seed e
+verifica `/healthz`. A primeira subida também exige os passos one-time §2c e §2d
+(viewer `kubo_ro` e editor `kubo_rw`), exatamente como no DEV, mas com senhas
+próprias e apontando para o `surrealdb` do `kubo-prd`.
+
+### 5.4 Cutover Telegram: DEV vira teste, PRD assume o real
+
+Ordem importante — o token real aceita **um consumidor de updates por vez**:
+
+1. No `kubo-test`, pare o scheduler e delete o webhook do token real (a
+   chamada `deleteWebhook` é idempotente; isso impede dois pollers):
+   ```bash
+   ssh kubo-test
+   cd ~/kubo
+   docker compose stop kubo-scheduler
+   set -a; . ./.env; set +a
+   curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook"
+   unset TELEGRAM_BOT_TOKEN
+   ```
+2. Troque o `.env` do `kubo-test` para o **bot de teste** e **chat de teste**.
+3. Atualize o destino semeado no DEV para o chat de teste (pela UI, ou
+   remova o marker `seed_marker:owner_destination` e rode o seed novamente).
+4. Confirme que o `.env` do `kubo-prd` tem o token/chat real e `COMPOSE_FILE`
+   apontando para `compose.prd-lxc.yml`.
+5. Rode o deploy da PRD (passo 5.3).
+6. Suba o scheduler da PRD: `ssh kubo-prd "cd ~/kubo && docker compose up -d kubo-scheduler"`.
+
+Após a virada, o `kubo-test` nunca mais deve carregar o token real: o fail-safe é
+estritamente a separação de credencial (`.env`) e dado (destinos no banco)
+(ADR-0038 §III).
+
+### 5.5 Smoke físico da Fatia A
+
+* `curl http://100.66.254.24:2900/healthz` → `ok` pela tailnet.
+* Login scrypt funciona; UI mostra as 6 fontes cadastradas pelo seed; grafo de
+  conhecimento vazio.
+* O digest da PRD chega no Telegram **real** do dono.
+* O digest do DEV (re-configurado com bot de teste) chega no Telegram de **teste**.
+* Nenhum duplo-envio: o mesmo digest não chega duas vezes no canal real.
+* Do IP público do host, `curl --max-time 5 http://<IP_PUBLICO>:2900/healthz` deve
+  falhar (nada exposto à internet).
+
+### 5.6 Restore PRD
+
+Mesma cadeia de restore do DEV (§4), mas apontando para `~/backups/kubo-prd` e
+executando no `kubo-prd`:
+
+```bash
+DUMP=$(ls -1 /backups/prd/kubo-*.surql | sort | tail -1)
+mkdir -p ~/restore-tmp
+# ... mesmos passos de ~/restore-tmp/pass1.surql e pass2.surql do §4 ...
+```
+
+### 5.7 Backup PRD para o Mac
+
+Use um `LaunchAgent` separado (ou outro mecanismo) puxando `oute-server:backups/kubo-prd/`.
+
+---
+
+## 6. Cheat-sheet
 
 | Ação | Comando |
 |---|---|
-| Entrar | `ssh kubo-test` |
+| Entrar DEV | `ssh kubo-test` |
+| Entrar PRD | `ssh kubo-prd` |
 | Estado | `cd ~/kubo && docker compose ps` |
 | Logs scheduler | `docker compose logs -f kubo-scheduler` |
 | Reiniciar stack | `docker compose restart` |
 | Parar/subir | `docker compose down` / `docker compose up -d` |
-| Reboot container | `ssh oute-server lxc restart kubo-test` (religa tudo sozinho) |
+| Deploy DEV | `./scripts/deploy.sh` |
+| Deploy PRD | `KUBO_DEPLOY_HOST=kubo-prd KUBO_HEALTH_URL=http://100.66.254.24:2900/healthz ./scripts/deploy.sh` |
+| Reboot container DEV | `ssh oute-server lxc restart kubo-test` (religa tudo sozinho) |
+| Reboot container PRD | `ssh oute-server lxc restart kubo-prd` (religa tudo sozinho) |

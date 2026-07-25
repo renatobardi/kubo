@@ -235,5 +235,8 @@ planning/
 # e favicon SÃO versionados (o dir static existe no repo por causa deles).
 kubo/api/static/app.css
 
+# Scripts de ops manual (item 15 do CLAUDE.md global)
+scripts/ops/
+
 # Docs efêmeros de auditoria (conteúdo coletado, nunca commitar) — sessão 0014
 *.local.md

@@ -159,6 +159,47 @@ def test_injected_sender_is_called() -> None:
     assert calls[0]["from_address"] == "kubo@example.com"
 
 
+def test_send_with_reply_to_success() -> None:
+    """`Reply-To` header is added when configured in SmtpConfig."""
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    mock_smtp.has_extn.return_value = True
+
+    with patch("kubo.distribution.email.smtplib.SMTP", return_value=mock_smtp):
+        send_email(
+            to="owner@example.com",
+            subject="Kubo digest",
+            text_body="plain",
+            html_body="<p>html</p>",
+            smtp_config=_config(reply_to="donowner@example.com"),
+        )
+
+    msg = mock_smtp.send_message.call_args.args[0]
+    assert msg["Reply-To"] == "donowner@example.com"
+    assert msg["From"] == "kubo@example.com"
+
+
+def test_send_without_reply_to_omits_header() -> None:
+    """`Reply-To` header is omitted when not configured."""
+    mock_smtp = MagicMock()
+    mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp.__exit__ = MagicMock(return_value=False)
+    mock_smtp.has_extn.return_value = True
+
+    with patch("kubo.distribution.email.smtplib.SMTP", return_value=mock_smtp):
+        send_email(
+            to="owner@example.com",
+            subject="Kubo digest",
+            text_body="plain",
+            html_body="<p>html</p>",
+            smtp_config=_config(),
+        )
+
+    msg = mock_smtp.send_message.call_args.args[0]
+    assert "Reply-To" not in msg
+
+
 def test_email_smtp_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """`email_smtp_config` monta SmtpConfig a partir das variáveis de ambiente padrão."""
     monkeypatch.setenv("KUBO_EMAIL_HOST", "smtp.example.com")
@@ -166,6 +207,7 @@ def test_email_smtp_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KUBO_EMAIL_USER", "kubo@example.com")
     monkeypatch.setenv("KUBO_EMAIL_PASSWORD", _TEST_PASSWORD)  # pragma: allowlist secret
     monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_REPLY_TO", "dono@example.com")
 
     cfg = email_smtp_config()
     assert cfg is not None
@@ -174,6 +216,21 @@ def test_email_smtp_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.user == "kubo@example.com"
     assert cfg.password == _TEST_PASSWORD
     assert cfg.from_address == "kubo@example.com"
+    assert cfg.reply_to == "dono@example.com"
+
+
+def test_email_smtp_config_reply_to_empty_becomes_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`KUBO_EMAIL_REPLY_TO` vazio é normalizado para None."""
+    monkeypatch.setenv("KUBO_EMAIL_HOST", "smtp.example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PORT", "587")
+    monkeypatch.setenv("KUBO_EMAIL_USER", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_PASSWORD", _TEST_PASSWORD)  # pragma: allowlist secret
+    monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
+    monkeypatch.setenv("KUBO_EMAIL_REPLY_TO", "   ")
+
+    cfg = email_smtp_config()
+    assert cfg is not None
+    assert cfg.reply_to is None
 
 
 def test_email_smtp_config_returns_none_when_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
