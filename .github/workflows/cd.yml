@@ -56,6 +56,9 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04-arm
     environment: dev
+    concurrency:
+      group: cd-dev
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
@@ -113,6 +116,9 @@ jobs:
     needs: [build, collect-digest]
     runs-on: ubuntu-24.04-arm
     environment: prd
+    concurrency:
+      group: cd-prd
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
@@ -122,6 +128,26 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY_PRD }}
           tags: tag:cd-prd
+      # Revalida contra o kubo-test (não o kubo-prd): fecha a "race do DEV-que-andou"
+      # (ADR-0037 §IV) — entre a coleta pré-gate e a aprovação, um merge novo pode ter
+      # trocado o digest vivo no DEV. Aborta se o que foi homologado já não é mais atual.
+      - name: Revalidar digest antes do deploy
+        env:
+          EXPECTED: ${{ needs.collect-digest.outputs.digest }}
+          HOST: ${{ secrets.KUBO_TEST_HOST }}
+        run: |
+          live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
+          if [ "$live_digest" != "$EXPECTED" ]; then
+            echo "::error::Digest do kubo-test mudou desde a homologação (aprovado sha256:${EXPECTED}, agora vivo sha256:${live_digest}) — dispare a promoção de novo"
+            exit 1
+          fi
+      - name: Backup antes de migrar
+        env:
+          HOST: ${{ secrets.KUBO_PRD_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && docker compose exec -T backup sh -c 'date -u +%Y%m%dT%H%M%SZ > /backups/.pre-migration-marker'" < /dev/null
       - name: Sync repo → kubo-prd
         env:
           HOST: ${{ secrets.KUBO_PRD_HOST }}
@@ -132,26 +158,12 @@ jobs:
             --exclude='.env' \
             -e 'ssh -o StrictHostKeyChecking=no' \
             ./ "${HOST}:kubo/"
-      - name: Revalidar digest antes do deploy
-        env:
-          EXPECTED: ${{ needs.collect-digest.outputs.digest }}
-          HOST: ${{ secrets.KUBO_PRD_HOST }}
-        run: |
-          live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
-          if [ "$live_digest" != "$EXPECTED" ]; then
-            echo "::error::Digest divergiu entre coleta e deploy (esperado sha256:${EXPECTED}, vivo sha256:${live_digest})"
-            exit 1
-          fi
-      - name: Backup antes de migrar
-        env:
-          HOST: ${{ secrets.KUBO_PRD_HOST }}
-        run: |
-          ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && docker compose exec -T backup sh -c 'date -u +%Y%m%dT%H%M%SZ > /backups/.pre-migration-marker'" < /dev/null
+      # Promove exatamente o digest homologado e aprovado (needs.collect-digest), não um
+      # rebuild do dispatch atual (needs.build) — build não é bit-reproducible e o ponto do
+      # gate é aprovar bytes específicos (ADR-0037 §I, §IV.3).
       - name: Deploy to kubo-prd
         env:
-          DIGEST: ${{ needs.build.outputs.digest }}
+          DIGEST: ${{ needs.collect-digest.outputs.digest }}
           HOST: ${{ secrets.KUBO_PRD_HOST }}
         run: |
           ssh -o StrictHostKeyChecking=no "${HOST}" \
