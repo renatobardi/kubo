@@ -1,7 +1,7 @@
 # ADR-0035 — Exposição da PRD: porta aberta + TLS próprio (Caddy)
 
 > Status: **aceito** · Data: 2026-07-22 · Reverte a rejeição de "Caddy + port-forward" da sessão 0020 (`docs/sessions/0020-exposicao-kubo-oute-pro.md`), com motivo empírico nomeado.
-> **Mecanismo de TLS revisado em 2026-07-25** (premissa central era falsa — a exposição vive no **nginx do host**, não em Caddy). Ver §Atualização ao final.
+> **⚠️ Mecanismo de TLS SUPERADO em 2026-07-25:** o §Decisão I (Caddy no compose) é **histórico** — a exposição **vigente** é **nginx do host + certbot**, não Caddy; a premissa central era falsa. A decisão de fundo (porta-aberta + TLS na própria caixa) permanece. Ver §Atualização ao final.
 
 ## Contexto
 
@@ -17,6 +17,8 @@ Fato favorável levantado: do lado público, `80/443/2900` estão **fechados** n
 ## Decisão
 
 ### I. Caddy no compose termina o TLS na 443
+
+> **[SUPERADO 2026-07-25 — histórico]** A decisão **vigente** é **nginx do host + certbot** (ver §Atualização ao final). O texto abaixo é o registro do que se decidiu em 2026-07-22, mantido como histórico — não é o que está no ar.
 
 `Caddy` como **container no compose** (portável, migra com `docker compose up` — mesmo papel que o `cloudflared` teria) termina o TLS na **443** e faz reverse-proxy para `kubo-api:8000` pela rede interna. Cert **Let's Encrypt via HTTP-01** → a regra da **security list da VCN abre 80 E 443** (o HTTP-01 precisa da 80). Registro **A explícito** `kubo.oute.pro → 140.238.238.118` (não confiar no wildcard). **DNS fica na Hostinger** — zero migração.
 
@@ -55,8 +57,8 @@ A exposição foi construída de forma diferente da decidida aqui, e a **premiss
 
 **Consequências da divergência:**
 
-- A propriedade que justificava o Caddy — *"container no compose, portável, migra com `docker compose up`"* — **cai**. O vhost é **artefato manual no host**, fora do repo/compose, **compartilhado com os 13 vizinhos** (config e destino-de-falha comuns; a security list host-wide do §III já antecipava esse compartilhamento). A esteira de CD (ADR-0037) sobe o compose e **não toca o nginx**: o vhost é operado à parte e o certbot renova sozinho. **Dívida de doc:** o setup do vhost não está no `docs/runbook-deploy.md` (a §5 só cobre a tailnet 2900) — entra na Fatia B.
+- A propriedade que justificava o Caddy — *"container no compose, portável, migra com `docker compose up`"* — **cai**. O vhost é **artefato manual no host**, fora do repo/compose, **compartilhado com os 13 vizinhos** (config e destino-de-falha comuns; a security list host-wide do §III já antecipava esse compartilhamento). A esteira de CD (ADR-0037) sobe o compose e **não toca o nginx**: o vhost é operado à parte e o certbot renova sozinho. **IP acoplado:** o upstream `10.173.117.21` é **fixado** (netplan + lease estático do LXD, runbook §5.1); como o vhost o hardcoda e o CD não o atualiza, uma troca de IP do kubo-prd quebra a exposição (502) e exige editar o vhost à mão — manter o IP pinado (ou trocar por MagicDNS estável). **Dívida de doc:** o setup do vhost não está no `docs/runbook-deploy.md` (a §5 só cobre a tailnet 2900) — entra na Fatia B.
 - As pré-condições do §II seguem **válidas e pendentes no código**: cookie `Secure=True` global e `--forwarded-allow-ips` confiando a origem do nginx no uvicorn são critério de aceite da Fatia B (auth Firebase), não estão feitos.
-- O risco do §III (*"a exposição eleva a auth a portão único"*) **materializou-se pior que o previsto**: a superfície pública está guardada hoje por **scrypt de senha única** (Firebase/ADR-0036 ainda não no ar). Gate interino barato: `auth_basic` no vhost fecha a superfície sem esperar código — recomendado enquanto a Fatia B não entra.
+- O risco do §III (*"a exposição eleva a auth a portão único"*) **materializou-se pior que o previsto**: a superfície pública está guardada hoje por **scrypt de senha única** (Firebase/ADR-0036 ainda não no ar). Gate interino barato: `auth_basic` no vhost fecha a superfície sem esperar código — recomendado enquanto a Fatia B não entra. Se adotado, as credenciais do `auth_basic` seguem o invariante 8 — fora do repo, em secret manager/keychain, referenciadas por config (nunca valor em doc/commit), e removidas quando o Firebase entra.
 
 **Por que a realidade é preferível:** host-nginx+certbot é o padrão que os 13 projetos já usam — consistente, certbot já operado, zero container novo, coerente com a fadiga-de-complexidade. A decisão de Caddy foi correta *dada a premissa*, e a premissa é que estava errada.
