@@ -47,7 +47,7 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
 def _login_csrf(app: Any) -> tuple[TestClient, str]:
     """Autentica e devolve (client, csrf) lido do form de destinos."""
-    tc = TestClient(app)
+    tc = TestClient(app, base_url="https://testserver")
     login = tc.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert login.status_code == 303
     m = re.search(r'name="csrf" value="([0-9a-f]+)"', tc.get("/destinations").text)
