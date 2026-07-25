@@ -15,15 +15,24 @@ imagem sem digest determinístico.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
 
-import structlog
-
 _HEX_RE = re.compile(r"^[a-f0-9]+$")
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
-_log = structlog.get_logger().bind(worker="digest-guard", flow_id=None, task_id=None)
+
+
+def _log_event(event: str, level: str, **fields: object) -> None:
+    """Emite um evento estruturado em JSON no stderr.
+
+    Sem `structlog`: este script roda no host bare-metal (fora do venv da
+    imagem), então depende só da stdlib — ver docstring do módulo e
+    scripts/digest-guard.sh.
+    """
+    payload = {"event": event, "level": level, "worker": "digest-guard", **fields}
+    print(json.dumps(payload), file=sys.stderr)
 
 
 def normalize_digest(value: str) -> str:
@@ -134,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
         "project": args.project,
     }
     if rc == 0:
-        _log.info("digest_guard_ok", **log_kwargs)
+        _log_event("digest_guard_ok", "info", **log_kwargs)
     else:
-        _log.error("digest_guard_failed", **log_kwargs)
+        _log_event("digest_guard_failed", "error", **log_kwargs)
     print(msg, file=sys.stderr if rc != 0 else sys.stdout)
     return rc
 
