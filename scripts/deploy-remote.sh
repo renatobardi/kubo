@@ -64,7 +64,13 @@ if [ "$mode" = "digest" ]; then
     normalized="${digest#sha256:}"
   fi
   export KUBO_IMAGE="${repo}@sha256:${normalized}"
-  export COMPOSE_FILE="docker-compose.yml:compose.cd.yml${COMPOSE_FILE:+:${COMPOSE_FILE}}"
+  # COMPOSE_FILE do ambiente (docker-compose.yml:compose.dev-lxc.yml ou
+  # ...prd-lxc.yml, conforme .env do host) vem do ARQUIVO, não do shell: uma sessão
+  # ssh não-interativa não dá source no .env, então o COMPOSE_FILE do shell está
+  # sempre vazio aqui — usá-lo perderia silenciosamente o overlay de porta/volume
+  # do ambiente (achado do KUBO-100: kubo-api sem `ports:` nenhum sem o overlay).
+  env_compose_file="$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | tail -n1)"
+  export COMPOSE_FILE="${env_compose_file:-docker-compose.yml}:compose.cd.yml"
 
   echo "[deploy] modo CD — imagem ${KUBO_IMAGE}"
   docker pull "${KUBO_IMAGE}"
