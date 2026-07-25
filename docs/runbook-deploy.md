@@ -781,6 +781,11 @@ curl -I https://kubo.oute.pro/healthz
 # deve retornar HTTP 200 com header Set-Cookie Secure no login.
 ```
 
+> **Aceite de produção (KUBO-94 / ADR-0036 §V):** antes de declarar a Fatia B
+> pronta, testar `signInWithPopup` (Google e GitHub) no **celular do dono pelo
+> caminho público** (`https://kubo.oute.pro/login`). Se o popup falhar em
+> mobile, a decisão de popup versus redirect reabre.
+
 ---
 
 ## 6. Cheat-sheet
