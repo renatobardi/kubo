@@ -42,8 +42,8 @@ A capacidade 4 é consumidora das capacidades 1–3: agente que desenvolve agent
 
 Escopo negativo é contrato, não sugestão. Cada item abaixo foi considerado e rejeitado com razão registrada:
 
-- **Não é plataforma multi-tenant.** Um dono, uma VPC (a existente na Oracle Cloud/OCI). Amigos são *destinatários* de distribuição, não usuários que executam agentes. Consequência: **sem proxy de credenciais** — secret manager + permissões por persona (declaradas em YAML) cobrem o threat model. Reavaliar apenas se amigos virarem operadores.
-- **Não é workflow engine genérico.** Sem canvas builder, sem DSL de workflow. Templates de Flow são YAML declarativo; lógica que YAML não expressa pertence a skill de persona ou a worker, nunca ao template.
+- **É plataforma multi-tenant real** (revisado 2026-07-25 — pivot de produto, mapa wayfinder [KUBO-104](https://oute.atlassian.net/browse/KUBO-104), ADRs 0039–0042; revoga o item anterior deste bullet). Múltiplos tenants (equipes com exatamente 1 owner + membros convidados) coexistem no mesmo runtime e no mesmo banco, isolados por `tenant_id` row-level (ADR-0039) — não por VPC/namespace separado. Amigos deixam de ser só *destinatários* de distribuição: podem virar membros de um tenant, com acesso de workspace compartilhado (sem isolamento intra-tenant, ADR-0039). Consequência **preservada**: continua **sem proxy de credenciais** — não porque o sistema seja single-operador (não é mais), mas porque API keys de tenant vivem cifradas em repouso no próprio banco único (`tenant_credential`, ADR-0039 §IV), sem componente de infra novo.
+- **Não é workflow engine genérico.** Sem canvas builder, sem DSL de workflow. Templates de Flow são dado declarativo (armazenamento migrou de YAML global do repo para catálogo por-tenant no banco, ADR-0042); lógica que o template não expressa pertence a skill de persona ou a worker, nunca ao template.
 - **Não é ferramenta de project management standalone.** Kanban/issues/tasks são *modelo de dados no grafo* + views; não competem com produtos de PM. Sem drag-and-drop como prioridade, sem sync externo de PM.
 - **Não adota orquestrador pesado na largada.** Sem Prefect/Dagster/Temporal/Airflow. APScheduler + webhooks FastAPI. A migração futura é localizada porque pipeline é entidade no grafo.
 - **Não constrói UI rica na fase 1.** A view é descartável; o grafo não. UI mínima (FastAPI + HTMX ou TUI) até o substrato provar valor.
@@ -287,7 +287,7 @@ Query sobre o grafo → artefato → canal.
 - Cenário canônico (§4) executado de ponta a ponta como teste de aceitação.
 
 ### Fora do roadmap (registrado)
-- Proxy de credenciais: somente se o sistema virar multi-operador (outro produto).
+- ~~Proxy de credenciais: somente se o sistema virar multi-operador~~ — **condição disparada** (multi-tenant real, KUBO-104). Resolvida **sem** proxy de credenciais: API keys de tenant cifradas em repouso no banco único (`tenant_credential`, ADR-0039 §IV), chave mestra via env. O componente de infra pesado que este item previa continua fora do roadmap.
 - Orquestrador pesado: somente se volume cobrar; migração localizada.
 - Kanban como produto/UI rica: as views evoluem sob demanda; o grafo é o contrato.
 

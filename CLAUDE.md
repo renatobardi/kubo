@@ -17,12 +17,12 @@ Em conflito entre este arquivo e a spec, a spec vence — e o conflito deve ser 
 
 1. **Um runtime:** Python 3.12+. Não introduzir outras linguagens de aplicação.
 2. **Um banco:** SurrealDB (document + vector + graph). Não adicionar segundo datastore. Todo acesso a banco passa pela camada `kubo/store/` — nunca queries espalhadas.
-3. **Três catálogos YAML** (`catalogs/integrations/`, `catalogs/personas/`, `catalogs/flow_templates/`): declarativos, 1 arquivo por item, versionados. **Templates são dados, não código** — proibido evoluí-los para DSL (condicionais, herança, hooks). Lógica pertence a skill de persona ou a worker.
+3. **Três catálogos** (`persona`, `integration`, `flow_template`) — **emendado 2026-07-25 (ADR-0042):** deixam de ser YAML global do repo; cada tenant tem catálogo próprio no SurrealDB (`catalog_persona`/`catalog_integration`/`catalog_flow_template`, `tenant_id` obrigatório), semeado por defaults definidos em código (não lidos de YAML em runtime) na criação do tenant. **Templates continuam sendo dados, não código** — proibido evoluí-los para DSL (condicionais, herança, hooks), restrição que vale para o schema no banco tanto quanto valia para o YAML. Lógica pertence a skill de persona ou a worker. Mudança de catálogo é auditada em `catalog_changelog` (quem, o quê, quando).
 4. **Template versionado, instância snapshot:** instanciar flow = congelar cópia da config. Mudança em template nunca afeta flow em andamento.
 5. **Gate humano obrigatório** na promoção de código gerado a pipeline operacional. Nunca implementar bypass, nem como flag.
 6. **Contrato de worker** (spec §3.3) é obrigatório para todo worker, portado ou gerado. O runtime valida contrato, não confia em quem escreveu.
 7. **Escopo negativo da spec (§1.2) é contrato:** sem proxy de credenciais, sem workflow engine/canvas, sem PM standalone, sem orquestrador pesado (Prefect/Dagster/Temporal/Airflow), sem UI rica na fase 1, sem autonomia total. Se uma tarefa parecer exigir um destes itens, PARE e pergunte ao dono em vez de implementar.
-8. **Segredos** só por referência (env/secret manager). Nunca valores em YAML, código, log ou commit.
+8. **Segredos** só por referência (env/secret manager) — **emendado 2026-07-25 (ADR-0039 §IV):** vale integralmente para segredo de sistema; segredo de tenant (API key de provedor, BYOK) é dado cifrado em repouso no banco único (`tenant_credential`), com a chave mestra — não o segredo em si — vivendo em env. Nunca valores em claro em YAML, código, log ou commit; cifrado em repouso não é exceção a isso.
 
 ## Stack e convenções
 
