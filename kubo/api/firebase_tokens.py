@@ -17,6 +17,8 @@ import httpx
 import jwt
 from jwt.api_jwk import PyJWKSet
 
+from kubo.errors import FirebaseTokenError
+
 _GOOGLE_JWKS_URL = (
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
 )
@@ -29,15 +31,6 @@ def clear_jwks_cache() -> None:
     """Limpa o cache de chaves públicas (útil para testes unitários)."""
     global _jwks_cache  # noqa: PLW0603
     _jwks_cache = None
-
-
-class FirebaseTokenError(Exception):
-    """ID token Firebase inválido, não confiável ou fora da allowlist."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 def _parse_max_age(cache_control: str | None) -> int:

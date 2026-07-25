@@ -7,17 +7,16 @@ expiração e allowlist fail-closed.
 
 from __future__ import annotations
 
-import base64
 import time
 from typing import Any
 
 import pytest
 import respx
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt import encode as jwt_encode
 
-from kubo.api.firebase_tokens import FirebaseTokenError, clear_jwks_cache, verify_id_token
+from kubo.api.firebase_tokens import clear_jwks_cache, verify_id_token
+from kubo.errors import FirebaseTokenError
+from tests.api._firebase_test_helpers import rsa_keypair
 
 _PROJECT_ID = "kubo-test-project"
 _OWNER_UID = "owner-google-uid"
@@ -26,34 +25,6 @@ _KID = "test-kid"
 _JWKS_URL = (
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
 )
-
-
-def _rsa_keypair() -> tuple[str, dict[str, Any]]:
-    """Retorna (private_pem, jwk_dict) para assinar tokens de teste."""
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("utf-8")
-    numbers = key.public_key().public_numbers()
-
-    def _b64u(n: int) -> str:
-        return (
-            base64.urlsafe_b64encode(n.to_bytes((n.bit_length() + 7) // 8, "big"))
-            .rstrip(b"=")
-            .decode("ascii")
-        )
-
-    jwk = {
-        "kty": "RSA",
-        "alg": "RS256",
-        "use": "sig",
-        "kid": _KID,
-        "n": _b64u(numbers.n),
-        "e": _b64u(numbers.e),
-    }
-    return private_pem, jwk
 
 
 def _mock_jwks(respx_mock: respx.MockRouter, jwk: dict[str, Any]) -> None:
@@ -96,7 +67,7 @@ def _reset_jwks_cache() -> None:
 
 
 def test_valid_token_returns_uid_when_in_allowlist(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem)
 
@@ -107,7 +78,7 @@ def test_valid_token_returns_uid_when_in_allowlist(respx_mock: respx.MockRouter)
 
 
 def test_uid_outside_allowlist_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, uid=_OTHER_UID)
 
@@ -117,7 +88,7 @@ def test_uid_outside_allowlist_is_rejected(respx_mock: respx.MockRouter) -> None
 
 
 def test_empty_allowlist_is_fail_closed(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem)
 
@@ -141,7 +112,7 @@ def test_wrong_algorithm_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_unknown_kid_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, kid="unknown-kid")
 
@@ -151,7 +122,7 @@ def test_unknown_kid_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_expired_token_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, exp=int(time.time()) - 1)
 
@@ -161,7 +132,7 @@ def test_expired_token_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_wrong_audience_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, aud="other-project")
 
@@ -171,7 +142,7 @@ def test_wrong_audience_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_wrong_issuer_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, iss="https://other.issuer.com")
 
@@ -181,7 +152,7 @@ def test_wrong_issuer_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_email_unverified_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, email_verified=False)
 
@@ -191,7 +162,7 @@ def test_email_unverified_is_rejected(respx_mock: respx.MockRouter) -> None:
 
 
 def test_missing_sub_is_rejected(respx_mock: respx.MockRouter) -> None:
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, sub="")
 

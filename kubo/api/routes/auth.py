@@ -19,8 +19,9 @@ from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
 from kubo.api.auth import verify_password
-from kubo.api.firebase_tokens import FirebaseTokenError, verify_id_token
+from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
+from kubo.errors import FirebaseTokenError
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
