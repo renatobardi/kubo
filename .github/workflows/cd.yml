@@ -107,13 +107,22 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
+      # `docker inspect` num CONTAINER não tem campo `.RepoDigests` (isso só existe em
+      # IMAGE) — sempre falhava com "map has no entry for key RepoDigests" e o erro ia
+      # pro stderr, então o pipe via stdout ficava vazio silenciosamente. `.Config.Image`
+      # (presente no container) já traz `repo@sha256:...` quando a imagem foi puxada por
+      # digest — mesmo fallback que scripts/digest_guard.py usa.
       - name: Coletar digest vivo do kubo-test
         id: collect
         env:
           HOST: ${{ secrets.KUBO_TEST_HOST }}
         run: |
           live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
+            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{.Config.Image}}' | sed -E 's/.*@sha256://'")
+          if [ -z "$live_digest" ]; then
+            echo "::error::Não foi possível ler o digest vivo do kubo-api em kubo-test"
+            exit 1
+          fi
           echo "digest=${live_digest}" >> "$GITHUB_OUTPUT"
           echo "::notice::Digest vivo em kubo-test: sha256:${live_digest}"
 
@@ -142,8 +151,8 @@ jobs:
           HOST: ${{ secrets.KUBO_TEST_HOST }}
         run: |
           live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
-          if [ "$live_digest" != "$EXPECTED" ]; then
+            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{.Config.Image}}' | sed -E 's/.*@sha256://'")
+          if [ -z "$EXPECTED" ] || [ -z "$live_digest" ] || [ "$live_digest" != "$EXPECTED" ]; then
             echo "::error::Digest do kubo-test mudou desde a homologação (aprovado sha256:${EXPECTED}, agora vivo sha256:${live_digest}) — dispare a promoção de novo"
             exit 1
           fi
