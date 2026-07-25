@@ -7,7 +7,7 @@
 #
 # Pré-requisitos (use scripts/ops/fatia-c-setup-*.sh):
 #   - Pacote GHCR público e visível (KUBO-99).
-#   - Tailscale OIDC provider + tags cd-dev/cd-prd configurados (KUBO-100).
+#   - Auth keys Tailscale taggeadas cd-dev/cd-prd (KUBO-100).
 #   - Environment `prd` com required reviewer e segredos (KUBO-103).
 
 name: cd
@@ -26,7 +26,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.meta.outputs.image }}
@@ -59,14 +58,12 @@ jobs:
     environment: dev
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tailscale (dev identity)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
+          authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
       - name: Deploy to kubo-test
         env:
@@ -82,7 +79,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
-      id-token: write
     outputs:
       digest: ${{ steps.collect.outputs.digest }}
     steps:
@@ -90,8 +86,7 @@ jobs:
       - name: Tailscale (dev identity)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
+          authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
       - name: Coletar digest vivo do kubo-test
         id: collect
@@ -109,14 +104,12 @@ jobs:
     environment: prd
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tailscale (prd identity)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_PRD }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_PRD }}
+          authkey: ${{ secrets.TS_AUTHKEY_PRD }}
           tags: tag:cd-prd
       - name: Revalidar digest antes do deploy
         env:
