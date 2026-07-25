@@ -1,6 +1,7 @@
 # ADR-0035 — Exposição da PRD: porta aberta + TLS próprio (Caddy)
 
 > Status: **aceito** · Data: 2026-07-22 · Reverte a rejeição de "Caddy + port-forward" da sessão 0020 (`docs/sessions/0020-exposicao-kubo-oute-pro.md`), com motivo empírico nomeado.
+> **Mecanismo de TLS revisado em 2026-07-25** (premissa central era falsa — a exposição vive no **nginx do host**, não em Caddy). Ver §Atualização ao final.
 
 ## Contexto
 
@@ -39,3 +40,23 @@ A exposição por porta-aberta é um **passo abaixo na superfície de rede** (po
 
 - **Cloudflare Tunnel (desenho da 0020)** — exige a zona inteira na CF (free) e o dono bateu num bloqueio ao migrar os NS; reabrível só se a PRD sair do LXC para instância dedicada.
 - **Tailscale Funnel** — só serve o domínio `ts.net`, morto pelo requisito do domínio próprio (0020).
+
+## Atualização (2026-07-25) — realidade divergente: nginx do host, não Caddy
+
+A exposição foi construída de forma diferente da decidida aqui, e a **premissa central deste ADR era factualmente falsa**.
+
+**Premissa falsa** (§Contexto e §Decisão I, citando KUBO-74/78): *"80/443 fechados no host, nada serve web hoje — abrir a 443 é greenfield, sem proxy existente para conflitar"*. **Errado.** O `oute-server` já rodava **nginx do host** servindo ~13 subdomínios vizinhos (`core`, `dify`, `hermes`, `omnigent`, ...). Não era greenfield: o **padrão estabelecido do host é nginx + certbot por vhost**, e a decisão de Caddy só existiu por desconhecê-lo.
+
+**O que está vivo** (validado 2026-07-25 por SSH ao host + `curl` público):
+
+- `https://kubo.oute.pro` → **nginx do host** (`/etc/nginx/sites-enabled/kubo.oute.pro`), TLS **Let's Encrypt via certbot** (HTTP-01, webroot `/var/www/certbot`), redirect `80 → 443` (301) — tudo *managed by Certbot*.
+- Upstream `proxy_pass http://10.173.117.21:2900` — o **kubo-prd** (IP confirmado por `lxc list`, não inferido) pela `lxdbr0`. O nginx já injeta `X-Forwarded-Proto $scheme`, `X-Real-IP` e `X-Forwarded-For`.
+- **Caddy não existe** no host (serviço inativo, ausente do compose).
+
+**Consequências da divergência:**
+
+- A propriedade que justificava o Caddy — *"container no compose, portável, migra com `docker compose up`"* — **cai**. O vhost é **artefato manual no host**, fora do repo/compose, **compartilhado com os 13 vizinhos** (config e destino-de-falha comuns; a security list host-wide do §III já antecipava esse compartilhamento). A esteira de CD (ADR-0037) sobe o compose e **não toca o nginx**: o vhost é operado à parte e o certbot renova sozinho. **Dívida de doc:** o setup do vhost não está no `docs/runbook-deploy.md` (a §5 só cobre a tailnet 2900) — entra na Fatia B.
+- As pré-condições do §II seguem **válidas e pendentes no código**: cookie `Secure=True` global e `--forwarded-allow-ips` confiando a origem do nginx no uvicorn são critério de aceite da Fatia B (auth Firebase), não estão feitos.
+- O risco do §III (*"a exposição eleva a auth a portão único"*) **materializou-se pior que o previsto**: a superfície pública está guardada hoje por **scrypt de senha única** (Firebase/ADR-0036 ainda não no ar). Gate interino barato: `auth_basic` no vhost fecha a superfície sem esperar código — recomendado enquanto a Fatia B não entra.
+
+**Por que a realidade é preferível:** host-nginx+certbot é o padrão que os 13 projetos já usam — consistente, certbot já operado, zero container novo, coerente com a fadiga-de-complexidade. A decisão de Caddy foi correta *dada a premissa*, e a premissa é que estava errada.

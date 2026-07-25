@@ -1,6 +1,7 @@
 # ADR-0038 — Identidade de distribuição da PRD: e-mail (Resend) + canais Telegram
 
 > Status: **aceito** · Data: 2026-07-22 · **Estende o ADR-0031** (credenciais SMTP por env) e **aplica os ADR-0027/0029/0030** (destinos no DB) ao ambiente de produção.
+> **Provedor e endereço revisados em 2026-07-25** (Hostinger SMTP + endereço-raiz, não Resend/subdomínio). Ver §Atualização ao final.
 
 ## Contexto
 
@@ -45,3 +46,12 @@ Ambas caem das decisões já tomadas: credenciais separadas por ambiente (ADR-00
 - **Envio do domínio raiz `@oute.pro`** — arrasta a reputação do raiz; o subdomínio isola.
 - **Bot novo para a PRD** (o real vira o de teste do DEV) — mais disrupção (iniciar chat novo) sem ganho; o dono preferiu reusar o token.
 - **Flag de runtime "não enviar em DEV"** — frágil (esquecível) contra a separação estrutural de credencial e dado.
+
+## Atualização (2026-07-25) — provedor e endereço divergiram na execução
+
+O dono executou o e-mail da PRD diferente do §I, e confirmou os trade-offs (2026-07-25):
+
+- **Provedor: conta SMTP da Hostinger, não Resend.** A Hostinger (onde `oute.pro` já vive) provê SMTP autenticado; o dono configurou, **testou e está funcionando** no `.env` do kubo-prd. Resend fica reavaliável no futuro. O `EmailDigestWorker`/`SmtpConfig` (ADR-0031) **não muda** — relay SMTP por env, exatamente o cenário de zero-reescrita que o §I previa.
+- **Endereço: `kubo@oute.pro` (raiz), não o subdomínio `kubo@kubo.oute.pro`.** O §I escolhera o subdomínio *de propósito* para isolar a reputação do domínio-raiz. O dono **aceitou o trade-off de reputação** do domínio-raiz em e-mail automatizado (decisão consciente). Consequência assumida: um digest marcado como spam pode afetar a reputação de `oute.pro` — reabre se `oute.pro` ganhar peso de e-mail além do digest.
+- **Reply-To (dep bloqueante do §I): já implementado** em `kubo/distribution/email.py` (lê `KUBO_EMAIL_REPLY_TO`, injeta o header). A dívida do §I está paga.
+- **Pendente (Fatia D):** DNS de autenticação (SPF/DKIM/DMARC na zona Hostinger) + verificação de envio real. Sem eles a entrega fica frágil, qualquer que seja o provedor.
