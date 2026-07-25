@@ -55,13 +55,14 @@ def _login_context(
     request: Request, error: str | None = None, next_path: str = "/"
 ) -> dict[str, Any]:
     """Contexto da tela de login: mensagem de erro + config Firebase + next."""
+    cfg = request.app.state.firebase_config
     return {
         "error": error,
         "next": _safe_next(next_path),
         "firebase": {
-            "api_key": request.app.state.firebase_api_key,
-            "auth_domain": request.app.state.firebase_auth_domain,
-            "project_id": request.app.state.firebase_project_id,
+            "api_key": cfg.api_key,
+            "auth_domain": cfg.auth_domain,
+            "project_id": cfg.project_id,
         },
     }
 
@@ -134,7 +135,8 @@ def logout(request: Request) -> Response:
 
 def _firebase_config_ok(request: Request) -> bool:
     """True se project id e owner uids estão configurados (fail-closed)."""
-    return bool(request.app.state.firebase_project_id and request.app.state.firebase_owner_uids)
+    cfg = request.app.state.firebase_config
+    return bool(cfg.project_id and request.app.state.firebase_owner_uids)
 
 
 @router.post("/auth/firebase")
@@ -169,7 +171,7 @@ def firebase_login(
     try:
         user = verify_id_token(
             id_token,
-            request.app.state.firebase_project_id,
+            request.app.state.firebase_config.project_id,
             request.app.state.firebase_owner_uids,
         )
     except FirebaseTokenError as exc:

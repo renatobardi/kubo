@@ -79,17 +79,24 @@ def _parse_owner_uids(raw: str) -> set[str]:
 
 
 @dataclass(frozen=True)
+class FirebaseConfig:
+    """Configuração pública do Firebase (apiKey, authDomain, projectId)."""
+
+    api_key: str
+    auth_domain: str
+    project_id: str
+
+
+@dataclass(frozen=True)
 class UiConfig:
     """Config da UI vinda só de env (invariante 8): hash da senha, secret da
-    sessão, hosts confiáveis e identidades Firebase autorizadas."""
+    sessão, hosts confiáveis, identidades Firebase autorizadas e freshness."""
 
     password_hash: str
     session_secret: str
     allowed_hosts: list[str]
     session_fresh_max_age: int
-    firebase_api_key: str
-    firebase_auth_domain: str
-    firebase_project_id: str
+    firebase_config: FirebaseConfig
     firebase_owner_uids: set[str]
 
 
@@ -119,6 +126,11 @@ def _ui_config() -> UiConfig:
     auth_domain = os.environ.get("KUBO_FIREBASE_AUTH_DOMAIN", "")
     if not auth_domain and project_id:
         auth_domain = f"{project_id}.firebaseapp.com"
+    firebase_config = FirebaseConfig(
+        api_key=os.environ.get("KUBO_FIREBASE_API_KEY", ""),
+        auth_domain=auth_domain,
+        project_id=project_id,
+    )
     try:
         fresh_max_age = int(os.environ.get("SESSION_FRESH_MAX_AGE", "600"))
     except ValueError:
@@ -128,9 +140,7 @@ def _ui_config() -> UiConfig:
         session_secret=session_secret,
         allowed_hosts=allowed,
         session_fresh_max_age=fresh_max_age,
-        firebase_api_key=os.environ.get("KUBO_FIREBASE_API_KEY", ""),
-        firebase_auth_domain=auth_domain,
-        firebase_project_id=project_id,
+        firebase_config=firebase_config,
         firebase_owner_uids=owner_uids,
     )
 
@@ -156,9 +166,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Kubo", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.password_hash = cfg.password_hash
     app.state.session_fresh_max_age = cfg.session_fresh_max_age
-    app.state.firebase_api_key = cfg.firebase_api_key
-    app.state.firebase_auth_domain = cfg.firebase_auth_domain
-    app.state.firebase_project_id = cfg.firebase_project_id
+    app.state.firebase_config = cfg.firebase_config
     app.state.firebase_owner_uids = cfg.firebase_owner_uids
 
     # Estáticos: htmx vendorizado, font Inter self-hosted, favicon sakura e o
