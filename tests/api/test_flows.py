@@ -10,6 +10,8 @@ parte (o footgun do no-op silencioso).
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -394,13 +396,33 @@ def test_promote_requires_fresh_session(
     _fresh_age_seconds(monkeypatch)
     client, csrf = _step_up_client(monkeypatch, auth_at=1000.0, promote_at=1101.0)
 
+    def _should_not_be_called(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("promote_gate não deve ser chamado quando a sessão não é fresca")
+
+    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _should_not_be_called)
+
     resp = client.post(
         "/flows/gate/promote",
         data={"task": "task:h2", "csrf": csrf, "worker_name": "feed"},
+        headers={"referer": "https://testserver/flows/d1"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/login")
+    assert resp.headers["location"] == "/login?next=/flows/d1"
+
+
+def test_session_is_fresh_rejects_future_auth_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    """auth_at no futuro é rejeitado antes mesmo de comparar max_age."""
+    from kubo.api.routes.flows import _session_is_fresh
+
+    class _FakeRequest:
+        def __init__(self, session: dict[str, Any]) -> None:
+            self.session = session
+            self.app = SimpleNamespace(state=SimpleNamespace(session_fresh_max_age=600))
+
+    monkeypatch.setattr("kubo.api.routes.flows.time.time", lambda: 1000.0)
+    request = _FakeRequest({"auth_at": 2000})
+    assert _session_is_fresh(request) is False  # type: ignore[arg-type]
 
 
 def test_promote_allows_fresh_session(
@@ -410,7 +432,14 @@ def test_promote_allows_fresh_session(
     _fresh_age_seconds(monkeypatch)
     client, csrf = _step_up_client(monkeypatch, auth_at=1000.0, promote_at=1005.0)
 
-    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", lambda db, **kw: None)
+    called: dict[str, Any] = {}
+
+    def _spy_promote_gate(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+        called["db"] = db
+        called["gate_task"] = gate_task
+        called["worker_name"] = worker_name
+
+    monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _spy_promote_gate)
 
     resp = client.post(
         "/flows/gate/promote",
@@ -419,3 +448,5 @@ def test_promote_allows_fresh_session(
     )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/flows/d1"
+    assert called.get("gate_task") == RecordID("task", "h2")
+    assert called.get("worker_name") == "feed"

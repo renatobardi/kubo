@@ -109,8 +109,11 @@ def _session_is_fresh(request: Request) -> bool:
     auth_at = request.session.get("auth_at")
     if not isinstance(auth_at, int):
         return False
+    age = time.time() - auth_at
+    if age < 0:
+        return False
     max_age = getattr(request.app.state, "session_fresh_max_age", 600)
-    return (time.time() - auth_at) <= max_age
+    return age <= max_age
 
 
 @router.post("/gate/promote")

@@ -159,6 +159,13 @@ def firebase_login(
         )
     except FirebaseTokenError as exc:
         _log.warning("api.firebase.failed", code=exc.code)
+        if exc.code == "jwks_unavailable":
+            return templates.TemplateResponse(
+                request,
+                _LOGIN_TEMPLATE,
+                _login_context(request, "Login Firebase indisponível.", next_path=next_path),
+                status_code=503,
+            )
         return templates.TemplateResponse(
             request,
             _LOGIN_TEMPLATE,
