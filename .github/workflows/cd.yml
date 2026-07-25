@@ -1,7 +1,4 @@
-# workflow-cd.yml — modelo de esteira build-once / promote-by-digest (ADR-0037).
-#
-# INSTRUÇÃO: copiar este arquivo para .github/workflows/cd.yml via PR humano.
-# O agente NÃO toca .github/workflows/ por política (ADR-0021 §9).
+# workflow-cd.yml — esteira build-once / promote-by-digest (ADR-0037).
 #
 # Jobs:
 #   build    — builda a imagem uma vez por commit e publica no GHCR por SHA.
@@ -23,21 +20,20 @@ on:
 env:
   IMAGE_REPO: ghcr.io/renatobardi/kubo
 
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.meta.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -48,7 +44,7 @@ jobs:
           echo "image=${{ env.IMAGE_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true
@@ -61,10 +57,13 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04-arm
     environment: dev
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tailscale (dev identity)
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
@@ -81,12 +80,15 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04-arm
     if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       digest: ${{ steps.collect.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tailscale (dev identity)
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
@@ -105,10 +107,13 @@ jobs:
     needs: [build, collect-digest]
     runs-on: ubuntu-24.04-arm
     environment: prd
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tailscale (prd identity)
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_PRD }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET_PRD }}
