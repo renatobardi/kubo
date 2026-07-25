@@ -33,7 +33,7 @@ echo "[deploy] 2/3 build ${KUBO_BUILD_ID} + migrations + up (remoto)"
 # stdin: um `compose build`/`run` dentro de `ssh HOST bash -s <<EOF` consome o stdin (o próprio
 # script) e engole os passos seguintes — foi a causa PROXIMA do incidente (o guard nunca
 # rodava). O build_id vai por argumento; `< /dev/null` garante que nada leia o canal do ssh.
-ssh "${HOST}" "cd ~/kubo && bash scripts/deploy-remote.sh '${KUBO_BUILD_ID}'" < /dev/null
+ssh "${HOST}" "cd ~/kubo && bash scripts/deploy-remote.sh --build-id '${KUBO_BUILD_ID}'" < /dev/null
 
 echo "[deploy] 3/3 smoke ${HEALTH_URL}"
 # O kubo-api foi recém-recriado (force-recreate): o uvicorn leva alguns segundos para aceitar
