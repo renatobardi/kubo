@@ -1,0 +1,17 @@
+# compose.cd.yml — overlay para deploy build-once via GHCR (ADR-0037).
+#
+# NÃO é um compose autônomo: sobrepõe docker-compose.yml via COMPOSE_FILE
+# adicionado por scripts/deploy-remote.sh. A imagem do app vem de
+# ${KUBO_IMAGE:?}, que aponta o digest publicado no GHCR. O build: do
+# docker-compose.yml base é ignorado porque o deploy roda
+# `docker compose up -d --no-build` após `docker pull` explícito.
+#
+# O overlay não toca em ports/volumes/backup: esses ajustes continuam nos
+# overlays de ambiente (compose.dev-lxc.yml / compose.prd-lxc.yml).
+
+services:
+  kubo-scheduler:
+    image: "${KUBO_IMAGE:?defina KUBO_IMAGE - digest da imagem a deployar}"
+
+  kubo-api:
+    image: "${KUBO_IMAGE:?defina KUBO_IMAGE - digest da imagem a deployar}"
