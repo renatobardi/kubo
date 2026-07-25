@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from kubo.store import client, knowledge, migrations
-from kubo.store.seed_extra_rss import FEEDS, seed_extra_rss_sources
+from kubo.store.seed_extra_rss import FEEDS, main, seed_extra_rss_sources
 
 pytestmark = pytest.mark.integration
 
@@ -88,3 +88,22 @@ def test_seed_preserves_owner_edits(db: Any) -> None:
     assert got.title == "Meu título"
     assert got.tags == ["custom"]
     assert got.enabled is False
+
+
+def test_main_connects_and_seeds(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() usa client.connect_rw e devolve a quantidade de feeds processados."""
+
+    class _FakeConnect:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def __enter__(self) -> Any:
+            return self._inner
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+    monkeypatch.setattr("kubo.store.seed_extra_rss.client.connect_rw", lambda: _FakeConnect(db))
+
+    assert main() == len(FEEDS)
+    assert _count_source(db) == len(FEEDS)
