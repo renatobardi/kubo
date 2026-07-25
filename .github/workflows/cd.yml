@@ -55,6 +55,11 @@ jobs:
   deploy-dev:
     needs: build
     runs-on: ubuntu-24.04-arm
+    # Só em push: workflow_dispatch é usado para promover a PRD (collect-digest +
+    # deploy-prd), e um redeploy do DEV em paralelo corre com a leitura do digest
+    # vivo em collect-digest — já aconteceu (digest capturado vazio, container no
+    # meio da troca).
+    if: github.event_name == 'push'
     environment: dev
     concurrency:
       group: cd-dev
