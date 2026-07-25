@@ -695,32 +695,45 @@ Use um `LaunchAgent` separado (ou outro mecanismo) puxando `oute-server:backups/
 ### 5.8 Exposição à internet (Fatia B) — vhost Nginx
 
 A PRD é exposta em `https://kubo.oute.pro` pelo Nginx do **host** `oute-server`
-(ADR-0035). O container LXC continua ouvindo `10.173.117.19:2900`; o Nginx apenas
+(ADR-0035). O container LXC continua ouvindo `10.173.117.21:2900`; o Nginx apenas
 termina TLS e faz proxy reverso, adicionando os headers `X-Forwarded-*` para que
 o Uvicorn reconnheça o scheme `https` e o cookie `Secure` funcione.
+
+> O IP do LXC é fixo no host (`10.173.117.21` confirmado por `lxc list` em
+> 2026-07-25, ADR-0035 §Atualização). Se mudar, o vhost quebra com 502.
 
 Pré-requisitos no host:
 
 ```bash
-# Certbot + plugin DNS (substitua pelo provedor DNS usado; exemplo Cloudflare):
-apt-get install -y certbot python3-certbot-dns-cloudflare
+apt-get install -y certbot
 ```
 
-Arquivo `/etc/nginx/sites-available/kubo.oute.pro`:
+Arquivo `/etc/nginx/sites-available/kubo.oute.pro` (Certbot gerencia o bloco
+`443` via HTTP-01 com webroot `/var/www/certbot`; edite com `certbot
+reinstall --cert-name kubo.oute.pro`):
 
 ```nginx
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 80;
+    listen [::]:80;
     server_name kubo.oute.pro;
 
-    ssl_certificate     /etc/letsencrypt/live/kubo.oute.pro/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/kubo.oute.pro/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    location /.well-known/acme-challenge/ {
+        alias /var/www/certbot/.well-known/acme-challenge/;
+    }
 
     location / {
-        proxy_pass http://10.173.117.19:2900;
+        return 301 https://$server_name$request_uri;
+    }
+}
+```
+
+Após o Certbot emitir o certificado, ele adiciona o bloco `443`. Verifique que
+o `location /` do bloco `443` contenha:
+
+```nginx
+    location / {
+        proxy_pass http://10.173.117.21:2900;
         proxy_http_version 1.1;
 
         proxy_set_header Host $host;
@@ -732,28 +745,21 @@ server {
         proxy_request_buffering off;
         client_max_body_size 10m;
     }
-}
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name kubo.oute.pro;
-    return 301 https://$server_name$request_uri;
-}
 ```
 
-Ative e obtenha/renove o certificado:
+Obtenha/renove o certificado:
 
 ```bash
-ln -s /etc/nginx/sites-available/kubo.oute.pro /etc/nginx/sites-enabled/
-nginx -t
+# Crie o webroot se não existir:
+mkdir -p /var/www/certbot
 
-# Troque o método DNS pelo seu provedor; --dry-run primeiro:
-certbot certonly --dns-cloudflare --dry-run -d kubo.oute.pro
-# Sem erros, rode de verdade:
-certbot certonly --dns-cloudflare -d kubo.oute.pro
+# Certbot HTTP-01 (não pede credencial de DNS):
+certbot certonly --webroot -w /var/www/certbot -d kubo.oute.pro --dry-run
+# Sem erros:
+certbot certonly --webroot -w /var/www/certbot -d kubo.oute.pro
 
-systemctl reload nginx
+# O Nginx foi validado e recarregado pelo Certbot; se não:
+nginx -t && systemctl reload nginx
 ```
 
 Configuração do `.env` do `kubo-prd`:
