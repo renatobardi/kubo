@@ -1,0 +1,204 @@
+"""Testes de verificação server-side de ID token Firebase (KUBO-93).
+
+Usa chave RSA de teste assinando tokens JWT; os certificados públicos do Google
+são mockados via respx no endpoint JWKS. Matriz cobre claims, algoritmo, kid,
+expiração e allowlist fail-closed.
+"""
+
+from __future__ import annotations
+
+import base64
+import time
+from typing import Any
+
+import pytest
+import respx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt import encode as jwt_encode
+
+from kubo.api.firebase_tokens import FirebaseTokenError, clear_jwks_cache, verify_id_token
+
+_PROJECT_ID = "kubo-test-project"
+_OWNER_UID = "owner-google-uid"
+_OTHER_UID = "other-uid"
+_KID = "test-kid"
+_JWKS_URL = (
+    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
+)
+
+
+def _rsa_keypair() -> tuple[str, dict[str, Any]]:
+    """Retorna (private_pem, jwk_dict) para assinar tokens de teste."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    numbers = key.public_key().public_numbers()
+
+    def _b64u(n: int) -> str:
+        return (
+            base64.urlsafe_b64encode(n.to_bytes((n.bit_length() + 7) // 8, "big"))
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+
+    jwk = {
+        "kty": "RSA",
+        "alg": "RS256",
+        "use": "sig",
+        "kid": _KID,
+        "n": _b64u(numbers.n),
+        "e": _b64u(numbers.e),
+    }
+    return private_pem, jwk
+
+
+def _mock_jwks(respx_mock: respx.MockRouter, jwk: dict[str, Any]) -> None:
+    respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
+
+
+def _token(
+    *,
+    private_pem: str,
+    uid: str = _OWNER_UID,
+    email: str = "owner@example.com",
+    email_verified: bool = True,
+    aud: str | None = _PROJECT_ID,
+    iss: str | None = f"https://securetoken.google.com/{_PROJECT_ID}",
+    exp: int | None = None,
+    sub: str | None = _OWNER_UID,
+    kid: str = _KID,
+    alg: str = "RS256",
+) -> str:
+    now = int(time.time())
+    payload: dict[str, Any] = {
+        "uid": uid,
+        "email": email,
+        "email_verified": email_verified,
+        "iat": now,
+        "sub": sub if sub is not None else uid,
+    }
+    if aud is not None:
+        payload["aud"] = aud
+    if iss is not None:
+        payload["iss"] = iss
+    payload["exp"] = exp if exp is not None else now + 3600
+    return jwt_encode(payload, private_pem, algorithm=alg, headers={"kid": kid, "alg": alg})
+
+
+@pytest.fixture(autouse=True)
+def _reset_jwks_cache() -> None:
+    """Cada teste começa com cache limpo para não cruzar chaves RSA geradas no teste."""
+    clear_jwks_cache()
+
+
+def test_valid_token_returns_uid_when_in_allowlist(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem)
+
+    result = verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+
+    assert result["uid"] == _OWNER_UID
+    assert result["email"] == "owner@example.com"
+
+
+def test_uid_outside_allowlist_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, uid=_OTHER_UID)
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "uid_not_allowed"
+
+
+def test_empty_allowlist_is_fail_closed(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem)
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, set())
+    assert exc.value.code == "uid_not_allowed"
+
+
+def test_wrong_algorithm_is_rejected(respx_mock: respx.MockRouter) -> None:
+    """Token HS256 (mesmo com kid válido) deve ser rejeitado antes de tocar no JWKS."""
+    token = jwt_encode(
+        {"uid": _OWNER_UID, "aud": _PROJECT_ID},
+        "any-secret",
+        algorithm="HS256",
+        headers={"kid": _KID, "alg": "HS256"},
+    )
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_algorithm"
+
+
+def test_unknown_kid_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, kid="unknown-kid")
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "unknown_kid"
+
+
+def test_expired_token_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, exp=int(time.time()) - 1)
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_token"
+
+
+def test_wrong_audience_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, aud="other-project")
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_token"
+
+
+def test_wrong_issuer_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, iss="https://other.issuer.com")
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_token"
+
+
+def test_email_unverified_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, email_verified=False)
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_token"
+
+
+def test_missing_sub_is_rejected(respx_mock: respx.MockRouter) -> None:
+    private_pem, jwk = _rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, sub="")
+
+    with pytest.raises(FirebaseTokenError) as exc:
+        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    assert exc.value.code == "invalid_token"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))
