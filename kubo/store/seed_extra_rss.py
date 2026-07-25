@@ -4,8 +4,12 @@ Script one-shot idempotente que cadastra os feeds descobertos durante a pesquisa
 via `kubo.store.knowledge.upsert_seed_source`. Pode ser rodado a qualquer momento
 no deploy ou manualmente; reexecução é no-op por (kind, canonical).
 
+Usa `client.connect()` (usuário root/SURREAL_USER do `.env`) porque o seed roda
+no `kubo-scheduler`, que não carrega `KUBO_RW_SURREAL_PASS` — mesmo caminho do
+`python -m kubo.store.seed` do deploy.
+
 Para executar no ambiente de produção:
-    KUBO_RW_SURREAL_PASS=... python -m kubo.store.seed_extra_rss
+    python -m kubo.store.seed_extra_rss
 """
 
 from __future__ import annotations
