@@ -112,15 +112,19 @@ def ui_env(monkeypatch: pytest.MonkeyPatch) -> str:
         "KUBO_TELEGRAM_WEBHOOK_SECRET",
         "test-webhook-secret",  # pragma: allowlist secret
     )
+    monkeypatch.setenv("KUBO_FIREBASE_PROJECT_ID", "kubo-test-project")
+    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner-google-uid")
+    monkeypatch.setenv("KUBO_FIREBASE_API_KEY", "test-firebase-api-key")  # pragma: allowlist secret
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
     return UI_PASSWORD
 
 
 @pytest.fixture
 def client() -> TestClient:
-    """Client anônimo (sem sessão). raise_server_exceptions garante que um 500 real
+    """Client anônimo (sem sessão). base_url=https para o cookie Secure ser aceito
+    pelo jar do TestClient (ADR-0035). raise_server_exceptions garante que um 500 real
     da app apareça como erro, não seja mascarado."""
-    return TestClient(create_app())
+    return TestClient(create_app(), base_url="https://testserver")
 
 
 @pytest.fixture
