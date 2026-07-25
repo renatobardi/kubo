@@ -19,8 +19,11 @@ import re
 import subprocess
 import sys
 
+import structlog
+
 _HEX_RE = re.compile(r"^[a-f0-9]+$")
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+_log = structlog.get_logger().bind(worker="digest-guard", flow_id=None, task_id=None)
 
 
 def normalize_digest(value: str) -> str:
@@ -125,6 +128,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     rc, msg = guard(args.expected_digest, args.service, args.project)
+    log_kwargs = {
+        "digest": args.expected_digest,
+        "service": args.service,
+        "project": args.project,
+    }
+    if rc == 0:
+        _log.info("digest_guard_ok", **log_kwargs)
+    else:
+        _log.error("digest_guard_failed", **log_kwargs)
     print(msg, file=sys.stderr if rc != 0 else sys.stdout)
     return rc
 

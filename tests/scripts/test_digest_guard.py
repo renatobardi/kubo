@@ -139,7 +139,10 @@ def test_guard_falls_back_to_config_image_when_repo_digest_is_missing(
     assert "abc123" in msg
 
 
-def test_main_cli_prints_and_returns_zero_on_match(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_cli_prints_and_returns_zero_on_match(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     fake = _FakeRun(
         [
             ("a1b2c3d4e5f6\n", 0),
@@ -151,3 +154,4 @@ def test_main_cli_prints_and_returns_zero_on_match(monkeypatch: pytest.MonkeyPat
     rc = dg.main(["sha256:abc123", "kubo-api"])
 
     assert rc == 0
+    assert "OK" in capsys.readouterr().out

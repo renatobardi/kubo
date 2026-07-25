@@ -86,7 +86,14 @@ fi
 # Quiesce writers before destructive migrations (ADR-0030 §5).
 docker compose stop kubo-api kubo-scheduler
 docker compose up -d --no-build surrealdb
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)")" = healthy ]; do
+deadline=$((SECONDS + 120))
+until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)" 2>/dev/null || true)" == healthy ]]; do
+  if (( SECONDS >= deadline )); then
+    echo "[deploy] FALHOU: surrealdb não ficou healthy em 120s" >&2
+    docker compose ps surrealdb >&2 || true
+    docker compose logs --tail=100 surrealdb >&2 || true
+    exit 1
+  fi
   sleep 3
 done
 
