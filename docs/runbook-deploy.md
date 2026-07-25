@@ -692,6 +692,91 @@ Use um `LaunchAgent` separado (ou outro mecanismo) puxando `oute-server:backups/
 
 ---
 
+### 5.8 Exposição à internet (Fatia B) — vhost Nginx
+
+A PRD é exposta em `https://kubo.oute.pro` pelo Nginx do **host** `oute-server`
+(ADR-0035). O container LXC continua ouvindo `10.173.117.19:2900`; o Nginx apenas
+termina TLS e faz proxy reverso, adicionando os headers `X-Forwarded-*` para que
+o Uvicorn reconnheça o scheme `https` e o cookie `Secure` funcione.
+
+Pré-requisitos no host:
+
+```bash
+# Certbot + plugin DNS (substitua pelo provedor DNS usado; exemplo Cloudflare):
+apt-get install -y certbot python3-certbot-dns-cloudflare
+```
+
+Arquivo `/etc/nginx/sites-available/kubo.oute.pro`:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name kubo.oute.pro;
+
+    ssl_certificate     /etc/letsencrypt/live/kubo.oute.pro/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/kubo.oute.pro/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://10.173.117.19:2900;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+        client_max_body_size 10m;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name kubo.oute.pro;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+Ative e obtenha/renove o certificado:
+
+```bash
+ln -s /etc/nginx/sites-available/kubo.oute.pro /etc/nginx/sites-enabled/
+nginx -t
+
+# Troque o método DNS pelo seu provedor; --dry-run primeiro:
+certbot certonly --dns-cloudflare --dry-run -d kubo.oute.pro
+# Sem erros, rode de verdade:
+certbot certonly --dns-cloudflare -d kubo.oute.pro
+
+systemctl reload nginx
+```
+
+Configuração do `.env` do `kubo-prd`:
+
+```
+# Hosts confiáveis: o domínio público + o IP Tailscale do proxy.
+KUBO_ALLOWED_HOSTS=kubo.oute.pro,100.66.254.24
+# Uvicorn só confia X-Forwarded-Proto do peer da conexão. No LXC aninhado,
+# o peer geralmente é o gateway da bridge (ex.: 10.173.117.1). Verifique
+# request.client.host na primeira subida e preencha:
+FORWARDED_ALLOW_IPS=10.173.117.1
+```
+
+Smoke:
+
+```bash
+# de fora (internet):
+curl -I https://kubo.oute.pro/healthz
+# deve retornar HTTP 200 com header Set-Cookie Secure no login.
+```
+
+---
+
 ## 6. Cheat-sheet
 
 | Ação | Comando |
