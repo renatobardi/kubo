@@ -86,6 +86,14 @@ class FirebaseConfig:
     auth_domain: str
     project_id: str
 
+    def as_firebase_js_dict(self) -> dict[str, str]:
+        """Serializa no formato camelCase exigido pelo Firebase JS SDK."""
+        return {
+            "apiKey": self.api_key,
+            "authDomain": self.auth_domain,
+            "projectId": self.project_id,
+        }
+
 
 @dataclass(frozen=True)
 class UiConfig:

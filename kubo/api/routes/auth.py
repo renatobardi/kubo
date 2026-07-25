@@ -11,16 +11,17 @@ from __future__ import annotations
 import threading
 import time
 from typing import Annotated, Any
-from urllib.parse import urlparse
 
 import structlog
-from fastapi import APIRouter, Body, Form, Query, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from kubo.api.auth import verify_password
 from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
+from kubo.api.urls import safe_next
 from kubo.errors import FirebaseTokenError
 
 _log = structlog.get_logger(__name__)
@@ -41,29 +42,20 @@ def _open_session(request: Request, *, uid: str) -> None:
     request.session["auth_at"] = int(time.time())
 
 
-def _safe_next(raw: str, default: str = "/") -> str:
-    """Só aceita paths relativos locais como destino pós-login."""
-    if not raw:
-        return default
-    path = urlparse(raw).path
-    if not path.startswith("/") or path.startswith("//"):
-        return default
-    return path
+class FirebaseLoginBody(BaseModel):
+    """Corpo da requisição POST /auth/firebase (entrada externa hostil)."""
+
+    id_token: str = Field(..., min_length=1)
 
 
 def _login_context(
     request: Request, error: str | None = None, next_path: str = "/"
 ) -> dict[str, Any]:
     """Contexto da tela de login: mensagem de erro + config Firebase + next."""
-    cfg = request.app.state.firebase_config
     return {
         "error": error,
-        "next": _safe_next(next_path),
-        "firebase": {
-            "api_key": cfg.api_key,
-            "auth_domain": cfg.auth_domain,
-            "project_id": cfg.project_id,
-        },
+        "next": safe_next(next_path),
+        "firebase": request.app.state.firebase_config.as_firebase_js_dict(),
     }
 
 
@@ -82,7 +74,7 @@ def login_form(
 ) -> Response:
     """Mostra o form de login. Já autenticado? Vai direto ao destino `next`."""
     if request.session.get("role") == "owner":
-        return RedirectResponse(_safe_next(next), status_code=303)
+        return RedirectResponse(safe_next(next), status_code=303)
     return templates.TemplateResponse(
         request, _LOGIN_TEMPLATE, _login_context(request, next_path=next)
     )
@@ -99,7 +91,7 @@ def login_submit(
 
     Uma tentativa por vez (gate não-bloqueante): se já há login em voo, recusa na
     hora (429) sem gastar scrypt/sleep nem prender thread do pool."""
-    next_path = _safe_next(next)
+    next_path = safe_next(next)
     if not _LOGIN_GATE.acquire(blocking=False):
         client = request.client.host if request.client else "unknown"
         _log.warning("api.login.busy", client=client)
@@ -142,14 +134,14 @@ def _firebase_config_ok(request: Request) -> bool:
 @router.post("/auth/firebase")
 def firebase_login(
     request: Request,
-    body: Annotated[dict[str, Any], Body()],
+    body: FirebaseLoginBody,
     next: Annotated[str, Query()] = "",
 ) -> Response:
     """Verifica ID token Firebase (server-side) e abre sessão owner se autorizado.
 
     Fail-closed: config ausente → 503; token inválido/uid não permitido → 401.
     """
-    next_path = _safe_next(next)
+    next_path = safe_next(next)
     if not _firebase_config_ok(request):
         _log.warning("api.firebase.config_missing")
         return templates.TemplateResponse(
@@ -159,18 +151,9 @@ def firebase_login(
             status_code=503,
         )
 
-    id_token = body.get("id_token", "")
-    if not id_token:
-        return templates.TemplateResponse(
-            request,
-            _LOGIN_TEMPLATE,
-            _login_context(request, "Token não informado.", next_path=next_path),
-            status_code=400,
-        )
-
     try:
         user = verify_id_token(
-            id_token,
+            body.id_token,
             request.app.state.firebase_config.project_id,
             request.app.state.firebase_owner_uids,
         )
