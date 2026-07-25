@@ -161,9 +161,14 @@ def seed_extra_rss_sources(db: Any) -> int:
 
 
 def main() -> int:
-    """Conecta por ambiente e semeia os feeds adicionais."""
+    """Conecta por ambiente e semeia os feeds adicionais.
+
+    Usa `client.connect()` (usuário root/SURREAL_USER do .env) porque o seed roda
+    do scheduler, que não carrega `KUBO_RW_SURREAL_PASS` — mesmo caminho do
+    `python -m kubo.store.seed` do deploy.
+    """
     try:
-        with client.connect_rw() as db:
+        with client.connect() as db:
             count = seed_extra_rss_sources(db)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga
         _log.exception("seed_extra_rss_failed")

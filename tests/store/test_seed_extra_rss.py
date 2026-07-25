@@ -103,7 +103,9 @@ def test_main_connects_and_seeds(db: Any, monkeypatch: pytest.MonkeyPatch) -> No
         def __exit__(self, *args: Any) -> None:
             pass
 
-    monkeypatch.setattr("kubo.store.seed_extra_rss.client.connect_rw", lambda: _FakeConnect(db))
+    monkeypatch.setattr(
+        "kubo.store.seed_extra_rss.client.connect", lambda cfg=None: _FakeConnect(db)
+    )
 
     assert main() == len(FEEDS)
     assert _count_source(db) == len(FEEDS)
