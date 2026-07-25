@@ -22,7 +22,7 @@ from surrealdb import RecordID
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
-from kubo.api.routes.auth import _safe_next
+from kubo.api.urls import safe_next
 from kubo.distribution.config import resolve_base_url
 from kubo.errors import ConfigError, ForgeError, PromotionError, SenderError, StateError
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate
@@ -128,7 +128,7 @@ def promote(
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
     if not _session_is_fresh(request):
         referer = request.headers.get("referer", "/flows")
-        return RedirectResponse(f"/login?next={_safe_next(referer, '/flows')}", status_code=303)
+        return RedirectResponse(f"/login?next={safe_next(referer, '/flows')}", status_code=303)
     gate_task = _parse_task_id(task)
     if gate_task is None:
         return PlainTextResponse("id de task inválido.", status_code=400)
