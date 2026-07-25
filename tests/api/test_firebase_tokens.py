@@ -43,15 +43,17 @@ def _token(
     sub: str | None = _OWNER_UID,
     kid: str = _KID,
     alg: str = "RS256",
+    include_uid: bool = False,
 ) -> str:
     now = int(time.time())
     payload: dict[str, Any] = {
-        "uid": uid,
         "email": email,
         "email_verified": email_verified,
         "iat": now,
         "sub": sub if sub is not None else uid,
     }
+    if include_uid:
+        payload["uid"] = uid
     if aud is not None:
         payload["aud"] = aud
     if iss is not None:
@@ -77,10 +79,21 @@ def test_valid_token_returns_uid_when_in_allowlist(respx_mock: respx.MockRouter)
     assert result["email"] == "owner@example.com"
 
 
+def test_valid_token_uses_sub_claim_not_uid(respx_mock: respx.MockRouter) -> None:
+    """Tokens reais do Firebase não contêm 'uid'; a identidade está em 'sub'."""
+    private_pem, jwk = rsa_keypair()
+    _mock_jwks(respx_mock, jwk)
+    token = _token(private_pem=private_pem, include_uid=False)
+
+    result = verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+
+    assert result["uid"] == _OWNER_UID
+
+
 def test_uid_outside_allowlist_is_rejected(respx_mock: respx.MockRouter) -> None:
     private_pem, jwk = rsa_keypair()
     _mock_jwks(respx_mock, jwk)
-    token = _token(private_pem=private_pem, uid=_OTHER_UID)
+    token = _token(private_pem=private_pem, sub=_OTHER_UID)
 
     with pytest.raises(FirebaseTokenError) as exc:
         verify_id_token(token, _PROJECT_ID, {_OWNER_UID})

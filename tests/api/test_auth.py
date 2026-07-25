@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 import time
+from typing import Any
 
 import pytest
 import respx
+from itsdangerous import TimestampSigner
 from jwt import encode as jwt_encode
 from starlette.testclient import TestClient
 
@@ -28,6 +33,16 @@ def test_login_page_is_public(client: TestClient) -> None:
     assert "Entrar com Google" in text or "firebase" in text.lower()
     # Config do Firebase (apiKey/projectId) está embutida como JSON escapado.
     assert "kubo-test-project" in text
+
+
+def test_firebase_config_renders_camel_case_in_login(client: TestClient) -> None:
+    """Firebase JS SDK exige config camelCase (apiKey, authDomain, projectId)."""
+    resp = client.get("/login")
+    assert resp.status_code == 200
+    text = resp.text
+    assert '"apiKey"' in text
+    assert '"authDomain"' in text
+    assert '"projectId"' in text
 
 
 def test_protected_route_redirects_anonymous_to_login(client: TestClient) -> None:
@@ -81,12 +96,22 @@ def test_session_cookie_is_secure_httponly_and_lax(client: TestClient) -> None:
     assert "samesite=lax" in set_cookie
 
 
+def _decode_session_cookie(set_cookie: str) -> dict[str, Any]:
+    """Decodifica o cookie itsdangerous assinado pelo SessionMiddleware (só para testes)."""
+    cookie_value = set_cookie.split(";")[0].split("=", 1)[1]
+    signer = TimestampSigner(os.environ["SESSION_SECRET"])
+    data = signer.unsign(cookie_value.encode(), max_age=14 * 24 * 3600)
+    return json.loads(base64.b64decode(data))
+
+
 def test_session_carries_role_owner_and_uid(client: TestClient) -> None:
     """Login scrypt grava sessão no formato {"role": "owner", "uid": "scrypt:owner"}."""
     resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert resp.status_code == 303
-    # Só a presença do cookie não mostra o conteúdo; a prova é acessar rota protegida.
-    assert client.get("/").status_code == 200
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["role"] == "owner"
+    assert session["uid"] == "scrypt:owner"
+    assert "auth_at" in session
 
 
 def test_session_regenerates_on_login(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,7 +197,6 @@ def _firebase_token(
 ) -> str:
     now = int(time.time())
     payload = {
-        "uid": uid,
         "email": "owner@example.com",
         "email_verified": True,
         "aud": _FIREBASE_PROJECT_ID,
@@ -232,6 +256,12 @@ def test_firebase_login_rejects_malformed_allowlist(
 
     resp = configured_client.post("/auth/firebase", json={"id_token": "x"}, follow_redirects=False)
     assert resp.status_code == 503
+
+
+def test_firebase_login_rejects_missing_id_token(client: TestClient) -> None:
+    """POST /auth/firebase sem id_token é rejeitado na borda (Pydantic 422)."""
+    resp = client.post("/auth/firebase", json={}, follow_redirects=False)
+    assert resp.status_code == 422
 
 
 if __name__ == "__main__":

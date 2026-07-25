@@ -128,7 +128,7 @@ def verify_id_token(token: str, project_id: str, allowed_uids: set[str]) -> dict
     if payload.get("email_verified") is not True:
         raise FirebaseTokenError("invalid_token", "email não verificado")
 
-    uid = payload.get("uid")
+    uid = payload.get("sub")
     if uid not in allowed_uids:
         raise FirebaseTokenError("uid_not_allowed", "uid não está na allowlist")
 
