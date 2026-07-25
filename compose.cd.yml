@@ -11,7 +11,7 @@
 
 services:
   kubo-scheduler:
-    image: ${KUBO_IMAGE:?defina KUBO_IMAGE — digest da imagem a deployar (ex.: ghcr.io/renatobardi/kubo@sha256:...)}
+    image: "${KUBO_IMAGE:?defina KUBO_IMAGE - digest da imagem a deployar}"
 
   kubo-api:
-    image: ${KUBO_IMAGE:?}
+    image: "${KUBO_IMAGE:?defina KUBO_IMAGE - digest da imagem a deployar}"

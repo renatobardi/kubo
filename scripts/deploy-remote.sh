@@ -55,14 +55,26 @@ cd ~/kubo
 # Modo CD: puxa a imagem publicada uma vez no GHCR pelo digest.
 # KUBO_IMAGE_REPO permite override (padrão = ghcr.io/renatobardi/kubo).
 if [ "$mode" = "digest" ]; then
-  repo="${KUBO_IMAGE_REPO:-ghcr.io/renatobardi/kubo}"
-  # Normaliza digest: aceita 'sha256:...' ou só o hex.
-  normalized="${digest#sha256:}"
+  # Resolve repo e digest a partir de uma referência completa, sha256:hex ou hex puro.
+  if [[ "$digest" == *@sha256:* ]]; then
+    repo="${digest%@sha256:*}"
+    normalized="${digest##*@sha256:}"
+  else
+    repo="${KUBO_IMAGE_REPO:-ghcr.io/renatobardi/kubo}"
+    normalized="${digest#sha256:}"
+  fi
   export KUBO_IMAGE="${repo}@sha256:${normalized}"
-  export COMPOSE_FILE="docker-compose.yml:compose.cd.yml:${COMPOSE_FILE:-}"
+  export COMPOSE_FILE="docker-compose.yml:compose.cd.yml${COMPOSE_FILE:+:${COMPOSE_FILE}}"
 
   echo "[deploy] modo CD — imagem ${KUBO_IMAGE}"
   docker pull "${KUBO_IMAGE}"
+
+  # Revalida o digest do conteúdo puxado imediatamente antes de subir.
+  pulled_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${KUBO_IMAGE}" | sed 's/.*sha256://')"
+  if [ "${pulled_digest}" != "${normalized}" ]; then
+    echo "[deploy] FALHOU: digest puxado (${pulled_digest}) não bate com o promovido (${normalized})" >&2
+    exit 1
+  fi
 else
   # Modo legado: build local. Mantém compatibilidade com deploy.sh do Mac
   # enquanto o dono não completa a setup da esteira CD (KUBO-99..KUBO-103).
@@ -102,9 +114,7 @@ else
   echo "[deploy] verificado: kubo-api e kubo-scheduler rodam o build ${KUBO_BUILD_ID}"
 fi
 
-# Poda imagens dangling do projeto. No modo CD as imagens puxadas usam reference
-# ghcr.io/renatobardi/kubo*; no modo legado usam label compose. Nenhum prune
-# irrestrito para não apagar lixo de outras stacks no oute-server.
-repo_ref="${KUBO_IMAGE_REPO:-ghcr.io/renatobardi/kubo}"
+# Poda imagens dangling do projeto buildadas pelo compose. Imagens puxadas por
+# digest do GHCR não são dangling enquanto estão em uso; prune irrestrito evitado
+# para não apagar lixo de outras stacks no oute-server.
 docker image prune -f --filter "label=com.docker.compose.project=kubo" >/dev/null || true
-docker image prune -f --filter "reference=${repo_ref}*" >/dev/null || true
