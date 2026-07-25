@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-import base64
 import time
-from typing import Any
 
 import pytest
 import respx
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt import encode as jwt_encode
 from starlette.testclient import TestClient
 
 from kubo.api.app import create_app
 from kubo.api.firebase_tokens import clear_jwks_cache
 from kubo.errors import ConfigError
+from tests.api._firebase_test_helpers import rsa_keypair
 from tests.api.conftest import UI_PASSWORD
 
 # Valor incorreto para o teste de rejeição — não é credencial, só "senha errada".
@@ -116,12 +113,14 @@ def test_session_regenerates_on_login(client: TestClient, monkeypatch: pytest.Mo
 
 
 def test_request_recognizes_https_behind_proxy(client: TestClient) -> None:
-    """Com base_url=https (simula X-Forwarded-Proto do nginx), o app vê scheme https."""
+    """Com base_url=https (proxy TLS), o app recebe o cookie Secure nas requisições autenticadas."""
     resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert resp.status_code == 303
-    # O cookie Secure só é mantido/reemitido quando o scheme é reconhecido como https.
+    assert "secure" in resp.headers["set-cookie"].lower()
+    # Requisição seguinte envia o cookie (TestClient base_url=https simula HTTPS).
     resp2 = client.get("/")
-    assert "secure" in resp2.request.headers.get("cookie", "").lower() or True
+    assert resp2.status_code == 200
+    assert "kubo_session" in resp2.request.headers.get("cookie", "")
 
 
 def test_trusted_host_rejects_unknown_host(client: TestClient) -> None:
@@ -185,36 +184,10 @@ def _firebase_token(
     return jwt_encode(payload, private_pem, algorithm="RS256", headers={"kid": kid, "alg": "RS256"})
 
 
-def _rsa_keypair() -> tuple[str, dict[str, Any]]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("utf-8")
-    numbers = key.public_key().public_numbers()
-
-    def _b64u(n: int) -> str:
-        return (
-            base64.urlsafe_b64encode(n.to_bytes((n.bit_length() + 7) // 8, "big"))
-            .rstrip(b"=")
-            .decode("ascii")
-        )
-
-    return private_pem, {
-        "kty": "RSA",
-        "alg": "RS256",
-        "use": "sig",
-        "kid": "test-kid",
-        "n": _b64u(numbers.n),
-        "e": _b64u(numbers.e),
-    }
-
-
 def test_firebase_login_success(respx_mock: respx.MockRouter, client: TestClient) -> None:
     """Token Firebase válido abre sessão owner e redireciona para o Painel."""
     clear_jwks_cache()
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
     token = _firebase_token(private_pem=private_pem)
 
@@ -229,7 +202,7 @@ def test_firebase_login_rejects_unknown_uid(
 ) -> None:
     """UID fora da allowlist não abre sessão."""
     clear_jwks_cache()
-    private_pem, jwk = _rsa_keypair()
+    private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
     token = _firebase_token(private_pem=private_pem, uid="other-uid")
 
@@ -244,6 +217,17 @@ def test_firebase_login_rejects_missing_config(
     """Sem project_id/owner_uids a rota devolve 503 (fail-closed)."""
     monkeypatch.setenv("KUBO_FIREBASE_PROJECT_ID", "")
     monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "")
+    configured_client = TestClient(create_app(), base_url="https://testserver")
+
+    resp = configured_client.post("/auth/firebase", json={"id_token": "x"}, follow_redirects=False)
+    assert resp.status_code == 503
+
+
+def test_firebase_login_rejects_malformed_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowlist malformada (uid com espaço, sem vírgulas) é tratada como vazia → 503."""
+    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner uid")
     configured_client = TestClient(create_app(), base_url="https://testserver")
 
     resp = configured_client.post("/auth/firebase", json={"id_token": "x"}, follow_redirects=False)

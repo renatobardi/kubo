@@ -17,6 +17,7 @@ compose bate em `http://localhost:8000/healthz` de dentro do container.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,6 +65,18 @@ _PUBLIC_PREFIXES = ("/static/",)
 # (+ MagicDNS). `testserver` é o Host do TestClient do Starlette.
 _DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "testserver")
 
+# UID do Firebase: até 128 chars, alfanumérico + underscore/hífen/ponto/dois-pontos.
+# Se a allowlist não seguir esse padrão, consideramos malformada e negamos tudo.
+_UID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def _parse_owner_uids(raw: str) -> set[str]:
+    """Parseia KUBO_FIREBASE_OWNER_UIDS; malformado ou vazio devolve set vazio."""
+    uids = {uid.strip() for uid in raw.split(",") if uid.strip()}
+    if not uids or not all(_UID_RE.match(uid) for uid in uids):
+        return set()
+    return uids
+
 
 @dataclass(frozen=True)
 class UiConfig:
@@ -102,11 +115,7 @@ def _ui_config() -> UiConfig:
         if loopback not in allowed:
             allowed.append(loopback)
     project_id = os.environ.get("KUBO_FIREBASE_PROJECT_ID", "")
-    owner_uids = {
-        uid.strip()
-        for uid in os.environ.get("KUBO_FIREBASE_OWNER_UIDS", "").split(",")
-        if uid.strip()
-    }
+    owner_uids = _parse_owner_uids(os.environ.get("KUBO_FIREBASE_OWNER_UIDS", ""))
     auth_domain = os.environ.get("KUBO_FIREBASE_AUTH_DOMAIN", "")
     if not auth_domain and project_id:
         auth_domain = f"{project_id}.firebaseapp.com"
