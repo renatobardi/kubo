@@ -65,18 +65,29 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
+      - name: Sync repo → kubo-test
+        env:
+          HOST: ${{ secrets.KUBO_TEST_HOST }}
+        run: |
+          rsync -az --delete \
+            --exclude='.git' --exclude='.venv' --exclude='__pycache__' \
+            --exclude='.pytest_cache' --exclude='.ruff_cache' --exclude='.coverage' \
+            --exclude='.env' \
+            -e 'ssh -o StrictHostKeyChecking=no' \
+            ./ "${HOST}:kubo/"
       - name: Deploy to kubo-test
         env:
           DIGEST: ${{ needs.build.outputs.digest }}
           HOST: ${{ secrets.KUBO_TEST_HOST }}
         run: |
           ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && bash scripts/deploy-remote.sh 'sha256:${DIGEST}'" < /dev/null
+            "cd ~/kubo && bash scripts/deploy-remote.sh '${DIGEST}'" < /dev/null
 
   collect-digest:
     needs: build
     runs-on: ubuntu-24.04-arm
     if: github.event_name == 'workflow_dispatch'
+    environment: dev
     permissions:
       contents: read
     outputs:
@@ -111,6 +122,16 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY_PRD }}
           tags: tag:cd-prd
+      - name: Sync repo → kubo-prd
+        env:
+          HOST: ${{ secrets.KUBO_PRD_HOST }}
+        run: |
+          rsync -az --delete \
+            --exclude='.git' --exclude='.venv' --exclude='__pycache__' \
+            --exclude='.pytest_cache' --exclude='.ruff_cache' --exclude='.coverage' \
+            --exclude='.env' \
+            -e 'ssh -o StrictHostKeyChecking=no' \
+            ./ "${HOST}:kubo/"
       - name: Revalidar digest antes do deploy
         env:
           EXPECTED: ${{ needs.collect-digest.outputs.digest }}
@@ -134,4 +155,4 @@ jobs:
           HOST: ${{ secrets.KUBO_PRD_HOST }}
         run: |
           ssh -o StrictHostKeyChecking=no "${HOST}" \
-            "cd ~/kubo && bash scripts/deploy-remote.sh 'sha256:${DIGEST}'" < /dev/null
+            "cd ~/kubo && bash scripts/deploy-remote.sh '${DIGEST}'" < /dev/null
