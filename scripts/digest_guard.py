@@ -15,8 +15,12 @@ imagem sem digest determinístico.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+
+_HEX_RE = re.compile(r"^[a-f0-9]+$")
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def normalize_digest(value: str) -> str:
@@ -41,22 +45,29 @@ def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[st
 
 def _container_id(service: str, project: str) -> str:
     """Retorna o id do container em execução do serviço, ou levanta RuntimeError."""
+    if not _NAME_RE.fullmatch(service):
+        raise RuntimeError(f"nome de serviço inválido: '{service}'")
+    if not _NAME_RE.fullmatch(project):
+        raise RuntimeError(f"nome de projeto inválido: '{project}'")
     result = run(
         ["docker", "compose", "--project-name", project, "ps", "-q", service],
         check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"docker compose ps falhou para '{service}': {result.stderr.strip()}")
-    container_id = result.stdout.strip()
+    container_id = result.stdout.strip().split("\n")[0]
     if not container_id:
         raise RuntimeError(f"Nenhum container em execução para o serviço '{service}'")
-    if "\n" in container_id:
-        raise RuntimeError(f"Mais de um container em execução para '{service}'")
+    if not _HEX_RE.fullmatch(container_id):
+        raise RuntimeError(f"id de container inválido: '{container_id}'")
     return container_id
 
 
 def _running_digest(container_id: str) -> str:
     """Obtém o digest (sha256) da imagem do container."""
+    if not _HEX_RE.fullmatch(container_id):
+        raise RuntimeError(f"id de container inválido: '{container_id}'")
+
     repo_digest = run(
         ["docker", "inspect", "--format", "{{index .RepoDigests 0}}", container_id],
         check=False,
@@ -80,7 +91,15 @@ def guard(expected: str, service: str, project: str = "kubo") -> tuple[int, str]
     Retorna ``(0, mensagem)`` quando coincidem e ``(1, mensagem)`` quando
     divergem ou não consegue inspecionar.
     """
+    if not _NAME_RE.fullmatch(service):
+        return 1, f"[digest-guard] FALHOU: nome de serviço inválido: '{service}'"
+    if not _NAME_RE.fullmatch(project):
+        return 1, f"[digest-guard] FALHOU: nome de projeto inválido: '{project}'"
+
     expected_digest = normalize_digest(expected)
+    if not _HEX_RE.fullmatch(expected_digest):
+        return 1, f"[digest-guard] FALHOU: digest '{expected}' não é hexadecimal"
+
     try:
         container_id = _container_id(service, project)
         actual_digest = _running_digest(container_id)

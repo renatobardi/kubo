@@ -39,7 +39,7 @@ class _FakeRun:
 
 
 def test_normalize_digest_strips_sha256_prefix_and_lowercases() -> None:
-    assert dg.normalize_digest("sha256:ABC123def456") == "abc123def456"
+    assert dg.normalize_digest("sha256:ABC123def456") == "abc123def456"  # pragma: allowlist secret
 
 
 def test_normalize_digest_accepts_plain_hex() -> None:
@@ -57,7 +57,7 @@ def test_extract_digest_from_config_image_reference() -> None:
 def test_guard_passes_when_digests_match(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRun(
         [
-            ("container123\n", 0),  # docker compose ps -q
+            ("a1b2c3d4e5f6\n", 0),  # docker compose ps -q
             ("ghcr.io/renatobardi/kubo@sha256:abc123\n", 0),  # repo digest
         ]
     )
@@ -74,8 +74,8 @@ def test_guard_fails_when_digests_diverge(monkeypatch: pytest.MonkeyPatch) -> No
     """Regressão: imagem viva com conteúdo diferente do promovido deve falhar."""
     fake = _FakeRun(
         [
-            ("container123\n", 0),
-            ("ghcr.io/renatobardi/kubo@sha256:olddigest\n", 0),
+            ("a1b2c3d4e5f6\n", 0),
+            ("ghcr.io/renatobardi/kubo@sha256:deadbeef0101\n", 0),
         ]
     )
     monkeypatch.setattr(dg, "run", fake)
@@ -108,7 +108,7 @@ def test_guard_fails_when_container_id_is_empty(monkeypatch: pytest.MonkeyPatch)
 def test_guard_fails_when_image_has_no_repo_digest(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRun(
         [
-            ("container123\n", 0),
+            ("a1b2c3d4e5f6\n", 0),
             ("<no value>\n", 0),  # RepoDigests vazio
             ("kubo:latest\n", 0),  # Config.Image sem digest
         ]
@@ -126,7 +126,7 @@ def test_guard_falls_back_to_config_image_when_repo_digest_is_missing(
 ) -> None:
     fake = _FakeRun(
         [
-            ("container123\n", 0),
+            ("a1b2c3d4e5f6\n", 0),
             ("<no value>\n", 1),  # RepoDigests inexistente
             ("ghcr.io/renatobardi/kubo@sha256:abc123\n", 0),  # Config.Image com digest
         ]
@@ -142,7 +142,7 @@ def test_guard_falls_back_to_config_image_when_repo_digest_is_missing(
 def test_main_cli_prints_and_returns_zero_on_match(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRun(
         [
-            ("container123\n", 0),
+            ("a1b2c3d4e5f6\n", 0),
             ("ghcr.io/renatobardi/kubo@sha256:abc123\n", 0),
         ]
     )
