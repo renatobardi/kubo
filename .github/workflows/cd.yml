@@ -1,0 +1,144 @@
+# workflow-cd.yml — esteira build-once / promote-by-digest (ADR-0037).
+#
+# Jobs:
+#   build    — builda a imagem uma vez por commit e publica no GHCR por SHA.
+#   deploy-dev — merge em main auto-deploya o kubo-test.
+#   deploy-prd — workflow_dispatch, gated pelo Environment `prd`, com binding do digest.
+#
+# Pré-requisitos (use scripts/ops/fatia-c-setup-*.sh):
+#   - Pacote GHCR público e visível (KUBO-99).
+#   - Tailscale OIDC provider + tags cd-dev/cd-prd configurados (KUBO-100).
+#   - Environment `prd` com required reviewer e segredos (KUBO-103).
+
+name: cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE_REPO: ghcr.io/renatobardi/kubo
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Meta
+        id: meta
+        run: |
+          echo "image=${{ env.IMAGE_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Não assamos segredos; o .env do servidor é lido em runtime (invariante 8).
+
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Tailscale (dev identity)
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
+          tags: tag:cd-dev
+      - name: Deploy to kubo-test
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+          HOST: ${{ secrets.KUBO_TEST_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && bash scripts/deploy-remote.sh 'sha256:${DIGEST}'" < /dev/null
+
+  collect-digest:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.collect.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Tailscale (dev identity)
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_DEV }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_DEV }}
+          tags: tag:cd-dev
+      - name: Coletar digest vivo do kubo-test
+        id: collect
+        env:
+          HOST: ${{ secrets.KUBO_TEST_HOST }}
+        run: |
+          live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
+          echo "digest=${live_digest}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Digest vivo em kubo-test: sha256:${live_digest}"
+
+  deploy-prd:
+    needs: [build, collect-digest]
+    runs-on: ubuntu-24.04-arm
+    environment: prd
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Tailscale (prd identity)
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID_PRD }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET_PRD }}
+          tags: tag:cd-prd
+      - name: Revalidar digest antes do deploy
+        env:
+          EXPECTED: ${{ needs.collect-digest.outputs.digest }}
+          HOST: ${{ secrets.KUBO_PRD_HOST }}
+        run: |
+          live_digest=$(ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && docker compose ps -q kubo-api | xargs -r docker inspect --format '{{index .RepoDigests 0}}' | sed 's/.*sha256://'")
+          if [ "$live_digest" != "$EXPECTED" ]; then
+            echo "::error::Digest divergiu entre coleta e deploy (esperado sha256:${EXPECTED}, vivo sha256:${live_digest})"
+            exit 1
+          fi
+      - name: Backup antes de migrar
+        env:
+          HOST: ${{ secrets.KUBO_PRD_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && docker compose exec -T backup sh -c 'date -u +%Y%m%dT%H%M%SZ > /backups/.pre-migration-marker'" < /dev/null
+      - name: Deploy to kubo-prd
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+          HOST: ${{ secrets.KUBO_PRD_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${HOST}" \
+            "cd ~/kubo && bash scripts/deploy-remote.sh 'sha256:${DIGEST}'" < /dev/null
