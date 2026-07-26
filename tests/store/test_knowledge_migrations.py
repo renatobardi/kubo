@@ -93,6 +93,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0016_tenant_credential.surql",
         # 0017 (KUBO-120): convite de equipe.
         "0017_team_invite.surql",
+        # 0018 (KUBO-119): catálogo por-tenant + changelog.
+        "0018_catalog_tables.surql",
     }
 
 

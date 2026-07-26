@@ -18,7 +18,7 @@ from kubo.runtime.integrations import (
     Integration,
     ResolvedIntegration,
     load_integration,
-    load_integrations,
+    load_integrations_from_dir,
     resolve_integrations,
 )
 
@@ -37,7 +37,7 @@ def test_load_rss_from_real_catalog() -> None:
 
 def test_load_integrations_indexes_by_name() -> None:
     """load_integrations devolve {name: Integration}; o catálogo real tem rss."""
-    catalog = load_integrations(_CATALOG)
+    catalog = load_integrations_from_dir(_CATALOG)
 
     assert "rss" in catalog
     assert isinstance(catalog["rss"], Integration)
@@ -55,7 +55,7 @@ def test_load_integrations_rejects_duplicate_name(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigError, match="dup"):
-        load_integrations(tmp_path)
+        load_integrations_from_dir(tmp_path)
 
 
 def test_loader_rejects_inline_secret(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_resolve_missing_env_var_fails(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_resolve_injects_only_declared() -> None:
     """Só as integrações DECLARADAS entram no ctx; o resto do catálogo é negado
     por omissão (least-privilege, plano §4.3.3)."""
-    catalog = load_integrations(_CATALOG)  # tem 'rss'
+    catalog = load_integrations_from_dir(_CATALOG)  # tem 'rss'
 
     resolved = resolve_integrations([], catalog)
 
@@ -155,12 +155,12 @@ def test_resolve_denies_nonexistent_declared() -> None:
     """Integração declarada que não existe no catálogo é negada com falha alta:
     manifest válido ≠ permissão concedida (plano §4.3.3)."""
     with pytest.raises(ConfigError, match="ghost"):
-        resolve_integrations(["ghost"], load_integrations(_CATALOG))
+        resolve_integrations(["ghost"], load_integrations_from_dir(_CATALOG))
 
 
 def test_resolved_integration_from_public_source() -> None:
     """Integração pública (auth none) resolve com secret=None — sem env exigido."""
-    resolved = resolve_integrations(["rss"], load_integrations(_CATALOG))
+    resolved = resolve_integrations(["rss"], load_integrations_from_dir(_CATALOG))
 
     assert resolved["rss"].secret is None
     assert resolved["rss"].auth_type == "none"

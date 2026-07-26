@@ -41,18 +41,22 @@ class IntegrationAuth(BaseModel):
 
     @model_validator(mode="after")
     def _ref_only(self) -> Self:
-        """type=none não tem segredo; os demais exigem secret_ref no formato env:VAR."""
+        """type=none não tem segredo; os demais exigem secret_ref como
+        env:VAR ou tenant_credential:<nome>."""
         if self.type == "none":
             if self.secret_ref is not None:
                 raise ValueError("auth.type=none não deve declarar secret_ref")
             return self
         if self.secret_ref is None:
-            raise ValueError(f"auth.type={self.type} exige secret_ref (referência env:VAR)")
+            raise ValueError(
+                f"auth.type={self.type} exige secret_ref (env:VAR ou tenant_credential:<nome>)"
+            )
         if not _SECRET_REF.match(self.secret_ref):
             # NÃO ecoa o valor: se alguém colou um token real por engano, a mensagem
             # não pode vazá-lo para o ConfigError/run.error. Só diz a regra violada.
             raise ValueError(
-                "secret_ref deve ser referência no formato env:VAR, nunca valor inline"
+                "secret_ref deve ser referência (env:VAR ou tenant_credential:<nome>), "
+                "nunca valor inline"
             )
         return self
 
@@ -109,7 +113,7 @@ def load_integration(path: Path) -> Integration:
         ) from exc
 
 
-def load_integrations(catalog_dir: Path) -> dict[str, Integration]:
+def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
     """Carrega todas as integrações de um diretório (1 YAML por item), por nome.
 
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
@@ -120,6 +124,25 @@ def load_integrations(catalog_dir: Path) -> dict[str, Integration]:
         integ = load_integration(path)
         if integ.name in catalog:
             raise ConfigError(f"integração '{integ.name}' declarada em mais de um arquivo")
+        catalog[integ.name] = integ
+    return catalog
+
+
+def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integration]:
+    """Carrega as integrações do catálogo do tenant no banco (ADR-0042).
+
+    Leitura direta a cada chamada, sem cache."""
+    from kubo.store import catalog as _catalog_store
+
+    rows = _catalog_store.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
+    catalog: dict[str, Integration] = {}
+    for row in rows:
+        try:
+            integ = Integration.model_validate(row)
+        except ValidationError as exc:
+            raise ConfigError(
+                f"integração {row.get('name')!r} inválida: {format_validation_error(exc)}"
+            ) from exc
         catalog[integ.name] = integ
     return catalog
 

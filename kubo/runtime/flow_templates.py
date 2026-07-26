@@ -14,7 +14,7 @@ ADR-0016 §II) — este loader só valida o catálogo; o congelamento é da stor
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
@@ -100,7 +100,7 @@ def load_flow_template(path: Path) -> FlowTemplate:
         ) from exc
 
 
-def load_flow_templates(catalog_dir: Path) -> dict[str, FlowTemplate]:
+def load_flow_templates_from_dir(catalog_dir: Path) -> dict[str, FlowTemplate]:
     """Carrega todos os templates de um diretório (1 YAML por item), por nome.
 
     Nome duplicado falha alto (ConfigError): o binding template→comportamento do
@@ -110,5 +110,24 @@ def load_flow_templates(catalog_dir: Path) -> dict[str, FlowTemplate]:
         template = load_flow_template(path)
         if template.name in catalog:
             raise ConfigError(f"flow template '{template.name}' declarado em mais de um arquivo")
+        catalog[template.name] = template
+    return catalog
+
+
+def load_flow_templates(db: Any, tenant_id: Any, user_id: Any) -> dict[str, FlowTemplate]:
+    """Carrega os templates do catálogo do tenant no banco (ADR-0042).
+
+    Leitura direta a cada chamada, sem cache."""
+    from kubo.store import catalog as _catalog_store
+
+    rows = _catalog_store.list_flow_templates(db, tenant_id=tenant_id, user_id=user_id)
+    catalog: dict[str, FlowTemplate] = {}
+    for row in rows:
+        try:
+            template = FlowTemplate.model_validate(row)
+        except ValidationError as exc:
+            raise ConfigError(
+                f"flow template {row.get('name')!r} inválido: {format_validation_error(exc)}"
+            ) from exc
         catalog[template.name] = template
     return catalog

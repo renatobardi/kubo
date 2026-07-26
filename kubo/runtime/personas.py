@@ -14,7 +14,7 @@ o congelamento é da store (`instantiate_flow`).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -67,7 +67,7 @@ def load_persona(path: Path) -> Persona:
         raise ConfigError(f"persona {path.name} inválida: {format_validation_error(exc)}") from exc
 
 
-def load_personas(catalog_dir: Path) -> dict[str, Persona]:
+def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
     """Carrega todas as personas de um diretório (1 YAML por item), por nome.
 
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
@@ -78,5 +78,25 @@ def load_personas(catalog_dir: Path) -> dict[str, Persona]:
         persona = load_persona(path)
         if persona.name in catalog:
             raise ConfigError(f"persona '{persona.name}' declarada em mais de um arquivo")
+        catalog[persona.name] = persona
+    return catalog
+
+
+def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
+    """Carrega as personas do catálogo do tenant no banco (ADR-0042).
+
+    Leitura direta a cada chamada, sem cache. O `tenant_id`/`user_id` vêm da sessão
+    após checagem de membership na store."""
+    from kubo.store import catalog as _catalog_store
+
+    rows = _catalog_store.list_personas(db, tenant_id=tenant_id, user_id=user_id)
+    catalog: dict[str, Persona] = {}
+    for row in rows:
+        try:
+            persona = Persona.model_validate(row)
+        except ValidationError as exc:
+            raise ConfigError(
+                f"persona {row.get('name')!r} inválida: {format_validation_error(exc)}"
+            ) from exc
         catalog[persona.name] = persona
     return catalog

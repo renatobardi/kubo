@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from kubo.errors import ConfigError
-from kubo.runtime.personas import Persona, load_persona, load_personas
+from kubo.runtime.personas import Persona, load_persona, load_personas_from_dir
 
 _CATALOG = Path(__file__).parents[2] / "catalogs" / "personas"
 
@@ -41,7 +41,7 @@ def test_load_humano_is_a_human_without_task_machinery() -> None:
 
 def test_load_personas_indexes_by_name() -> None:
     """load_personas devolve {name: Persona}; o catálogo real tem analista e humano."""
-    catalog = load_personas(_CATALOG)
+    catalog = load_personas_from_dir(_CATALOG)
 
     assert {"analista", "humano"} <= set(catalog)
     assert isinstance(catalog["analista"], Persona)
@@ -69,7 +69,7 @@ def test_load_personas_rejects_duplicate_name(tmp_path: Path) -> None:
     (tmp_path / "a.yaml").write_text("name: dup\nexecutor: human\n", encoding="utf-8")
     (tmp_path / "b.yaml").write_text("name: dup\nexecutor: api\nmodel: m\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="dup"):
-        load_personas(tmp_path)
+        load_personas_from_dir(tmp_path)
 
 
 def test_load_persona_rejects_non_mapping(tmp_path: Path) -> None:

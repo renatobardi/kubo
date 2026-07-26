@@ -29,9 +29,17 @@ from kubo.errors import ConfigError, PromotionError, SenderError, StateError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
 from kubo.executors.cli import CliExecutor, CliExecutorConfig, CliRunner
-from kubo.runtime.flow_templates import FlowTemplate, load_flow_templates
-from kubo.runtime.integrations import load_integrations, resolve_integrations
-from kubo.runtime.personas import Persona, load_personas
+from kubo.runtime.flow_templates import (
+    FlowTemplate,
+    load_flow_templates,
+    load_flow_templates_from_dir,
+)
+from kubo.runtime.integrations import (
+    load_integrations,
+    load_integrations_from_dir,
+    resolve_integrations,
+)
+from kubo.runtime.personas import Persona, load_personas, load_personas_from_dir
 from kubo.runtime.runner import FlowCtx, run_worker
 from kubo.store.destinations import Destination
 from kubo.store.flows import (
@@ -159,21 +167,29 @@ def run_flow(
     base_url: str,
     executor: Executor | None = None,
     senders: Mapping[str, Sender] | None = None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> FlowRunResult:
     """Instancia e executa um flow do template `template_name` (ADR-0016 §III).
 
-    Carrega os catálogos, resolve o handler no `FLOW_REGISTRY` (template sem handler falha
-    alto — E4) e delega. `executor`/`senders` são injetáveis (default = reais) para tornar o
-    caminho testável com LLM/Telegram/cli falsos. `embedder`/`destination` são opcionais: o
+    Carrega os catálogos do tenant (ou do disco se tenant_id/user_id não forem
+    fornecidos, para compatibilidade com testes/CLI), resolve o handler no
+    `FLOW_REGISTRY` (template sem handler falha alto — E4) e delega.
+    `executor`/`senders` são injetáveis (default = reais) para tornar o caminho
+    testável com LLM/Telegram/cli falsos. `embedder`/`destination` são opcionais: o
     flow `dev` (executor cli) não usa nenhum dos dois — o behavior declara o que precisa."""
-    templates = load_flow_templates(_TEMPLATES_DIR)
+    if tenant_id is not None and user_id is not None:
+        templates = load_flow_templates(db, tenant_id, user_id)
+        personas = load_personas(db, tenant_id, user_id)
+    else:
+        templates = load_flow_templates_from_dir(_TEMPLATES_DIR)
+        personas = load_personas_from_dir(_PERSONAS_DIR)
     template = templates.get(template_name)
     if template is None:
         raise ConfigError(f"template de flow '{template_name}' não existe no catálogo")
     behavior = _FLOW_REGISTRY.get(template_name)
     if behavior is None:
         raise ConfigError(f"template '{template_name}' sem handler no FLOW_REGISTRY")
-    personas = load_personas(_PERSONAS_DIR)
     return behavior.run(
         db,
         template,
@@ -184,6 +200,8 @@ def run_flow(
         base_url=base_url,
         executor=executor,
         senders=senders,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
 
@@ -198,6 +216,8 @@ def _run_analysis(
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> FlowRunResult:
     """Comportamento do template `analysis` (E4): a analista recebe o task; o humano é
     materializado (D33) mas não recebe. Instancia → analyzing → run_worker(AnalystWorker) →
@@ -225,6 +245,8 @@ def _run_analysis(
         config={"question": question},
         embedder=embedder,
         flow_ctx=FlowCtx(inst.flow, task),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     set_task_run(db, task, run_id)
     final = _DELIVERED if _run_succeeded(db, run_id) else _FAILED
@@ -243,6 +265,8 @@ def _run_analysis_review(
     base_url: str,
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> FlowRunResult:
     """Comportamento do `analysis-review` (E4, ADR-0018 §IV/§V): roda a analista em modo
     PRODUCE-ONLY (`destination=None`) — o relatório PARA no gate ANTES do envio (D37). Sucesso
@@ -273,6 +297,8 @@ def _run_analysis_review(
         config={"question": question},
         embedder=embedder,
         flow_ctx=FlowCtx(inst.flow, task),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     set_task_run(db, task, run_id)
     if not _run_succeeded(db, run_id):
@@ -296,6 +322,8 @@ def _run_analysis_review(
         question=question,
         base_url=base_url,
         senders=senders,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     return FlowRunResult(
         flow=inst.flow, task=task, run=run_id, state=_AWAITING, gate_task=gate_task
@@ -314,6 +342,8 @@ def _run_dev(
     executor: Executor | None,
     senders: Mapping[str, Sender] | None,
     target: _DevTarget,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> FlowRunResult:
     """Comportamento do `dev-mini` (E4, ADR-0019): a persona dev implementa num clone efêmero do
     sandbox → PARA no gate `review` com um deliverable `kind=pr`.
@@ -336,7 +366,14 @@ def _run_dev(
     config = _dev_config(
         question, branch=_dev_branch(inst.flow, prefix=target.branch_prefix), env=target.env
     )
-    run_id = run_worker(db, worker, config=config, flow_ctx=FlowCtx(inst.flow, task))
+    run_id = run_worker(
+        db,
+        worker,
+        config=config,
+        flow_ctx=FlowCtx(inst.flow, task),
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     set_task_run(db, task, run_id)
     if not _run_succeeded(db, run_id):
         transition_task(db, task, from_state=_IMPLEMENTING, to_state=_FAILED)
@@ -404,6 +441,8 @@ def _resume_dev(
     destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> None:
     """Aprovação do `dev-mini` (D38): move as 2 tasks a `done`. SEM envio e SEM merge — o Kubo não
     tem capacidade de merge (anti-bypass por construção, ADR-0018 §V-bis); o merge é clique do dono
@@ -420,7 +459,15 @@ def _resume_dev(
     )
 
 
-def _reject_dev(db: Any, *, gate_task: RecordID, reason: str, target: _DevTarget) -> None:
+def _reject_dev(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    reason: str,
+    target: _DevTarget,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> None:
     """Rejeição do `dev-mini`/`dev-kubo` (D38): FECHA o PR via API com o motivo em comentário,
     DEPOIS decide o gate → rejected. Ordem (fechar antes, decidir depois) é at-least-once,
     espelho do resume do analysis (ADR-0019 §IX): close falho deixa o gate ABERTO e visível (o
@@ -451,7 +498,9 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str, target: _DevTarget
             f"pr_url do deliverable ({ctx.pr_url!r}) não bate com o alvo resolvido "
             f"({expected_url!r})"
         )
-    base_url_api, pat = _write_integration(target.write_integration)
+    base_url_api, pat = _write_integration(
+        target.write_integration, db=db, tenant_id=tenant_id, user_id=user_id
+    )
     github_api.close_pull_request(
         base_url=base_url_api,
         token=pat,
@@ -470,7 +519,15 @@ def _reject_dev(db: Any, *, gate_task: RecordID, reason: str, target: _DevTarget
     )
 
 
-def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str, target: _DevTarget) -> None:
+def _promote_dev(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    worker_name: str,
+    target: _DevTarget,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> None:
     """Confirmar promoção do `dev-mini`/`dev-kubo` v2 (ADR-0021 §2/§9, E10/E12) — a 3ª porta de
     escrita.
 
@@ -499,7 +556,7 @@ def _promote_dev(db: Any, *, gate_task: RecordID, worker_name: str, target: _Dev
             f"pr_url do deliverable ({ctx.pr_url!r}) não bate com o alvo resolvido "
             f"({expected_url!r})"
         )
-    base_url_api, token = _forge_readonly_integration()
+    base_url_api, token = _forge_readonly_integration(db=db, tenant_id=tenant_id, user_id=user_id)
     status = github_api.get_pull_request(
         base_url=base_url_api,
         token=token,
@@ -536,10 +593,16 @@ def _validate_registered_worker(worker_name: str) -> WorkerManifest:
     return manifest
 
 
-def _forge_readonly_integration() -> tuple[str, str]:
+def _forge_readonly_integration(
+    db: Any = None, tenant_id: Any = None, user_id: Any = None
+) -> tuple[str, str]:
     """Resolve (base_url, token) da integração `github-readonly` (E12/E13) — SEPARADA do
     `github` de escrita: o Confirmar promoção só LÊ o merge, nunca mescla/comenta/fecha."""
-    resolved = resolve_integrations(["github-readonly"], load_integrations(_INTEGRATIONS_DIR))[
+    if tenant_id is not None and user_id is not None and db is not None:
+        catalog = load_integrations(db, tenant_id, user_id)
+    else:
+        catalog = load_integrations_from_dir(_INTEGRATIONS_DIR)
+    resolved = resolve_integrations(["github-readonly"], catalog, db=db, tenant_id=tenant_id)[
         "github-readonly"
     ]
     if not resolved.secret:
@@ -549,11 +612,17 @@ def _forge_readonly_integration() -> tuple[str, str]:
     return resolved.base_url or "https://api.github.com", resolved.secret
 
 
-def _write_integration(name: str) -> tuple[str, str]:
+def _write_integration(
+    name: str, db: Any = None, tenant_id: Any = None, user_id: Any = None
+) -> tuple[str, str]:
     """Resolve (base_url, PAT) da integração de ESCRITA `name` do catálogo (`github` do forge ou
     `github-kubo` do repo principal, conforme `_DevTarget.write_integration`) — o runtime resolve
     o segredo, o worker/behavior nunca lê env direto (§8). PAT ausente → ConfigError (config)."""
-    resolved = resolve_integrations([name], load_integrations(_INTEGRATIONS_DIR))[name]
+    if tenant_id is not None and user_id is not None and db is not None:
+        catalog = load_integrations(db, tenant_id, user_id)
+    else:
+        catalog = load_integrations_from_dir(_INTEGRATIONS_DIR)
+    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id)[name]
     if not resolved.secret:
         raise ConfigError(f"integração {name!r} sem PAT resolvido")
     return resolved.base_url or "https://api.github.com", resolved.secret
@@ -594,6 +663,8 @@ def resume_gate(
     destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None = None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> None:
     """Aprova um gate pelo browser (ADR-0018 §V): despacha ao comportamento do template do
     flow (E4). Falha de ENVIO propaga e deixa o gate ABERTO (at-least-once — o dono clica de
@@ -602,27 +673,49 @@ def resume_gate(
     if behavior.resume is None:
         raise ConfigError("o template deste gate não suporta aprovação")
     behavior.resume(
-        db, gate_task=gate_task, destination=destination, base_url=base_url, senders=senders
+        db,
+        gate_task=gate_task,
+        destination=destination,
+        base_url=base_url,
+        senders=senders,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
 
-def reject_gate(db: Any, *, gate_task: RecordID, reason: str) -> None:
+def reject_gate(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    reason: str,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> None:
     """Rejeita um gate pelo browser COM motivo obrigatório (ADR-0018 §IV): despacha ao
     comportamento do template. Arquiva o flow (as 2 tasks → rejected). Sem envio."""
     behavior = _behavior_for_gate(db, gate_task)
     if behavior.reject is None:
         raise ConfigError("o template deste gate não suporta rejeição")
-    behavior.reject(db, gate_task=gate_task, reason=reason)
+    behavior.reject(db, gate_task=gate_task, reason=reason, tenant_id=tenant_id, user_id=user_id)
 
 
-def promote_gate(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+def promote_gate(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    worker_name: str,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> None:
     """Confirma uma promoção pelo browser (ADR-0021 §9) — a 3ª porta de escrita, rota PRÓPRIA
     (nunca sobrecarrega `resume_gate`): despacha ao comportamento do template. `worker_name` é
     informado pelo dono (já viu merge+deploy); a validação (merge+registry) é do behavior."""
     behavior = _behavior_for_gate(db, gate_task)
     if behavior.promote is None:
         raise ConfigError("o template deste gate não suporta promoção")
-    behavior.promote(db, gate_task=gate_task, worker_name=worker_name)
+    behavior.promote(
+        db, gate_task=gate_task, worker_name=worker_name, tenant_id=tenant_id, user_id=user_id
+    )
 
 
 def _behavior_for_gate(db: Any, gate_task: RecordID) -> FlowBehavior:
@@ -643,6 +736,8 @@ def _resume_review(
     destination: Destination,
     base_url: str,
     senders: Mapping[str, Sender] | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> None:
     """Aprovação do `analysis-review` (ADR-0018 §V): re-hidrata o contexto do grafo, ENVIA o
     relatório (mecânico, sem LLM — a prosa do deliverable + as fontes das arestas `consults`),
@@ -654,7 +749,15 @@ def _resume_review(
     items = [_distilled_rid(s.id) for s in ctx.sources]
     try:
         text = render_telegram(ctx.content, ctx.sources, base_url)
-        _send_telegram(destination, text, senders, parse_mode="HTML")
+        _send_telegram(
+            db,
+            destination,
+            text,
+            senders,
+            parse_mode="HTML",
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
     except SenderError:
         _dispatch_report(db, destination, items, status="error")
         raise
@@ -668,9 +771,17 @@ def _resume_review(
     )
 
 
-def _reject_review(db: Any, *, gate_task: RecordID, reason: str) -> None:
+def _reject_review(
+    db: Any,
+    *,
+    gate_task: RecordID,
+    reason: str,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> None:
     """Rejeição do `analysis-review` (ADR-0018 §IV): arquiva as 2 tasks → rejected com o motivo
     obrigatório. `decide_gate` valida o motivo e a atomicidade (transação)."""
+    _ = (tenant_id, user_id)
     ctx = read_gate_context(db, gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow")
@@ -693,6 +804,8 @@ def _notify_gate(
     question: str,
     base_url: str,
     senders: Mapping[str, Sender] | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> None:
     """Avisa o dono que um gate abriu + grava o dispatch de gate (ADR-0018 §III). BEST-EFFORT:
     falha de notificação NÃO falha o gate (loga com flow_id/task_id e segue — o board é a fonte
@@ -702,7 +815,15 @@ def _notify_gate(
             f"🔔 Um relatório aguarda sua aprovação no Kubo.\n\n{question}\n\n"
             f"Abra o board: {base_url}/flows"
         )
-        _send_telegram(destination, text, senders, parse_mode=None)
+        _send_telegram(
+            db,
+            destination,
+            text,
+            senders,
+            parse_mode=None,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         insert_dispatch(
             db,
             destination=destination.id,
@@ -740,24 +861,36 @@ def _dispatch_report(
 
 
 def _send_telegram(
+    db: Any,
     destination: Destination,
     text: str,
     senders: Mapping[str, Sender] | None,
     *,
     parse_mode: str | None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> None:
     """Envia `text` ao destino Telegram: o sender injetado (default = real) + o token resolvido
     do catálogo de integrações. O RUNTIME resolve o segredo (o worker nunca lê env, §8)."""
     if destination.channel != "telegram":
         raise SenderError(f"canal {destination.channel!r} não suportado")
     sender = (senders or {}).get("telegram") or send_telegram
-    sender(token=_telegram_token(), chat_id=destination.address, text=text, parse_mode=parse_mode)
+    sender(
+        token=_telegram_token(db, tenant_id=tenant_id, user_id=user_id),
+        chat_id=destination.address,
+        text=text,
+        parse_mode=parse_mode,
+    )
 
 
-def _telegram_token() -> str:
+def _telegram_token(db: Any, *, tenant_id: Any = None, user_id: Any = None) -> str:
     """Resolve o token do Telegram do catálogo de integrações (mesmo seam do worker). Token
     ausente → SenderError (falha de ENTREGA, não crash)."""
-    resolved = resolve_integrations(["telegram"], load_integrations(_INTEGRATIONS_DIR))
+    if tenant_id is not None and user_id is not None:
+        catalog = load_integrations(db, tenant_id, user_id)
+    else:
+        catalog = load_integrations_from_dir(_INTEGRATIONS_DIR)
+    resolved = resolve_integrations(["telegram"], catalog, db=db, tenant_id=tenant_id)
     secret = resolved["telegram"].secret
     if not secret:
         raise SenderError("integração 'telegram' sem segredo resolvido")
