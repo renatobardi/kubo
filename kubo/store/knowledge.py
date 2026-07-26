@@ -23,6 +23,7 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.errors import DuplicateSourceError, SourceHasHistoryError, StaleSourceError
+from kubo.store import tenancy
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger(__name__)
@@ -221,20 +222,37 @@ def upsert_item(
     return rid
 
 
-def get_or_create_entity(db: Any, *, name: str, kind: str | None = None) -> RecordID:
-    """Resolve uma entity pelo nome normalizado, criando se não existir. Idempotente."""
+def get_or_create_entity(
+    db: Any,
+    *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
+    name: str,
+    kind: str | None = None,
+) -> RecordID:
+    """Resolve uma entity pelo nome normalizado, criando se não existir. Idempotente.
+
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e escopa a entity no
+    tenant (KUBO-117)."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     normalized = normalize_entity(name)
-    rid = _rid("entity", normalized)
-    db.query(
-        "UPSERT $r SET name = $name, normalized = $normalized, kind = $kind;",
-        {"r": rid, "name": name, "normalized": normalized, "kind": kind},
-    )
+    natural_key = normalized if tenant_id is None else f"{tenant_id}:{normalized}"
+    rid = _rid("entity", natural_key)
+    stmt = "UPSERT $r SET name = $name, normalized = $normalized, kind = $kind"
+    params: dict[str, Any] = {"r": rid, "name": name, "normalized": normalized, "kind": kind}
+    if tenant_id is not None:
+        stmt += ", tenant_id = $tenant"
+        params["tenant"] = tenant_id
+    stmt += ";"
+    db.query(stmt, params)
     return rid
 
 
 def insert_distilled(
     db: Any,
     *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
     item: RecordID,
     summary: str,
     chunks: Sequence[Chunk],
@@ -247,13 +265,19 @@ def insert_distilled(
     distilled`, `produced_by -> run` (se dado) e `mentions -> entity` (se dados).
     Vetor de dimensão != 768 é rejeitado na borda e reverte a transação inteira.
 
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e escopa o
+    distilled, chunks e arestas no tenant (KUBO-117).
+
     Levanta `ValueError` se a proveniência de um chunk (`dim`) não bate com o vetor
     real (`len(embedding)`): o schema garante `embedding` == 768, mas não que o `dim`
     registrado seja verdadeiro — um `dim` mentiroso corromperia a proveniência do re-embed."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     distilled = _fresh("distilled")
+    tenant_suffix = ", tenant_id = $tenant" if tenant_id is not None else ""
+    edge_tenant = " SET tenant_id = $tenant" if tenant_id is not None else ""
     stmts = [
-        "CREATE $d SET summary = $summary, claims = $claims",
-        "RELATE $d->derived_from->$item",
+        f"CREATE $d SET summary = $summary, claims = $claims{tenant_suffix}",
+        f"RELATE $d->derived_from->$item{edge_tenant}",
     ]
     params: dict[str, Any] = {
         "d": distilled,
@@ -261,14 +285,16 @@ def insert_distilled(
         "summary": summary,
         "claims": list(claims) if claims else [],
     }
+    if tenant_id is not None:
+        params["tenant"] = tenant_id
     for i, ch in enumerate(chunks):
         _require_dim_matches(ch)
         cid = _rid("chunk", f"{distilled}|{ch.seq}")
         stmts.append(
             f"CREATE $c{i} SET text = $ct{i}, seq = $cs{i}, embedding = $ce{i}, "
-            f"model = $cm{i}, dim = $cd{i}, task_type = $ck{i}"
+            f"model = $cm{i}, dim = $cd{i}, task_type = $ck{i}{tenant_suffix}"
         )
-        stmts.append(f"RELATE $c{i}->chunk_of->$d")
+        stmts.append(f"RELATE $c{i}->chunk_of->$d{edge_tenant}")
         params |= {
             f"c{i}": cid,
             f"ct{i}": ch.text,
@@ -279,10 +305,10 @@ def insert_distilled(
             f"ck{i}": ch.task_type,
         }
     if run is not None:
-        stmts.append("RELATE $d->produced_by->$run")
+        stmts.append(f"RELATE $d->produced_by->$run{edge_tenant}")
         params["run"] = run
     for i, ent in enumerate(entities or []):
-        stmts.append(f"RELATE $d->mentions->$e{i}")
+        stmts.append(f"RELATE $d->mentions->$e{i}{edge_tenant}")
         params[f"e{i}"] = ent
     run_transaction(db, stmts, params)
     return distilled
@@ -481,32 +507,50 @@ class EntityListItem:
     mentions: int
 
 
-def _entity_filter(query: str | None) -> tuple[str, dict[str, Any]]:
-    """Cláusula WHERE + bind para a busca de entidade por nome/kind (substring,
-    case-insensitive). Vazia = sem filtro. O termo é conteúdo do usuário → bind param,
-    normalizado (NFC+casefold+colapso) para casar com `entity.normalized`."""
-    if not query or not query.strip():
+def _entity_filter(
+    query: str | None, *, tenant_id: RecordID | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Cláusula WHERE + binds para a busca de entidade por nome/kind (substring,
+    case-insensitive) e/ou tenant. Vazia = sem filtro."""
+    filters: list[str] = []
+    params: dict[str, Any] = {}
+    if tenant_id is not None:
+        filters.append("tenant_id = $t")
+        params["t"] = tenant_id
+    if query and query.strip():
+        filters.append(
+            "(string::contains(normalized, $q) "
+            "OR string::contains(string::lowercase(kind ?? ''), $q))"
+        )
+        params["q"] = normalize_entity(query)
+    if not filters:
         return "", {}
-    return (
-        " WHERE string::contains(normalized, $q) "
-        "OR string::contains(string::lowercase(kind ?? ''), $q)",
-        {"q": normalize_entity(query)},
-    )
+    return " WHERE " + " AND ".join(filters), params
 
 
 def list_entities(
-    db: Any, *, limit: int, start: int, query: str | None = None
+    db: Any,
+    *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
+    limit: int,
+    start: int,
+    query: str | None = None,
 ) -> list[EntityListItem]:
     """Página de entidades, mais mencionadas primeiro (E2), opcionalmente filtrada por
     `query` (nome ou kind, busca da UI 0011).
+
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e filtra pelo tenant
+    ativo (KUBO-117).
 
     Menções = `array::len(<-mentions)` — conta as arestas incoming sem materializar
     os destilados (uma aresta por menção; `insert_distilled` não deduplica o par, mas
     a contagem de arestas é a verdade do grafo). `limit`/`start` clampados na borda
     como nas outras listas; ORDER BY sobre o alias computado é provado pelo probe 0010."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
-    where, params = _entity_filter(query)
+    where, params = _entity_filter(query, tenant_id=tenant_id)
     q = (
         "SELECT id, name, kind, array::len(<-mentions) AS mentions "  # noqa: S608
         f"FROM entity{where} ORDER BY mentions DESC, name LIMIT {limit} START {start};"

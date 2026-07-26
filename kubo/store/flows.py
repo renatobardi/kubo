@@ -20,6 +20,7 @@ from surrealdb import RecordID
 from kubo.errors import ConfigError, StateError
 from kubo.runtime.flow_templates import FlowTemplate
 from kubo.runtime.personas import Persona
+from kubo.store import tenancy
 from kubo.store.transaction import run_transaction
 
 
@@ -41,6 +42,7 @@ _HUMAN_CATALOG = "humano"
 
 # LIMIT/START não aceitam bind param neste SurrealDB; `list_flows` interpola SÓ ints
 # (paginação da store, nunca entrada coletada) via .format — S608 suprimido no call site.
+# `{where}` recebe "WHERE tenant_id = $t" ou string vazia; o bind `$t` é seguro.
 _LIST_FLOWS_SQL = (
     "SELECT id, template_name, question, created_at, "
     "<-belongs_to<-task.state AS task_states, "
@@ -48,8 +50,9 @@ _LIST_FLOWS_SQL = (
     "snapshot.board.gates AS gate_pairs, "
     "snapshot.board.transitions AS transition_pairs, "
     "array::distinct(<-belongs_to<-task->assigned_to->persona.catalog_name) AS cast "
-    "FROM flow ORDER BY created_at DESC LIMIT {limit} START {start};"
+    "FROM flow {where} ORDER BY created_at DESC LIMIT {limit} START {start};"
 )
+_LIST_FLOWS_WHERE = "WHERE tenant_id = $t"
 
 
 @dataclass(frozen=True)
@@ -63,43 +66,46 @@ class InstantiatedFlow:
 
 
 def instantiate_flow(
-    db: Any, *, template: FlowTemplate, personas: Mapping[str, Persona], question: str
+    db: Any,
+    *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
+    template: FlowTemplate,
+    personas: Mapping[str, Persona],
+    question: str,
 ) -> InstantiatedFlow:
     """Instancia um flow: congela o snapshot INTEGRAL do template e materializa uma
     persona (snapshot congelado) por membro do elenco. Bookkeeping GENÉRICO — não
     decide quem recebe task (isso é comportamento do FLOW_REGISTRY, ADR-0016 §IV).
 
-    Não transacionado: cada CREATE é independente; um crash no meio deixa um flow
-    órfão (sem todas as personas) — inofensivo, re-execução = novo flow. Elenco que
-    referencia persona ausente do catálogo falha alto (ConfigError). O snapshot vai
-    em `mode="json"` (tuplas de transição viram arrays, serializáveis pelo SDK)."""
-    flow = _create(
-        db,
-        "flow",
-        {
-            "template_name": template.name,
-            "template_version": template.version,
-            "question": question,
-            "snapshot": template.model_dump(mode="json"),
-        },
-    )
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e grava `tenant_id`
+    no flow e nas personas materializadas (KUBO-117)."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    flow_data: dict[str, Any] = {
+        "template_name": template.name,
+        "template_version": template.version,
+        "question": question,
+        "snapshot": template.model_dump(mode="json"),
+    }
+    if tenant_id is not None:
+        flow_data["tenant_id"] = tenant_id
+    flow = _create(db, "flow", flow_data)
     materialized: dict[str, RecordID] = {}
     for name in template.cast:
         persona = personas.get(name)
         if persona is None:
             raise ConfigError(f"elenco referencia persona '{name}' ausente do catálogo")
-        materialized[name] = _create(
-            db,
-            "persona",
-            {
-                "name": persona.name,
-                "executor": persona.executor,
-                "model": persona.model,
-                "prompt": persona.prompt,
-                "permissions": list(persona.permissions),
-                "catalog_name": persona.name,
-            },
-        )
+        persona_data: dict[str, Any] = {
+            "name": persona.name,
+            "executor": persona.executor,
+            "model": persona.model,
+            "prompt": persona.prompt,
+            "permissions": list(persona.permissions),
+            "catalog_name": persona.name,
+        }
+        if tenant_id is not None:
+            persona_data["tenant_id"] = tenant_id
+        materialized[name] = _create(db, "persona", persona_data)
     return InstantiatedFlow(flow=flow, personas=materialized)
 
 
@@ -110,22 +116,39 @@ def _create(db: Any, table: str, data: dict[str, Any]) -> RecordID:
     return rows[0]["id"]
 
 
-def create_task(db: Any, *, flow: RecordID, persona: RecordID, state: str) -> RecordID:
+def create_task(
+    db: Any,
+    *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
+    flow: RecordID,
+    persona: RecordID,
+    state: str,
+) -> RecordID:
     """Cria um task com estado inicial e liga `belongs_to->flow` + `assigned_to->persona`
     numa transação atômica (o task e suas arestas de proveniência são um fato único).
 
     Chamado pelo código do FLOW_REGISTRY (não por `instantiate_flow`): QUEM ganha task
-    e em que estado é comportamento do template, não bookkeeping genérico (ADR-0016 §IV)."""
+    e em que estado é comportamento do template, não bookkeeping genérico (ADR-0016 §IV).
+
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e escopa o task e
+    as arestas no tenant (KUBO-117)."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     task = _fresh("task")
-    run_transaction(
-        db,
-        [
-            "CREATE $t SET state = $state",
-            "RELATE $t->belongs_to->$flow",
-            "RELATE $t->assigned_to->$persona",
-        ],
-        {"t": task, "state": state, "flow": flow, "persona": persona},
-    )
+    statements = ["CREATE $t SET state = $state"]
+    params: dict[str, Any] = {"t": task, "state": state, "flow": flow, "persona": persona}
+    if tenant_id is not None:
+        statements[0] = "CREATE $t SET state = $state, tenant_id = $tenant"
+        params["tenant"] = tenant_id
+        statements.extend(
+            [
+                "RELATE $t->belongs_to->$flow SET tenant_id = $tenant",
+                "RELATE $t->assigned_to->$persona SET tenant_id = $tenant",
+            ]
+        )
+    else:
+        statements.extend(["RELATE $t->belongs_to->$flow", "RELATE $t->assigned_to->$persona"])
+    run_transaction(db, statements, params)
     return task
 
 
@@ -585,11 +608,25 @@ def _flow_status(
     return "rodando", False
 
 
-def list_flows(db: Any, *, limit: int, start: int) -> list[FlowListRow]:
+def list_flows(
+    db: Any,
+    *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
+    limit: int,
+    start: int,
+) -> list[FlowListRow]:
     """Lista os flows mais recentes primeiro, com status/gate/elenco derivados dos tasks
     (ADR-0018 §V). Busca é 2º sacrifício do plano — não implementada aqui. `limit`/`start` são
-    ints internos (paginação da store), interpolados como literais."""
-    rows = db.query(_LIST_FLOWS_SQL.format(limit=int(limit), start=int(start)))  # noqa: S608
+    ints internos (paginação da store), interpolados como literais.
+
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e filtra pelo tenant
+    ativo (KUBO-117)."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    where = _LIST_FLOWS_WHERE if tenant_id is not None else ""
+    query = _LIST_FLOWS_SQL.format(where=where, limit=int(limit), start=int(start))
+    params: dict[str, Any] = {"t": tenant_id} if tenant_id is not None else {}
+    rows = db.query(query, params)  # noqa: S608
     result: list[FlowListRow] = []
     for r in rows:
         states = [str(s) for s in _as_list(r.get("task_states"))]
@@ -675,6 +712,8 @@ _HUMAN = "humano"
 def insert_deliverable(
     db: Any,
     *,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
     flow: RecordID,
     task: RecordID,
     kind: str,
@@ -693,7 +732,11 @@ def insert_deliverable(
 
     `pr_url`/`pr_number` (ADR-0019 §VI): a ref ESTRUTURAL do deliverable `kind="pr"`, vinda
     da API do GitHub (E3) — campos `option<...>` (migration 0007) só preenchidos para PR; o
-    report não os carrega. `content` segue sendo o resumo untrusted do agente (E4)."""
+    report não os carrega. `content` segue sendo o resumo untrusted do agente (E4).
+
+    Quando `tenant_id`/`user_id` são fornecidos, exige membership e escopa o deliverable e
+    as arestas no tenant (KUBO-117)."""
+    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     deliverable = _fresh("deliverable")
     create = "CREATE $d SET kind = $kind, content = $content"
     params: dict[str, Any] = {
@@ -703,13 +746,23 @@ def insert_deliverable(
         "f": flow,
         "t": task,
     }
+    if tenant_id is not None:
+        create += ", tenant_id = $tenant"
+        params["tenant"] = tenant_id
     if pr_url is not None:
         create += ", pr_url = $pr_url, pr_number = $pr_number"
         params["pr_url"] = pr_url
         params["pr_number"] = pr_number
-    stmts = [create, "RELATE $f->produces->$d"]
+    stmts = [create]
+    if tenant_id is not None:
+        stmts.append("RELATE $f->produces->$d SET tenant_id = $tenant")
+    else:
+        stmts.append("RELATE $f->produces->$d")
     for i, distilled in enumerate(consulted):
-        stmts.append(f"RELATE $t->consults->$c{i}")
+        if tenant_id is not None:
+            stmts.append(f"RELATE $t->consults->$c{i} SET tenant_id = $tenant")
+        else:
+            stmts.append(f"RELATE $t->consults->$c{i}")
         params[f"c{i}"] = distilled
     run_transaction(db, stmts, params)
     return deliverable
