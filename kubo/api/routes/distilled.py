@@ -64,7 +64,7 @@ def list_page(
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         items = knowledge.list_distilled(
             db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start
@@ -100,7 +100,7 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         hits = _dedupe_by_distilled(
             knowledge.search(
@@ -137,7 +137,7 @@ def detail(request: Request, distilled_id: str) -> Response:
         with client.connect() as db:
             session = resolve_session(db, request)
             if session is None:
-                return PlainTextResponse("Sessão inválida.", status_code=403)
+                return PlainTextResponse("Invalid session.", status_code=403)
             tenant_id, user_id = session
             view = knowledge.read_distilled(db, rid, tenant_id=tenant_id, user_id=user_id)
             if view is not None:

@@ -59,7 +59,7 @@ def dashboard(request: Request) -> Response:
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         counts = knowledge.dashboard_counts(db, tenant_id=tenant_id, user_id=user_id)
         runs = knowledge.recent_runs(db, tenant_id=tenant_id, user_id=user_id, limit=_RECENT_RUNS)

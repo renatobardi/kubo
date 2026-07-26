@@ -458,7 +458,7 @@ def set_merge_commit_sha(
     )
     deliverable: RecordID | None = rows[0] if rows and rows[0] is not None else None
     if deliverable is None:
-        raise StateError(f"flow {flow} sem deliverable — nada onde gravar merge_commit_sha")
+        raise StateError(f"flow {flow} has no deliverable — nowhere to record merge_commit_sha")
     updated = db.query(
         "UPDATE $d SET merge_commit_sha = $sha WHERE tenant_id = $tenant;",
         {"d": deliverable, "sha": merge_commit_sha, "tenant": tenant_id},
@@ -481,7 +481,7 @@ def set_task_run(
         {"t": task, "run": run, "tenant": tenant_id},
     )
     if not updated:
-        raise StateError(f"task {task} não pertence ao tenant")
+        raise StateError(f"task {task} does not belong to tenant")
 
 
 def task_state(db: Any, *, tenant_id: RecordID, user_id: RecordID, task: RecordID) -> str | None:

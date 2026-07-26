@@ -61,7 +61,7 @@ def list_page(
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         flows = list_flows(db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start)
         total = count_flows(db, tenant_id=tenant_id, user_id=user_id)
@@ -80,7 +80,7 @@ def board_page(request: Request, flow_key: str) -> Response:
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         board = flow_board(db, tenant_id=tenant_id, user_id=user_id, flow=flow)
         if board is None:
@@ -150,7 +150,7 @@ def promote(
         with client.connect_rw() as db:
             session = resolve_session(db, request)
             if session is None:
-                return PlainTextResponse("Sessão inválida.", status_code=403)
+                return PlainTextResponse("Invalid session.", status_code=403)
             tenant_id, user_id = session
             return _apply_promotion(
                 request,
@@ -264,7 +264,7 @@ def _decide(request: Request, *, task: str, csrf: str, approve: bool, reason: st
         with client.connect_rw() as db:
             session = resolve_session(db, request)
             if session is None:
-                return PlainTextResponse("Sessão inválida.", status_code=403)
+                return PlainTextResponse("Invalid session.", status_code=403)
             tenant_id, user_id = session
             return _apply_decision(
                 request,

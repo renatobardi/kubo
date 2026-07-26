@@ -41,7 +41,7 @@ def list_page(
     with client.connect() as db:
         session = resolve_session(db, request)
         if session is None:
-            return PlainTextResponse("Sessão inválida.", status_code=403)
+            return PlainTextResponse("Invalid session.", status_code=403)
         tenant_id, user_id = session
         entities = knowledge.list_entities(
             db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start, query=query
@@ -67,7 +67,7 @@ def detail(request: Request, entity_id: str) -> Response:
         with client.connect() as db:
             session = resolve_session(db, request)
             if session is None:
-                return PlainTextResponse("Sessão inválida.", status_code=403)
+                return PlainTextResponse("Invalid session.", status_code=403)
             tenant_id, user_id = session
             view = knowledge.read_entity(
                 db, RecordID(_ENTITY_TABLE, key), tenant_id=tenant_id, user_id=user_id

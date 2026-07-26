@@ -377,9 +377,9 @@ def parse_tenant_id(raw: str) -> RecordID | None:
 
 def get_first_tenant(db: Any) -> RecordID:
     """Devolve o id do primeiro tenant do banco, ou levanta ConfigError se não houver."""
-    rows = db.query("SELECT id FROM tenant LIMIT 1;")
+    rows = db.query("SELECT id FROM tenant ORDER BY id LIMIT 1;")
     if not rows:
-        raise ConfigError("nenhum tenant encontrado")
+        raise ConfigError("no tenant found")
     return rows[0]["id"]
 
 
@@ -390,7 +390,7 @@ def get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
         {"t": tenant_id},
     )
     if not rows:
-        raise ConfigError(f"tenant {tenant_id} não tem owner")
+        raise ConfigError(f"tenant {tenant_id} has no owner")
     return rows[0]["user"]
 
 

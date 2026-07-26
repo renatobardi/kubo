@@ -30,10 +30,10 @@ def resolve_scheduler_tenant_and_user(db: Any) -> tuple[RecordID, RecordID]:
 def _resolve_from_env(db: Any, tenant_raw: str, uid: str) -> tuple[RecordID, RecordID]:
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
-        raise ConfigError(f"KUBO_SCHEDULER_USER_UID '{uid}' não resolve um user")
+        raise ConfigError(f"KUBO_SCHEDULER_USER_UID '{uid}' does not resolve to a user")
     tenant = tenancy_store.parse_tenant_id(tenant_raw)
     if tenant is None:
-        raise ConfigError(f"KUBO_SCHEDULER_TENANT_ID inválido: {tenant_raw}")
+        raise ConfigError(f"invalid KUBO_SCHEDULER_TENANT_ID: {tenant_raw}")
     return tenant, user.id
 
 

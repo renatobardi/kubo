@@ -239,13 +239,13 @@ def _resolve_cli_tenant(db: Any) -> tuple[RecordID, RecordID]:
     tenant_raw = os.environ.get("KUBO_TENANT_ID", "").strip()
     uid = os.environ.get("KUBO_USER_UID", "").strip()
     if not tenant_raw or not uid:
-        raise ConfigError("KUBO_TENANT_ID e KUBO_USER_UID são obrigatórios para os comandos kubo")
+        raise ConfigError("KUBO_TENANT_ID and KUBO_USER_UID are required for kubo commands")
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
-        raise ConfigError(f"usuário com firebase_uid '{uid}' não encontrado")
+        raise ConfigError(f"user with firebase_uid '{uid}' not found")
     tenant = tenancy_store.parse_tenant_id(tenant_raw)
     if tenant is None:
-        raise ConfigError(f"KUBO_TENANT_ID inválido: {tenant_raw}")
+        raise ConfigError(f"invalid KUBO_TENANT_ID: {tenant_raw}")
     return tenant, user.id
 
 

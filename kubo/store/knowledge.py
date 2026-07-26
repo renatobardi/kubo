@@ -323,7 +323,7 @@ def insert_distilled(
         valid = {str(r["id"]) for r in valid_rows}
         missing = [str(e) for e in entities if str(e) not in valid]
         if missing:
-            raise StoreError(f"entity não pertence ao tenant ou não existe: {missing[0]}")
+            raise StoreError(f"entity does not belong to tenant or does not exist: {missing[0]}")
         entities = [e for e in entities if str(e) in valid]
     distilled = _fresh("distilled")
     suffix = ", tenant_id = $tenant"
