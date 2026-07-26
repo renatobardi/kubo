@@ -29,6 +29,85 @@ _SELECT_BY_ID = "SELECT * FROM $r;"
 _DELETE_BY_ID = "DELETE $r;"
 
 
+def _get_catalog_item(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    table: str,
+    name: str,
+    from_row: Any,
+) -> dict[str, Any] | None:
+    """Lê um item de catálogo pelo nome, ou None se não existe no tenant."""
+    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, table, name)})
+    return from_row(rows[0]) if rows else None
+
+
+def _upsert_catalog_item(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    table: str,
+    name: str,
+    kind: str,
+    set_clause: str,
+    fields: dict[str, Any],
+    from_row: Any,
+) -> dict[str, Any]:
+    """Cria ou atualiza um item de catálogo e grava changelog."""
+    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rid = _catalog_id(tenant_id, table, name)
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
+    before = from_row(existing[0]) if existing else None
+
+    params: dict[str, Any] = {"r": rid, "t": tenant_id, "n": name}
+    params.update(fields)
+    transaction.run_transaction(db, [set_clause], params)
+
+    after = from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
+    _log_changelog(
+        db,
+        tenant_id=tenant_id,
+        kind=kind,
+        item_name=name,
+        before=before,
+        after=after,
+        changed_by=user_id,
+    )
+    return after
+
+
+def _delete_catalog_item(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    table: str,
+    name: str,
+    kind: str,
+    from_row: Any,
+) -> None:
+    """Remove um item de catálogo e grava changelog com after=None."""
+    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rid = _catalog_id(tenant_id, table, name)
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
+    if not existing:
+        raise ConfigError(f"{kind} '{name}' not found in tenant catalog")
+    before = from_row(existing[0])
+    db.query(_DELETE_BY_ID, {"r": rid})
+    _log_changelog(
+        db,
+        tenant_id=tenant_id,
+        kind=kind,
+        item_name=name,
+        before=before,
+        after=None,
+        changed_by=user_id,
+    )
+
+
 def _catalog_id(tenant_id: RecordID, table: str, name: str) -> RecordID:
     """RecordID determinístico por (tenant, nome) — idempotente e sem SELECT-then-CREATE."""
     key = f"{tenant_id}:{name}"
@@ -174,67 +253,51 @@ def get_persona(
     db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
 ) -> dict[str, Any] | None:
     """Lê uma persona pelo nome, ou None se não existe no tenant."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, "catalog_persona", name)})
-    return _persona_from_row(rows[0]) if rows else None
+    return _get_catalog_item(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_persona",
+        name=name,
+        from_row=_persona_from_row,
+    )
 
 
 def upsert_persona(
     db: Any, *, tenant_id: RecordID, user_id: RecordID, persona: dict[str, Any]
 ) -> dict[str, Any]:
     """Cria ou atualiza uma persona no catálogo do tenant e grava changelog."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    name = persona["name"]
-    rid = _catalog_id(tenant_id, "catalog_persona", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    before = _persona_from_row(existing[0]) if existing else None
-
-    transaction.run_transaction(
+    return _upsert_catalog_item(
         db,
-        [
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_persona",
+        name=persona["name"],
+        kind="persona",
+        set_clause=(
             "UPSERT $r SET tenant_id = $t, name = $n, executor = $e, model = $m, "
-            "prompt = $p, permissions = $perms, updated_at = time::now()",
-        ],
-        {
-            "r": rid,
-            "t": tenant_id,
-            "n": name,
+            "prompt = $p, permissions = $perms, updated_at = time::now()"
+        ),
+        fields={
             "e": persona["executor"],
             "m": persona.get("model"),
             "p": persona.get("prompt", ""),
             "perms": list(persona.get("permissions", [])),
         },
+        from_row=_persona_from_row,
     )
-    after = _persona_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
-    _log_changelog(
-        db,
-        tenant_id=tenant_id,
-        kind="persona",
-        item_name=name,
-        before=before,
-        after=after,
-        changed_by=user_id,
-    )
-    return after
 
 
 def delete_persona(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
     """Remove uma persona do catálogo do tenant e grava changelog com after=None."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _catalog_id(tenant_id, "catalog_persona", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    if not existing:
-        raise ConfigError(f"persona '{name}' not found in tenant catalog")
-    before = _persona_from_row(existing[0])
-    db.query(_DELETE_BY_ID, {"r": rid})
-    _log_changelog(
+    _delete_catalog_item(
         db,
         tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_persona",
+        name=name,
         kind="persona",
-        item_name=name,
-        before=before,
-        after=None,
-        changed_by=user_id,
+        from_row=_persona_from_row,
     )
 
 
@@ -255,67 +318,51 @@ def get_integration(
     db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
 ) -> dict[str, Any] | None:
     """Lê uma integração pelo nome, ou None se não existe no tenant."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, "catalog_integration", name)})
-    return _integration_from_row(rows[0]) if rows else None
+    return _get_catalog_item(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_integration",
+        name=name,
+        from_row=_integration_from_row,
+    )
 
 
 def upsert_integration(
     db: Any, *, tenant_id: RecordID, user_id: RecordID, integration: dict[str, Any]
 ) -> dict[str, Any]:
     """Cria ou atualiza uma integração no catálogo do tenant e grava changelog."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    name = integration["name"]
-    rid = _catalog_id(tenant_id, "catalog_integration", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    before = _integration_from_row(existing[0]) if existing else None
-
-    transaction.run_transaction(
+    return _upsert_catalog_item(
         db,
-        [
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_integration",
+        name=integration["name"],
+        kind="integration",
+        set_clause=(
             "UPSERT $r SET tenant_id = $t, name = $n, kind = $k, auth = $a, "
-            "rate_limit = $rl, base_url = $b, updated_at = time::now()",
-        ],
-        {
-            "r": rid,
-            "t": tenant_id,
-            "n": name,
+            "rate_limit = $rl, base_url = $b, updated_at = time::now()"
+        ),
+        fields={
             "k": integration["kind"],
             "a": integration["auth"],
             "rl": integration.get("rate_limit"),
             "b": integration.get("base_url"),
         },
+        from_row=_integration_from_row,
     )
-    after = _integration_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
-    _log_changelog(
-        db,
-        tenant_id=tenant_id,
-        kind="integration",
-        item_name=name,
-        before=before,
-        after=after,
-        changed_by=user_id,
-    )
-    return after
 
 
 def delete_integration(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
     """Remove uma integração do catálogo do tenant e grava changelog."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _catalog_id(tenant_id, "catalog_integration", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    if not existing:
-        raise ConfigError(f"integration '{name}' not found in tenant catalog")
-    before = _integration_from_row(existing[0])
-    db.query(_DELETE_BY_ID, {"r": rid})
-    _log_changelog(
+    _delete_catalog_item(
         db,
         tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_integration",
+        name=name,
         kind="integration",
-        item_name=name,
-        before=before,
-        after=None,
-        changed_by=user_id,
+        from_row=_integration_from_row,
     )
 
 
@@ -336,35 +383,33 @@ def get_flow_template(
     db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
 ) -> dict[str, Any] | None:
     """Lê um flow_template pelo nome, ou None se não existe no tenant."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        _SELECT_BY_ID,
-        {"r": _catalog_id(tenant_id, "catalog_flow_template", name)},
+    return _get_catalog_item(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_flow_template",
+        name=name,
+        from_row=_flow_template_from_row,
     )
-    return _flow_template_from_row(rows[0]) if rows else None
 
 
 def upsert_flow_template(
     db: Any, *, tenant_id: RecordID, user_id: RecordID, template: dict[str, Any]
 ) -> dict[str, Any]:
     """Cria ou atualiza um flow_template no catálogo do tenant e grava changelog."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    name = template["name"]
-    rid = _catalog_id(tenant_id, "catalog_flow_template", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    before = _flow_template_from_row(existing[0]) if existing else None
-
-    transaction.run_transaction(
+    return _upsert_catalog_item(
         db,
-        [
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_flow_template",
+        name=template["name"],
+        kind="flow_template",
+        set_clause=(
             "UPSERT $r SET tenant_id = $t, name = $n, version = $v, board = $b, "
             "cast = $c, deliverable = $d, triggers = $tr, budget_usd = $bu, "
-            "updated_at = time::now()",
-        ],
-        {
-            "r": rid,
-            "t": tenant_id,
-            "n": name,
+            "updated_at = time::now()"
+        ),
+        fields={
             "v": template["version"],
             "b": template["board"],
             "c": list(template["cast"]),
@@ -372,37 +417,20 @@ def upsert_flow_template(
             "tr": list(template["triggers"]),
             "bu": template.get("budget_usd"),
         },
+        from_row=_flow_template_from_row,
     )
-    after = _flow_template_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
-    _log_changelog(
-        db,
-        tenant_id=tenant_id,
-        kind="flow_template",
-        item_name=name,
-        before=before,
-        after=after,
-        changed_by=user_id,
-    )
-    return after
 
 
 def delete_flow_template(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
     """Remove um flow_template do catálogo do tenant e grava changelog."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _catalog_id(tenant_id, "catalog_flow_template", name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    if not existing:
-        raise ConfigError(f"flow_template '{name}' not found in tenant catalog")
-    before = _flow_template_from_row(existing[0])
-    db.query(_DELETE_BY_ID, {"r": rid})
-    _log_changelog(
+    _delete_catalog_item(
         db,
         tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_flow_template",
+        name=name,
         kind="flow_template",
-        item_name=name,
-        before=before,
-        after=None,
-        changed_by=user_id,
+        from_row=_flow_template_from_row,
     )
 
 
