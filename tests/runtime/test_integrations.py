@@ -188,7 +188,7 @@ def _tenant_credential_catalog() -> dict[str, Integration]:
                 "kind": "llm",
                 "auth": {
                     "type": "bearer",
-                    "secret_ref": "tenant_credential:openai",
+                    "secret_ref": "tenant_credential:openai",  # pragma: allowlist secret
                 },
             }
         )

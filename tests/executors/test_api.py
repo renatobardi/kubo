@@ -297,11 +297,12 @@ def test_complete_passa_api_key_do_tenant_para_litellm(monkeypatch):
     """api_key da config (vinda de tenant_credential, KUBO-115) chega a litellm.completion."""
     mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
     monkeypatch.setattr(litellm, "completion", mock_completion)
-    executor = ApiExecutor(_config(api_key="tenant-openai-key"))
+    tenant_key = "tenant-openai-key"  # pragma: allowlist secret
+    executor = ApiExecutor(_config(api_key=tenant_key))
 
     executor.complete("instrução", "conteúdo", _Out)
 
-    assert mock_completion.call_args.kwargs["api_key"] == "tenant-openai-key"
+    assert mock_completion.call_args.kwargs["api_key"] == tenant_key
 
 
 def test_complete_sem_api_key_nao_passa_kwarg_vazio(monkeypatch):
