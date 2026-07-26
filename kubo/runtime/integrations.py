@@ -16,10 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Self
 
-import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
-from kubo.errors import ConfigError, format_validation_error
+from kubo.errors import ConfigError
+from kubo.runtime.catalog_loader import (
+    load_items_from_db,
+    load_items_from_dir,
+    load_yaml_item,
+)
 from kubo.store import tenant_credentials
 
 # Referência de segredo aceita:
@@ -102,15 +106,7 @@ class ResolvedIntegration:
 
 def load_integration(path: Path) -> Integration:
     """Carrega e valida um YAML de integração; erro vira ConfigError (fronteira)."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ConfigError(f"integração {path.name}: YAML não é um mapping")
-    try:
-        return Integration.model_validate(raw)
-    except ValidationError as exc:
-        raise ConfigError(
-            f"integração {path.name} inválida: {format_validation_error(exc)}"
-        ) from exc
+    return load_yaml_item(path, Integration, "integração")
 
 
 def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
@@ -119,13 +115,7 @@ def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
     em silêncio: least-privilege depende de o catálogo ser inequívoco (um nome, uma
     integração, uma permissão), senão um worker poderia herdar a auth/base_url errada."""
-    catalog: dict[str, Integration] = {}
-    for path in sorted(catalog_dir.glob("*.yaml")):
-        integ = load_integration(path)
-        if integ.name in catalog:
-            raise ConfigError(f"integração '{integ.name}' declarada em mais de um arquivo")
-        catalog[integ.name] = integ
-    return catalog
+    return load_items_from_dir(catalog_dir, Integration, "integração")
 
 
 def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integration]:
@@ -134,17 +124,14 @@ def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integr
     Leitura direta a cada chamada, sem cache."""
     from kubo.store import catalog as _catalog_store
 
-    rows = _catalog_store.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
-    catalog: dict[str, Integration] = {}
-    for row in rows:
-        try:
-            integ = Integration.model_validate(row)
-        except ValidationError as exc:
-            raise ConfigError(
-                f"integração {row.get('name')!r} inválida: {format_validation_error(exc)}"
-            ) from exc
-        catalog[integ.name] = integ
-    return catalog
+    return load_items_from_db(
+        db,
+        tenant_id,
+        user_id,
+        _catalog_store.list_integrations,
+        Integration,
+        "integração",
+    )
 
 
 def _resolve_secret(

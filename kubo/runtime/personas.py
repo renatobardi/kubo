@@ -16,10 +16,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, Self
 
-import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from kubo.errors import ConfigError, format_validation_error
+from kubo.runtime.catalog_loader import (
+    load_items_from_db,
+    load_items_from_dir,
+    load_yaml_item,
+)
 
 # Executores suportados: `api` (LLM via LiteLLM), `cli` (adapters, 0015) e `human`
 # (persona materializada que NÃO recebe task nesta fase — D33). Literal fechado:
@@ -58,13 +61,7 @@ class Persona(BaseModel):
 
 def load_persona(path: Path) -> Persona:
     """Carrega e valida um YAML de persona; erro vira ConfigError (fronteira)."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ConfigError(f"persona {path.name}: YAML não é um mapping")
-    try:
-        return Persona.model_validate(raw)
-    except ValidationError as exc:
-        raise ConfigError(f"persona {path.name} inválida: {format_validation_error(exc)}") from exc
+    return load_yaml_item(path, Persona, "persona")
 
 
 def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
@@ -73,13 +70,7 @@ def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
     em silêncio: o elenco de um template referencia personas por nome, e um nome
     ambíguo materializaria a persona errada num flow."""
-    catalog: dict[str, Persona] = {}
-    for path in sorted(catalog_dir.glob("*.yaml")):
-        persona = load_persona(path)
-        if persona.name in catalog:
-            raise ConfigError(f"persona '{persona.name}' declarada em mais de um arquivo")
-        catalog[persona.name] = persona
-    return catalog
+    return load_items_from_dir(catalog_dir, Persona, "persona")
 
 
 def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
@@ -89,14 +80,11 @@ def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
     após checagem de membership na store."""
     from kubo.store import catalog as _catalog_store
 
-    rows = _catalog_store.list_personas(db, tenant_id=tenant_id, user_id=user_id)
-    catalog: dict[str, Persona] = {}
-    for row in rows:
-        try:
-            persona = Persona.model_validate(row)
-        except ValidationError as exc:
-            raise ConfigError(
-                f"persona {row.get('name')!r} inválida: {format_validation_error(exc)}"
-            ) from exc
-        catalog[persona.name] = persona
-    return catalog
+    return load_items_from_db(
+        db,
+        tenant_id,
+        user_id,
+        _catalog_store.list_personas,
+        Persona,
+        "persona",
+    )
