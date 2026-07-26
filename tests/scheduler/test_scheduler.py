@@ -15,6 +15,7 @@ qual comportamento falta.
 
 from __future__ import annotations
 
+import secrets
 import threading
 from collections.abc import Iterator
 from dataclasses import replace
@@ -31,7 +32,7 @@ from surrealdb import RecordID
 from kubo.contracts.models import RunResult, SourcePayload
 from kubo.contracts.worker import RunContext, WorkerManifest
 from kubo.errors import ConfigError
-from kubo.store import client, migrations
+from kubo.store import client, migrations, tenancy
 from kubo.store.settings import Settings
 
 _JOB_DB = "test_scheduler_job"
@@ -71,6 +72,8 @@ def scheduler_db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_JOB_DB};")
         conn.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(conn)
+        user = tenancy.create_user(conn, firebase_uid=f"scheduler-{secrets.token_hex(8)}")
+        tenancy.create_tenant(conn, name="Scheduler Test", owner_user_id=user.id)
         yield conn
         conn.query(f"REMOVE DATABASE IF EXISTS {_JOB_DB};")
 
@@ -548,12 +551,12 @@ def test_execute_sweep_job_dispatches_one_run_per_active_source(
     ]
     monkeypatch.setattr(scheduler.client, "config", lambda: None)
     monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
-    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind: sources)
+    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind, **kw: sources)
     calls: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         scheduler,
         "run_worker",
-        lambda db, worker, *, config: calls.append((type(worker).__name__, config)),
+        lambda db, worker, *, config, **kw: calls.append((type(worker).__name__, config)),
     )
 
     scheduler.execute_sweep_job("rss")
@@ -588,10 +591,10 @@ def test_execute_sweep_job_isolates_failing_source(monkeypatch: pytest.MonkeyPat
     ]
     monkeypatch.setattr(scheduler.client, "config", lambda: None)
     monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
-    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind: sources)
+    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind, **kw: sources)
     attempted: list[str] = []
 
-    def _run(db: Any, worker: Any, *, config: dict[str, Any]) -> None:
+    def _run(db: Any, worker: Any, *, config: dict[str, Any], **kw: Any) -> None:
         attempted.append(config["feed_url"])
         if config["feed_url"] == "https://b/f":
             raise RuntimeError("ws morreu no meio do sweep")
@@ -675,12 +678,12 @@ def test_execute_sweep_job_dispatches_github_repo_with_repo_and_since(
     ]
     monkeypatch.setattr(scheduler.client, "config", lambda: None)
     monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _DummyCtx())
-    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind: sources)
+    monkeypatch.setattr(scheduler, "active_sources", lambda db, *, kind, **kw: sources)
     calls: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         scheduler,
         "run_worker",
-        lambda db, worker, *, config: calls.append((type(worker).__name__, config)),
+        lambda db, worker, *, config, **kw: calls.append((type(worker).__name__, config)),
     )
 
     scheduler.execute_sweep_job("github-repo")
@@ -711,7 +714,9 @@ def test_execute_sweep_job_honors_active_filter_against_real_db(
     knowledge.create_source(scheduler_db, kind="github-repo", canonical="https://github.com/o/r")
     dispatched: list[str] = []
     monkeypatch.setattr(
-        scheduler, "run_worker", lambda db, worker, *, config: dispatched.append(config["feed_url"])
+        scheduler,
+        "run_worker",
+        lambda db, worker, *, config, **kw: dispatched.append(config["feed_url"]),
     )
 
     scheduler.execute_sweep_job("rss")

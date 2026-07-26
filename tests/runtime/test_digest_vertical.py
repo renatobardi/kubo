@@ -51,13 +51,20 @@ class _RecordingSender:
         self.calls.append({"token": token, "chat_id": chat_id, "text": text})
 
 
-def _seed_distilled(db: Any, summaries: list[str]) -> None:
+def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, summaries: list[str]) -> None:
     """Insere destilados (created_at≈now, sequencial → strictly crescente) via a store."""
     for summary in summaries:
-        knowledge.insert_distilled(db, item=_orphan_item(db), summary=summary, chunks=[])
+        knowledge.insert_distilled(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            item=_orphan_item(db, tenant_id, user_id),
+            summary=summary,
+            chunks=[],
+        )
 
 
-def _orphan_item(db: Any) -> Any:
+def _orphan_item(db: Any, tenant_id: RecordID, user_id: RecordID) -> Any:
     """Cria um item mínimo para o distilled derivar (derived_from exige endpoint)."""
     import secrets
 
@@ -90,15 +97,15 @@ def _dispatch_rows(db: Any) -> list[dict[str, Any]]:
 
 
 def test_digest_vertical_sends_and_persists_dispatch(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Feliz: 3 destilados novos → sender chamado 1x, 1 dispatch(ok) persistido com
     item_count=3 e watermark, o token resolvido do env chega ao sender."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _CHAT_TOKEN)
-    _seed_distilled(db, ["a", "b", "c"])
+    _seed_distilled(db, tenant_id, user_id, ["a", "b", "c"])
     sender = _RecordingSender()
 
-    run_worker(db, _worker(sender), config={"max_items": 50})
+    run_worker(db, _worker(sender), config={"max_items": 50}, tenant_id=tenant_id, user_id=user_id)
 
     assert len(sender.calls) == 1
     assert sender.calls[0]["token"] == _CHAT_TOKEN
@@ -112,18 +119,24 @@ def test_digest_vertical_sends_and_persists_dispatch(
 
 
 def test_digest_vertical_rerun_without_novelty_is_noop(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Re-rodar após um dispatch ok, sem destilado novo → nenhum envio, nenhum
     dispatch novo (só-se-novidade + watermark, ADR-0015 §V). O critério físico do
     plano, provado em unit."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _CHAT_TOKEN)
-    _seed_distilled(db, ["a", "b"])
-    run_worker(db, _worker(_RecordingSender()), config={"max_items": 50})
+    _seed_distilled(db, tenant_id, user_id, ["a", "b"])
+    run_worker(
+        db,
+        _worker(_RecordingSender()),
+        config={"max_items": 50},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     assert len(_dispatch_rows(db)) == 1
 
     second = _RecordingSender()
-    run_worker(db, _worker(second), config={"max_items": 50})
+    run_worker(db, _worker(second), config={"max_items": 50}, tenant_id=tenant_id, user_id=user_id)
 
     assert second.calls == []  # nada novo → nada enviado
     assert len(_dispatch_rows(db)) == 1  # nenhum dispatch novo

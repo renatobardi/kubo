@@ -14,11 +14,13 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import PlainTextResponse
 from starlette.responses import Response
 from surrealdb import RecordID
 
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.embedding import GeminiEmbedder
 from kubo.errors import ConfigError, EmbeddingError
 from kubo.store import client, knowledge
@@ -60,8 +62,14 @@ def list_page(
     size = clamp_size(size)
     start = clamp_start(start)
     with client.connect() as db:
-        items = knowledge.list_distilled(db, limit=size, start=start)
-        total = knowledge.count_distilled(db)
+        session = resolve_session(db, request)
+        if session is None:
+            return PlainTextResponse("Sessão inválida.", status_code=403)
+        tenant_id, user_id = session
+        items = knowledge.list_distilled(
+            db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start
+        )
+        total = knowledge.count_distilled(db, tenant_id=tenant_id, user_id=user_id)
     return templates.TemplateResponse(
         request,
         "distilled/list.html",
@@ -90,11 +98,24 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
             {"results": [], "query": query, "error": "Busca indisponível no momento."},
         )
     with client.connect() as db:
-        hits = _dedupe_by_distilled(knowledge.search(db, embedding=vector, k=_SEARCH_K))
+        session = resolve_session(db, request)
+        if session is None:
+            return PlainTextResponse("Sessão inválida.", status_code=403)
+        tenant_id, user_id = session
+        hits = _dedupe_by_distilled(
+            knowledge.search(
+                db, tenant_id=tenant_id, user_id=user_id, embedding=vector, k=_SEARCH_K
+            )
+        )
         results = [
             view
             for hit in hits
-            if (view := knowledge.read_distilled(db, hit.distilled)) is not None
+            if (
+                view := knowledge.read_distilled(
+                    db, hit.distilled, tenant_id=tenant_id, user_id=user_id
+                )
+            )
+            is not None
         ]
     return templates.TemplateResponse(
         request, _RESULTS_TEMPLATE, {"results": results, "query": query, "error": None}
@@ -114,9 +135,15 @@ def detail(request: Request, distilled_id: str) -> Response:
     if key:
         rid = RecordID(_DISTILLED_TABLE, key)
         with client.connect() as db:
-            view = knowledge.read_distilled(db, rid)
+            session = resolve_session(db, request)
+            if session is None:
+                return PlainTextResponse("Sessão inválida.", status_code=403)
+            tenant_id, user_id = session
+            view = knowledge.read_distilled(db, rid, tenant_id=tenant_id, user_id=user_id)
             if view is not None:
-                related = knowledge.related_distilled(db, rid, limit=_RELATED)
+                related = knowledge.related_distilled(
+                    db, rid, tenant_id=tenant_id, user_id=user_id, limit=_RELATED
+                )
     if view is None:
         return templates.TemplateResponse(
             request, "distilled/not_found.html", {"raw": distilled_id}, status_code=404

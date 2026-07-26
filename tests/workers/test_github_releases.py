@@ -24,6 +24,7 @@ import pytest
 import respx
 import structlog
 from pydantic import ValidationError
+from surrealdb import RecordID
 
 from kubo.contracts.models import ItemPayload
 from kubo.runtime.context import GraphKnowledge, RunContext
@@ -32,6 +33,9 @@ from kubo.workers.github_releases import GithubReleasesConfig, GithubReleasesWor
 
 _BASE_URL = "https://api.github.com"
 _TOKEN = "ghr-secret-token"  # pragma: allowlist secret
+
+_UNIT_TENANT = RecordID("tenant", "github-test")
+_UNIT_USER = RecordID("user", "github-test")
 _SINCE = datetime(2026, 1, 1, tzinfo=UTC)
 _REPO = "acme/widget"
 
@@ -82,7 +86,7 @@ def _ctx(config: GithubReleasesConfig, *, token: str | None = _TOKEN) -> RunCont
     return RunContext(
         config=config,
         integrations=integrations,
-        knowledge=GraphKnowledge(None),
+        knowledge=GraphKnowledge(None, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER),
         logger=structlog.get_logger(),
     )
 

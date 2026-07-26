@@ -11,6 +11,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.runtime.context import GraphKnowledge
 from kubo.store import client, knowledge, migrations
@@ -32,7 +33,9 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_ADAPTER_DB};")
 
 
-def test_items_to_distill_assigns_sequential_refs_and_resolves(db: Any) -> None:
+def test_items_to_distill_assigns_sequential_refs_and_resolves(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """2 itens pendentes -> items_to_distill(limit=10) devolve 2 ItemViews com
     refs 0 e 1; gk.resolve(0)/gk.resolve(1) devolvem os RecordIDs corretos."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
@@ -43,7 +46,7 @@ def test_items_to_distill_assigns_sequential_refs_and_resolves(db: Any) -> None:
         db, source=source_id, external_id="b", content="conteúdo B", title="Título B"
     )
 
-    gk = GraphKnowledge(db)
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
     views = gk.items_to_distill(limit=10)
 
     assert len(views) == 2
@@ -65,14 +68,16 @@ def test_items_to_distill_assigns_sequential_refs_and_resolves(db: Any) -> None:
         assert by_ref[1].content == "conteúdo A"
 
 
-def test_resolve_unknown_ref_returns_none(db: Any) -> None:
+def test_resolve_unknown_ref_returns_none(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """resolve de um ref nunca atribuído devolve None — nunca levanta."""
-    gk = GraphKnowledge(db)
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
 
     assert gk.resolve(999) is None
 
 
-def test_refs_are_monotonic_across_two_calls(db: Any) -> None:
+def test_refs_are_monotonic_across_two_calls(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Com 3 itens pendentes e limit=2: a 1a chamada dá refs 0,1; a 2a dá refs
     2,3 (NUNCA reseta o contador). `items_to_distill` não consome/marca itens
     como destilados — como nada muda entre as chamadas, a 2a lê de novo os
@@ -83,7 +88,7 @@ def test_refs_are_monotonic_across_two_calls(db: Any) -> None:
     knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
 
-    gk = GraphKnowledge(db)
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
     first_batch = gk.items_to_distill(limit=2)
     second_batch = gk.items_to_distill(limit=2)
 
@@ -100,7 +105,9 @@ def test_refs_are_monotonic_across_two_calls(db: Any) -> None:
     assert gk.resolve(first_sorted[1].ref) is not None
 
 
-def test_items_to_distill_excludes_already_distilled(db: Any) -> None:
+def test_items_to_distill_excludes_already_distilled(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Um item COM destilado não aparece em items_to_distill — o filtro vem de
     items_without_distilled; confirma a integração ponta a ponta."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
@@ -110,9 +117,11 @@ def test_items_to_distill_excludes_already_distilled(db: Any) -> None:
     distilled_item = knowledge.upsert_item(
         db, source=source_id, external_id="distilled", content="já destilado"
     )
-    knowledge.insert_distilled(db, item=distilled_item, summary="resumo", chunks=[])
+    knowledge.insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=distilled_item, summary="resumo", chunks=[]
+    )
 
-    gk = GraphKnowledge(db)
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
     views = gk.items_to_distill(limit=10)
 
     assert len(views) == 1

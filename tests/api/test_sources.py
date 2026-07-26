@@ -284,7 +284,9 @@ def test_edit_page_prefills_current_values(
     salvar apagaria as tags existentes (full-replace)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.get_source",
-        lambda db, sid: _detail(title="Feed X", canonical="https://x/feed", tags=["python", "ml"]),
+        lambda db, sid, **kw: _detail(
+            title="Feed X", canonical="https://x/feed", tags=["python", "ml"]
+        ),
     )
     html = authed_client.get("/sources/s1/edit").text
     assert 'value="Feed X"' in html
@@ -299,7 +301,7 @@ def test_edit_page_absent_source_redirects_to_list(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET numa fonte que não existe (ou foi apagada) volta para a lista — não 500."""
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid, **kw: None)
     resp = authed_client.get("/sources/ghost/edit", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/sources"
@@ -337,7 +339,7 @@ def test_edit_stale_source_is_409(
 ) -> None:
     """POST numa fonte que saiu do estado editável (inexistente/arquivada) → 409 (staleness
     semântica, molde ADR-0018), sem abrir a conexão de escrita."""
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid, **kw: None)
     csrf = _csrf(authed_client)
     resp = authed_client.post(
         "/sources/ghost/edit",
@@ -354,7 +356,7 @@ def test_edit_without_writer_credential_is_503(
     credencial kubo_rw (env ausente no teste), a escrita é indisponível (503)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.get_source",
-        lambda db, sid: _detail(kind="rss", canonical="https://x/feed"),
+        lambda db, sid, **kw: _detail(kind="rss", canonical="https://x/feed"),
     )
     csrf = _csrf(authed_client)
     resp = authed_client.post(
@@ -409,9 +411,11 @@ def test_delete_page_zero_items_shows_confirm(
     destrutivo de confirmar e o form POST /sources/{id}/delete com CSRF."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.get_source",
-        lambda db, sid: _detail(title="Errado", canonical="https://x/feed"),
+        lambda db, sid, **kw: _detail(title="Errado", canonical="https://x/feed"),
     )
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 0)
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid, **kw: 0
+    )
     html = authed_client.get("/sources/s1/delete").text
     assert 'action="/sources/s1/delete"' in html and 'method="post"' in html
     assert 'name="csrf"' in html
@@ -425,9 +429,11 @@ def test_delete_page_with_items_blocks_and_points_to_archive(
     arquivar (US#11). Sem botão de POST delete — a store recusaria, e a UI não convida ao erro."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.get_source",
-        lambda db, sid: _detail(title="Tem histórico", canonical="https://x/feed"),
+        lambda db, sid, **kw: _detail(title="Tem histórico", canonical="https://x/feed"),
     )
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 7)
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid, **kw: 7
+    )
     html = authed_client.get("/sources/s1/delete").text
     assert "7" in html  # a contagem de itens é dita
     assert "arquiv" in html.lower()  # orienta a arquivar
@@ -438,7 +444,7 @@ def test_delete_page_absent_source_redirects_to_list(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GET de apagar numa fonte inexistente volta para a lista — não 500."""
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid: None)
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, sid, **kw: None)
     resp = authed_client.get("/sources/ghost/delete", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/sources"
@@ -476,11 +482,13 @@ def test_delete_page_archived_with_items_shows_only_back(
     arquivada), só mostra histórico e botão 'Voltar' — sem ação duplicada."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.get_source",
-        lambda db, sid: _detail(
+        lambda db, sid, **kw: _detail(
             title="Já arquivada", canonical="https://x/feed", archived_at=_iso_days_ago(2)
         ),
     )
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid: 5)
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.source_item_count", lambda db, sid, **kw: 5
+    )
     html = authed_client.get("/sources/s1/delete").text
     assert "5" in html  # contagem de itens
     assert 'action="/sources/s1/archive"' not in html  # sem POST arquivar (já arquivada)

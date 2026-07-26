@@ -8,9 +8,11 @@ end as error/rate_limit on the free tier).
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import PlainTextResponse
 from starlette.responses import Response
 
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
 from kubo.store import tenancy as tenancy_store
 
@@ -55,8 +57,12 @@ def _workspaces_for_session(
 def dashboard(request: Request) -> Response:
     """Home page: collection counts, latest runs, workspace switcher and invite card."""
     with client.connect() as db:
-        counts = knowledge.dashboard_counts(db)
-        runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
+        session = resolve_session(db, request)
+        if session is None:
+            return PlainTextResponse("Sessão inválida.", status_code=403)
+        tenant_id, user_id = session
+        counts = knowledge.dashboard_counts(db, tenant_id=tenant_id, user_id=user_id)
+        runs = knowledge.recent_runs(db, tenant_id=tenant_id, user_id=user_id, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
 
     return templates.TemplateResponse(

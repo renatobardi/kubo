@@ -32,11 +32,7 @@ from kubo.contracts.worker import validate_worker
 from kubo.embedding import Embedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import GraphKnowledge, RunContext
-from kubo.runtime.integrations import (
-    load_integrations,
-    load_integrations_from_dir,
-    resolve_integrations,
-)
+from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.store.destinations import record_id_from_destination
 from kubo.store.flows import insert_deliverable
 from kubo.store.knowledge import (
@@ -54,8 +50,9 @@ from kubo.store.knowledge import (
 
 @dataclass(frozen=True)
 class FlowCtx:
-    """Contexto de flow opcional passado a `run_worker`: os RecordIDs de flow/task que o
-    `_persist` usa para costurar a proveniência de um `ReportPayload` (`produces`/`consults`).
+    """Contexto de flow opcional passado a `run_worker`: os RecordIDs de flow/task e os
+    ids de tenancy que o `_persist` usa para costurar a proveniência (`produces`/`consults`)
+    e escopar o deliverável no tenant.
 
     O worker NUNCA o vê — atribuição de proveniência mora no runtime, não no worker (ADR-0016
     §III). A analista tem LLM no circuito, então a disciplina de ref opaco vale: nem bug nem
@@ -63,6 +60,8 @@ class FlowCtx:
 
     flow: RecordID
     task: RecordID
+    tenant_id: RecordID | None = None
+    user_id: RecordID | None = None
 
 
 _DEFAULT_CATALOG_DIR = Path(__file__).parents[2] / "catalogs" / "integrations"
@@ -106,6 +105,9 @@ def _persist(
     run_id: RecordID,
     knowledge: GraphKnowledge,
     flow_ctx: FlowCtx | None,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
 ) -> int:
     """Persiste cada payload por match EXPLÍCITO e hardcoded tipo→função da store.
     Devolve a contagem de `DistilledPayload` pulados por `ref` não-resolvível.
@@ -130,12 +132,16 @@ def _persist(
         if isinstance(payload, ItemPayload):
             source = upsert_source(
                 db,
+                tenant_id=tenant_id,
+                user_id=user_id,
                 kind=payload.source.kind,
                 canonical=payload.source.canonical,
                 title=payload.source.title,
             )
             upsert_item(
                 db,
+                tenant_id=tenant_id,
+                user_id=user_id,
                 source=source,
                 external_id=payload.external_id,
                 content=payload.content,
@@ -150,7 +156,10 @@ def _persist(
                 unresolved += 1
                 continue
             entities = [
-                get_or_create_entity(db, name=e.name, kind=e.kind) for e in payload.entities
+                get_or_create_entity(
+                    db, tenant_id=tenant_id, user_id=user_id, name=e.name, kind=e.kind
+                )
+                for e in payload.entities
             ]
             chunks = [
                 Chunk(
@@ -164,7 +173,14 @@ def _persist(
                 for c in payload.chunks
             ]
             insert_distilled(
-                db, item=item, summary=payload.summary, chunks=chunks, run=run_id, entities=entities
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                item=item,
+                summary=payload.summary,
+                chunks=chunks,
+                run=run_id,
+                entities=entities,
             )
         elif isinstance(payload, DispatchPayload):
             # `items` (strings validated by pydantic boundary) → RecordID for the store.
@@ -173,6 +189,8 @@ def _persist(
             # (no consumer — ADR-0015 §II); the run itself is the execution provenance.
             insert_dispatch(
                 db,
+                tenant_id=tenant_id,
+                user_id=user_id,
                 destination=record_id_from_destination(payload.destination),
                 channel=payload.channel,
                 status=payload.status,
@@ -183,15 +201,29 @@ def _persist(
                 error=payload.error.model_dump() if payload.error else None,
             )
         elif isinstance(payload, ReportPayload):
-            _persist_report(db, payload, flow_ctx)
+            _persist_report(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
         elif isinstance(payload, PrPayload):
-            _persist_pr(db, payload, flow_ctx)
+            _persist_pr(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
         else:  # SourcePayload — o único outro membro restante da união
-            upsert_source(db, kind=payload.kind, canonical=payload.canonical, title=payload.title)
+            upsert_source(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                kind=payload.kind,
+                canonical=payload.canonical,
+                title=payload.title,
+            )
     return unresolved
 
 
-def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -> None:
+def _persist_report(
+    db: Any,
+    payload: ReportPayload,
+    flow_ctx: FlowCtx | None,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
     """Grava um ReportPayload como deliverable + arestas (ADR-0016 §III), fora do laço de
     `_persist` (extraído para manter a complexidade do laço sob o teto).
 
@@ -203,6 +235,8 @@ def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -
         raise ConfigError("ReportPayload exige flow_ctx (proveniência de flow/task)")
     insert_deliverable(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         flow=flow_ctx.flow,
         task=flow_ctx.task,
         kind="report",
@@ -211,7 +245,14 @@ def _persist_report(db: Any, payload: ReportPayload, flow_ctx: FlowCtx | None) -
     )
 
 
-def _persist_pr(db: Any, payload: PrPayload, flow_ctx: FlowCtx | None) -> None:
+def _persist_pr(
+    db: Any,
+    payload: PrPayload,
+    flow_ctx: FlowCtx | None,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
     """Grava um PrPayload como deliverable `kind="pr"` (ADR-0019 §VI), espelho exato do
     `_persist_report`: mesma costura de proveniência via `flow_ctx`, mesmo `insert_deliverable`.
 
@@ -223,6 +264,8 @@ def _persist_pr(db: Any, payload: PrPayload, flow_ctx: FlowCtx | None) -> None:
         raise ConfigError("PrPayload exige flow_ctx (proveniência de flow/task)")
     insert_deliverable(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         flow=flow_ctx.flow,
         task=flow_ctx.task,
         kind="pr",
@@ -249,24 +292,22 @@ def _build_context(
     run_id: RecordID,
     db: Any,
     embedder: Embedder | None,
-    tenant_id: Any,
-    user_id: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
 ) -> RunContext:
     """Monta o ctx read-only: config validada contra o schema do manifest,
     integrações resolvidas (declaradas ∩ existentes; segredo pelo runtime),
     o adaptador de conhecimento (`GraphKnowledge`, ADR-0013 §III) e logger
     bound com run_id/worker."""
     config_model = manifest.config.model_validate(config or {})
-    if tenant_id is not None and user_id is not None:
-        catalog = load_integrations(db, tenant_id, user_id)
-    else:
-        catalog = load_integrations_from_dir(catalog_dir)
+    catalog = load_integrations(db, tenant_id, user_id)
     integrations = resolve_integrations(manifest.integrations, catalog, db=db, tenant_id=tenant_id)
     logger = structlog.get_logger().bind(run_id=str(run_id), worker=manifest.name)
     return RunContext(
         config=config_model,
         integrations=integrations,
-        knowledge=GraphKnowledge(db),
+        knowledge=GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id),
         logger=logger,
         embedder=embedder,
     )
@@ -280,8 +321,8 @@ def run_worker(
     catalog_dir: Path = _DEFAULT_CATALOG_DIR,
     embedder: Embedder | None = None,
     flow_ctx: FlowCtx | None = None,
-    tenant_id: Any = None,
-    user_id: Any = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
 ) -> RecordID:
     """Executa um worker sob contrato ponta a ponta e devolve o id do `run`.
 
@@ -294,25 +335,44 @@ def run_worker(
     proveniência de um `ReportPayload` (ADR-0016 §III) — o mecanismo genérico só ganha um
     contexto de ATRIBUIÇÃO opcional, não lógica de flow. `None` para os workers da fase 1."""
     manifest = validate_worker(worker)
-    run_id = start_run(db, worker=manifest.name)
+    run_id = start_run(db, tenant_id=tenant_id, user_id=user_id, worker=manifest.name)
     try:
         ctx = _build_context(
-            manifest, config, catalog_dir, run_id, db, embedder, tenant_id, user_id
+            manifest,
+            config,
+            catalog_dir,
+            run_id,
+            db,
+            embedder,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
         raw_result = worker.run(ctx)  # type: ignore[attr-defined]  # assinatura validada acima
         result = RunResult.model_validate(raw_result)
         # _persist DENTRO do try: uma falha de store não pode deixar o run travado
         # em 'running' nem propagar exceção crua fora da fronteira.
-        unresolved = _persist(db, result.payloads, run_id, ctx.knowledge, flow_ctx)
+        unresolved = _persist(
+            db,
+            result.payloads,
+            run_id,
+            ctx.knowledge,
+            flow_ctx,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         # Precedência do fechamento: erro do próprio worker vence (já é o motivo de
         # falha mais específico); senão, ref não-resolvível (defensivo, §III.6);
         # senão, ok.
         if result.error is not None:
-            fail_run(db, run_id, error=result.error.model_dump())
+            fail_run(
+                db, run_id, tenant_id=tenant_id, user_id=user_id, error=result.error.model_dump()
+            )
         elif unresolved > 0:
             fail_run(
                 db,
                 run_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
                 error=ErrorInfo(
                     kind="unresolvable_ref",
                     message=f"{unresolved} payload(s) com ref não-resolvível",
@@ -320,7 +380,15 @@ def run_worker(
                 ).model_dump(),
             )
         else:
-            finish_run(db, run_id, stats=result.stats.model_dump())
+            finish_run(
+                db, run_id, tenant_id=tenant_id, user_id=user_id, stats=result.stats.model_dump()
+            )
     except Exception as exc:  # noqa: BLE001 — fronteira: exceção vira erro estruturado, não crash
-        fail_run(db, run_id, error=_error_from_exception(exc).model_dump())
+        fail_run(
+            db,
+            run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            error=_error_from_exception(exc).model_dump(),
+        )
     return run_id

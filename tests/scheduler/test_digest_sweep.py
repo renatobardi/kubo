@@ -63,7 +63,9 @@ def test_dispatches_one_run_per_active_destination(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(scheduler, "resolve_base_url", lambda: "https://kubo.test")
     calls: list[tuple[Any, dict[str, Any]]] = []
 
-    def _run_worker(db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+    def _run_worker(
+        db: Any, worker: Any, *, config: dict[str, Any], embedder: Any, **kw: Any
+    ) -> None:
         calls.append((worker, config))
 
     monkeypatch.setattr(scheduler, "run_worker", _run_worker)
@@ -115,7 +117,9 @@ def test_isolates_failing_destination(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scheduler, "resolve_base_url", lambda: "https://kubo.test")
     attempted: list[str] = []
 
-    def _run_worker(db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+    def _run_worker(
+        db: Any, worker: Any, *, config: dict[str, Any], embedder: Any, **kw: Any
+    ) -> None:
         dest_id = str(worker._destination.id)
         attempted.append(dest_id)
         if "bad" in dest_id:
@@ -141,7 +145,9 @@ def test_unknown_channel_is_ignored_without_run(monkeypatch: pytest.MonkeyPatch)
     calls: list[str] = []
     warnings: list[dict[str, Any]] = []
 
-    def _run_worker(db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+    def _run_worker(
+        db: Any, worker: Any, *, config: dict[str, Any], embedder: Any, **kw: Any
+    ) -> None:
         calls.append(str(worker._destination.id))
 
     def _warning(event: str, **kwargs: Any) -> None:
@@ -174,7 +180,9 @@ def test_email_failure_does_not_affect_telegram(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("KUBO_EMAIL_FROM", "kubo@example.com")
     calls: list[tuple[str, str]] = []
 
-    def _run_worker(db: Any, worker: Any, *, config: dict[str, Any], embedder: Any) -> None:
+    def _run_worker(
+        db: Any, worker: Any, *, config: dict[str, Any], embedder: Any, **kw: Any
+    ) -> None:
         calls.append((str(worker._destination.id), worker._destination.channel))
         if worker._destination.channel == "email":
             raise RuntimeError("SMTP fora do ar")

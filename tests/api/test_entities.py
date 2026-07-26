@@ -91,7 +91,7 @@ def test_entity_detail_shows_mentioning_distilled(
     """O detalhe mostra a entidade + os destilados que a mencionam (cards com título)."""
     monkeypatch.setattr(
         "kubo.api.routes.entities.knowledge.read_entity",
-        lambda db, eid: EntityView(
+        lambda db, eid, **kw: EntityView(
             id=RecordID("entity", "e1"),
             name="Python",
             kind="tecnologia",
@@ -144,7 +144,7 @@ def test_entity_detail_has_placeholder_cards(
     placeholder honesto 'sem dados ainda' (D-a — sem fabricar dado)."""
     monkeypatch.setattr(
         "kubo.api.routes.entities.knowledge.read_entity",
-        lambda db, eid: EntityView(
+        lambda db, eid, **kw: EntityView(
             id=RecordID("entity", "e1"), name="Python", kind="tecnologia", mentions=1, distilled=[]
         ),
     )
@@ -157,7 +157,9 @@ def test_entity_detail_has_placeholder_cards(
 def test_entity_detail_404_for_unknown_id(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("kubo.api.routes.entities.knowledge.read_entity", lambda db, eid: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.entities.knowledge.read_entity", lambda db, eid, **kw: None
+    )
     resp = authed_client.get("/entities/nope")
     assert resp.status_code == 404
     assert "não encontrada" in resp.text.lower()

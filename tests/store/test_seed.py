@@ -15,6 +15,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.errors import ConfigError
 from kubo.store import client, knowledge, migrations, settings
@@ -53,13 +54,15 @@ def _count_source(db: Any) -> int:
     return int(rows[0]["count"]) if rows else 0
 
 
-def test_seed_creates_six_active_rss_feeds_with_tags(db: Any) -> None:
+def test_seed_creates_six_active_rss_feeds_with_tags(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Ambiente limpo: o seed cria as 6 fontes como Cadastros rss ATIVOS, com o title e as tags
     do `schedules.yaml` — é o que o sweep varre e o que reproduz a coleta legada sem regressão."""
     processed = seed_feed_cadastros(db)
 
     assert processed == 6
-    active = knowledge.active_sources(db, kind="rss")
+    active = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
     assert len(active) == 6
     by_canonical = {s.canonical: s for s in active}
     openai = by_canonical["https://openai.com/news/rss.xml"]
@@ -94,15 +97,18 @@ def test_seed_first_run_coalesces_owner_pause_and_title(db: Any) -> None:
     assert got.tags == ["ai", "openai", "confiavel"]  # tags legadas ([]) preenchidas no bootstrap
 
 
-def test_seed_once_per_env_preserves_later_tag_clear(db: Any) -> None:
+def test_seed_once_per_env_preserves_later_tag_clear(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """A correção do CodeRabbit (#116): depois do bootstrap, o dono limpa TODAS as tags de uma
     fonte pela UI (`tags=[]` intencional). Um segundo deploy NÃO pode refilar as tags legadas —
     o marcador faz o seed pular, então o `[]` do dono sobrevive. É o caso que o coalesce sozinho
     não cobria (`[]` ambíguo: legado vs limpo-de-propósito), resolvido por rodar só uma vez."""
     seed_feed_cadastros(db)
-    tgt = {s.canonical: s for s in knowledge.active_sources(db, kind="rss")}[
-        "https://openai.com/news/rss.xml"
-    ]
+    tgt = {
+        s.canonical: s
+        for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+    }["https://openai.com/news/rss.xml"]
     knowledge.edit_source(
         db, id=tgt.id, title="OpenAI News", tags=[], canonical="https://openai.com/news/rss.xml"
     )
@@ -111,7 +117,7 @@ def test_seed_once_per_env_preserves_later_tag_clear(db: Any) -> None:
 
     (again,) = [
         s
-        for s in knowledge.active_sources(db, kind="rss")
+        for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
         if s.canonical == "https://openai.com/news/rss.xml"
     ]
     assert again.tags == []  # o 'limpar tudo' do dono sobreviveu ao re-deploy

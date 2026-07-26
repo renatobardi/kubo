@@ -15,11 +15,18 @@ from typing import Any
 
 import pytest
 
-from kubo.store import client, migrations
+from kubo.store import client, migrations, tenancy
 
 pytestmark = pytest.mark.integration
 
 _KNOWLEDGE_DB = "test_knowledge_migrations"
+
+
+def _tenant_owner(db: Any, *, firebase_uid: str, name: str = "Team") -> tuple[Any, Any]:
+    user = tenancy.create_user(db, firebase_uid=firebase_uid)
+    tenant = tenancy.create_tenant(db, name=name, owner_user_id=user.id)
+    return user, tenant
+
 
 _TABLES = {
     "source",
@@ -97,6 +104,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0018_catalog_tables.surql",
         # 0019 (KUBO-117): tenant_id nos domínios centrais.
         "0019_tenant_scoped_domain.surql",
+        # 0020 (KUBO-123): contrato de tenancy obrigatória.
+        "0020_tenant_contract.surql",
     }
 
 
@@ -138,16 +147,21 @@ def test_flexible_fields_preserve_nested_payload(db: Any) -> None:
 
 def test_relation_edge_rejects_missing_endpoint(db: Any) -> None:
     """ENFORCED: aresta para endpoint inexistente falha (proveniência não fica órfã)."""
+    _owner, tenant = _tenant_owner(db, firebase_uid="relation-missing")
     db.query("CREATE item:i SET external_id='e', content='c';")
     with pytest.raises(Exception):  # noqa: B017, PT011 (SurrealDB NotFoundError)
-        db.query("RELATE distilled:ghost->derived_from->item:i;")
+        db.query(
+            "RELATE distilled:ghost->derived_from->item:i SET tenant_id = $t;",
+            {"t": tenant.id},
+        )
 
 
 def test_relation_edge_allows_valid_endpoints(db: Any) -> None:
     """ENFORCED aceita a aresta quando os dois endpoints existem."""
+    _owner, tenant = _tenant_owner(db, firebase_uid="relation-ok")
     db.query("CREATE item:i SET external_id='e', content='c';")
-    db.query("CREATE distilled:d SET summary='s';")
-    db.query("RELATE distilled:d->derived_from->item:i;")
+    db.query("CREATE distilled:d SET summary='s', tenant_id = $t;", {"t": tenant.id})
+    db.query("RELATE distilled:d->derived_from->item:i SET tenant_id = $t;", {"t": tenant.id})
     linked = db.query("SELECT ->derived_from->item AS items FROM distilled:d;")[0]["items"]
     assert len(linked) == 1
 

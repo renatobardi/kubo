@@ -65,6 +65,8 @@ def db(make_db: Callable[[str], Any]) -> Iterator[Any]:
 
 def _run_to_gate(
     db: Any,
+    tenant_id: RecordID,
+    user_id: RecordID,
     monkeypatch: pytest.MonkeyPatch,
     *,
     outcome: CliOutcome | None = None,
@@ -86,17 +88,24 @@ def _run_to_gate(
         return PrRef(url=pr_url, number=pr_number)
 
     monkeypatch.setattr(github_api, "open_pull_request", _open)
-    result = run_flow(db, template_name="dev-kubo", question="fix bug Y", base_url=_BASE)
+    result = run_flow(
+        db,
+        template_name="dev-kubo",
+        question="fix bug Y",
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     return result, opened
 
 
 def test_run_parks_at_review_with_agent_branch_and_kubo_pat(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """O SEGUNDO alvo não é um alias do primeiro: o PR abre de um branch `agent/*` (E3 identifica
     PRs de agente por prefixo, não `kubo/*` do forge) e usa o PAT dedicado `github-kubo`, não o
     `github` do sandbox."""
-    result, opened = _run_to_gate(db, monkeypatch)
+    result, opened = _run_to_gate(db, tenant_id, user_id, monkeypatch)
 
     assert result.state == "review"
     assert result.gate_task is not None
@@ -115,14 +124,18 @@ def test_run_parks_at_review_with_agent_branch_and_kubo_pat(
     assert opened["token"] == _MAIN_PAT  # NÃO o PAT do forge
 
 
-def test_reject_closes_pr_via_api_with_kubo_pat(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reject_closes_pr_via_api_with_kubo_pat(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Rejeição do dev-kubo: fecha o PR via API com o PAT DEDICADO `github-kubo` — prova que
     `_reject_dev` resolve a integração do TARGET, não hardcoded no `github` do forge."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     closed: dict[str, Any] = {}
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
 
-    reject_gate(db, gate_task=result.gate_task, reason="escopo errado")
+    reject_gate(
+        db, gate_task=result.gate_task, reason="escopo errado", tenant_id=tenant_id, user_id=user_id
+    )
 
     assert closed["number"] == 42
     assert closed["owner"] == _OWNER
@@ -131,13 +144,22 @@ def test_reject_closes_pr_via_api_with_kubo_pat(db: Any, monkeypatch: pytest.Mon
     assert db.query("SELECT VALUE state FROM $t;", {"t": result.task})[0] == "rejected"
 
 
-def test_promote_still_uses_shared_readonly_token(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_promote_still_uses_shared_readonly_token(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Confirmar promoção do dev-kubo lê o merge com o MESMO token READ-ONLY compartilhado do
     forge (E12/E13 — o PAT read-only já cobre os dois repos operacionalmente, não é preocupação
     de target): prova que a generalização por `target` NÃO regrediu o caminho de leitura."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     promo = promotion_gate(db, result.flow)
     assert promo is not None
     seen: dict[str, Any] = {}
@@ -148,7 +170,7 @@ def test_promote_still_uses_shared_readonly_token(db: Any, monkeypatch: pytest.M
 
     monkeypatch.setattr(github_api, "get_pull_request", _get)
 
-    promote_gate(db, gate_task=promo, worker_name="feed")
+    promote_gate(db, gate_task=promo, worker_name="feed", tenant_id=tenant_id, user_id=user_id)
 
     assert seen["token"] == _RO_TOKEN  # NUNCA o PAT de escrita do dev-kubo
     assert seen["owner"] == _OWNER
@@ -158,7 +180,7 @@ def test_promote_still_uses_shared_readonly_token(db: Any, monkeypatch: pytest.M
 
 
 def test_reject_tripwire_blocks_pr_url_mismatch_before_any_api_call(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """E8 defesa-em-profundidade: se o deliverable guarda um `pr_url` que NÃO bate com
     owner/repo do alvo `dev-kubo` (ex.: uma PrRef simulando ter aberto sob `kubo-forge` — um
@@ -166,6 +188,8 @@ def test_reject_tripwire_blocks_pr_url_mismatch_before_any_api_call(
     qualquer chamada à API do GitHub — nunca comentar/fechar o PR errado."""
     result, _ = _run_to_gate(
         db,
+        tenant_id,
+        user_id,
         monkeypatch,
         pr_url="https://github.com/owner/kubo-forge/pull/9",
         pr_number=9,
@@ -174,24 +198,39 @@ def test_reject_tripwire_blocks_pr_url_mismatch_before_any_api_call(
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
 
     with pytest.raises(StateError):
-        reject_gate(db, gate_task=result.gate_task, reason="pr_url não bate com o alvo")
+        reject_gate(
+            db,
+            gate_task=result.gate_task,
+            reason="pr_url não bate com o alvo",
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
 
     assert closed == {}  # nenhuma chamada à API do GitHub
 
 
 def test_promote_tripwire_blocks_pr_url_mismatch_before_any_api_call(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Mesmo tripwire (E8) no caminho de promoção: `promote_gate` deve barrar com `StateError`
     ANTES de consultar `get_pull_request` quando o `pr_url` armazenado não bate com o alvo."""
     result, _ = _run_to_gate(
         db,
+        tenant_id,
+        user_id,
         monkeypatch,
         pr_url="https://github.com/owner/kubo-forge/pull/9",
         pr_number=9,
     )
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     promo = promotion_gate(db, result.flow)
     assert promo is not None
     seen: dict[str, Any] = {}
@@ -202,6 +241,6 @@ def test_promote_tripwire_blocks_pr_url_mismatch_before_any_api_call(
     )
 
     with pytest.raises(StateError):
-        promote_gate(db, gate_task=promo, worker_name="feed")
+        promote_gate(db, gate_task=promo, worker_name="feed", tenant_id=tenant_id, user_id=user_id)
 
     assert seen == {}  # nenhuma chamada à API do GitHub (get_pull_request não foi invocado)

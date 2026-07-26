@@ -7,6 +7,7 @@ pyproject, que aponta para `main` abaixo.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from kubo.errors import ConfigError, EmbeddingError
 from kubo.runtime.flow_runner import FlowRunResult, run_flow
 from kubo.store import client, knowledge
 from kubo.store import settings as settings_store
+from kubo.store import tenancy as tenancy_store
 from kubo.store.knowledge import DistilledView, SearchHit
 
 _DISTILLED_TABLE = "distilled"
@@ -119,16 +121,26 @@ def format_distilled(view: DistilledView, *, provenance: bool) -> str:
     return "\n".join(lines)
 
 
-def run_query(db: Any, embedder: Embedder, question: str, *, k: int) -> str:
+def run_query(
+    db: Any,
+    embedder: Embedder,
+    question: str,
+    *,
+    k: int,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> str:
     """Orquestra `kubo query`: embedda a pergunta, busca (`search`), deduplica
     por distilled (`dedupe_hits`), resolve a proveniência de cada hit
     (`read_distilled`) e formata (`format_query_results`).
     """
     vector = embedder.embed([question])[0]
-    hits = dedupe_hits(knowledge.search(db, embedding=vector, k=k))
+    hits = dedupe_hits(
+        knowledge.search(db, tenant_id=tenant_id, user_id=user_id, embedding=vector, k=k)
+    )
     results: list[tuple[SearchHit, DistilledView]] = []
     for hit in hits:
-        view = knowledge.read_distilled(db, hit.distilled)
+        view = knowledge.read_distilled(db, hit.distilled, tenant_id=tenant_id, user_id=user_id)
         if view is None:
             # defensivo: hit aponta para um distilled que sumiu entre a busca e a
             # leitura — pula em vez de quebrar o comando inteiro.
@@ -137,13 +149,20 @@ def run_query(db: Any, embedder: Embedder, question: str, *, k: int) -> str:
     return format_query_results(results)
 
 
-def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
+def run_show(
+    db: Any,
+    raw_id: str,
+    *,
+    provenance: bool,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> str | None:
     """Orquestra `kubo show`: resolve o id (`parse_distilled_id`), lê o
     distilled (`read_distilled`) e formata (`format_distilled`); `None` se o
     distilled não existe no grafo.
     """
     distilled = parse_distilled_id(raw_id)
-    view = knowledge.read_distilled(db, distilled)
+    view = knowledge.read_distilled(db, distilled, tenant_id=tenant_id, user_id=user_id)
     if view is None:
         return None
     return format_distilled(view, provenance=provenance)
@@ -155,7 +174,14 @@ def run_show(db: Any, raw_id: str, *, provenance: bool) -> str | None:
 _DEV_TEMPLATES = frozenset({"dev-mini", "dev-kubo"})
 
 
-def run_flow_command(db: Any, *, template: str, question: str) -> FlowRunResult:
+def run_flow_command(
+    db: Any,
+    *,
+    template: str,
+    question: str,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> FlowRunResult:
     """Resolve flow dependencies and run it synchronously in the CLI process (ADR-0016 §VII).
 
     Analysis flows resolve the Gemini embedder + default destination from settings;
@@ -175,6 +201,8 @@ def run_flow_command(db: Any, *, template: str, question: str) -> FlowRunResult:
         base_url = resolve_base_url()
     return run_flow(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         template_name=template,
         question=question,
         embedder=embedder,
@@ -183,16 +211,50 @@ def run_flow_command(db: Any, *, template: str, question: str) -> FlowRunResult:
     )
 
 
-def _handle_flow(db: Any, args: argparse.Namespace) -> int:
+def _handle_flow(
+    db: Any, args: argparse.Namespace, *, tenant_id: RecordID, user_id: RecordID
+) -> int:
     """Despacha `kubo flow run <template> "pergunta"`: executa e imprime o resultado. Exit 1 SÓ
     se o flow terminou em `failed`; qualquer outro desfecho é sucesso — entregue (`delivered`),
     ou o gate abriu e espera a decisão no board (`awaiting_review` no analysis, `review` no dev)."""
     if args.flow_command != "run":
         print('uso: kubo flow run <template> "pergunta"', file=sys.stderr)
         return 2
-    result = run_flow_command(db, template=args.template, question=args.question)
+    result = run_flow_command(
+        db,
+        template=args.template,
+        question=args.question,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     print(f"flow {result.flow} — {result.state} (run {result.run})")
     return 1 if result.state == "failed" else 0
+
+
+def _resolve_cli_tenant(db: Any) -> tuple[RecordID, RecordID]:
+    """Resolve o tenant/user da CLI a partir de env (KUBO_TENANT_ID, KUBO_USER_UID).
+
+    `KUBO_TENANT_ID` aceita `tenant:<key>` ou só `<key>`; `KUBO_USER_UID` é o
+    firebase_uid, resolvido para o record<user>. Falta de qualquer um → ConfigError."""
+    tenant_raw = os.environ.get("KUBO_TENANT_ID", "").strip()
+    uid = os.environ.get("KUBO_USER_UID", "").strip()
+    if not tenant_raw or not uid:
+        raise ConfigError("KUBO_TENANT_ID e KUBO_USER_UID são obrigatórios para os comandos kubo")
+    user = tenancy_store.get_user_by_firebase_uid(db, uid)
+    if user is None:
+        raise ConfigError(f"usuário com firebase_uid '{uid}' não encontrado")
+    tenant = _parse_cli_tenant(tenant_raw)
+    return tenant, user.id
+
+
+def _parse_cli_tenant(raw: str) -> RecordID:
+    """`tenant:<key>` ou `<key>` → RecordID da tabela `tenant`."""
+    key = raw.strip()
+    if ":" in key:
+        table, _, key = key.partition(":")
+        if table != "tenant" or not key:
+            raise ConfigError(f"KUBO_TENANT_ID inválido: {raw}")
+    return RecordID("tenant", key)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -230,9 +292,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         # ponytail: catch de fronteira do CLI — imprime e retorna, nunca traceback;
         # não é except-pass.
         with client.connect() as db:
+            tenant_id, user_id = _resolve_cli_tenant(db)
             if args.command == "query":
                 embedder = GeminiEmbedder.from_env()
-                out = run_query(db, embedder, args.question, k=args.k)
+                out = run_query(
+                    db,
+                    embedder,
+                    args.question,
+                    k=args.k,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
                 if not out.strip():
                     print("nenhum resultado.")
                 else:
@@ -240,10 +310,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
 
             if args.command == "flow":
-                return _handle_flow(db, args)
+                return _handle_flow(db, args, tenant_id=tenant_id, user_id=user_id)
 
             try:
-                out_show = run_show(db, args.id, provenance=args.provenance)
+                out_show = run_show(
+                    db,
+                    args.id,
+                    provenance=args.provenance,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
             except ValueError as exc:
                 print(f"id inválido: {exc}", file=sys.stderr)
                 return 1

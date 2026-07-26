@@ -12,11 +12,13 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import PlainTextResponse
 from starlette.responses import Response
 from surrealdb import RecordID
 
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
 
 router = APIRouter()
@@ -37,8 +39,14 @@ def list_page(
     start = clamp_start(start)
     query = q.strip()
     with client.connect() as db:
-        entities = knowledge.list_entities(db, limit=size, start=start, query=query)
-        total = knowledge.count_entities(db, query=query)
+        session = resolve_session(db, request)
+        if session is None:
+            return PlainTextResponse("Sessão inválida.", status_code=403)
+        tenant_id, user_id = session
+        entities = knowledge.list_entities(
+            db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start, query=query
+        )
+        total = knowledge.count_entities(db, tenant_id=tenant_id, user_id=user_id, query=query)
     return templates.TemplateResponse(
         request,
         "entities/list.html",
@@ -57,7 +65,13 @@ def detail(request: Request, entity_id: str) -> Response:
     view = None
     if key:
         with client.connect() as db:
-            view = knowledge.read_entity(db, RecordID(_ENTITY_TABLE, key))
+            session = resolve_session(db, request)
+            if session is None:
+                return PlainTextResponse("Sessão inválida.", status_code=403)
+            tenant_id, user_id = session
+            view = knowledge.read_entity(
+                db, RecordID(_ENTITY_TABLE, key), tenant_id=tenant_id, user_id=user_id
+            )
     if view is None:
         return templates.TemplateResponse(
             request, "entities/not_found.html", {"raw": entity_id}, status_code=404

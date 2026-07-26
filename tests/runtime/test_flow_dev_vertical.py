@@ -65,7 +65,12 @@ def db(make_db: Callable[[str], Any]) -> Iterator[Any]:
 
 
 def _run_to_gate(
-    db: Any, monkeypatch: pytest.MonkeyPatch, *, outcome: CliOutcome | None = None
+    db: Any,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outcome: CliOutcome | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Instancia e roda o dev-mini até o gate (ou até falhar). Devolve (result, open_pr_kwargs)."""
     fake_gitops(monkeypatch)
@@ -78,15 +83,24 @@ def _run_to_gate(
         return PrRef(url="https://github.com/owner/kubo-forge/pull/9", number=9)
 
     monkeypatch.setattr(github_api, "open_pull_request", _open)
-    result = run_flow(db, template_name="dev-mini", question="add hello()", base_url=_BASE)
+    result = run_flow(
+        db,
+        template_name="dev-mini",
+        question="add hello()",
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     return result, opened
 
 
-def test_run_parks_at_review_with_pr_deliverable(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_parks_at_review_with_pr_deliverable(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Run-até-gate: a dev PARA em `review`, o humano recebe task em `review`, e o deliverable
     `kind=pr` guarda a URL/número ESTRUTURAIS da API (E3) + a prosa untrusted (E4). O PR abriu de
     head=branch(derivado do flow) → main, com o PAT do ctx."""
-    result, opened = _run_to_gate(db, monkeypatch)
+    result, opened = _run_to_gate(db, tenant_id, user_id, monkeypatch)
 
     assert result.state == "review"
     assert result.gate_task is not None
@@ -110,14 +124,23 @@ def test_run_parks_at_review_with_pr_deliverable(db: Any, monkeypatch: pytest.Mo
     assert opened["token"] == _PAT
 
 
-def test_approve_closes_flow_done_without_merge(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_approve_closes_flow_done_without_merge(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Aprovação (D38): as 2 tasks vão a `done`, NENHUMA chamada de merge/close ao GitHub — o Kubo
     não mergeia (o dono clica no GitHub). Só a decisão no grafo."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     closed: dict[str, Any] = {}
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
 
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": result.task})[0] == "done"
     gate = db.query("SELECT state, decision FROM $t;", {"t": result.gate_task})[0]
@@ -126,14 +149,22 @@ def test_approve_closes_flow_done_without_merge(db: Any, monkeypatch: pytest.Mon
     assert closed == {}  # nada foi fechado/mergeado
 
 
-def test_reject_closes_pr_via_api_and_archives(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reject_closes_pr_via_api_and_archives(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Rejeição (D38): FECHA o PR via API com o motivo (número ESTRUTURAL do deliverable) e leva
     as 2 tasks a `rejected`. Prova a ordem: o close ocorre com o pr_number + reason corretos."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     closed: dict[str, Any] = {}
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
 
-    reject_gate(db, gate_task=result.gate_task, reason="escopo errado")
+    reject_gate(
+        db,
+        gate_task=result.gate_task,
+        reason="escopo errado",
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     assert closed["number"] == 9  # do campo estrutural, não do content
     assert closed["reason"] == "escopo errado"
@@ -145,54 +176,81 @@ def test_reject_closes_pr_via_api_and_archives(db: Any, monkeypatch: pytest.Monk
     assert gate["reason"] == "escopo errado"
 
 
-def test_approve_auto_opens_promotion_gate_v2(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_approve_auto_opens_promotion_gate_v2(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """v2 (ADR-0021): aprovar o gate `review` abre AUTOMATICAMENTE o gate de promoção — nova task
     humana em `done`, sem decisão, resolvível como gate aberto (`gate_state='done'`)."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: None)
 
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     promo = promotion_gate(db, result.flow)
     assert promo is not None
-    ctx = read_gate_context(db, promo)
+    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo)
     assert ctx is not None
     assert ctx.gate_state == "done"
     assert ctx.counterpart_task == result.task  # a dev, única não-humana
 
 
 def test_reject_on_promotion_gate_leaves_merged_pr_untouched(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Trap c (ADR-0021 §9): rejeitar o gate de PROMOÇÃO (par [done, rejected] inexistente) falha
     ANTES de qualquer I/O — o PR JÁ MESCLADO não é comentado nem fechado."""
-    result, _ = _run_to_gate(db, monkeypatch)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
     closed: dict[str, Any] = {}
     monkeypatch.setattr(github_api, "close_pull_request", lambda **kw: closed.update(kw))
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     promo = promotion_gate(db, result.flow)
 
     with pytest.raises(StateError):
-        reject_gate(db, gate_task=promo, reason="não quero promover")
+        reject_gate(
+            db, gate_task=promo, reason="não quero promover", tenant_id=tenant_id, user_id=user_id
+        )
 
     assert closed == {}  # nenhuma chamada à API do GitHub
 
 
-def _approved_to_promotion(db: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
+def _approved_to_promotion(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, Any]:
     """Roda o dev-mini até o gate de promoção ABERTO (review aprovado). Devolve (result, promo)."""
-    result, _ = _run_to_gate(db, monkeypatch)
-    resume_gate(db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch)
+    resume_gate(
+        db,
+        gate_task=result.gate_task,
+        destination=_DEST,
+        base_url=_BASE,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     promo = promotion_gate(db, result.flow)
     return result, promo
 
 
 def test_promote_confirms_merged_pr_and_registered_worker(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """E10/E12: `promote_gate` lê o merge com o token READ-ONLY (nunca o PAT de escrita),
     valida `worker_name` no `WORKER_REGISTRY` real (`feed`, sempre presente), grava o
     `merge_commit_sha` no deliverable e move as 2 tasks a `promoted` (terminal v2)."""
-    result, promo = _approved_to_promotion(db, monkeypatch)
+    result, promo = _approved_to_promotion(db, tenant_id, user_id, monkeypatch)
     seen: dict[str, Any] = {}
 
     def _get(**kw: Any) -> PrStatus:
@@ -201,7 +259,7 @@ def test_promote_confirms_merged_pr_and_registered_worker(
 
     monkeypatch.setattr(github_api, "get_pull_request", _get)
 
-    promote_gate(db, gate_task=promo, worker_name="feed")
+    promote_gate(db, gate_task=promo, worker_name="feed", tenant_id=tenant_id, user_id=user_id)
 
     assert seen["token"] == _RO_TOKEN  # NUNCA o PAT de escrita
     assert seen["number"] == 9
@@ -214,25 +272,31 @@ def test_promote_confirms_merged_pr_and_registered_worker(
     assert deliv == ["deadbeef123"]
 
 
-def test_promote_rejects_when_pr_not_merged(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_promote_rejects_when_pr_not_merged(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Aprovar no board ≠ mesclar no GitHub (D38): se a API diz `merged:false`, o Confirmar
     falha com `PromotionError` e o gate SEGUE ABERTO (o dono relê e reclica)."""
-    _result, promo = _approved_to_promotion(db, monkeypatch)
+    _result, promo = _approved_to_promotion(db, tenant_id, user_id, monkeypatch)
     monkeypatch.setattr(
         github_api, "get_pull_request", lambda **kw: PrStatus(merged=False, merge_commit_sha=None)
     )
 
     with pytest.raises(PromotionError):
-        promote_gate(db, gate_task=promo, worker_name="feed")
+        promote_gate(db, gate_task=promo, worker_name="feed", tenant_id=tenant_id, user_id=user_id)
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
-    assert read_gate_context(db, promo) is not None  # ainda um gate aberto
+    assert (
+        read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo) is not None
+    )  # ainda um gate aberto
 
 
-def test_promote_rejects_unknown_worker_name(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_promote_rejects_unknown_worker_name(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Import-oráculo (E10/E14): merge confirmado mas `worker_name` NÃO resolve no registry do
     processo vivo (deploy não rodou) → `PromotionError`, gate segue aberto."""
-    _result, promo = _approved_to_promotion(db, monkeypatch)
+    _result, promo = _approved_to_promotion(db, tenant_id, user_id, monkeypatch)
     monkeypatch.setattr(
         github_api,
         "get_pull_request",
@@ -240,14 +304,18 @@ def test_promote_rejects_unknown_worker_name(db: Any, monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(PromotionError):
-        promote_gate(db, gate_task=promo, worker_name="does-not-exist")
+        promote_gate(
+            db, gate_task=promo, worker_name="does-not-exist", tenant_id=tenant_id, user_id=user_id
+        )
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
-    assert read_gate_context(db, promo) is not None  # ainda um gate aberto
+    assert (
+        read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo) is not None
+    )  # ainda um gate aberto
 
 
 def test_agent_failure_fails_flow_without_gate_or_pr(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Agente com erro (budget/timeout/agent — E2) → task `failed`, SEM gate, SEM PR (E5). O flow
     não abre gate sobre trabalho que não existe."""
@@ -256,7 +324,7 @@ def test_agent_failure_fails_flow_without_gate_or_pr(
     bad = CliOutcome(
         text="", cost_usd=0.0, num_turns=0, error=ErrorInfo(kind="budget", message="estourou")
     )
-    result, _ = _run_to_gate(db, monkeypatch, outcome=bad)
+    result, _ = _run_to_gate(db, tenant_id, user_id, monkeypatch, outcome=bad)
 
     assert result.state == "failed"
     assert result.gate_task is None

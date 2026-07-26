@@ -86,18 +86,20 @@ class _FakeSender:
             raise SenderError("Telegram HTTP 400")
 
 
-def _seed(db: Any, title: str, summary: str) -> Any:
+def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: str) -> Any:
     src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
     )
     chunk = Chunk(text=summary, seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
-    return knowledge.insert_distilled(db, item=item, summary=summary, chunks=[chunk])
+    return knowledge.insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=[chunk]
+    )
 
 
-def _run_to_gate(db: Any, sender: _FakeSender) -> Any:
+def _run_to_gate(db: Any, tenant_id: RecordID, user_id: RecordID, sender: _FakeSender) -> Any:
     """Instancia e roda até o gate abrir; devolve o FlowRunResult (state=awaiting_review)."""
-    _seed(db, "Rust", "resumo sobre Rust")
+    _seed(db, tenant_id, user_id, "Rust", "resumo sobre Rust")
     return run_flow(
         db,
         template_name="analysis-review",
@@ -107,15 +109,19 @@ def _run_to_gate(db: Any, sender: _FakeSender) -> Any:
         base_url=_BASE,
         executor=_FakeExecutor(),
         senders={"telegram": sender},
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
 
-def test_run_parks_at_gate_and_notifies_without_delivering(db: Any) -> None:
+def test_run_parks_at_gate_and_notifies_without_delivering(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Run-até-gate: a analista PARA em awaiting_review, o humano recebe task, o deliverable
     (prosa) existe no grafo, o dono é notificado (dispatch artifact=gate) — e NADA de report
     ainda (o relatório espera a decisão)."""
     notify = _FakeSender()
-    result = _run_to_gate(db, notify)
+    result = _run_to_gate(db, tenant_id, user_id, notify)
 
     assert result.state == "awaiting_review"
     assert result.gate_task is not None
@@ -134,10 +140,12 @@ def test_run_parks_at_gate_and_notifies_without_delivering(db: Any) -> None:
     assert db.query("SELECT VALUE artifact FROM dispatch;") == ["gate"]
 
 
-def test_approve_sends_and_delivers_both_tasks(db: Any) -> None:
+def test_approve_sends_and_delivers_both_tasks(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Aprovação: o relatório é ENVIADO agora, o dispatch de report é gravado (não move o
     watermark do digest) e as 2 tasks vão a delivered com a decisão na task do gate."""
-    result = _run_to_gate(db, _FakeSender())
+    result = _run_to_gate(db, tenant_id, user_id, _FakeSender())
     approve = _FakeSender()
 
     resume_gate(
@@ -146,6 +154,8 @@ def test_approve_sends_and_delivers_both_tasks(db: Any) -> None:
         destination=_DEST,
         base_url=_BASE,
         senders={"telegram": approve},
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert len(approve.calls) == 1  # o envio acontece SÓ na aprovação
@@ -160,12 +170,20 @@ def test_approve_sends_and_delivers_both_tasks(db: Any) -> None:
     assert knowledge.last_dispatch_watermark(db, _DEST.id) is None
 
 
-def test_reject_archives_both_tasks_with_reason(db: Any) -> None:
+def test_reject_archives_both_tasks_with_reason(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Rejeição: as 2 tasks vão a rejected, o motivo obrigatório fica na task do gate, e NÃO
     há envio de report (só o dispatch de gate da abertura)."""
-    result = _run_to_gate(db, _FakeSender())
+    result = _run_to_gate(db, tenant_id, user_id, _FakeSender())
 
-    reject_gate(db, gate_task=result.gate_task, reason="fontes fracas para a pergunta")
+    reject_gate(
+        db,
+        gate_task=result.gate_task,
+        reason="fontes fracas para a pergunta",
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": result.task})[0] == "rejected"
     gate = db.query("SELECT state, decision, reason FROM $t;", {"t": result.gate_task})[0]
@@ -175,15 +193,23 @@ def test_reject_archives_both_tasks_with_reason(db: Any) -> None:
     assert db.query("SELECT VALUE artifact FROM dispatch;") == ["gate"]  # nenhum report
 
 
-def test_approve_send_failure_keeps_gate_open(db: Any) -> None:
+def test_approve_send_failure_keeps_gate_open(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """At-least-once (ADR-0018 §V): falha de ENVIO na aprovação deixa o gate ABERTO (o dono
     clica de novo), grava o dispatch de report em erro e NÃO decide o gate."""
-    result = _run_to_gate(db, _FakeSender())
+    result = _run_to_gate(db, tenant_id, user_id, _FakeSender())
     failing = {"telegram": _FakeSender(fail=True)}
 
     with pytest.raises(SenderError):
         resume_gate(
-            db, gate_task=result.gate_task, destination=_DEST, base_url=_BASE, senders=failing
+            db,
+            gate_task=result.gate_task,
+            destination=_DEST,
+            base_url=_BASE,
+            senders=failing,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
     # gate segue aberto — nada transicionou

@@ -61,7 +61,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
-        lambda db: DashboardCounts(distilled=0, items=0, sources=0, entities=0),
+        lambda db, **kw: DashboardCounts(distilled=0, items=0, sources=0, entities=0),
     )
     monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
     _breakglass_user = SimpleNamespace(
@@ -79,26 +79,22 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         role="owner",
     )
     monkeypatch.setattr(
-        "kubo.api.routes.dashboard.tenancy_store.get_user_by_firebase_uid",
-        lambda db, firebase_uid: _breakglass_user,
+        "kubo.store.tenancy.get_user_by_firebase_uid", lambda db, firebase_uid: _breakglass_user
     )
     monkeypatch.setattr(
-        "kubo.api.routes.dashboard.tenancy_store.list_memberships_for_user",
-        lambda db, user_id: [_breakglass_membership],
+        "kubo.store.tenancy.list_memberships_for_user", lambda db, user_id: [_breakglass_membership]
     )
+    monkeypatch.setattr("kubo.store.tenancy.get_tenant", lambda db, tenant_id: _breakglass_tenant)
     monkeypatch.setattr(
-        "kubo.api.routes.dashboard.tenancy_store.get_tenant",
-        lambda db, tenant_id: _breakglass_tenant,
-    )
-    monkeypatch.setattr(
-        "kubo.api.routes.dashboard.tenancy_store.list_tenants",
+        "kubo.store.tenancy.list_tenants",
         lambda db, tenant_ids: [_breakglass_tenant] if tenant_ids else [],
     )
+    monkeypatch.setattr("kubo.api.session._is_member", lambda db, *, user_id, tenant_id: True)
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
-    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 0)
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.count_runs", lambda db, **kw: 0)
-    monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db: [])
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.list_entities", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.list_dispatches", lambda db, **kw: [])
@@ -113,12 +109,16 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         archived_at=None,
     )
     monkeypatch.setattr(
-        "kubo.api.routes.destinations.destination_store.list_destinations", lambda db: [_OWNER]
+        "kubo.api.routes.destinations.destination_store.list_destinations",
+        lambda db, **kw: [_OWNER],
     )
     monkeypatch.setattr(
-        "kubo.api.routes.destinations.destination_store.active_destinations", lambda db: [_OWNER]
+        "kubo.api.routes.destinations.destination_store.active_destinations",
+        lambda db, **kw: [_OWNER],
     )
-    monkeypatch.setattr("kubo.api.routes.destinations.invite_store.list_invites", lambda db: [])
+    monkeypatch.setattr(
+        "kubo.api.routes.destinations.invite_store.list_invites", lambda db, **kw: []
+    )
     _settings_store_stub = SimpleNamespace(
         get_settings=lambda db: Settings(
             id=RecordID("settings", "global"),

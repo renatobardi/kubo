@@ -133,7 +133,7 @@ def test_search_partial_escapes_summary(
         ],
     )
     monkeypatch.setattr(
-        "kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid: _view(_XSS)
+        "kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid, **kw: _view(_XSS)
     )
     html = authed_client.get("/distilled/search", params={"q": "algo"}).text
     assert "&lt;script&gt;" in html
@@ -155,7 +155,7 @@ def test_detail_escapes_summary_and_neutralizes_hostile_url(
     )
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.read_distilled",
-        lambda db, rid: _view(_XSS, items=[hostile_item]),
+        lambda db, rid, **kw: _view(_XSS, items=[hostile_item]),
     )
     html = authed_client.get("/distilled/x1").text
     # summary + título escapados
@@ -214,7 +214,7 @@ def test_list_pagination_total_and_next(
     há mais que uma página; sem 'Anteriores' na 1ª. Total = 120 → 3 páginas de 50."""
     rows = [_card(f"x{i}", f"s{i}") for i in range(50)]
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: rows)
-    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 120)
+    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db, **kw: 120)
     html = authed_client.get("/distilled").text
     assert "página 1 de 3" in html
     assert "120 no total" in html
@@ -227,7 +227,9 @@ def test_detail_404_for_unknown_id(
     authed_client: TestClient, patch_store: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Id inexistente: 404 com a tela de não-encontrado."""
-    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid, **kw: None
+    )
     resp = authed_client.get("/distilled/inexistente")
     assert resp.status_code == 404
     assert "não encontrado" in resp.text.lower()
@@ -247,7 +249,7 @@ def test_detail_renders_provenance_chain(
     )
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.read_distilled",
-        lambda db, rid: _view("resumo", items=[item]),
+        lambda db, rid, **kw: _view("resumo", items=[item]),
     )
     html = authed_client.get("/distilled/x1").text
     assert "Um post" in html
@@ -269,7 +271,9 @@ def test_detail_shows_entity_chips_and_related(
         runs=[],
         entities=[EntityRef(id=RecordID("entity", "e1"), name="Python", kind="tecnologia")],
     )
-    monkeypatch.setattr("kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid: view)
+    monkeypatch.setattr(
+        "kubo.api.routes.distilled.knowledge.read_distilled", lambda db, rid, **kw: view
+    )
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.related_distilled",
         lambda db, rid, **kw: [_card("r1", "resumo relacionado", title="Relacionado A")],

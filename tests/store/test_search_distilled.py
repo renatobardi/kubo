@@ -47,7 +47,15 @@ def _vec(axis: int) -> list[float]:
     return v
 
 
-def _distilled(db: Any, *, title: str, summary: str, vectors: list[list[float]]) -> RecordID:
+def _distilled(
+    db: Any,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    *,
+    title: str,
+    summary: str,
+    vectors: list[list[float]],
+) -> RecordID:
     """Cria source+item (com título) e um distilled com um chunk por vetor dado."""
     src = upsert_source(db, kind="rss", canonical=f"src::{title}")
     item = upsert_item(db, source=src, external_id=f"ext::{title}", content="x", title=title)
@@ -55,26 +63,32 @@ def _distilled(db: Any, *, title: str, summary: str, vectors: list[list[float]])
         Chunk(text=summary, seq=i, embedding=v, model="m", dim=768, task_type="SEMANTIC_SIMILARITY")
         for i, v in enumerate(vectors)
     ]
-    return insert_distilled(db, item=item, summary=summary, chunks=chunks)
+    return insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=chunks
+    )
 
 
-def test_search_returns_closest_first_with_title_and_summary(db: Any) -> None:
+def test_search_returns_closest_first_with_title_and_summary(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """A busca resolve título (via derived_from) + summary e ordena por proximidade:
     query no eixo 0 traz o distilled do eixo 0 primeiro."""
-    d0 = _distilled(db, title="Rust", summary="sobre Rust", vectors=[_vec(0)])
-    _distilled(db, title="Python", summary="sobre Python", vectors=[_vec(1)])
+    d0 = _distilled(db, tenant_id, user_id, title="Rust", summary="sobre Rust", vectors=[_vec(0)])
+    _distilled(db, tenant_id, user_id, title="Python", summary="sobre Python", vectors=[_vec(1)])
 
-    docs = search_distilled(db, embedding=_vec(0), k=5)
+    docs = search_distilled(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(0), k=5)
 
     assert docs[0].id == d0
     assert docs[0].title == "Rust"
     assert docs[0].summary == "sobre Rust"
 
 
-def test_search_dedups_by_distilled(db: Any) -> None:
+def test_search_dedups_by_distilled(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Dois chunks do MESMO distilled não viram duas citações — dedup por distilled."""
-    d0 = _distilled(db, title="Rust", summary="sobre Rust", vectors=[_vec(0), _vec(2)])
+    d0 = _distilled(
+        db, tenant_id, user_id, title="Rust", summary="sobre Rust", vectors=[_vec(0), _vec(2)]
+    )
 
-    docs = search_distilled(db, embedding=_vec(0), k=10)
+    docs = search_distilled(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(0), k=10)
 
     assert [d.id for d in docs] == [d0]

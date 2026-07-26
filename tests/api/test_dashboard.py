@@ -15,7 +15,7 @@ def test_dashboard_renders_counts_and_runs(
     da falha visível (discriminação da mini-sessão pós-M6)."""
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
-        lambda db: DashboardCounts(distilled=42, items=100, sources=7, entities=13),
+        lambda db, **kw: DashboardCounts(distilled=42, items=100, sources=7, entities=13),
     )
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.recent_runs",
@@ -52,7 +52,7 @@ def test_dashboard_stat_tiles_are_clickable_links(
     Destilados→/distilled, Entidades→/entities (paridade HomeScreen)."""
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
-        lambda db: DashboardCounts(distilled=1, items=2, sources=3, entities=4),
+        lambda db, **kw: DashboardCounts(distilled=1, items=2, sources=3, entities=4),
     )
     html = authed_client.get("/").text
     for route in ('href="/sources"', 'href="/runs"', 'href="/distilled"', 'href="/entities"'):

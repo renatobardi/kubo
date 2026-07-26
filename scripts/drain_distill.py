@@ -37,11 +37,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
+from surrealdb import RecordID
 
 from kubo.embedding import GeminiEmbedder
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
-from kubo.store import client, knowledge
+from kubo.store import client, knowledge, tenancy
 from kubo.workers.distiller import DistillerWorker
 
 _log = structlog.get_logger().bind(worker="drain_distill")
@@ -101,6 +102,8 @@ def drain(
     max_batches: int,
     delay: float,
     sleep: Callable[[float], None] = time.sleep,
+    tenant_id: RecordID,
+    user_id: RecordID,
 ) -> tuple[int, int, int, str]:
     """Roda até `max_batches` batches; devolve `(inicial, final, drenados, motivo)`.
 
@@ -108,15 +111,24 @@ def drain(
     pacing. Para cedo em erro sistêmico, backlog vazio ou stall (via `evaluate_batch`)."""
     worker = _build_worker()
     embedder = GeminiEmbedder.from_env()
-    initial = pending = knowledge.count_items_without_distilled(db)
+    initial = pending = knowledge.count_items_without_distilled(
+        db, tenant_id=tenant_id, user_id=user_id
+    )
     drained = batches = 0
     reason = "max_batches"
     for _ in range(max_batches):
         if batches > 0:
             sleep(delay)
-        run_id = run_worker(db, worker, config={"max_items": batch_size}, embedder=embedder)
+        run_id = run_worker(
+            db,
+            worker,
+            config={"max_items": batch_size},
+            embedder=embedder,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         status = knowledge.run_status(db, run_id)
-        after = knowledge.count_items_without_distilled(db)
+        after = knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id)
         outcome = evaluate_batch(status, pending, after)
         drained += max(outcome.distilled, 0)
         batches += 1
@@ -161,11 +173,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("lembretes: spend limit no OpenRouter · Gemini RPD (E5) · EVITE 09:00–09:35 (E4).")
 
     with client.connect(client.config()) as db:
+        user, tenant = tenancy.get_or_create_user_and_tenant(
+            db, firebase_uid="drain-script", email="drain@kubo.local"
+        )
         initial, final, drained, reason = drain(
             db,
             batch_size=args.batch_size,
             max_batches=args.max_batches,
             delay=args.delay,
+            tenant_id=tenant.id,
+            user_id=user.id,
         )
 
     print(
