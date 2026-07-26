@@ -10,6 +10,18 @@ from typing import Any
 
 _GITHUB_API_URL = "https://api.github.com"
 
+
+def _http_bearer_integration(name: str, secret_ref: str, base_url: str) -> dict[str, Any]:
+    """Helper para integrações HTTP com auth bearer — evita repetição de dicionários."""
+    return {
+        "name": name,
+        "kind": "http",
+        "auth": {"type": "bearer", "secret_ref": secret_ref},
+        "rate_limit": None,
+        "base_url": base_url,
+    }
+
+
 DEFAULT_PERSONAS: list[dict[str, Any]] = [
     {
         "name": "analista",
@@ -67,27 +79,9 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
 ]
 
 DEFAULT_INTEGRATIONS: list[dict[str, Any]] = [
-    {
-        "name": "github-kubo",
-        "kind": "http",
-        "auth": {"type": "bearer", "secret_ref": "env:GITHUB_PAT_KUBO"},
-        "rate_limit": None,
-        "base_url": _GITHUB_API_URL,
-    },
-    {
-        "name": "github-readonly",
-        "kind": "http",
-        "auth": {"type": "bearer", "secret_ref": "env:GITHUB_TOKEN_READONLY"},
-        "rate_limit": None,
-        "base_url": _GITHUB_API_URL,
-    },
-    {
-        "name": "github",
-        "kind": "http",
-        "auth": {"type": "bearer", "secret_ref": "env:GITHUB_PAT_FORGE"},
-        "rate_limit": None,
-        "base_url": _GITHUB_API_URL,
-    },
+    _http_bearer_integration("github-kubo", "env:GITHUB_PAT_KUBO", _GITHUB_API_URL),
+    _http_bearer_integration("github-readonly", "env:GITHUB_TOKEN_READONLY", _GITHUB_API_URL),
+    _http_bearer_integration("github", "env:GITHUB_PAT_FORGE", _GITHUB_API_URL),
     {
         "name": "rss",
         "kind": "http",
@@ -95,13 +89,7 @@ DEFAULT_INTEGRATIONS: list[dict[str, Any]] = [
         "rate_limit": {"requests_per_minute": 60},
         "base_url": None,
     },
-    {
-        "name": "telegram",
-        "kind": "http",
-        "auth": {"type": "bearer", "secret_ref": "env:TELEGRAM_BOT_TOKEN"},
-        "rate_limit": None,
-        "base_url": "https://api.telegram.org",
-    },
+    _http_bearer_integration("telegram", "env:TELEGRAM_BOT_TOKEN", "https://api.telegram.org"),
 ]
 
 DEFAULT_FLOW_TEMPLATES: list[dict[str, Any]] = [
