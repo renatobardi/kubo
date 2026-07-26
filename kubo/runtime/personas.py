@@ -24,6 +24,8 @@ from kubo.runtime.catalog_loader import (
     load_yaml_item,
 )
 
+_KIND = "persona"
+
 # Executores suportados: `api` (LLM via LiteLLM), `cli` (adapters, 0015) e `human`
 # (persona materializada que NÃO recebe task nesta fase — D33). Literal fechado:
 # um executor com nome errado é rejeitado na borda, não silenciosamente aceito.
@@ -61,7 +63,7 @@ class Persona(BaseModel):
 
 def load_persona(path: Path) -> Persona:
     """Carrega e valida um YAML de persona; erro vira ConfigError (fronteira)."""
-    return load_yaml_item(path, Persona, "persona")
+    return load_yaml_item(path, Persona, _KIND)
 
 
 def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
@@ -70,7 +72,7 @@ def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
     em silêncio: o elenco de um template referencia personas por nome, e um nome
     ambíguo materializaria a persona errada num flow."""
-    return load_items_from_dir(catalog_dir, Persona, "persona")
+    return load_items_from_dir(catalog_dir, Persona, _KIND)
 
 
 def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
@@ -86,5 +88,5 @@ def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
         user_id,
         _catalog_store.list_personas,
         Persona,
-        "persona",
+        _KIND,
     )

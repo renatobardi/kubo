@@ -24,6 +24,8 @@ from kubo.runtime.catalog_loader import (
     load_yaml_item,
 )
 
+_KIND = "flow template"
+
 
 class Board(BaseModel):
     """A máquina de estados do template: os estados e as transições permitidas.
@@ -92,7 +94,7 @@ class FlowTemplate(BaseModel):
 
 def load_flow_template(path: Path) -> FlowTemplate:
     """Carrega e valida um YAML de template; erro vira ConfigError (fronteira)."""
-    return load_yaml_item(path, FlowTemplate, "flow template")
+    return load_yaml_item(path, FlowTemplate, _KIND)
 
 
 def load_flow_templates_from_dir(catalog_dir: Path) -> dict[str, FlowTemplate]:
@@ -100,7 +102,7 @@ def load_flow_templates_from_dir(catalog_dir: Path) -> dict[str, FlowTemplate]:
 
     Nome duplicado falha alto (ConfigError): o binding template→comportamento do
     FLOW_REGISTRY é por nome, e um nome ambíguo instanciaria a forma errada."""
-    return load_items_from_dir(catalog_dir, FlowTemplate, "flow template")
+    return load_items_from_dir(catalog_dir, FlowTemplate, _KIND)
 
 
 def load_flow_templates(db: Any, tenant_id: Any, user_id: Any) -> dict[str, FlowTemplate]:
@@ -115,5 +117,5 @@ def load_flow_templates(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Flow
         user_id,
         _catalog_store.list_flow_templates,
         FlowTemplate,
-        "flow template",
+        _KIND,
     )

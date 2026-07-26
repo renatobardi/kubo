@@ -26,6 +26,8 @@ from kubo.runtime.catalog_loader import (
 )
 from kubo.store import tenant_credentials
 
+_KIND = "integração"
+
 # Referência de segredo aceita:
 # - env:NOME_DA_VAR (maiúsculas/underscore/dígitos) — segredo de sistema.
 # - tenant_credential:<nome> — chave cifrada do tenant (ADR-0039 §IV, KUBO-115).
@@ -106,7 +108,7 @@ class ResolvedIntegration:
 
 def load_integration(path: Path) -> Integration:
     """Carrega e valida um YAML de integração; erro vira ConfigError (fronteira)."""
-    return load_yaml_item(path, Integration, "integração")
+    return load_yaml_item(path, Integration, _KIND)
 
 
 def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
@@ -115,7 +117,7 @@ def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
     em silêncio: least-privilege depende de o catálogo ser inequívoco (um nome, uma
     integração, uma permissão), senão um worker poderia herdar a auth/base_url errada."""
-    return load_items_from_dir(catalog_dir, Integration, "integração")
+    return load_items_from_dir(catalog_dir, Integration, _KIND)
 
 
 def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integration]:
@@ -130,7 +132,7 @@ def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integr
         user_id,
         _catalog_store.list_integrations,
         Integration,
-        "integração",
+        _KIND,
     )
 
 
