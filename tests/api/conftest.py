@@ -52,6 +52,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "auth",
         "dashboard",
         "distilled",
+        "flows",
         "runs",
         "sources",
         "entities",
@@ -82,6 +83,10 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.store.tenancy.get_user_by_firebase_uid", lambda db, firebase_uid: _breakglass_user
     )
     monkeypatch.setattr(
+        "kubo.api.routes.auth.tenancy_store.create_user",
+        lambda db, *, firebase_uid, email=None: _breakglass_user,
+    )
+    monkeypatch.setattr(
         "kubo.store.tenancy.list_memberships_for_user", lambda db, user_id: [_breakglass_membership]
     )
     monkeypatch.setattr("kubo.store.tenancy.get_tenant", lambda db, tenant_id: _breakglass_tenant)
@@ -97,6 +102,17 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.list_entities", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 0)
+    _session_ctx = SimpleNamespace(
+        tenant_id=RecordID("tenant", "breakglass"),
+        user_id=RecordID("user", "breakglass-owner"),
+        role="owner",
+    )
+    for _mod in ("entities", "dashboard", "distilled", "flows"):
+        monkeypatch.setattr(
+            f"kubo.api.routes.{_mod}.resolve_session",
+            lambda request, db, _ctx=_session_ctx: _ctx,
+        )
+    monkeypatch.setattr("kubo.api.routes.entities._entity_in_tenant", lambda db, eid, ctx: True)
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.list_dispatches", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.dispatches.knowledge.count_dispatches", lambda db, **kw: 0)
     _OWNER = Destination(

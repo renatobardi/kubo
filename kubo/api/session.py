@@ -1,30 +1,83 @@
-"""Resolução de sessão para tenant/user ativo (KUBO-123)."""
+"""Resolução de sessão para rotas tenant-scoped (ADR-0039, ADR-0041).
+
+Toda rota que precisa do tenant ativo deve chamar `resolve_session` dentro de uma
+conexão aberta e usar o `tenant_id`/`user_id` retornado nas store functions.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import Request
+from starlette.requests import Request
 from surrealdb import RecordID
 
+from kubo.errors import MembershipRequiredError
 from kubo.store import tenancy as tenancy_store
 
 
-def resolve_session(db: Any, request: Request) -> tuple[RecordID, RecordID] | None:
-    """Devolve o par (tenant_id, user_id) da sessão autenticada, ou None se inválido.
+@dataclass(frozen=True)
+class SessionContext:
+    """Tenant, usuário e papel da sessão autenticada, já validados."""
 
-    O `tenant_id` na sessão pode estar na forma `tenant:<key>` (canonical) ou só `<key>`;
-    o `uid` é o firebase_uid, resolvido para o record<user>."""
+    tenant_id: RecordID
+    user_id: RecordID
+    role: str
+
+
+def parse_record_id(value: str) -> RecordID | None:
+    """Converte uma string `table:id` em RecordID, ou None se malformado.
+
+    Helper compartilhado entre `session.resolve_session` e `routes.auth` — a
+    sessão guarda ids como string (serializável no cookie), as store functions
+    exigem `RecordID`.
+    """
+    if not value or ":" not in value:
+        return None
+    table, rid = value.split(":", 1)
+    if not table or not rid:
+        return None
+    return RecordID(table, rid)
+
+
+def resolve_session(request: Request, db: Any) -> SessionContext | None:
+    """Lê a sessão do request, valida usuário/tenant e retorna contexto.
+
+    O papel `superadmin` bypassa a checagem de membership (ADR-0041 §VI), mas é
+    re-verificado contra a allowlist de env — o cookie não é fonte de verdade
+    para o bypass. `owner`/`member` precisam pertencer ao tenant ativo.
+
+    Retorna None para sessão incompleta, tenant malformado, usuário inexistente
+    ou membership inválida — a rota deve negar o acesso (403).
+    """
     uid = request.session.get("uid")
     tenant_id = request.session.get("tenant_id")
-    if not uid or not tenant_id:
+    role = request.session.get("role")
+    if not uid or not tenant_id or not role:
         return None
+
+    tenant = parse_record_id(tenant_id)
+    if tenant is None:
+        return None
+
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
         return None
-    tenant = tenancy_store.parse_tenant_id(tenant_id)
-    if tenant is None:
+
+    is_superadmin = role == "superadmin" and tenancy_store.is_superadmin(
+        uid, request.app.state.superadmin_uids
+    )
+    try:
+        tenancy_store.assert_membership_or_superadmin(
+            db,
+            user_id=user.id,
+            tenant_id=tenant,
+            superadmin=is_superadmin,
+        )
+    except MembershipRequiredError:
         return None
-    if not tenancy_store.is_member(db, user_id=user.id, tenant_id=tenant):
-        return None
-    return tenant, user.id
+    return SessionContext(
+        tenant_id=tenant,
+        user_id=user.id,
+        role="superadmin" if is_superadmin else role,
+    )

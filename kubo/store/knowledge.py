@@ -556,19 +556,22 @@ def list_distilled(
     *,
     tenant_id: RecordID,
     user_id: RecordID,
+    superadmin: bool = False,
     limit: int,
     start: int,
 ) -> list[DistilledListItem]:
     """Página do acervo de destilados, mais recentes primeiro (browse da UI fase 2).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e a lista é
-    filtrada pelo tenant ativo (KUBO-123).
+    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada (ou bypassada para
+    `superadmin`) e a lista é filtrada pelo tenant ativo (KUBO-123, KUBO-126).
 
     `limit`/`start` vêm de query param (hostis): o clamp fica aqui, a store é a
     fronteira em que a spec confia — `limit` em [1, _MAX_PAGE], `start` >= 0. Ordem
     `created_at DESC, id`: recência para o browse, id como desempate determinístico
     para paginação estável quando dois destilados têm o mesmo created_at."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
     # LIMIT/START não aceitam bind param nesta versão do SurrealDB (o parser exige
@@ -613,6 +616,7 @@ def list_entities(
     *,
     tenant_id: RecordID,
     user_id: RecordID,
+    superadmin: bool = False,
     limit: int,
     start: int,
     query: str | None = None,
@@ -620,14 +624,16 @@ def list_entities(
     """Página de entidades de um tenant, mais mencionadas primeiro (E2), opcionalmente
     filtrada por `query` (nome ou kind, busca da UI 0011).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e a lista é filtrada
-    pelo tenant ativo (KUBO-123).
+    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada (ou bypassada para
+    `superadmin`) e a lista é filtrada pelo tenant ativo (KUBO-123, KUBO-126).
 
     Menções = `array::len(<-mentions)` — conta as arestas incoming sem materializar
     os destilados (uma aresta por menção; `insert_distilled` não deduplica o par, mas
     a contagem de arestas é a verdade do grafo). `limit`/`start` clampados na borda
     como nas outras listas; ORDER BY sobre o alias computado é provado pelo probe 0010."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
     where, params = _entity_filter(query, tenant_id=tenant_id)
@@ -642,11 +648,19 @@ def list_entities(
 
 
 def count_entities(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, query: str | None = None
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    superadmin: bool = False,
+    query: str | None = None,
 ) -> int:
     """Total de entidades do tenant sob o MESMO filtro de `list_entities` (para o 'X de Y'
-    da paginação com busca ativa)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    da paginação com busca ativa). Membership checada (ou bypassada para `superadmin`,
+    KUBO-126)."""
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     where, params = _entity_filter(query, tenant_id=tenant_id)
     rows = db.query(f"SELECT count() FROM entity{where} GROUP ALL;", params)  # noqa: S608
     return int(rows[0]["count"]) if rows else 0
@@ -715,9 +729,14 @@ def _count(db: Any, table: str, *, tenant_id: RecordID | None = None) -> int:
     return int(rows[0]["count"]) if rows else 0
 
 
-def dashboard_counts(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> DashboardCounts:
-    """Contagens do acervo (distilled/item/source) para o Painel."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+def dashboard_counts(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, superadmin: bool = False
+) -> DashboardCounts:
+    """Contagens do acervo (distilled/item/source) para o Painel. Membership checada
+    (ou bypassada para `superadmin`, KUBO-126)."""
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     return DashboardCounts(
         distilled=_count(db, "distilled", tenant_id=tenant_id),
         items=_count(db, "item"),
@@ -890,9 +909,14 @@ def count_runs(
     return int(rows[0]["count"]) if rows else 0
 
 
-def count_distilled(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
-    """Total de destilados no acervo (paginação da lista de Destilados)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+def count_distilled(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, superadmin: bool = False
+) -> int:
+    """Total de destilados no acervo (paginação da lista de Destilados). Membership
+    checada (ou bypassada para `superadmin`, KUBO-126)."""
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     return _count(db, "distilled", tenant_id=tenant_id)
 
 

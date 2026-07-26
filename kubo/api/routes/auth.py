@@ -23,6 +23,7 @@ from surrealdb import RecordID
 from kubo.api.auth import verify_password
 from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
+from kubo.api.session import parse_record_id as _parse_record_id
 from kubo.api.urls import safe_next
 from kubo.errors import FirebaseTokenError, TeamInviteError
 from kubo.store import client
@@ -158,16 +159,6 @@ def _firebase_config_ok(request: Request) -> bool:
     return bool(cfg.project_id)
 
 
-def _parse_record_id(value: str) -> RecordID | None:
-    """Parse a `table:id` session string into a RecordID; returns None for malformed input."""
-    if not value or ":" not in value:
-        return None
-    table, rid = value.split(":", 1)
-    if not table or not rid:
-        return None
-    return RecordID(table, rid)
-
-
 def _canonical_record_id(record: RecordID) -> str:
     """Canonical string form of a RecordID, without SurrealDB escaping of special characters."""
     return f"{record.table_name}:{record.id}"
@@ -242,6 +233,14 @@ def firebase_login(
 
     uid = token_user["uid"]
     if tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids):
+        with client.connect() as db:
+            user = tenancy_store.get_user_by_firebase_uid(db, uid)
+            if user is None:
+                tenancy_store.create_user(
+                    db,
+                    firebase_uid=uid,
+                    email=token_user.get("email") or None,
+                )
         _open_session(
             request,
             uid=uid,
@@ -366,24 +365,46 @@ def switch_workspace(
     tenant_id: Annotated[str, Form()],
     next: Annotated[str, Form()] = "",
 ) -> Response:
-    """Switch the active tenant in the session to another one the user belongs to."""
+    """Switch the active tenant in the session.
+
+    Owner/member só podem trocar para um tenant ao qual pertencem. Superadmin
+    pode trocar para qualquer tenant existente (ADR-0041 §VI)."""
     uid = request.session.get("uid")
     if not uid:
         return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
-    if _parse_record_id(tenant_id) is None:
+    target = _parse_record_id(tenant_id)
+    if target is None:
         return Response("Invalid tenant.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     with client.connect() as db:
-        membership = _membership_for_session(db, uid, tenant_id)
-        if membership is None:
-            return Response("Tenant not allowed.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
+        user = tenancy_store.get_user_by_firebase_uid(db, uid)
+        if user is None:
+            return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
+
+        is_superadmin = tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids)
+        if is_superadmin:
+            # Superadmin pode trocar para qualquer tenant existente, mas a
+            # autorização é re-verificada na store primitive (ADR-0041 §VI).
+            tenant = tenancy_store.get_tenant(db, target)
+            if tenant is None:
+                return Response("Tenant not allowed.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
+            tenancy_store.assert_membership_or_superadmin(
+                db, user_id=user.id, tenant_id=target, superadmin=True
+            )
+            role = "superadmin"
+        else:
+            membership = _membership_for_session(db, uid, tenant_id)
+            if membership is None:
+                return Response("Tenant not allowed.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
+            target = membership.tenant
+            role = membership.role
 
     _open_session(
         request,
         uid=uid,
-        tenant_id=_canonical_record_id(membership.tenant),
-        role=membership.role,
+        tenant_id=_canonical_record_id(target),
+        role=role,
     )
     target = safe_next(next)
     if request.headers.get("HX-Request"):
