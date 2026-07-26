@@ -33,6 +33,8 @@ router = APIRouter()
 
 _FAIL_DELAY_SECONDS = 1
 _LOGIN_TEMPLATE = "login.html"
+_MEDIA_TYPE_TEXT = "text/plain"
+_MSG_INVALID_SESSION = "Invalid session."
 
 # Synthetic uid for sessions opened by scrypt login (break-glass).
 _SCRYPT_OWNER_UID = "scrypt:owner"
@@ -322,21 +324,21 @@ def create_invite(request: Request) -> Response:
     """
     session_role = request.session.get("role")
     if session_role != "owner":
-        return Response("Access denied.", status_code=403, media_type="text/plain")
+        return Response("Access denied.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     tenant_id = request.session.get("tenant_id")
     uid = request.session.get("uid")
     if not tenant_id or not uid:
-        return Response("Invalid session.", status_code=403, media_type="text/plain")
+        return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     tenant_record = _parse_record_id(tenant_id)
     if tenant_record is None:
-        return Response("Invalid session.", status_code=403, media_type="text/plain")
+        return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     with client.connect() as db:
         membership = _membership_for_session(db, uid, tenant_id)
         if membership is None or membership.role != "owner":
-            return Response("Only owner can invite.", status_code=403, media_type="text/plain")
+            return Response("Only owner can invite.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
         invite = team_invites_store.create_team_invite(
             db,
@@ -357,15 +359,15 @@ def switch_workspace(
     """Switch the active tenant in the session to another one the user belongs to."""
     uid = request.session.get("uid")
     if not uid:
-        return Response("Invalid session.", status_code=403, media_type="text/plain")
+        return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     if _parse_record_id(tenant_id) is None:
-        return Response("Invalid tenant.", status_code=403, media_type="text/plain")
+        return Response("Invalid tenant.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     with client.connect() as db:
         membership = _membership_for_session(db, uid, tenant_id)
         if membership is None:
-            return Response("Tenant not allowed.", status_code=403, media_type="text/plain")
+            return Response("Tenant not allowed.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
     _open_session(
         request,
