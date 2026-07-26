@@ -85,14 +85,15 @@ def _signing_key(jwks: PyJWKSet, kid: str) -> jwt.PyJWK:
     )
 
 
-def verify_id_token(token: str, project_id: str, allowed_uids: set[str]) -> dict[str, Any]:
-    """Verifica um ID token do Firebase e devolve uid/email se autorizado.
+def verify_id_token(
+    token: str, project_id: str, allowed_uids: set[str] | None = None
+) -> dict[str, Any]:
+    """Verifica um ID token do Firebase e devolve uid/email.
 
     Levanta `FirebaseTokenError` com `code` discriminatório para qualquer falha.
-    Allowlist vazia nega tudo (fail-closed).
+    `allowed_uids`, quando fornecida, aplica allowlist fail-closed (vazia nega tudo).
+    Quando `None`, o token é verificado sem checagem de allowlist (self-signup).
     """
-    if not allowed_uids:
-        raise FirebaseTokenError("uid_not_allowed", "allowlist de uids está vazia")
 
     try:
         header = jwt.get_unverified_header(token)
@@ -129,7 +130,7 @@ def verify_id_token(token: str, project_id: str, allowed_uids: set[str]) -> dict
         raise FirebaseTokenError("invalid_token", "email não verificado")
 
     uid = payload.get("sub")
-    if uid not in allowed_uids:
+    if allowed_uids is not None and uid not in allowed_uids:
         raise FirebaseTokenError("uid_not_allowed", "uid não está na allowlist")
 
     return {"uid": uid, "email": payload.get("email", ""), "provider": "firebase"}

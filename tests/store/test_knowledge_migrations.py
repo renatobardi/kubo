@@ -89,6 +89,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0014_invite_table.surql",
         # 0015 (KUBO-113): schema de tenancy (tenant/user/membership).
         "0015_tenancy_schema.surql",
+        # 0016 (KUBO-115): credenciais cifradas de provedor por tenant.
+        "0016_tenant_credential.surql",
     }
 
 

@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ import respx
 from itsdangerous import TimestampSigner
 from jwt import encode as jwt_encode
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.api.firebase_tokens import clear_jwks_cache
@@ -105,12 +107,13 @@ def _decode_session_cookie(set_cookie: str) -> dict[str, Any]:
 
 
 def test_session_carries_role_owner_and_uid(client: TestClient) -> None:
-    """Login scrypt grava sessão no formato {"role": "owner", "uid": "scrypt:owner"}."""
+    """Login scrypt grava sessão com breakglass user/tenant configurado."""
     resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert resp.status_code == 303
     session = _decode_session_cookie(resp.headers["set-cookie"])
     assert session["role"] == "owner"
-    assert session["uid"] == "scrypt:owner"
+    assert session["uid"] == "user:breakglass-owner"
+    assert session["tenant_id"] == "tenant:breakglass"
     assert "auth_at" in session
 
 
@@ -208,50 +211,110 @@ def _firebase_token(
     return jwt_encode(payload, private_pem, algorithm="RS256", headers={"kid": kid, "alg": "RS256"})
 
 
-def test_firebase_login_success(respx_mock: respx.MockRouter, client: TestClient) -> None:
-    """Token Firebase válido abre sessão owner e redireciona para o Painel."""
+def _fake_user_and_tenant(uid: str) -> tuple[Any, Any]:
+    """Devolve objetos mínimos que a rota /auth/firebase espera de get_or_create_user_and_tenant."""
+    safe_id = "".join(c for c in uid if c.isalnum())
+    user = SimpleNamespace(
+        id=RecordID("user", uid),
+        firebase_uid=uid,
+        email=f"{uid}@example.com",
+    )
+    tenant = SimpleNamespace(id=RecordID("tenant", f"tenant{safe_id}"))
+    return user, tenant
+
+
+def test_firebase_login_success(
+    respx_mock: respx.MockRouter,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Token Firebase válido abre sessão owner + tenant_id e redireciona para o Painel."""
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
     token = _firebase_token(private_pem=private_pem)
+
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.tenancy_store.get_or_create_user_and_tenant",
+        lambda db, *, firebase_uid, email=None: _fake_user_and_tenant(firebase_uid),
+    )
 
     resp = client.post("/auth/firebase", json={"id_token": token}, follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/"
     assert client.get("/").status_code == 200
 
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["role"] == "owner"
+    assert session["uid"] == _FIREBASE_OWNER_UID
+    assert session["tenant_id"] == "tenant:tenantownergoogleuid"
 
-def test_firebase_login_rejects_unknown_uid(
-    respx_mock: respx.MockRouter, client: TestClient
+
+def test_firebase_login_allows_unknown_uid_and_creates_tenant(
+    respx_mock: respx.MockRouter,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UID fora da allowlist não abre sessão."""
+    """Self-signup: uid novo é aceito e a rota cria user/tenant via store."""
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
-    token = _firebase_token(private_pem=private_pem, uid="other-uid")
+    token = _firebase_token(private_pem=private_pem, uid="new-user-uid")
+
+    called = {}
+
+    def _fake_get_or_create(
+        db: Any, *, firebase_uid: str, email: str | None = None
+    ) -> tuple[Any, Any]:
+        called["uid"] = firebase_uid
+        called["email"] = email
+        return _fake_user_and_tenant(firebase_uid)
+
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.tenancy_store.get_or_create_user_and_tenant",
+        _fake_get_or_create,
+    )
 
     resp = client.post("/auth/firebase", json={"id_token": token}, follow_redirects=False)
-    assert resp.status_code == 401
-    assert client.get("/", follow_redirects=False).status_code == 303
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    assert called["uid"] == "new-user-uid"
+    assert called["email"] == "owner@example.com"
+
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["role"] == "owner"
+    assert session["tenant_id"] == "tenant:tenantnewuseruid"
+
+
+def test_firebase_login_superadmin_gets_superadmin_role(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UID na allowlist de superadmin abre sessão com role=superadmin, sem criar tenant."""
+    clear_jwks_cache()
+    private_pem, jwk = rsa_keypair()
+    respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
+    token = _firebase_token(private_pem=private_pem, uid="owner-google-uid")
+
+    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner-google-uid")
+    configured_client = TestClient(create_app(), base_url="https://testserver")
+
+    resp = configured_client.post(
+        "/auth/firebase", json={"id_token": token}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["role"] == "superadmin"
+    assert session["uid"] == "owner-google-uid"
+    assert session["tenant_id"] == "tenant:breakglass"
 
 
 def test_firebase_login_rejects_missing_config(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Sem project_id/owner_uids a rota devolve 503 (fail-closed)."""
+    """Sem project_id a rota devolve 503 (fail-closed)."""
     monkeypatch.setenv("KUBO_FIREBASE_PROJECT_ID", "")
-    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "")
-    configured_client = TestClient(create_app(), base_url="https://testserver")
-
-    resp = configured_client.post("/auth/firebase", json={"id_token": "x"}, follow_redirects=False)
-    assert resp.status_code == 503
-
-
-def test_firebase_login_rejects_malformed_allowlist(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Allowlist malformada (uid com espaço, sem vírgulas) é tratada como vazia → 503."""
-    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner uid")
     configured_client = TestClient(create_app(), base_url="https://testserver")
 
     resp = configured_client.post("/auth/firebase", json={"id_token": "x"}, follow_redirects=False)

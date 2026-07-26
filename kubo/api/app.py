@@ -98,14 +98,16 @@ class FirebaseConfig:
 @dataclass(frozen=True)
 class UiConfig:
     """Config da UI vinda só de env (invariante 8): hash da senha, secret da
-    sessão, hosts confiáveis, identidades Firebase autorizadas e freshness."""
+    sessão, hosts confiáveis, config Firebase, superadmin uids e break-glass."""
 
     password_hash: str
     session_secret: str
     allowed_hosts: list[str]
     session_fresh_max_age: int
     firebase_config: FirebaseConfig
-    firebase_owner_uids: set[str]
+    superadmin_uids: set[str]
+    breakglass_user_id: str
+    breakglass_tenant_id: str
 
 
 def _ui_config() -> UiConfig:
@@ -130,7 +132,8 @@ def _ui_config() -> UiConfig:
         if loopback not in allowed:
             allowed.append(loopback)
     project_id = os.environ.get("KUBO_FIREBASE_PROJECT_ID", "")
-    owner_uids = _parse_owner_uids(os.environ.get("KUBO_FIREBASE_OWNER_UIDS", ""))
+    # Owner uids legados viram superadmin uids (ADR-0041 §VI).
+    superadmin_uids = _parse_owner_uids(os.environ.get("KUBO_FIREBASE_OWNER_UIDS", ""))
     auth_domain = os.environ.get("KUBO_FIREBASE_AUTH_DOMAIN", "")
     if not auth_domain and project_id:
         auth_domain = f"{project_id}.firebaseapp.com"
@@ -149,7 +152,9 @@ def _ui_config() -> UiConfig:
         allowed_hosts=allowed,
         session_fresh_max_age=fresh_max_age,
         firebase_config=firebase_config,
-        firebase_owner_uids=owner_uids,
+        superadmin_uids=superadmin_uids,
+        breakglass_user_id=os.environ.get("KUBO_BREAKGLASS_USER_ID", ""),
+        breakglass_tenant_id=os.environ.get("KUBO_BREAKGLASS_TENANT_ID", ""),
     )
 
 
@@ -157,12 +162,14 @@ class RequireLoginMiddleware(BaseHTTPMiddleware):
     """Redireciona toda requisição sem sessão válida para /login, exceto rotas públicas.
 
     Guard num único ponto (não uma dependency por rota) — não há como esquecer de
-    proteger uma rota nova. Sessão válida = `role == "owner"` (KUBO-92)."""
+    proteger uma rota nova. Sessão válida = `owner`, `member` ou `superadmin`."""
+
+    _VALID_ROLES = {"owner", "member", "superadmin"}
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         public = path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES)
-        if public or request.session.get("role") == "owner":
+        if public or request.session.get("role") in self._VALID_ROLES:
             return await call_next(request)
         return RedirectResponse("/login", status_code=303)
 
@@ -175,7 +182,9 @@ def create_app() -> FastAPI:
     app.state.password_hash = cfg.password_hash
     app.state.session_fresh_max_age = cfg.session_fresh_max_age
     app.state.firebase_config = cfg.firebase_config
-    app.state.firebase_owner_uids = cfg.firebase_owner_uids
+    app.state.superadmin_uids = cfg.superadmin_uids
+    app.state.breakglass_user_id = cfg.breakglass_user_id
+    app.state.breakglass_tenant_id = cfg.breakglass_tenant_id
 
     # Estáticos: htmx vendorizado, font Inter self-hosted, favicon sakura e o
     # app.css gerado pelo Tailwind. O diretório existe no repo (htmx/font/favicon

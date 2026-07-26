@@ -14,16 +14,19 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from kubo.errors import ConfigError, format_validation_error
+from kubo.store import tenant_credentials
 
-# Referência de segredo aceita: env:NOME_DA_VAR (maiúsculas/underscore/dígitos).
+# Referência de segredo aceita:
+# - env:NOME_DA_VAR (maiúsculas/underscore/dígitos) — segredo de sistema.
+# - tenant_credential:<nome> — chave cifrada do tenant (ADR-0039 §IV, KUBO-115).
 # Qualquer outra coisa em secret_ref é tratada como valor inline e rejeitada.
-_SECRET_REF = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
+_SECRET_REF = re.compile(r"^(env:[A-Z_][A-Z0-9_]*|tenant_credential:[A-Za-z0-9_.:-]+)$")
 
 AuthType = Literal["none", "bearer", "basic", "api_key"]
 
@@ -121,20 +124,49 @@ def load_integrations(catalog_dir: Path) -> dict[str, Integration]:
     return catalog
 
 
-def _resolve_secret(auth: IntegrationAuth) -> str | None:
-    """Resolve a referência env:VAR para o valor concreto; falha alto se ausente."""
+def _resolve_secret(
+    auth: IntegrationAuth,
+    *,
+    db: Any = None,
+    tenant_id: Any = None,
+) -> str | None:
+    """Resolve a referência de segredo para o valor concreto; falha alto se ausente.
+
+    `env:VAR` resolve contra ambiente. `tenant_credential:<nome>` resolve contra
+    a tabela `tenant_credential` do tenant ativo (KUBO-115) — requer `db` e
+    `tenant_id`. Qualquer outro formato já foi rejeitado pelo schema.
+    """
     if auth.secret_ref is None:
         return None
-    var = auth.secret_ref.removeprefix("env:")
-    value = os.environ.get(var)
-    if value is None:
-        raise ConfigError(f"variável de ambiente {var} (secret_ref) não está definida")
-    return value
+    if auth.secret_ref.startswith("env:"):
+        var = auth.secret_ref.removeprefix("env:")
+        value = os.environ.get(var)
+        if value is None:
+            raise ConfigError(f"variável de ambiente {var} (secret_ref) não está definida")
+        return value
+    if auth.secret_ref.startswith("tenant_credential:"):
+        if db is None or tenant_id is None:
+            raise ConfigError("secret_ref tenant_credential requer contexto de tenant ativo")
+        name = auth.secret_ref.removeprefix("tenant_credential:")
+        # Runtime sem user_id: membership já foi checada na borda da requisição.
+        secret = tenant_credentials.get_credential(
+            db,
+            tenant_id=tenant_id,
+            provider=name,
+            user_id=None,
+        )
+        if secret is None:
+            raise ConfigError(f"credencial de tenant '{name}' não encontrada para o tenant ativo")
+        return secret
+    return None
 
 
 def resolve_integrations(
     declared: list[str],
     catalog: dict[str, Integration],
+    *,
+    db: Any = None,
+    tenant_id: Any = None,
 ) -> dict[str, ResolvedIntegration]:
     """Injeta só as integrações DECLARADAS ∩ existentes; nega o resto.
 
@@ -152,7 +184,7 @@ def resolve_integrations(
             name=integ.name,
             kind=integ.kind,
             auth_type=integ.auth.type,
-            secret=_resolve_secret(integ.auth),
+            secret=_resolve_secret(integ.auth, db=db, tenant_id=tenant_id),
             rate_limit=integ.rate_limit,
             base_url=integ.base_url,
         )

@@ -293,6 +293,37 @@ def test_complete_passa_timeout_customizado_da_config_para_litellm(monkeypatch):
     assert mock_completion.call_args.kwargs["timeout"] == pytest.approx(12.5)
 
 
+def test_complete_passa_api_key_do_tenant_para_litellm(monkeypatch):
+    """api_key da config (vinda de tenant_credential, KUBO-115) chega a litellm.completion."""
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    tenant_key = "tenant-openai-key"  # pragma: allowlist secret
+    executor = ApiExecutor(_config(api_key=tenant_key))
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["api_key"] == tenant_key
+
+
+def test_complete_sem_api_key_nao_passa_kwarg_vazio(monkeypatch):
+    """Sem api_key, litellm.completion recebe None e usa env padrão."""
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["api_key"] is None
+
+
+def test_api_key_nao_aparece_no_repr_da_config():
+    """ApiExecutorConfig esconde api_key do repr — segredo de tenant não vaza em log/trace."""
+    cfg = _config(api_key="tenant-secret-key")
+
+    assert "tenant-secret-key" not in repr(cfg)
+    assert "tenant-secret-key" not in str(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Sessão 0014 (A1/A2): honrar `retry-after` do provider + `scope` da quota.
 # retry-after curto (janela de minuto do Groq, TPM 60s) → espera o header e
