@@ -14,12 +14,17 @@ ADR-0016 §II) — este loader só valida o catálogo; o congelamento é da stor
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
-import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
-from kubo.errors import ConfigError, format_validation_error
+from kubo.runtime.catalog_loader import (
+    load_items_from_db,
+    load_items_from_dir,
+    load_yaml_item,
+)
+
+_KIND = "flow template"
 
 
 class Board(BaseModel):
@@ -89,26 +94,28 @@ class FlowTemplate(BaseModel):
 
 def load_flow_template(path: Path) -> FlowTemplate:
     """Carrega e valida um YAML de template; erro vira ConfigError (fronteira)."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ConfigError(f"flow template {path.name}: YAML não é um mapping")
-    try:
-        return FlowTemplate.model_validate(raw)
-    except ValidationError as exc:
-        raise ConfigError(
-            f"flow template {path.name} inválido: {format_validation_error(exc)}"
-        ) from exc
+    return load_yaml_item(path, FlowTemplate, _KIND)
 
 
-def load_flow_templates(catalog_dir: Path) -> dict[str, FlowTemplate]:
+def load_flow_templates_from_dir(catalog_dir: Path) -> dict[str, FlowTemplate]:
     """Carrega todos os templates de um diretório (1 YAML por item), por nome.
 
     Nome duplicado falha alto (ConfigError): o binding template→comportamento do
     FLOW_REGISTRY é por nome, e um nome ambíguo instanciaria a forma errada."""
-    catalog: dict[str, FlowTemplate] = {}
-    for path in sorted(catalog_dir.glob("*.yaml")):
-        template = load_flow_template(path)
-        if template.name in catalog:
-            raise ConfigError(f"flow template '{template.name}' declarado em mais de um arquivo")
-        catalog[template.name] = template
-    return catalog
+    return load_items_from_dir(catalog_dir, FlowTemplate, _KIND)
+
+
+def load_flow_templates(db: Any, tenant_id: Any, user_id: Any) -> dict[str, FlowTemplate]:
+    """Carrega os templates do catálogo do tenant no banco (ADR-0042).
+
+    Leitura direta a cada chamada, sem cache."""
+    from kubo.store import catalog as _catalog_store
+
+    return load_items_from_db(
+        db,
+        tenant_id,
+        user_id,
+        _catalog_store.list_flow_templates,
+        FlowTemplate,
+        _KIND,
+    )

@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 
 from kubo.errors import ConfigError
-from kubo.runtime.flow_templates import FlowTemplate, load_flow_template, load_flow_templates
+from kubo.runtime.flow_templates import (
+    FlowTemplate,
+    load_flow_template,
+    load_flow_templates_from_dir,
+)
 
 _CATALOG = Path(__file__).parents[2] / "catalogs" / "flow_templates"
 
@@ -34,7 +38,7 @@ def test_load_analysis_from_real_catalog() -> None:
 
 def test_load_flow_templates_indexes_by_name() -> None:
     """load_flow_templates devolve {name: FlowTemplate}; o catálogo real tem analysis."""
-    catalog = load_flow_templates(_CATALOG)
+    catalog = load_flow_templates_from_dir(_CATALOG)
 
     assert "analysis" in catalog
     assert isinstance(catalog["analysis"], FlowTemplate)
@@ -159,4 +163,4 @@ def test_load_flow_templates_rejects_duplicate_name(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="'t'"):
-        load_flow_templates(tmp_path)
+        load_flow_templates_from_dir(tmp_path)

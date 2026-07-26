@@ -16,11 +16,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Self
 
-import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
-from kubo.errors import ConfigError, format_validation_error
+from kubo.errors import ConfigError
+from kubo.runtime.catalog_loader import (
+    load_items_from_db,
+    load_items_from_dir,
+    load_yaml_item,
+)
 from kubo.store import tenant_credentials
+
+_KIND = "integração"
 
 # Referência de segredo aceita:
 # - env:NOME_DA_VAR (maiúsculas/underscore/dígitos) — segredo de sistema.
@@ -41,18 +47,22 @@ class IntegrationAuth(BaseModel):
 
     @model_validator(mode="after")
     def _ref_only(self) -> Self:
-        """type=none não tem segredo; os demais exigem secret_ref no formato env:VAR."""
+        """type=none não tem segredo; os demais exigem secret_ref como
+        env:VAR ou tenant_credential:<nome>."""
         if self.type == "none":
             if self.secret_ref is not None:
                 raise ValueError("auth.type=none não deve declarar secret_ref")
             return self
         if self.secret_ref is None:
-            raise ValueError(f"auth.type={self.type} exige secret_ref (referência env:VAR)")
+            raise ValueError(
+                f"auth.type={self.type} exige secret_ref (env:VAR ou tenant_credential:<nome>)"
+            )
         if not _SECRET_REF.match(self.secret_ref):
             # NÃO ecoa o valor: se alguém colou um token real por engano, a mensagem
             # não pode vazá-lo para o ConfigError/run.error. Só diz a regra violada.
             raise ValueError(
-                "secret_ref deve ser referência no formato env:VAR, nunca valor inline"
+                "secret_ref deve ser referência (env:VAR ou tenant_credential:<nome>), "
+                "nunca valor inline"
             )
         return self
 
@@ -98,30 +108,32 @@ class ResolvedIntegration:
 
 def load_integration(path: Path) -> Integration:
     """Carrega e valida um YAML de integração; erro vira ConfigError (fronteira)."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ConfigError(f"integração {path.name}: YAML não é um mapping")
-    try:
-        return Integration.model_validate(raw)
-    except ValidationError as exc:
-        raise ConfigError(
-            f"integração {path.name} inválida: {format_validation_error(exc)}"
-        ) from exc
+    return load_yaml_item(path, Integration, _KIND)
 
 
-def load_integrations(catalog_dir: Path) -> dict[str, Integration]:
+def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
     """Carrega todas as integrações de um diretório (1 YAML por item), por nome.
 
     Nome duplicado entre dois arquivos falha alto (ConfigError) — nunca sobrescreve
     em silêncio: least-privilege depende de o catálogo ser inequívoco (um nome, uma
     integração, uma permissão), senão um worker poderia herdar a auth/base_url errada."""
-    catalog: dict[str, Integration] = {}
-    for path in sorted(catalog_dir.glob("*.yaml")):
-        integ = load_integration(path)
-        if integ.name in catalog:
-            raise ConfigError(f"integração '{integ.name}' declarada em mais de um arquivo")
-        catalog[integ.name] = integ
-    return catalog
+    return load_items_from_dir(catalog_dir, Integration, _KIND)
+
+
+def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integration]:
+    """Carrega as integrações do catálogo do tenant no banco (ADR-0042).
+
+    Leitura direta a cada chamada, sem cache."""
+    from kubo.store import catalog as _catalog_store
+
+    return load_items_from_db(
+        db,
+        tenant_id,
+        user_id,
+        _catalog_store.list_integrations,
+        Integration,
+        _KIND,
+    )
 
 
 def _resolve_secret(

@@ -18,7 +18,7 @@ import pytest
 
 from kubo.errors import ConfigError, StateError
 from kubo.runtime.flow_templates import load_flow_template
-from kubo.runtime.personas import load_personas
+from kubo.runtime.personas import load_personas_from_dir
 from kubo.store import client, knowledge, migrations
 from kubo.store.flows import (
     count_flows,
@@ -70,7 +70,7 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
 
 
-_PERSONAS = load_personas(Path(__file__).parents[2] / "catalogs" / "personas")
+_PERSONAS = load_personas_from_dir(Path(__file__).parents[2] / "catalogs" / "personas")
 
 
 def _instantiate(db: Any, template_yaml: str, tmp_path: Path) -> Any:

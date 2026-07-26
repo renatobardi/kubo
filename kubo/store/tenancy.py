@@ -21,6 +21,7 @@ from surrealdb import RecordID
 from surrealdb.errors import InternalError
 
 from kubo.errors import (
+    ConfigError,
     DuplicateMembershipError,
     DuplicateOwnerError,
     DuplicateUserError,
@@ -183,6 +184,12 @@ def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
     tenant = get_tenant(db, tenant_id)
     if tenant is None:
         raise StoreError("tenant vanished during creation")
+
+    # Semeia o catálogo default do tenant (ADR-0042, KUBO-119).
+    # Import local para evitar circularidade com kubo.store.catalog.
+    from kubo.store import catalog
+
+    catalog.seed_catalog(db, tenant_id=tenant_id, created_by=owner_user_id)
     return tenant
 
 
@@ -314,6 +321,24 @@ def assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Non
 def is_superadmin(uid: str, superadmin_uids: set[str]) -> bool:
     """True se `uid` está na allowlist de superadmin (ADR-0041 §VI)."""
     return uid in superadmin_uids
+
+
+def assert_membership_if_given(
+    db: Any,
+    *,
+    user_id: RecordID | None,
+    tenant_id: RecordID | None,
+) -> None:
+    """Garante membership quando os dois ids são fornecidos; silencia se ambos forem None.
+
+    Levanta `ConfigError` se apenas um dos dois for passado (uso interno inconsistente).
+    Usada pelas store functions durante a transição para tenancy obrigatório (KUBO-117).
+    """
+    if tenant_id is None and user_id is None:
+        return
+    if tenant_id is None or user_id is None:
+        raise ConfigError("tenant_id e user_id devem ser fornecidos juntos")
+    assert_membership(db, user_id=user_id, tenant_id=tenant_id)
 
 
 def assert_membership_or_superadmin(

@@ -20,7 +20,7 @@ import pytest
 
 from kubo.errors import ConfigError
 from kubo.runtime.flow_templates import load_flow_template
-from kubo.runtime.personas import load_personas
+from kubo.runtime.personas import load_personas_from_dir
 from kubo.store import client, migrations
 from kubo.store.flows import create_task, decide_gate, instantiate_flow, transition_task
 
@@ -28,7 +28,7 @@ _RW_DB = "test_rw_user"
 _RW_USER = "kubo_rw"
 _RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca um literal no repo (invariante 8)
 _CATALOG = Path(__file__).parents[2] / "catalogs"
-_PERSONAS = load_personas(_CATALOG / "personas")
+_PERSONAS = load_personas_from_dir(_CATALOG / "personas")
 
 
 def test_rw_config_requires_password(monkeypatch: pytest.MonkeyPatch) -> None:

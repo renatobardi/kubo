@@ -32,7 +32,11 @@ from kubo.contracts.worker import validate_worker
 from kubo.embedding import Embedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.runtime.context import GraphKnowledge, RunContext
-from kubo.runtime.integrations import load_integrations, resolve_integrations
+from kubo.runtime.integrations import (
+    load_integrations,
+    load_integrations_from_dir,
+    resolve_integrations,
+)
 from kubo.store.destinations import record_id_from_destination
 from kubo.store.flows import insert_deliverable
 from kubo.store.knowledge import (
@@ -245,14 +249,19 @@ def _build_context(
     run_id: RecordID,
     db: Any,
     embedder: Embedder | None,
+    tenant_id: Any,
+    user_id: Any,
 ) -> RunContext:
     """Monta o ctx read-only: config validada contra o schema do manifest,
     integrações resolvidas (declaradas ∩ existentes; segredo pelo runtime),
     o adaptador de conhecimento (`GraphKnowledge`, ADR-0013 §III) e logger
     bound com run_id/worker."""
     config_model = manifest.config.model_validate(config or {})
-    catalog = load_integrations(catalog_dir)
-    integrations = resolve_integrations(manifest.integrations, catalog)
+    if tenant_id is not None and user_id is not None:
+        catalog = load_integrations(db, tenant_id, user_id)
+    else:
+        catalog = load_integrations_from_dir(catalog_dir)
+    integrations = resolve_integrations(manifest.integrations, catalog, db=db, tenant_id=tenant_id)
     logger = structlog.get_logger().bind(run_id=str(run_id), worker=manifest.name)
     return RunContext(
         config=config_model,
@@ -271,6 +280,8 @@ def run_worker(
     catalog_dir: Path = _DEFAULT_CATALOG_DIR,
     embedder: Embedder | None = None,
     flow_ctx: FlowCtx | None = None,
+    tenant_id: Any = None,
+    user_id: Any = None,
 ) -> RecordID:
     """Executa um worker sob contrato ponta a ponta e devolve o id do `run`.
 
@@ -285,7 +296,9 @@ def run_worker(
     manifest = validate_worker(worker)
     run_id = start_run(db, worker=manifest.name)
     try:
-        ctx = _build_context(manifest, config, catalog_dir, run_id, db, embedder)
+        ctx = _build_context(
+            manifest, config, catalog_dir, run_id, db, embedder, tenant_id, user_id
+        )
         raw_result = worker.run(ctx)  # type: ignore[attr-defined]  # assinatura validada acima
         result = RunResult.model_validate(raw_result)
         # _persist DENTRO do try: uma falha de store não pode deixar o run travado
