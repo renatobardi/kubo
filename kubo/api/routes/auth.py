@@ -23,6 +23,7 @@ from surrealdb import RecordID
 from kubo.api.auth import verify_password
 from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
+from kubo.api.session import parse_record_id as _parse_record_id
 from kubo.api.urls import safe_next
 from kubo.errors import FirebaseTokenError, TeamInviteError
 from kubo.store import client
@@ -156,16 +157,6 @@ def _firebase_config_ok(request: Request) -> bool:
     """
     cfg = request.app.state.firebase_config
     return bool(cfg.project_id)
-
-
-def _parse_record_id(value: str) -> RecordID | None:
-    """Parse a `table:id` session string into a RecordID; returns None for malformed input."""
-    if not value or ":" not in value:
-        return None
-    table, rid = value.split(":", 1)
-    if not table or not rid:
-        return None
-    return RecordID(table, rid)
 
 
 def _canonical_record_id(record: RecordID) -> str:
@@ -391,10 +382,16 @@ def switch_workspace(
         if user is None:
             return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
-        if request.session.get("role") == "superadmin":
+        is_superadmin = tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids)
+        if is_superadmin:
+            # Superadmin pode trocar para qualquer tenant existente, mas a
+            # autorização é re-verificada na store primitive (ADR-0041 §VI).
             tenant = tenancy_store.get_tenant(db, target)
             if tenant is None:
                 return Response("Tenant not allowed.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
+            tenancy_store.assert_membership_or_superadmin(
+                db, user_id=user.id, tenant_id=target, superadmin=True
+            )
             role = "superadmin"
         else:
             membership = _membership_for_session(db, uid, tenant_id)

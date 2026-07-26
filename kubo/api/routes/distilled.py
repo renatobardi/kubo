@@ -58,18 +58,29 @@ def list_page(
     size: Annotated[int, Query()] = 50,
 ) -> Response:
     """Página do acervo, mais recentes primeiro, com paginação completa (0011): total
-    + seletor 50/100. `size`/`start` clampados na borda."""
+    + seletor 50/100. `size`/`start` clampados na borda. Filtra pelo tenant ativo da
+    sessão (KUBO-126): superadmin lê qualquer tenant, owner/member só o seu."""
     size = clamp_size(size)
     start = clamp_start(start)
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        is_superadmin = ctx.role == "superadmin"
         items = knowledge.list_distilled(
-            db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+            limit=size,
+            start=start,
         )
-        total = knowledge.count_distilled(db, tenant_id=tenant_id, user_id=user_id)
+        total = knowledge.count_distilled(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+        )
     return templates.TemplateResponse(
         request,
         "distilled/list.html",
@@ -98,13 +109,16 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
             {"results": [], "query": query, "error": "Busca indisponível no momento."},
         )
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
         hits = _dedupe_by_distilled(
             knowledge.search(
-                db, tenant_id=tenant_id, user_id=user_id, embedding=vector, k=_SEARCH_K
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                embedding=vector,
+                k=_SEARCH_K,
             )
         )
         results = [
@@ -112,7 +126,7 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
             for hit in hits
             if (
                 view := knowledge.read_distilled(
-                    db, hit.distilled, tenant_id=tenant_id, user_id=user_id
+                    db, hit.distilled, tenant_id=ctx.tenant_id, user_id=ctx.user_id
                 )
             )
             is not None
@@ -135,14 +149,13 @@ def detail(request: Request, distilled_id: str) -> Response:
     if key:
         rid = RecordID(_DISTILLED_TABLE, key)
         with client.connect() as db:
-            session = resolve_session(db, request)
-            if session is None:
-                return PlainTextResponse("Invalid session.", status_code=403)
-            tenant_id, user_id = session
-            view = knowledge.read_distilled(db, rid, tenant_id=tenant_id, user_id=user_id)
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
+            view = knowledge.read_distilled(db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             if view is not None:
                 related = knowledge.related_distilled(
-                    db, rid, tenant_id=tenant_id, user_id=user_id, limit=_RELATED
+                    db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id, limit=_RELATED
                 )
     if view is None:
         return templates.TemplateResponse(

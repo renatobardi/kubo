@@ -732,6 +732,7 @@ def list_flows(
     *,
     tenant_id: RecordID,
     user_id: RecordID,
+    superadmin: bool = False,
     limit: int,
     start: int,
 ) -> list[FlowListRow]:
@@ -739,9 +740,11 @@ def list_flows(
     dos tasks (ADR-0018 §V). `limit`/`start` são ints internos (paginação da store),
     interpolados como literais.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e a lista é filtrada
-    pelo tenant ativo (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada (ou bypassada para
+    `superadmin`) e a lista é filtrada pelo tenant ativo (KUBO-123, KUBO-126)."""
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     query = _LIST_FLOWS_SQL.format(where=_LIST_FLOWS_WHERE, limit=int(limit), start=int(start))
     rows = db.query(query, {"t": tenant_id})  # noqa: S608
     result: list[FlowListRow] = []
@@ -770,9 +773,14 @@ def list_flows(
     return result
 
 
-def count_flows(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
-    """Total de flows do tenant (paginação da lista). `count()` com GROUP ALL; 0 quando vazio."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+def count_flows(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, superadmin: bool = False
+) -> int:
+    """Total de flows do tenant (paginação da lista). `count()` com GROUP ALL; 0 quando vazio.
+    Membership checada (ou bypassada para `superadmin`, KUBO-126)."""
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    )
     rows = db.query(
         "SELECT count() FROM flow WHERE tenant_id = $t GROUP ALL;",
         {"t": tenant_id},

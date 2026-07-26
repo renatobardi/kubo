@@ -55,16 +55,29 @@ def list_page(
     size: Annotated[int, Query()] = _PAGE_SIZE,
 ) -> Response:
     """Lista de Fluxos (paridade FlowsScreen): nome (pergunta), template, badge de gate, status
-    derivado e elenco. Busca é 2º sacrifício do plano — não implementada."""
+    derivado e elenco. Busca é 2º sacrifício do plano — não implementada. Filtra pelo
+    tenant ativo da sessão (KUBO-126): superadmin lê qualquer tenant, owner/member só o seu."""
     size = clamp_size(size)
     start = clamp_start(start)
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
-        flows = list_flows(db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start)
-        total = count_flows(db, tenant_id=tenant_id, user_id=user_id)
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        is_superadmin = ctx.role == "superadmin"
+        flows = list_flows(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+            limit=size,
+            start=start,
+        )
+        total = count_flows(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+        )
     return templates.TemplateResponse(
         request,
         _LIST_TEMPLATE,
@@ -78,14 +91,13 @@ def board_page(request: Request, flow_key: str) -> Response:
     GateSheet (contexto + decisão). Flow inexistente → volta à lista."""
     flow = RecordID("flow", flow_key)
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
-        board = flow_board(db, tenant_id=tenant_id, user_id=user_id, flow=flow)
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        board = flow_board(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, flow=flow)
         if board is None:
             return RedirectResponse(_LIST_PATH, status_code=303)
-        gate_ctx = _gate_context(db, board, tenant_id=tenant_id, user_id=user_id)
+        gate_ctx = _gate_context(db, board, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     return _render_board(request, board, gate_ctx)
 
 
@@ -148,17 +160,16 @@ def promote(
         return PlainTextResponse("Nome do worker é obrigatório.", status_code=400)
     try:
         with client.connect_rw() as db:
-            session = resolve_session(db, request)
-            if session is None:
-                return PlainTextResponse("Invalid session.", status_code=403)
-            tenant_id, user_id = session
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             return _apply_promotion(
                 request,
                 db,
                 gate_task,
                 worker_name=worker_name.strip(),
-                tenant_id=tenant_id,
-                user_id=user_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
             )
     except ConfigError:
         _log.warning("flows.write_unavailable")
@@ -262,18 +273,17 @@ def _decide(request: Request, *, task: str, csrf: str, approve: bool, reason: st
         return PlainTextResponse("Motivo é obrigatório na rejeição.", status_code=400)
     try:
         with client.connect_rw() as db:
-            session = resolve_session(db, request)
-            if session is None:
-                return PlainTextResponse("Invalid session.", status_code=403)
-            tenant_id, user_id = session
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             return _apply_decision(
                 request,
                 db,
                 gate_task,
                 approve=approve,
                 reason=reason,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
             )
     except ConfigError:  # connect_rw sem KUBO_RW_SURREAL_PASS OU destino/base_url do envio
         # Mensagem genérica: o ConfigError pode vir de connect_rw (credencial) OU de

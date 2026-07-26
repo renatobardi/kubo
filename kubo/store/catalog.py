@@ -16,7 +16,7 @@ from typing import Any
 
 from surrealdb import RecordID
 
-from kubo.errors import ConfigError
+from kubo.errors import ConfigError, StoreError
 from kubo.runtime.catalog_defaults import (
     DEFAULT_FLOW_TEMPLATES,
     DEFAULT_INTEGRATIONS,
@@ -72,13 +72,15 @@ def _upsert_catalog_item(
     set_clause: str,
     fields: dict[str, Any],
     from_row: Any,
-    after: dict[str, Any],
 ) -> dict[str, Any]:
-    """Cria ou atualiza um item de catálogo e grava changelog numa transação só."""
+    """Cria ou atualiza um item de catálogo e grava changelog numa transação só.
+
+    O `before` e o `after` do changelog são capturados via LET dentro da mesma
+    transação — `before` antes do UPSERT, `after` depois — garantindo que o audit
+    trail reflita exatamente o estado observado e gravado na transação, sem janela
+    de corrida com escritores concorrentes (ADR-0042, CodeRabbit review)."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, table, name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    before = from_row(existing[0]) if existing else None
 
     params: dict[str, Any] = {"r": rid, "t": tenant_id, "n": name}
     params.update(fields)
@@ -86,12 +88,22 @@ def _upsert_catalog_item(
         tenant_id=tenant_id,
         kind=kind,
         item_name=name,
-        before=before,
-        after=after,
+        before_expr="$before_row",
+        after_expr="$after_row",
         changed_by=user_id,
     )
-    transaction.run_transaction(db, [set_clause, changelog_stmt], {**params, **changelog_params})
-    return after
+    transaction.run_transaction(
+        db,
+        [
+            "LET $before_row = (SELECT * FROM $r)[0]",
+            set_clause,
+            "LET $after_row = (SELECT * FROM $r)[0]",
+            changelog_stmt,
+        ],
+        {**params, **changelog_params},
+    )
+    persisted = db.query(_SELECT_BY_ID, {"r": rid})
+    return from_row(persisted[0])
 
 
 def _delete_catalog_item(
@@ -104,23 +116,38 @@ def _delete_catalog_item(
     kind: str,
     from_row: Any,
 ) -> None:
-    """Remove um item de catálogo e grava changelog com after=None numa transação só."""
+    """Remove um item de catálogo e grava changelog com after=None numa transação só.
+
+    O `before` é capturado via LET dentro da transação, antes do DELETE — o snapshot
+    de auditoria compartilha a mesma transação da mutação, sem janela de corrida
+    (CodeRabbit review). A checagem de existência também roda na transação: se o
+    item não existe, o `before_row` é NONE e a transação aborta com erro explícito."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, table, name)
-    existing = db.query(_SELECT_BY_ID, {"r": rid})
-    if not existing:
-        raise ConfigError(f"{kind} '{name}' not found in tenant catalog")
-    before = from_row(existing[0])
+
     params: dict[str, Any] = {"r": rid}
     changelog_stmt, changelog_params = _changelog_statement(
         tenant_id=tenant_id,
         kind=kind,
         item_name=name,
-        before=before,
-        after=None,
+        before_expr="$before_row",
+        after_expr="None",
         changed_by=user_id,
     )
-    transaction.run_transaction(db, [_DELETE_BY_ID, changelog_stmt], {**params, **changelog_params})
+    try:
+        transaction.run_transaction(
+            db,
+            [
+                "LET $before_row = (SELECT * FROM $r)[0]",
+                "IF $before_row IS NONE { THROW 'ConfigError: not found' } ELSE { DELETE $r }",
+                changelog_stmt,
+            ],
+            {**params, **changelog_params},
+        )
+    except StoreError as exc:
+        if "ConfigError: not found" in str(exc):
+            raise ConfigError(f"{kind} '{name}' not found in tenant catalog") from exc
+        raise
 
 
 def _catalog_id(tenant_id: RecordID, table: str, name: str) -> RecordID:
@@ -185,27 +212,28 @@ def _changelog_statement(
     tenant_id: RecordID,
     kind: str,
     item_name: str,
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
+    before_expr: str,
+    after_expr: str,
     changed_by: RecordID,
 ) -> tuple[str, dict[str, Any]]:
     """Monta o statement e os binds do CREATE catalog_changelog.
 
-    Usado dentro da mesma transação da escrita do item, garantindo atomicidade
-    (KUBO-130). Os bind keys usam prefixo `c` para não colidirem com os do item.
+    `before_expr`/`after_expr` são expressões SurrealDB referenciadas inline —
+    `$before_row`/`$after_row` (variáveis LET capturadas na mesma transação) para
+    upserts, ou `None` para o `after` de deletes. Os bind keys usam prefixo `c`
+    para não colidirem com os do item.
     """
     rid = _fresh_changelog_id()
     stmt = (
         "CREATE $cr SET tenant_id = $ct, kind = $ck, item_name = $cn, "
-        "before = $cb, after = $ca, changed_by = $cu, changed_at = time::now()"
+        f"before = {before_expr}, after = {after_expr}, "
+        "changed_by = $cu, changed_at = time::now()"
     )
     params: dict[str, Any] = {
         "cr": rid,
         "ct": tenant_id,
         "ck": kind,
         "cn": item_name,
-        "cb": before,
-        "ca": after,
         "cu": changed_by,
     }
     return stmt, params
@@ -305,7 +333,6 @@ def upsert_persona(
             "perms": list(persona.get("permissions", [])),
         },
         from_row=_persona_from_row,
-        after=_persona_from_row(persona),
     )
 
 
@@ -372,7 +399,6 @@ def upsert_integration(
             "b": integration.get("base_url"),
         },
         from_row=_integration_from_row,
-        after=_integration_from_row(integration),
     )
 
 
@@ -442,7 +468,6 @@ def upsert_flow_template(
             "bu": template.get("budget_usd"),
         },
         from_row=_flow_template_from_row,
-        after=_flow_template_from_row(template),
     )
 
 

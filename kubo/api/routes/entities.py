@@ -9,7 +9,7 @@ timestamp). Nome de entidade é conteúdo derivado de LLM (hostil): renderizado 
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import PlainTextResponse
@@ -18,7 +18,7 @@ from surrealdb import RecordID
 
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
-from kubo.api.session import resolve_session
+from kubo.api.session import SessionContext, resolve_session
 from kubo.store import client, knowledge
 
 router = APIRouter()
@@ -72,17 +72,42 @@ def list_page(
 @router.get("/{entity_id}")
 def detail(request: Request, entity_id: str) -> Response:
     """Detalhe de uma entidade: tipo + contagem de menções + os destilados que a
-    mencionam (cards com título/fonte/data). Id inexistente vira 404.
+    mencionam (cards com título/fonte/data). Id inexistente vira 404; entidade de
+    outro tenant sem superadmin vira 403 (KUBO-130).
 
-    A tabela do RecordID é SEMPRE `entity` — o path param só escolhe a chave, nunca a
-    tabela; um id inexistente vira 404, não porta para ler outro registro."""
+    A tabela do RecordID é SEMPRE `entity` — o path param só escolhe a chave, nunca
+    a tabela; um id inexistente vira 404, não porta para ler outro registro."""
     key = entity_id.strip()
-    view = None
-    if key:
-        with client.connect() as db:
-            view = knowledge.read_entity(db, RecordID(_ENTITY_TABLE, key))
+    if not key:
+        return templates.TemplateResponse(
+            request, "entities/not_found.html", {"raw": entity_id}, status_code=404
+        )
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        rid = RecordID(_ENTITY_TABLE, key)
+        # Lê sem filtro de tenant para distinguir 404 (não existe) de 403 (outro tenant).
+        # O guard `_entity_in_tenant` faz o gate de tenant antes de devolver a view.
+        exists = db.query("SELECT id FROM $e;", {"e": rid})
+        if not exists:
+            view = None
+        elif not _entity_in_tenant(db, rid, ctx):
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        else:
+            view = knowledge.read_entity(db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     if view is None:
         return templates.TemplateResponse(
             request, "entities/not_found.html", {"raw": entity_id}, status_code=404
         )
     return templates.TemplateResponse(request, "entities/detail.html", {"view": view})
+
+
+def _entity_in_tenant(db: Any, entity_id: RecordID, ctx: SessionContext) -> bool:
+    """True se a entidade pertence ao tenant ativo OU se a sessão é superadmin."""
+    if ctx.role == "superadmin":
+        return True
+    rows = db.query("SELECT tenant_id FROM $e;", {"e": entity_id})
+    if not rows:
+        return False
+    return rows[0].get("tenant_id") == ctx.tenant_id

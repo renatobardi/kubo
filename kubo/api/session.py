@@ -12,6 +12,7 @@ from typing import Any
 from starlette.requests import Request
 from surrealdb import RecordID
 
+from kubo.errors import MembershipRequiredError
 from kubo.store import tenancy as tenancy_store
 
 
@@ -24,8 +25,13 @@ class SessionContext:
     role: str
 
 
-def _parse_record_id(value: str) -> RecordID | None:
-    """Converte uma string `table:id` em RecordID, ou None se malformado."""
+def parse_record_id(value: str) -> RecordID | None:
+    """Converte uma string `table:id` em RecordID, ou None se malformado.
+
+    Helper compartilhado entre `session.resolve_session` e `routes.auth` — a
+    sessão guarda ids como string (serializável no cookie), as store functions
+    exigem `RecordID`.
+    """
     if not value or ":" not in value:
         return None
     table, rid = value.split(":", 1)
@@ -37,10 +43,12 @@ def _parse_record_id(value: str) -> RecordID | None:
 def resolve_session(request: Request, db: Any) -> SessionContext | None:
     """Lê a sessão do request, valida usuário/tenant e retorna contexto.
 
-    O papel `superadmin` bypassa a checagem de membership (ADR-0041 §VI);
-    `owner`/`member` precisam pertencer ao tenant ativo. Retorna None para
-    sessão incompleta, tenant malformado ou usuário inexistente — a rota deve
-    negar o acesso.
+    O papel `superadmin` bypassa a checagem de membership (ADR-0041 §VI), mas é
+    re-verificado contra a allowlist de env — o cookie não é fonte de verdade
+    para o bypass. `owner`/`member` precisam pertencer ao tenant ativo.
+
+    Retorna None para sessão incompleta, tenant malformado, usuário inexistente
+    ou membership inválida — a rota deve negar o acesso (403).
     """
     uid = request.session.get("uid")
     tenant_id = request.session.get("tenant_id")
@@ -48,7 +56,7 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
     if not uid or not tenant_id or not role:
         return None
 
-    tenant = _parse_record_id(tenant_id)
+    tenant = parse_record_id(tenant_id)
     if tenant is None:
         return None
 
@@ -56,11 +64,20 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
     if user is None:
         return None
 
-    is_superadmin = role == "superadmin"
-    tenancy_store.assert_membership_or_superadmin(
-        db,
-        user_id=user.id,
-        tenant_id=tenant,
-        superadmin=is_superadmin,
+    is_superadmin = role == "superadmin" and tenancy_store.is_superadmin(
+        uid, request.app.state.superadmin_uids
     )
-    return SessionContext(tenant_id=tenant, user_id=user.id, role=role)
+    try:
+        tenancy_store.assert_membership_or_superadmin(
+            db,
+            user_id=user.id,
+            tenant_id=tenant,
+            superadmin=is_superadmin,
+        )
+    except MembershipRequiredError:
+        return None
+    return SessionContext(
+        tenant_id=tenant,
+        user_id=user.id,
+        role="superadmin" if is_superadmin else role,
+    )

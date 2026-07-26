@@ -161,3 +161,39 @@ def test_superadmin_can_browse_foreign_tenant(
     _switch(test_client, normal_tenant.id)
     html = test_client.get("/entities").text
     assert "Foreign Entity" in html
+
+
+def test_cross_tenant_entity_detail_returns_403(db: Any, test_client: TestClient) -> None:
+    """Sessão no tenant A recebe 403 ao acessar o detalhe de entidade do tenant B
+    via HTTP (KUBO-130, letra da spec: 403/404 em acesso cross-tenant direto)."""
+    _login(test_client)
+
+    tenant_a = tenancy.create_tenant(db, name="Tenant A2", owner_user_id=_BREAKGLASS_USER_ID)
+    tenant_b = tenancy.create_tenant(db, name="Tenant B2", owner_user_id=_BREAKGLASS_USER_ID)
+
+    from kubo.store.knowledge import get_or_create_entity
+
+    entity_b = get_or_create_entity(
+        db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID, name="Entity B2"
+    )
+
+    _switch(test_client, tenant_a.id)
+    entity_key = str(entity_b).partition(":")[2]
+    resp = test_client.get(f"/entities/{entity_key}", follow_redirects=False)
+    assert resp.status_code == 403
+
+
+def test_non_superadmin_cannot_switch_to_foreign_tenant(db: Any, test_client: TestClient) -> None:
+    """Non-superadmin que loga via /login não consegue trocar para um tenant ao qual
+    não pertence — /auth/switch retorna 403 (CodeRabbit review, KUBO-126)."""
+    _login(test_client)
+
+    foreign_user = tenancy.create_user(db, firebase_uid="foreign-user", email="foreign@example.com")
+    foreign_tenant = tenancy.create_tenant(db, name="Foreign Tenant", owner_user_id=foreign_user.id)
+
+    resp = test_client.post(
+        "/auth/switch",
+        data={"tenant_id": str(foreign_tenant.id), "next": "/entities"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403

@@ -8,7 +8,6 @@ end as error/rate_limit on the free tier).
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import PlainTextResponse
 from starlette.responses import Response
 
 from kubo.api.rendering import templates
@@ -55,14 +54,23 @@ def _workspaces_for_session(
 
 @router.get("/")
 def dashboard(request: Request) -> Response:
-    """Home page: collection counts, latest runs, workspace switcher and invite card."""
+    """Home page: collection counts, latest runs, workspace switcher and invite card.
+
+    Filtra as contagens pelo tenant ativo da sessão (KUBO-126): superadmin lê
+    qualquer tenant, owner/member só o seu. `recent_runs` ainda é global (a tabela
+    `run` não tem `tenant_id` — KUBO-117 pendente)."""
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
-        counts = knowledge.dashboard_counts(db, tenant_id=tenant_id, user_id=user_id)
-        runs = knowledge.recent_runs(db, tenant_id=tenant_id, user_id=user_id, limit=_RECENT_RUNS)
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return Response("Acesso negado.", status_code=403, media_type="text/plain")
+        is_superadmin = ctx.role == "superadmin"
+        counts = knowledge.dashboard_counts(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+        )
+        runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
 
     return templates.TemplateResponse(
