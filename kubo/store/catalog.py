@@ -29,6 +29,23 @@ _SELECT_BY_ID = "SELECT * FROM $r;"
 _DELETE_BY_ID = "DELETE $r;"
 
 
+def _list_catalog_items(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    table: str,
+    from_row: Any,
+) -> list[dict[str, Any]]:
+    """Lista todos os itens de uma tabela de catálogo do tenant, ordenados por nome."""
+    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM {table} WHERE tenant_id = $t ORDER BY name ASC;",  # noqa: S608
+        {"t": tenant_id},
+    )
+    return [from_row(r) for r in rows]
+
+
 def _get_catalog_item(
     db: Any,
     *,
@@ -241,12 +258,13 @@ def seed_catalog(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> None:
 
 def list_personas(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
     """Lista todas as personas do tenant, ordenadas por nome."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT * FROM catalog_persona WHERE tenant_id = $t ORDER BY name ASC;",
-        {"t": tenant_id},
+    return _list_catalog_items(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_persona",
+        from_row=_persona_from_row,
     )
-    return [_persona_from_row(r) for r in rows]
 
 
 def get_persona(
@@ -306,12 +324,13 @@ def delete_persona(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
 
 def list_integrations(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
     """Lista todas as integrações do tenant, ordenadas por nome."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT * FROM catalog_integration WHERE tenant_id = $t ORDER BY name ASC;",
-        {"t": tenant_id},
+    return _list_catalog_items(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_integration",
+        from_row=_integration_from_row,
     )
-    return [_integration_from_row(r) for r in rows]
 
 
 def get_integration(
@@ -371,12 +390,13 @@ def delete_integration(db: Any, *, tenant_id: RecordID, name: str, user_id: Reco
 
 def list_flow_templates(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
     """Lista todos os flow_templates do tenant, ordenados por nome."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT * FROM catalog_flow_template WHERE tenant_id = $t ORDER BY name ASC;",
-        {"t": tenant_id},
+    return _list_catalog_items(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        table="catalog_flow_template",
+        from_row=_flow_template_from_row,
     )
-    return [_flow_template_from_row(r) for r in rows]
 
 
 def get_flow_template(
