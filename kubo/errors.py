@@ -106,6 +106,26 @@ class StaleInviteError(KuboError):
     caso genérico para não virar oráculo de estado (ADR-0033, KUBO-62)."""
 
 
+class MembershipRequiredError(KuboError):
+    """Operação tenant-scoped recusada: o usuário não pertence ao tenant ativo."""
+
+
+class DuplicateOwnerError(KuboError):
+    """Tentativa de criar uma segunda membership de owner no mesmo tenant."""
+
+
+class DuplicateMembershipError(KuboError):
+    """O usuário já possui uma membership neste tenant."""
+
+
+class DuplicateUserError(KuboError):
+    """Já existe um user com este firebase_uid."""
+
+
+class InvalidRoleError(KuboError):
+    """Papel de membership inválido (só 'owner' ou 'member' são aceitos)."""
+
+
 class StoreError(KuboError):
     """Falha na camada de acesso ao datastore (ex.: statement revertido numa transação).
 
