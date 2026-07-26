@@ -11,7 +11,13 @@ from typing import Any
 
 import pytest
 
-from kubo.errors import DuplicateOwnerError, MembershipRequiredError
+from kubo.errors import (
+    DuplicateMembershipError,
+    DuplicateOwnerError,
+    DuplicateUserError,
+    InvalidRoleError,
+    MembershipRequiredError,
+)
 from kubo.store import client, migrations, tenancy
 
 pytestmark = pytest.mark.integration
@@ -64,20 +70,27 @@ def test_get_user_by_firebase_uid_missing_returns_none(db: Any) -> None:
     assert tenancy.get_user_by_firebase_uid(db, "não-existe") is None
 
 
+def test_duplicate_firebase_uid_is_refused(db: Any) -> None:
+    """Criar user com firebase_uid repetido recusa."""
+    tenancy.create_user(db, firebase_uid="uid-dup", email="a@example.com")
+
+    with pytest.raises(DuplicateUserError):
+        tenancy.create_user(db, firebase_uid="uid-dup", email="b@example.com")
+
+
 def test_user_can_belong_to_multiple_tenants(db: Any) -> None:
     """Um user pode ser owner de um tenant e member de outro."""
     user = tenancy.create_user(db, firebase_uid="uid-multi", email="multi@example.com")
+    owner_b = tenancy.create_user(db, firebase_uid="uid-owner-b", email="owner-b@example.com")
     tenant_a = tenancy.create_tenant(db, name="A", owner_user_id=user.id)
-    tenant_b = tenancy.create_tenant(db, name="B", owner_user_id=user.id)
+    tenant_b = tenancy.create_tenant(db, name="B", owner_user_id=owner_b.id)
 
-    # Adiciona o user como member do tenant B (criando um 2º owner violaria a regra).
     tenancy.create_membership(db, user_id=user.id, tenant_id=tenant_b.id, role="member")
 
     memberships = tenancy.list_memberships_for_user(db, user.id)
-    assert len(memberships) == 3  # owner A + owner B + member B
+    assert len(memberships) == 2  # owner A + member B
     by_role = {(str(m.tenant), m.role) for m in memberships}
     assert (str(tenant_a.id), "owner") in by_role
-    assert (str(tenant_b.id), "owner") in by_role
     assert (str(tenant_b.id), "member") in by_role
 
 
@@ -103,6 +116,31 @@ def test_member_is_allowed_after_owner_exists(db: Any) -> None:
     assert membership.role == "member"
     assert membership.user == member.id
     assert membership.tenant == tenant.id
+
+
+def test_duplicate_membership_is_refused(db: Any) -> None:
+    """Um user não pode ter duas memberships no mesmo tenant."""
+    owner = tenancy.create_user(db, firebase_uid="uid-owner-3", email="owner3@example.com")
+    tenant = tenancy.create_tenant(db, name="Sem-duplicata", owner_user_id=owner.id)
+
+    # owner tentando virar member do próprio tenant.
+    with pytest.raises(DuplicateMembershipError):
+        tenancy.create_membership(db, user_id=owner.id, tenant_id=tenant.id, role="member")
+
+
+def test_invalid_role_is_refused(db: Any) -> None:
+    """Papel de membership fora de owner/member recusa."""
+    owner = tenancy.create_user(db, firebase_uid="uid-owner-4", email="owner4@example.com")
+    member = tenancy.create_user(db, firebase_uid="uid-member-2", email="member2@example.com")
+    tenant = tenancy.create_tenant(db, name="Papel-fixo", owner_user_id=owner.id)
+
+    with pytest.raises(InvalidRoleError):
+        tenancy.create_membership(
+            db,
+            user_id=member.id,
+            tenant_id=tenant.id,
+            role="admin",  # type: ignore[reportArgumentType]
+        )
 
 
 def test_assert_membership_accepts_member(db: Any) -> None:

@@ -15,12 +15,24 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from surrealdb import RecordID
+from surrealdb.errors import InternalError
 
-from kubo.errors import DuplicateOwnerError, MembershipRequiredError, StoreError
+from kubo.errors import (
+    DuplicateMembershipError,
+    DuplicateOwnerError,
+    DuplicateUserError,
+    InvalidRoleError,
+    KuboError,
+    MembershipRequiredError,
+    StoreError,
+)
 from kubo.store import transaction
+
+Role = Literal["owner", "member"]
+_VALID_ROLES: set[str] = {"owner", "member"}
 
 
 @dataclass(frozen=True)
@@ -100,17 +112,37 @@ def _membership_from_row(row: dict[str, Any]) -> Membership:
     )
 
 
+def _map_internal_error(exc: InternalError, message: str) -> KuboError:
+    """Mapeia erros do driver para exceções de domínio quando possível."""
+    text = str(exc)
+    if "user_firebase_uid" in text:
+        return DuplicateUserError("firebase_uid already exists")
+    if "membership_user_tenant" in text:
+        return DuplicateMembershipError("user already belongs to tenant")
+    if "field `role`" in text:
+        return InvalidRoleError("role must be 'owner' or 'member'")
+    return StoreError(message)
+
+
 def create_user(db: Any, *, firebase_uid: str, email: str | None = None) -> User:
     """Cria um `user` novo com firebase_uid único."""
+    normalized_uid = firebase_uid.strip()
+    if get_user_by_firebase_uid(db, normalized_uid) is not None:
+        raise DuplicateUserError("firebase_uid already exists")
+
     user_id = _fresh_id("user")
-    db.query(
-        "CREATE $u SET firebase_uid = $uid, email = $email, created_at = time::now();",
-        {
-            "u": user_id,
-            "uid": firebase_uid.strip(),
-            "email": email.strip() if email else None,
-        },
-    )
+    try:
+        db.query(
+            "CREATE $u SET firebase_uid = $uid, email = $email, created_at = time::now();",
+            {
+                "u": user_id,
+                "uid": normalized_uid,
+                "email": email.strip() if email else None,
+            },
+        )
+    except InternalError as exc:
+        raise _map_internal_error(exc, "user creation failed") from exc
+
     user = get_user(db, user_id)
     if user is None:
         raise StoreError("user vanished during creation")
@@ -158,25 +190,79 @@ def get_tenant(db: Any, tenant_id: RecordID) -> Tenant | None:
     return _tenant_from_row(rows[0]) if rows else None
 
 
-def create_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID, role: str) -> Membership:
+def _find_existing_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> Any:
+    """Busca a membership pelo par (user, tenant), ou None."""
+    rows = db.query(
+        "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;",
+        {"u": user_id, "t": tenant_id},
+    )
+    return rows[0] if rows else None
+
+
+def _find_existing_owner(db: Any, tenant_id: RecordID) -> Any:
+    """Busca a membership de owner de um tenant, ou None."""
+    rows = db.query(
+        "SELECT * FROM membership WHERE out = $t AND role = 'owner' LIMIT 1;",
+        {"t": tenant_id},
+    )
+    return rows[0] if rows else None
+
+
+def _create_owner_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> None:
+    """Cria uma membership de owner, rejeitando atomicamente se já houver um.
+
+    A checagem e a escrita rodam numa única transação para reduzir a janela de
+    corrida entre dois criadores simultâneos. Ainda assim, ADR-0039 §I reforça que
+    a garantia de exatamente 1 owner por tenant é feita em código, não por índice
+    parcial do SurrealDB (suporte não confirmado na v3.1.5 pinada pelo ADR-0005).
+    """
+    try:
+        transaction.run_transaction(
+            db,
+            [
+                "LET $existing = (SELECT * FROM membership WHERE out = $t AND role = 'owner' LIMIT 1);",  # noqa: E501
+                "IF array::len($existing) > 0 { THROW 'DuplicateOwnerError' } "
+                "ELSE { RELATE $u->membership->$t SET role = 'owner', created_at = time::now() }",
+            ],
+            {"u": user_id, "t": tenant_id},
+        )
+    except StoreError as exc:
+        if "DuplicateOwnerError" in str(exc):
+            raise DuplicateOwnerError("tenant already has an owner") from exc
+        raise
+
+
+def create_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID, role: Role) -> Membership:
     """Cria uma membership `user -> tenant` com papel `owner` ou `member`.
 
     Rejeita `role='owner'` se o tenant já tiver um owner (`DuplicateOwnerError`).
+    Rejeita se o user já pertencer ao tenant (`DuplicateMembershipError`).
     """
+    if role not in _VALID_ROLES:
+        raise InvalidRoleError("role must be 'owner' or 'member'")
+
+    if _find_existing_membership(db, user_id, tenant_id) is not None:
+        raise DuplicateMembershipError("user already belongs to tenant")
+
     if role == "owner":
-        existing = db.query(
-            "SELECT * FROM membership WHERE out = $t AND role = 'owner' LIMIT 1;",
-            {"t": tenant_id},
-        )
-        if existing:
+        if _find_existing_owner(db, tenant_id) is not None:
             raise DuplicateOwnerError("tenant already has an owner")
+        _create_owner_membership(db, user_id, tenant_id)
+    else:
+        try:
+            db.query(
+                "RELATE $u->membership->$t SET role = $role, created_at = time::now();",
+                {"u": user_id, "t": tenant_id, "role": role},
+            )
+        except InternalError as exc:
+            raise _map_internal_error(exc, "membership creation failed") from exc
 
     rows = db.query(
-        "RELATE $u->membership->$t SET role = $role, created_at = time::now() RETURN AFTER;",
-        {"u": user_id, "t": tenant_id, "role": role},
+        "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;",
+        {"u": user_id, "t": tenant_id},
     )
     if not rows:
-        raise StoreError("membership creation failed")
+        raise StoreError("membership vanished during creation")
     return _membership_from_row(rows[0])
 
 

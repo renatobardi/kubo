@@ -21,3 +21,5 @@ DEFINE TABLE OVERWRITE membership TYPE RELATION IN user OUT tenant ENFORCED SCHE
 -- (ADR-0039 §I), não por índice parcial — suporte não confirmado na v3.1.5 pinada.
 DEFINE FIELD OVERWRITE role ON membership TYPE string ASSERT $value IN ['owner', 'member'];
 DEFINE FIELD OVERWRITE created_at ON membership TYPE datetime DEFAULT time::now() READONLY;
+-- Um user só pode ter uma membership por tenant (N:N, não multiset).
+DEFINE INDEX OVERWRITE membership_user_tenant ON membership FIELDS in, out UNIQUE;
