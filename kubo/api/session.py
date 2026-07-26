@@ -22,30 +22,9 @@ def resolve_session(db: Any, request: Request) -> tuple[RecordID, RecordID] | No
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
         return None
-    tenant = _parse_tenant(tenant_id)
+    tenant = tenancy_store.parse_tenant_id(tenant_id)
     if tenant is None:
         return None
-    if not _is_member(db, user_id=user.id, tenant_id=tenant):
+    if not tenancy_store.is_member(db, user_id=user.id, tenant_id=tenant):
         return None
     return tenant, user.id
-
-
-def _is_member(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> bool:
-    """True se o usuário tem membership no tenant."""
-    rows = db.query(
-        "SELECT id FROM membership WHERE in = $u AND out = $t LIMIT 1;",
-        {"u": user_id, "t": tenant_id},
-    )
-    return bool(rows)
-
-
-def _parse_tenant(raw: str) -> RecordID | None:
-    """`tenant:<key>` ou `<key>` → RecordID da tabela `tenant`."""
-    key = raw.strip()
-    if not key:
-        return None
-    if ":" in key:
-        table, _, key = key.partition(":")
-        if table != "tenant" or not key:
-            return None
-    return RecordID("tenant", key)

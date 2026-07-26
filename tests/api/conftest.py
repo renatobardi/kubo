@@ -89,7 +89,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.store.tenancy.list_tenants",
         lambda db, tenant_ids: [_breakglass_tenant] if tenant_ids else [],
     )
-    monkeypatch.setattr("kubo.api.session._is_member", lambda db, *, user_id, tenant_id: True)
+    monkeypatch.setattr("kubo.store.tenancy.is_member", lambda db, *, user_id, tenant_id: True)
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])

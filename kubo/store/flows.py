@@ -45,11 +45,12 @@ _HUMAN_CATALOG = "humano"
 # `{where}` recebe "WHERE tenant_id = $t" ou string vazia; o bind `$t` é seguro.
 _LIST_FLOWS_SQL = (
     "SELECT id, template_name, question, created_at, "
-    "<-belongs_to<-task.state AS task_states, "
-    "<-belongs_to<-task.decision AS task_decisions, "
+    "<-belongs_to<-task[WHERE tenant_id = $t].state AS task_states, "
+    "<-belongs_to<-task[WHERE tenant_id = $t].decision AS task_decisions, "
     "snapshot.board.gates AS gate_pairs, "
     "snapshot.board.transitions AS transition_pairs, "
-    "array::distinct(<-belongs_to<-task->assigned_to->persona.catalog_name) AS cast "
+    "array::distinct(<-belongs_to<-task[WHERE tenant_id = $t]"
+    "->assigned_to->persona[WHERE tenant_id = $t].catalog_name) AS cast "
     "FROM flow {where} ORDER BY created_at DESC LIMIT {limit} START {start};"
 )
 _LIST_FLOWS_WHERE = "WHERE tenant_id = $t"

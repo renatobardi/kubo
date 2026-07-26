@@ -358,6 +358,42 @@ def assert_membership_or_superadmin(
     assert_membership(db, user_id=user_id, tenant_id=tenant_id)
 
 
+def is_member(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> bool:
+    """True se `user_id` tem membership em `tenant_id`."""
+    return _find_existing_membership(db, user_id, tenant_id) is not None
+
+
+def parse_tenant_id(raw: str) -> RecordID | None:
+    """`tenant:<key>` ou `<key>` → RecordID da tabela `tenant`, ou None se inválido."""
+    key = raw.strip()
+    if not key:
+        return None
+    if ":" in key:
+        table, _, key = key.partition(":")
+        if table != "tenant" or not key:
+            return None
+    return RecordID("tenant", key)
+
+
+def get_first_tenant(db: Any) -> RecordID:
+    """Devolve o id do primeiro tenant do banco, ou levanta ConfigError se não houver."""
+    rows = db.query("SELECT id FROM tenant LIMIT 1;")
+    if not rows:
+        raise ConfigError("nenhum tenant encontrado")
+    return rows[0]["id"]
+
+
+def get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
+    """Devolve o user owner de um tenant, ou levanta ConfigError se não houver."""
+    rows = db.query(
+        "SELECT in AS user FROM membership WHERE out = $t AND role = 'owner' LIMIT 1;",
+        {"t": tenant_id},
+    )
+    if not rows:
+        raise ConfigError(f"tenant {tenant_id} não tem owner")
+    return rows[0]["user"]
+
+
 def get_or_create_user_and_tenant(
     db: Any, *, firebase_uid: str, email: str | None = None
 ) -> tuple[User, Tenant]:

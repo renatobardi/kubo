@@ -243,18 +243,10 @@ def _resolve_cli_tenant(db: Any) -> tuple[RecordID, RecordID]:
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
         raise ConfigError(f"usuário com firebase_uid '{uid}' não encontrado")
-    tenant = _parse_cli_tenant(tenant_raw)
+    tenant = tenancy_store.parse_tenant_id(tenant_raw)
+    if tenant is None:
+        raise ConfigError(f"KUBO_TENANT_ID inválido: {tenant_raw}")
     return tenant, user.id
-
-
-def _parse_cli_tenant(raw: str) -> RecordID:
-    """`tenant:<key>` ou `<key>` → RecordID da tabela `tenant`."""
-    key = raw.strip()
-    if ":" in key:
-        table, _, key = key.partition(":")
-        if table != "tenant" or not key:
-            raise ConfigError(f"KUBO_TENANT_ID inválido: {raw}")
-    return RecordID("tenant", key)
 
 
 def _build_parser() -> argparse.ArgumentParser:
