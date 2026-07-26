@@ -114,9 +114,12 @@ def ui_env(monkeypatch: pytest.MonkeyPatch) -> str:
         "test-webhook-secret",  # pragma: allowlist secret
     )
     monkeypatch.setenv("KUBO_FIREBASE_PROJECT_ID", "kubo-test-project")
-    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner-google-uid")
+    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "")
     monkeypatch.setenv("KUBO_FIREBASE_API_KEY", "test-firebase-api-key")  # pragma: allowlist secret
     monkeypatch.setenv("KUBO_BREAKGLASS_TENANT_ID", "tenant:breakglass")  # pragma: allowlist secret
+    monkeypatch.setenv(
+        "KUBO_BREAKGLASS_USER_ID", "user:breakglass-owner"
+    )  # pragma: allowlist secret
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
     return UI_PASSWORD
 

@@ -300,6 +300,28 @@ def assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Non
         raise MembershipRequiredError("user does not belong to tenant")
 
 
+def is_superadmin(uid: str, superadmin_uids: set[str]) -> bool:
+    """True se `uid` está na allowlist de superadmin (ADR-0041 §VI)."""
+    return uid in superadmin_uids
+
+
+def assert_membership_or_superadmin(
+    db: Any,
+    *,
+    user_id: RecordID,
+    tenant_id: RecordID,
+    is_superadmin: bool = False,
+) -> None:
+    """Garante membership OU papel superadmin; levanta MembershipRequiredError se não.
+
+    `superadmin` é a única exceção deliberada à regra de membership (ADR-0041 §VI),
+    e deve ser checada explicitamente no ponto de chamada — nunca bypass implícito.
+    """
+    if is_superadmin:
+        return
+    assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+
+
 def get_or_create_user_and_tenant(
     db: Any, *, firebase_uid: str, email: str | None = None
 ) -> tuple[User, Tenant]:

@@ -108,7 +108,7 @@ def login_submit(
         if verify_password(password, request.app.state.password_hash):
             _open_session(
                 request,
-                uid=_SCRYPT_OWNER_UID,
+                uid=request.app.state.breakglass_user_id or _SCRYPT_OWNER_UID,
                 tenant_id=request.app.state.breakglass_tenant_id,
                 role="owner",
             )
@@ -185,16 +185,26 @@ def firebase_login(
             status_code=401,
         )
 
+    uid = token_user["uid"]
+    if tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids):
+        _open_session(
+            request,
+            uid=uid,
+            tenant_id=request.app.state.breakglass_tenant_id,
+            role="superadmin",
+        )
+        return RedirectResponse(next_path, status_code=303)
+
     with client.connect() as db:
         tenant_user, tenant = tenancy_store.get_or_create_user_and_tenant(
             db,
-            firebase_uid=token_user["uid"],
+            firebase_uid=uid,
             email=token_user.get("email") or None,
         )
 
     _open_session(
         request,
-        uid=token_user["uid"],
+        uid=uid,
         tenant_id=str(tenant.id),
         role="owner",
     )

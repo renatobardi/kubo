@@ -107,12 +107,12 @@ def _decode_session_cookie(set_cookie: str) -> dict[str, Any]:
 
 
 def test_session_carries_role_owner_and_uid(client: TestClient) -> None:
-    """Login scrypt grava sessão no formato esperado, incluindo tenant_id."""
+    """Login scrypt grava sessão com breakglass user/tenant configurado."""
     resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert resp.status_code == 303
     session = _decode_session_cookie(resp.headers["set-cookie"])
     assert session["role"] == "owner"
-    assert session["uid"] == "scrypt:owner"
+    assert session["uid"] == "user:breakglass-owner"
     assert session["tenant_id"] == "tenant:breakglass"
     assert "auth_at" in session
 
@@ -284,6 +284,30 @@ def test_firebase_login_allows_unknown_uid_and_creates_tenant(
     session = _decode_session_cookie(resp.headers["set-cookie"])
     assert session["role"] == "owner"
     assert session["tenant_id"] == "tenant:tenantnewuseruid"
+
+
+def test_firebase_login_superadmin_gets_superadmin_role(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UID na allowlist de superadmin abre sessão com role=superadmin, sem criar tenant."""
+    clear_jwks_cache()
+    private_pem, jwk = rsa_keypair()
+    respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
+    token = _firebase_token(private_pem=private_pem, uid="owner-google-uid")
+
+    monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "owner-google-uid")
+    configured_client = TestClient(create_app(), base_url="https://testserver")
+
+    resp = configured_client.post(
+        "/auth/firebase", json={"id_token": token}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["role"] == "superadmin"
+    assert session["uid"] == "owner-google-uid"
+    assert session["tenant_id"] == "tenant:breakglass"
 
 
 def test_firebase_login_rejects_missing_config(

@@ -178,6 +178,30 @@ def test_tenant_isolation_via_membership(db: Any) -> None:
         tenancy.assert_membership(db, user_id=user_b.id, tenant_id=tenant_a.id)
 
 
+def test_is_superadmin_checks_allowlist() -> None:
+    """is_superadmin é True só para UIDs na allowlist."""
+    assert tenancy.is_superadmin("admin-uid", {"admin-uid"})
+    assert not tenancy.is_superadmin("other-uid", {"admin-uid"})
+
+
+def test_assert_membership_or_superadmin_bypasses_for_superadmin(db: Any) -> None:
+    """superadmin passa no assert mesmo sem membership no tenant."""
+    user = tenancy.create_user(db, firebase_uid="uid-admin", email="admin@example.com")
+    other = tenancy.create_user(db, firebase_uid="uid-other", email="other@example.com")
+    tenant = tenancy.create_tenant(db, name="Protegido", owner_user_id=other.id)
+
+    # Sem superadmin, recusa.
+    with pytest.raises(MembershipRequiredError):
+        tenancy.assert_membership_or_superadmin(
+            db, user_id=user.id, tenant_id=tenant.id, is_superadmin=False
+        )
+
+    # Com superadmin, passa.
+    tenancy.assert_membership_or_superadmin(
+        db, user_id=user.id, tenant_id=tenant.id, is_superadmin=True
+    )
+
+
 def test_get_or_create_user_and_tenant_creates_on_first_login(db: Any) -> None:
     """Primeiro login de uma identidade Firebase cria user + tenant + owner membership."""
     user, tenant = tenancy.get_or_create_user_and_tenant(
