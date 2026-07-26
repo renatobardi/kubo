@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.contracts.models import ReportPayload, WorkerManifest
 from kubo.errors import ConfigError
@@ -18,6 +19,19 @@ from kubo.runtime.flow_runner import _assert_permissions, _build_executor, run_f
 from kubo.runtime.personas import Persona
 from kubo.runtime.runner import _persist_report
 from kubo.workers.analyst import AnalystWorker
+
+
+@pytest.fixture(autouse=True)
+def _stub_catalogs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_flow agora carrega catálogos tenant-scoped antes de validar o template.
+    Nos testes unitários o db é object()/None; stubamos o loader para que a falha
+    por template inexistente ainda chegue como ConfigError."""
+    monkeypatch.setattr("kubo.runtime.flow_runner.load_flow_templates", lambda *a, **k: {})
+    monkeypatch.setattr("kubo.runtime.flow_runner.load_personas", lambda *a, **k: {})
+
+
+_TENANT_ID = RecordID("tenant", "test")
+_USER_ID = RecordID("user", "test")
 
 
 class _FakeEmbedder:
@@ -57,6 +71,8 @@ def test_run_flow_rejects_unknown_template() -> None:
             embedder=embedder,  # type: ignore[arg-type]
             destination=dest,
             base_url="https://x",
+            tenant_id=_TENANT_ID,
+            user_id=_USER_ID,
         )
 
 
@@ -85,7 +101,7 @@ def test_persist_report_without_flow_ctx_is_config_error() -> None:
     boundary do run_worker o mapeia para kind='config'), nunca costura às cegas."""
     payload = ReportPayload(content="corpo", consulted=[])
     with pytest.raises(ConfigError, match="flow_ctx"):
-        _persist_report(object(), payload, None)
+        _persist_report(object(), payload, None, tenant_id=_TENANT_ID, user_id=_USER_ID)
 
 
 def test_manifest_is_worker_manifest() -> None:
@@ -106,7 +122,14 @@ def test_dev_mini_is_wired_with_run_resume_reject() -> None:
 
     # Template desconhecido ainda falha alto e legível (nunca KeyError cru), antes de tocar db.
     with pytest.raises(ConfigError, match="não existe no catálogo"):
-        run_flow(db=None, template_name="ghost-template", question="x", base_url="")
+        run_flow(
+            db=None,
+            template_name="ghost-template",
+            question="x",
+            base_url="",
+            tenant_id=_TENANT_ID,
+            user_id=_USER_ID,
+        )
 
 
 def test_dev_mini_config_model_defaults_to_none() -> None:

@@ -90,7 +90,7 @@ class _FakeSender:
             raise SenderError("Telegram HTTP 400")
 
 
-def _seed(db: Any, title: str, summary: str) -> Any:
+def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: str) -> Any:
     """Semeia um distilled buscável: source+item (título) + um chunk embeddado em [0.1]*768,
     o mesmo vetor que o embedder falso devolve para a pergunta (KNN acha)."""
     src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
@@ -105,14 +105,18 @@ def _seed(db: Any, title: str, summary: str) -> Any:
         dim=768,
         task_type="SEMANTIC_SIMILARITY",
     )
-    return knowledge.insert_distilled(db, item=item, summary=summary, chunks=[chunk])
+    return knowledge.insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=[chunk]
+    )
 
 
-def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
+def test_flow_delivers_report_with_full_provenance(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Caminho feliz: o relatório vira deliverable com proveniência completa e o task
     termina em delivered; o dispatch de report NÃO cria watermark de digest (E1)."""
-    d1 = _seed(db, "Rust", "resumo sobre Rust")
-    d2 = _seed(db, "GC", "resumo sobre GC")
+    d1 = _seed(db, tenant_id, user_id, "Rust", "resumo sobre Rust")
+    d2 = _seed(db, tenant_id, user_id, "GC", "resumo sobre GC")
     sender = _FakeSender()
     executor = _FakeExecutor()
 
@@ -125,6 +129,8 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
         base_url=_BASE,
         executor=executor,
         senders={"telegram": sender},
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert result.state == "delivered"
@@ -158,10 +164,12 @@ def test_flow_delivers_report_with_full_provenance(db: Any) -> None:
     assert executor.calls == 1  # a etapa de síntese foi de fato exercitada (não pulou o LLM)
 
 
-def test_flow_send_failure_lands_in_failed_with_deliverable_persisted(db: Any) -> None:
+def test_flow_send_failure_lands_in_failed_with_deliverable_persisted(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Falha de envio: o task termina em `failed`, mas o deliverable permanece no grafo
     (o produto é o grafo; o Telegram é entrega)."""
-    _seed(db, "Rust", "resumo sobre Rust")
+    _seed(db, tenant_id, user_id, "Rust", "resumo sobre Rust")
 
     result = run_flow(
         db,
@@ -172,6 +180,8 @@ def test_flow_send_failure_lands_in_failed_with_deliverable_persisted(db: Any) -
         base_url=_BASE,
         executor=_FakeExecutor(),
         senders={"telegram": _FakeSender(fail=True)},
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert result.state == "failed"

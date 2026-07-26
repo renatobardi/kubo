@@ -21,6 +21,7 @@ from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.runtime.flow_runner import run_flow
+from kubo.store import catalog as catalog_store
 from kubo.store import client, knowledge, migrations
 from kubo.store import destinations as destinations_store
 from kubo.store import settings as settings_store
@@ -59,13 +60,15 @@ class _FakeEmbedder:
         return [[0.1] * 768 for _ in texts]
 
 
-def _seed_distilled(db: Any, title: str) -> None:
+def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, title: str) -> None:
     src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
     item = knowledge.upsert_item(
         db, source=src, external_id=f"e::{title}", content="x", title=title
     )
     chunk = Chunk(text="s", seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
-    knowledge.insert_distilled(db, item=item, summary="s", chunks=[chunk])
+    knowledge.insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="s", chunks=[chunk]
+    )
 
 
 @pytest.fixture
@@ -91,6 +94,23 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
         # finally e vazar o usuário kubo_rw no nível ROOT (afeta a instância inteira).
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
         try:
+            # Cria o usuário/tenant breakglass de forma determinística, alinhado com
+            # KUBO_BREAKGLASS_* do ui_env e com o stub_store da conftest.
+            user_id = RecordID("user", "breakglass-owner")
+            tenant_id = RecordID("tenant", "breakglass")
+            root.query(
+                "CREATE $u SET firebase_uid = $uid;",
+                {"u": user_id, "uid": "user:breakglass-owner"},
+            )
+            root.query(
+                "CREATE $t SET name = $name;",
+                {"t": tenant_id, "name": "Breakglass"},
+            )
+            root.query(
+                "RELATE $u->membership->$t SET role = 'owner';",
+                {"u": user_id, "t": tenant_id},
+            )
+            catalog_store.seed_catalog(root, tenant_id=tenant_id, created_by=user_id)
             dest_rid = destinations_store.create_destination(
                 root, name="Renato", kind="pessoa", channel="telegram", address="chat-1"
             )
@@ -100,7 +120,7 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
                 distribution_paused=False,
                 default_destination=dest_rid,
             )
-            _seed_distilled(root, "Rust")
+            _seed_distilled(root, tenant_id, user_id, "Rust")
             result = run_flow(
                 root,
                 template_name="analysis-review",
@@ -110,6 +130,8 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
                 base_url="https://kubo.example",
                 executor=_FakeExecutor(),
                 senders={"telegram": lambda **kw: None},  # notificação do gate: no-op no seed
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
             flow_key = str(result.flow).partition(":")[2]
             yield create_app(), flow_key, result.gate_task, sent

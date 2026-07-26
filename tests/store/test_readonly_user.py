@@ -19,8 +19,9 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
-from kubo.store import client, knowledge, migrations
+from kubo.store import client, knowledge, migrations, tenancy
 
 pytestmark = pytest.mark.integration
 
@@ -30,53 +31,71 @@ _RO_PASS = "readonly-ephemeral-test-pw"  # pragma: allowlist secret  # container
 
 
 @pytest.fixture
-def ro_env() -> Iterator[tuple[Any, Any]]:
+def ro_env() -> Iterator[tuple[Any, Any, RecordID, RecordID]]:
     """Sobe um db efêmero com schema + um `run` semeado, define um usuário ROOT-level
-    VIEWER e entrega (conexão root de escrita, conexão do viewer). Remove o usuário e o
-    db no teardown — nada vaza para o servidor compartilhado."""
+    VIEWER e entrega (conexão root de escrita, conexão do viewer, tenant_id, user_id)."""
     root_cfg = replace(client.config(), database=_RO_DB)
     viewer_cfg = replace(root_cfg, user=_RO_USER, password=_RO_PASS)
     with client.connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_RO_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
+        # Cria um tenant e usuário owner para escopoar o seed e as leituras.
+        user = tenancy.create_user(root, firebase_uid="ro-test-user")
+        tenant = tenancy.create_tenant(root, name="ReadOnlyTest", owner_user_id=user.id)
         # Grafo completo (source -> item -> distilled -> entity) para o viewer LER as
         # MESMAS projeções 2-hop das telas, não só um SELECT simples.
-        knowledge.start_run(root, worker="feed")
+        knowledge.start_run(root, worker="feed", tenant_id=tenant.id, user_id=user.id)
         src = knowledge.upsert_source(root, kind="rss", canonical="https://x/feed", title="Feed")
         item = knowledge.upsert_item(root, source=src, external_id="e1", content="c", title="Post")
-        ent = knowledge.get_or_create_entity(root, name="Python", kind="tecnologia")
-        knowledge.insert_distilled(root, item=item, summary="resumo", chunks=[], entities=[ent])
+        ent = knowledge.get_or_create_entity(
+            root, tenant_id=tenant.id, user_id=user.id, name="Python", kind="tecnologia"
+        )
+        knowledge.insert_distilled(
+            root,
+            tenant_id=tenant.id,
+            user_id=user.id,
+            item=item,
+            summary="resumo",
+            chunks=[],
+            entities=[ent],
+        )
         # ROOT-level VIEWER: mesma forma de signin do root (sem ns/db) — Path A.
         root.query(f"DEFINE USER {_RO_USER} ON ROOT PASSWORD '{_RO_PASS}' ROLES VIEWER;")
         try:
             with client.connect(viewer_cfg) as viewer:
-                yield root, viewer
+                yield root, viewer, tenant.id, user.id
         finally:
             root.query(f"REMOVE USER IF EXISTS {_RO_USER} ON ROOT;")
             root.query(f"REMOVE DATABASE IF EXISTS {_RO_DB};")
 
 
-def test_readonly_user_can_read(ro_env: tuple[Any, Any]) -> None:
+def test_readonly_user_can_read(ro_env: tuple[Any, Any, RecordID, RecordID]) -> None:
     """O viewer LÊ — prova que a credencial funciona (não está só quebrada)."""
-    _root, viewer = ro_env
+    _root, viewer, _tenant_id, _user_id = ro_env
     rows = viewer.query("SELECT worker, status FROM run;")
     assert rows and rows[0]["worker"] == "feed"
 
 
-def test_readonly_user_can_do_graph_projections(ro_env: tuple[Any, Any]) -> None:
+def test_readonly_user_can_do_graph_projections(
+    ro_env: tuple[Any, Any, RecordID, RecordID],
+) -> None:
     """O viewer executa as MESMAS projeções 2-hop das telas (fecha a fresta entre
     'provado por teste' e 'provado no browser'): card de destilado (título 1-hop +
     fonte 2-hop), entidades com contagem, fontes com stats. Se o VIEWER não tivesse
     permissão de travessia de aresta, isto explodiria — não explode."""
-    _root, viewer = ro_env
-    cards = knowledge.list_distilled(viewer, limit=20, start=0)
+    _root, viewer, tenant_id, user_id = ro_env
+    cards = knowledge.list_distilled(
+        viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0
+    )
     assert cards and cards[0].title == "Post" and cards[0].source_canonical == "https://x/feed"
 
-    entities = knowledge.list_entities(viewer, limit=20, start=0)
+    entities = knowledge.list_entities(
+        viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0
+    )
     assert entities and entities[0].name == "Python" and entities[0].mentions == 1
 
-    view = knowledge.read_entity(viewer, entities[0].id)
+    view = knowledge.read_entity(viewer, entities[0].id, tenant_id=tenant_id, user_id=user_id)
     assert view is not None and len(view.distilled) == 1
 
     sources = knowledge.sources_with_stats(viewer)
@@ -86,10 +105,10 @@ def test_readonly_user_can_do_graph_projections(ro_env: tuple[Any, Any]) -> None
     assert runs and runs[0].worker == "feed"
 
 
-def test_readonly_user_cannot_write(ro_env: tuple[Any, Any]) -> None:
+def test_readonly_user_cannot_write(ro_env: tuple[Any, Any, RecordID, RecordID]) -> None:
     """Fail-closed: uma tentativa de escrita do viewer NÃO altera o dado. Read-back
     como root prova o estado intacto. Tolera vazio OU exceção (não pina o quirk)."""
-    root, viewer = ro_env
+    root, viewer, _tenant_id, _user_id = ro_env
     before = root.query("SELECT VALUE status FROM run;")[0]
 
     with suppress(Exception):

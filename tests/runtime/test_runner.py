@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
+from surrealdb import RecordID
 
 from kubo.contracts.models import ErrorInfo, ItemPayload, RunResult, SourcePayload, Stats
 from kubo.contracts.worker import RunContext, WorkerManifest
@@ -115,12 +116,20 @@ class _SecretExfilWorker:
         raise RuntimeError(f"leak: {ctx.integrations['svc']}")
 
 
-def test_run_worker_success_persists_and_finishes(db: Any) -> None:
+def test_run_worker_success_persists_and_finishes(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Caminho feliz: worker validado executa, o runtime persiste source+item e
     fecha o run em 'ok' com os stats devolvidos."""
     from kubo.runtime.runner import run_worker
 
-    run_id = run_worker(db, _SuccessWorker(), config={"feed_url": "https://x/feed"})
+    run_id = run_worker(
+        db,
+        _SuccessWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     row = db.query("SELECT status, stats FROM $r;", {"r": run_id})[0]
     assert row["status"] == "ok"
@@ -133,12 +142,20 @@ def test_run_worker_success_persists_and_finishes(db: Any) -> None:
     assert collected == [run_id]  # proveniência de execução item->run (ADR-0008 §VI)
 
 
-def test_run_worker_failure_records_structured_error_and_persists_nothing(db: Any) -> None:
+def test_run_worker_failure_records_structured_error_and_persists_nothing(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Caminho de falha: worker estoura → run fecha em 'error' com erro
     estruturado, message TRUNCADA (não vaza o trecho coletado) e NADA persistido."""
     from kubo.runtime.runner import run_worker
 
-    run_id = run_worker(db, _RaisingWorker(), config={"feed_url": "https://x/feed"})
+    run_id = run_worker(
+        db,
+        _RaisingWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     row = db.query("SELECT status, error, finished_at FROM $r;", {"r": run_id})[0]
     assert row["status"] == "error"
@@ -149,12 +166,20 @@ def test_run_worker_failure_records_structured_error_and_persists_nothing(db: An
     assert _count(db, "item") == 0
 
 
-def test_run_worker_soft_error_persists_payloads_then_fails(db: Any) -> None:
+def test_run_worker_soft_error_persists_payloads_then_fails(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """RunResult com payloads E error: os payloads entregues são persistidos e
     o run fecha em 'error' (ADR-0009 item VII)."""
     from kubo.runtime.runner import run_worker
 
-    run_id = run_worker(db, _SoftErrorWorker(), config={"feed_url": "https://x/feed"})
+    run_id = run_worker(
+        db,
+        _SoftErrorWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     row = db.query("SELECT status, error FROM $r;", {"r": run_id})[0]
     assert row["status"] == "error"
@@ -162,32 +187,40 @@ def test_run_worker_soft_error_persists_payloads_then_fails(db: Any) -> None:
     assert _count(db, "source") == 1  # o payload entregue foi persistido antes do fail
 
 
-def test_run_worker_rejects_invalid_result(db: Any) -> None:
+def test_run_worker_rejects_invalid_result(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """RunResult inválido (item incompleto) é rejeitado na validação → run em
     'error', sem persistir o payload malformado (regra 2 de D6)."""
     from kubo.runtime.runner import run_worker
 
-    run_id = run_worker(db, _BadResultWorker(), config={"feed_url": "https://x/feed"})
+    run_id = run_worker(
+        db,
+        _BadResultWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     row = db.query("SELECT status FROM $r;", {"r": run_id})[0]
     assert row["status"] == "error"
     assert _count(db, "item") == 0
 
 
-def test_run_worker_rejects_invalid_worker_before_opening_run(db: Any) -> None:
+def test_run_worker_rejects_invalid_worker_before_opening_run(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Worker que não honra o contrato levanta ContractError ANTES de abrir o
     run — worker inválido nunca executa, sem run órfão (ADR-0009 item V)."""
     from kubo.runtime.runner import run_worker
 
     before = _count(db, "run")
     with pytest.raises(ContractError):
-        run_worker(db, _NoManifestWorker())
+        run_worker(db, _NoManifestWorker(), tenant_id=tenant_id, user_id=user_id)
 
     assert _count(db, "run") == before
 
 
 def test_run_worker_persist_failure_closes_run_as_error(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Falha na persistência não deixa o run travado em 'running' nem propaga
     exceção crua — o runner fecha o run em 'error' (a fronteira não explode,
@@ -199,25 +232,46 @@ def test_run_worker_persist_failure_closes_run_as_error(
 
     monkeypatch.setattr(runner, "upsert_source", _boom)
 
-    run_id = runner.run_worker(db, _SuccessWorker(), config={"feed_url": "https://x/feed"})
+    run_id = runner.run_worker(
+        db,
+        _SuccessWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
 
     assert db.query("SELECT status FROM $r;", {"r": run_id})[0]["status"] == "error"
 
 
 def test_run_worker_error_does_not_leak_secret(
-    db: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Worker hostil que estoura com o objeto de integração na exceção NÃO
     exfiltra o segredo resolvido para run.error (repr do segredo é redigido)."""
-    (tmp_path / "svc.yaml").write_text(
-        "name: svc\nkind: http\nauth:\n  type: bearer\n  secret_ref: env:KUBO_LEAK_TOKEN\n",
-        encoding="utf-8",
-    )
+    from kubo.store import catalog as catalog_store
+
     monkeypatch.setenv("KUBO_LEAK_TOKEN", "sk-do-not-leak")
+    catalog_store.upsert_integration(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        integration={
+            "name": "svc",
+            "kind": "http",
+            "auth": {  # pragma: allowlist secret
+                "type": "bearer",
+                "secret_ref": "env:KUBO_LEAK_TOKEN",  # pragma: allowlist secret
+            },
+        },
+    )
     from kubo.runtime.runner import run_worker
 
     run_id = run_worker(
-        db, _SecretExfilWorker(), config={"feed_url": "https://x/feed"}, catalog_dir=tmp_path
+        db,
+        _SecretExfilWorker(),
+        config={"feed_url": "https://x/feed"},
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     error = db.query("SELECT error FROM $r;", {"r": run_id})[0]["error"]

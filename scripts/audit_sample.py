@@ -36,7 +36,7 @@ from typing import Any
 
 import structlog
 
-from kubo.store import client, knowledge
+from kubo.store import client, knowledge, tenancy
 from scripts.backfill_chunks import language_guess
 
 _log = structlog.get_logger().bind(worker="audit_sample")
@@ -178,7 +178,12 @@ def validated_out(path: str) -> Path:
     return resolved
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    tenant_id: Any = None,
+    user_id: Any = None,
+) -> int:
     """CLI: lê o acervo, estratifica, grava o doc e imprime só o agregado (não o conteúdo)."""
     parser = argparse.ArgumentParser(description="Amostra de auditoria do dreno (gate B1).")
     parser.add_argument(
@@ -194,11 +199,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = validated_out(args.out)  # falha rápido, antes de tocar o banco, se o path escapar
 
     with client.connect(client.config()) as db:
-        rows = knowledge.list_distilled_with_items(db, limit=args.scan_limit)
+        if tenant_id is None or user_id is None:
+            user, tenant = tenancy.get_or_create_user_and_tenant(
+                db, firebase_uid="audit-script", email="audit@kubo.local"
+            )
+            tenant_id = tenant.id
+            user_id = user.id
+        rows = knowledge.list_distilled_with_items(
+            db, tenant_id=tenant_id, user_id=user_id, limit=args.scan_limit
+        )
         sample = select_sample(rows)
         contents = {
             str(i): content
-            for i, _title, content in knowledge.items_by_ids(db, [c.item_id for c in sample])
+            for i, _title, content in knowledge.items_by_ids(
+                db, [c.item_id for c in sample], tenant_id=tenant_id, user_id=user_id
+            )
         }
 
     entries = [(c, contents.get(str(c.item_id), "")) for c in sample]

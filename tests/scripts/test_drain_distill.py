@@ -84,7 +84,7 @@ class _FakeEmbedder:
 
 
 @pytest.mark.integration
-def test_drain_distills_backlog_and_reconciles(db, monkeypatch) -> None:
+def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypatch) -> None:
     """Casca de drain(): com _build_worker e GeminiEmbedder.from_env mockados (ZERO rede/
     quota paga), drena 2 itens pendentes do banco real via run_worker e reconcilia
     (inicial 2 → final 0, drenados 2, motivo 'done'). Fecha o risco de wiring que só
@@ -103,11 +103,17 @@ def test_drain_distills_backlog_and_reconciles(db, monkeypatch) -> None:
     monkeypatch.setattr(dd.GeminiEmbedder, "from_env", staticmethod(lambda: _FakeEmbedder()))
 
     initial, final, drained, reason = dd.drain(
-        db, batch_size=10, max_batches=3, delay=0.0, sleep=lambda _: None
+        db,
+        batch_size=10,
+        max_batches=3,
+        delay=0.0,
+        sleep=lambda _: None,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert initial == 2
     assert final == 0
     assert drained == 2
     assert reason == "done"
-    assert knowledge.count_items_without_distilled(db) == 0
+    assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0

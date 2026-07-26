@@ -102,7 +102,7 @@ def test_validated_out_accepts_path_inside_cwd() -> None:
 
 
 @pytest.mark.integration
-def test_main_writes_doc_against_seeded_db(db, tmp_path, monkeypatch) -> None:
+def test_main_writes_doc_against_seeded_db(db, tenant_id, user_id, tmp_path, monkeypatch) -> None:
     """Casca de main(): lê o acervo (list_distilled_with_items + items_by_ids), estratifica
     e grava o doc. Prova o encanamento store→doc contra o banco real (achado CodeRabbit).
     `chdir` em tmp_path para o `validated_out` (confina ao cwd) aceitar o `--out`."""
@@ -111,12 +111,18 @@ def test_main_writes_doc_against_seeded_db(db, tmp_path, monkeypatch) -> None:
     item = knowledge.upsert_item(
         db, source=src, external_id="e1", content="conteúdo original do item para auditar"
     )
-    run = knowledge.start_run(db, worker="distiller")
+    run = knowledge.start_run(db, worker="distiller", tenant_id=tenant_id, user_id=user_id)
     knowledge.insert_distilled(
-        db, item=item, summary="resumo recente destilado", chunks=[], run=run
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item,
+        summary="resumo recente destilado",
+        chunks=[],
+        run=run,
     )
 
-    rc = aud.main(["--out", "audit.local.md"])
+    rc = aud.main(["--out", "audit.local.md"], tenant_id=tenant_id, user_id=user_id)
 
     assert rc == 0
     text = (tmp_path / "audit.local.md").read_text(encoding="utf-8")

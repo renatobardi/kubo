@@ -28,6 +28,7 @@ from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
 from kubo.scheduler.sweep import DEST_DISPATCH, SWEEP_DISPATCH
+from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
@@ -145,7 +146,15 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     try:
         worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
-            run_worker(db, worker, config=config, embedder=embedder)
+            tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+            run_worker(
+                db,
+                worker,
+                config=config,
+                embedder=embedder,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga; APScheduler não perde o traço
         # Falha de conexão/setup ocorre ANTES de run_worker abrir o run, então não vira
         # run.error estruturado — este log garante visibilidade no formato do resto do módulo.
@@ -166,13 +175,20 @@ def execute_sweep_job(kind: str) -> None:
     if dispatch is None:  # inalcançável via build_scheduler (validado eager); guarda de fiação
         raise ConfigError(f"sweep de kind '{kind}' sem despacho em SWEEP_DISPATCH")
     with client.connect(client.config()) as db:
-        sources = active_sources(db, kind=kind)
+        tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+        sources = active_sources(db, tenant_id=tenant_id, user_id=user_id, kind=kind)
     dispatched = 0
     failed = 0
     for source in sources:
         try:
             with client.connect(client.config()) as db:
-                run_worker(db, dispatch.worker_factory(), config=dispatch.build_config(source))
+                run_worker(
+                    db,
+                    dispatch.worker_factory(),
+                    config=dispatch.build_config(source),
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
             dispatched += 1
         except Exception:  # noqa: BLE001 — isola o Cadastro: loga e segue (run_worker já estrutura erro de worker)
             failed += 1
@@ -205,6 +221,7 @@ def execute_digest_sweep_job() -> None:
         base_url = resolve_base_url()
 
         with client.connect(client.config()) as list_db:
+            tenant_id, user_id = resolve_scheduler_tenant_and_user(list_db)
             destination_list = destination_store.active_destinations(list_db)
 
         dispatched = 0
@@ -227,6 +244,8 @@ def execute_digest_sweep_job() -> None:
                         worker,
                         config={"max_items": _DIGEST_MAX_ITEMS},
                         embedder=None,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
                     )
                 dispatched += 1
             except Exception:  # noqa: BLE001 — isola o destino: loga e segue

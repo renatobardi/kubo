@@ -43,6 +43,8 @@ def db() -> Iterator[Any]:
 
 def _distilled_at(
     db: Any,
+    tenant_id: RecordID,
+    user_id: RecordID,
     *,
     summary: str,
     created_at: datetime,
@@ -54,26 +56,34 @@ def _distilled_at(
     entidades citadas (via mentions). Helper de teste — queries com literais
     internos."""
     did = db.query(
-        "CREATE distilled SET summary = $s, created_at = $c;",
-        {"s": summary, "c": created_at},
+        "CREATE distilled SET summary = $s, created_at = $c, tenant_id = $tenant;",
+        {"s": summary, "c": created_at, "tenant": tenant_id},
     )[0]["id"]
     if title is not None:
         src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
         item = knowledge.upsert_item(
             db, source=src, external_id=f"ext::{title}", content="x", title=title
         )
-        db.query("RELATE $d->derived_from->$i;", {"d": did, "i": item})
+        db.query(
+            "RELATE $d->derived_from->$i SET tenant_id = $tenant;",
+            {"d": did, "i": item, "tenant": tenant_id},
+        )
     for name in entities:
-        ent = knowledge.get_or_create_entity(db, name=name)
-        db.query("RELATE $d->mentions->$e;", {"d": did, "e": ent})
+        ent = knowledge.get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name=name)
+        db.query(
+            "RELATE $d->mentions->$e SET tenant_id = $tenant;",
+            {"d": did, "e": ent, "tenant": tenant_id},
+        )
     return did
 
 
-def test_insert_dispatch_records_the_delivery_fact(db: Any) -> None:
+def test_insert_dispatch_records_the_delivery_fact(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """insert_dispatch grava destino/canal/status/watermark/item_count/items com
     sent_at automático; items são record<distilled> para auditoria."""
     now = datetime.now(timezone.utc)
-    d1 = _distilled_at(db, summary="a", created_at=now)
+    d1 = _distilled_at(db, tenant_id, user_id, summary="a", created_at=now)
     rid = knowledge.insert_dispatch(
         db,
         destination=_dest("owner-telegram"),
@@ -166,20 +176,28 @@ def test_last_watermark_is_per_destination(db: Any) -> None:
     assert knowledge.last_dispatch_watermark(db, _dest("em")) == em
 
 
-def test_digest_bootstrap_excludes_legado_older_than_24h(db: Any) -> None:
+def test_digest_bootstrap_excludes_legado_older_than_24h(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Sem dispatch anterior, o bootstrap now-24h NÃO despeja o legado: distilled de
     30h atrás fica de fora; o de 1h atrás entra."""
     now = datetime.now(timezone.utc)
-    _distilled_at(db, summary="legado", created_at=now - timedelta(hours=30))
-    fresh = _distilled_at(db, summary="fresco", created_at=now - timedelta(hours=1))
-    views = knowledge.distilled_for_digest(db, destination=_dest("owner-telegram"), limit=50)
+    _distilled_at(db, tenant_id, user_id, summary="legado", created_at=now - timedelta(hours=30))
+    fresh = _distilled_at(
+        db, tenant_id, user_id, summary="fresco", created_at=now - timedelta(hours=1)
+    )
+    views = knowledge.distilled_for_digest(
+        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("owner-telegram"), limit=50
+    )
     assert [v.id for v in views] == [fresh]
 
 
-def test_digest_selects_only_newer_than_watermark(db: Any) -> None:
+def test_digest_selects_only_newer_than_watermark(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Depois de um dispatch ok, só distilled com created_at > watermark entram."""
     base = datetime.now(timezone.utc) - timedelta(hours=1)
-    old = _distilled_at(db, summary="antigo", created_at=base)
+    old = _distilled_at(db, tenant_id, user_id, summary="antigo", created_at=base)
     knowledge.insert_dispatch(
         db,
         destination=_dest("d"),
@@ -189,19 +207,33 @@ def test_digest_selects_only_newer_than_watermark(db: Any) -> None:
         item_count=1,
         items=[old],
     )
-    newer = _distilled_at(db, summary="novo", created_at=base + timedelta(minutes=30))
-    views = knowledge.distilled_for_digest(db, destination=_dest("d"), limit=50)
+    newer = _distilled_at(
+        db, tenant_id, user_id, summary="novo", created_at=base + timedelta(minutes=30)
+    )
+    views = knowledge.distilled_for_digest(
+        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("d"), limit=50
+    )
     assert [v.id for v in views] == [newer]
 
 
-def test_digest_view_carries_title_entities_and_datetime(db: Any) -> None:
+def test_digest_view_carries_title_entities_and_datetime(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """DigestView traz título (via derived_from→item), entidades (via mentions) e
     created_at como datetime (alimenta o max() do watermark)."""
     now = datetime.now(timezone.utc)
     did = _distilled_at(
-        db, summary="resumo", created_at=now, title="OpenAI lança X", entities=("OpenAI", "GPT")
+        db,
+        tenant_id,
+        user_id,
+        summary="resumo",
+        created_at=now,
+        title="OpenAI lança X",
+        entities=("OpenAI", "GPT"),
     )
-    views = knowledge.distilled_for_digest(db, destination=_dest("new"), limit=50)
+    views = knowledge.distilled_for_digest(
+        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("new"), limit=50
+    )
     assert len(views) == 1
     v = views[0]
     assert v.id == did
@@ -211,17 +243,23 @@ def test_digest_view_carries_title_entities_and_datetime(db: Any) -> None:
     assert isinstance(v.created_at, datetime)
 
 
-def test_digest_respects_limit_and_orders_by_created_at(db: Any) -> None:
+def test_digest_respects_limit_and_orders_by_created_at(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """distilled_for_digest respeita o limit e ordena por created_at ascendente."""
     now = datetime.now(timezone.utc)
-    a = _distilled_at(db, summary="a", created_at=now - timedelta(minutes=3))
-    b = _distilled_at(db, summary="b", created_at=now - timedelta(minutes=2))
-    _distilled_at(db, summary="c", created_at=now - timedelta(minutes=1))
-    views = knowledge.distilled_for_digest(db, destination=_dest("new"), limit=2)
+    a = _distilled_at(db, tenant_id, user_id, summary="a", created_at=now - timedelta(minutes=3))
+    b = _distilled_at(db, tenant_id, user_id, summary="b", created_at=now - timedelta(minutes=2))
+    _distilled_at(db, tenant_id, user_id, summary="c", created_at=now - timedelta(minutes=1))
+    views = knowledge.distilled_for_digest(
+        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("new"), limit=2
+    )
     assert [v.id for v in views] == [a, b]
 
 
-def test_watermark_round_trip_closes_the_loop(db: Any) -> None:
+def test_watermark_round_trip_closes_the_loop(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """O teste-âncora do advisor: enviar um conjunto, gravar watermark=max(created_at)
     das linhas devolvidas, e o próximo digest vem VAZIO (nada mais novo).
 
@@ -230,8 +268,17 @@ def test_watermark_round_trip_closes_the_loop(db: Any) -> None:
     expõe a armadilha de precisão do round-trip: se o watermark μs fosse comparado
     com o created_at ns cru, o último item reenviaria (bola de neve)."""
     for i in range(3):
-        knowledge.insert_distilled(db, item=_orphan_item(db, i), summary=f"item {i}", chunks=[])
-    picked = knowledge.distilled_for_digest(db, destination=_dest("d"), limit=50)
+        knowledge.insert_distilled(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            item=_orphan_item(db, i),
+            summary=f"item {i}",
+            chunks=[],
+        )
+    picked = knowledge.distilled_for_digest(
+        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("d"), limit=50
+    )
     assert len(picked) == 3
     watermark = max(v.created_at for v in picked)
     knowledge.insert_dispatch(
@@ -243,7 +290,12 @@ def test_watermark_round_trip_closes_the_loop(db: Any) -> None:
         item_count=len(picked),
         items=[v.id for v in picked],
     )
-    assert knowledge.distilled_for_digest(db, destination=_dest("d"), limit=50) == []
+    assert (
+        knowledge.distilled_for_digest(
+            db, tenant_id=tenant_id, user_id=user_id, destination=_dest("d"), limit=50
+        )
+        == []
+    )
 
 
 def _orphan_item(db: Any, seq: int) -> RecordID:

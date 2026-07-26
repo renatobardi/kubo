@@ -123,7 +123,9 @@ def _run_status(db: Any, run_id: RecordID) -> dict[str, Any]:
     return rows[0]
 
 
-def test_run_worker_distills_pending_items_into_graph(db: Any) -> None:
+def test_run_worker_distills_pending_items_into_graph(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Vertical feliz: 2 itens pendentes -> DistillerWorker (2 saídas do LLM
     fake) -> run_worker persiste 2 `distilled`, cada um com >=1 `chunk`
     embeddado, a entidade citada vira `entity`/`mentions`, `produced_by` liga
@@ -161,19 +163,23 @@ def test_run_worker_distills_pending_items_into_graph(db: Any) -> None:
         DistillerWorker(executor),
         config={"max_items": 10},
         embedder=_FakeEmbedder(),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert _count(db, "distilled") == 2
     assert _count(db, "chunk") >= 2
-    assert distilled_for(db, item_a) != []
-    assert distilled_for(db, item_b) != []
+    assert distilled_for(db, item_a, tenant_id=tenant_id, user_id=user_id) != []
+    assert distilled_for(db, item_b, tenant_id=tenant_id, user_id=user_id) != []
     assert _count(db, "entity") == 1
     assert _count(db, "mentions") == 1
     assert _count(db, "produced_by") == 2
     assert _run_status(db, run_id)["status"] == "ok"
 
 
-def test_run_worker_skips_malformed_item_persists_the_rest(db: Any) -> None:
+def test_run_worker_skips_malformed_item_persists_the_rest(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """1 item malformado (executor levanta MalformedOutputError) é pulado; o
     outro é destilado normalmente. O run NÃO cai: malformado é contado, não
     fatal (ADR-0013 §III.6) — status fecha 'ok' com 1 `distilled` persistido.
@@ -197,18 +203,22 @@ def test_run_worker_skips_malformed_item_persists_the_rest(db: Any) -> None:
         DistillerWorker(executor),
         config={"max_items": 10},
         embedder=_FakeEmbedder(),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert _count(db, "distilled") == 1
     assert _run_status(db, run_id)["status"] == "ok"
-    distilled_a = distilled_for(db, item_a)
-    distilled_b = distilled_for(db, item_b)
+    distilled_a = distilled_for(db, item_a, tenant_id=tenant_id, user_id=user_id)
+    distilled_b = distilled_for(db, item_b, tenant_id=tenant_id, user_id=user_id)
     # Exatamente um dos dois foi destilado (o outro veio malformado do fake) —
     # comportamento sob teste é "1 pulado, 1 persistido", não QUAL dos dois.
     assert sorted([len(distilled_a), len(distilled_b)]) == [0, 1]
 
 
-def test_run_worker_rate_limit_returns_partial_and_marks_run_error(db: Any) -> None:
+def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """3 itens; o 2º estoura RateLimitExhausted -> PARA o loop (o 3º nunca é
     chamado): só o 1º item é persistido, e o run fecha em 'error' com o erro
     kind 'rate_limit_exhausted' (ADR-0013 §V, falha sistêmica, não por-item)."""
@@ -229,6 +239,8 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(db: Any) -> N
         DistillerWorker(executor),
         config={"max_items": 10},
         embedder=_FakeEmbedder(),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert _count(db, "distilled") == 1
@@ -238,7 +250,9 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(db: Any) -> N
     assert executor.call_count == 2  # nunca alcançou o 3º item
 
 
-def test_run_worker_unresolvable_ref_skips_and_marks_error(db: Any) -> None:
+def test_run_worker_unresolvable_ref_skips_and_marks_error(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Defensivo (§III.6): um payload com `ref` que NUNCA foi atribuído por
     `items_to_distill` (worker sintético, não o DistillerWorker real) não pode
     ser gravado nem crashar o runtime — `_persist` pula o payload órfão e o
@@ -248,6 +262,8 @@ def test_run_worker_unresolvable_ref_skips_and_marks_error(db: Any) -> None:
         _SyntheticRefWorker(),
         config={"max_items": 10},
         embedder=_FakeEmbedder(),
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     assert _count(db, "distilled") == 0

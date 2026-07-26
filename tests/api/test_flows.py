@@ -61,7 +61,7 @@ def test_list_page_renders(monkeypatch: pytest.MonkeyPatch, authed_client: TestC
         created_at="2026-07-14T12:00:00Z",
     )
     monkeypatch.setattr("kubo.api.routes.flows.list_flows", lambda db, **kw: [row])
-    monkeypatch.setattr("kubo.api.routes.flows.count_flows", lambda db: 1)
+    monkeypatch.setattr("kubo.api.routes.flows.count_flows", lambda db, **kw: 1)
 
     resp = authed_client.get("/flows")
     assert resp.status_code == 200
@@ -74,8 +74,8 @@ def test_board_renders_gatesheet_with_plain_text(
 ) -> None:
     """O board mostra o GateSheet; o relatório é TEXTO PLANO — a tag hostil vem ESCAPADA
     (`&lt;b&gt;`), nunca como `<b>` (ADR-0016 §II: markdown→HTML proibido)."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _GATE)
 
     resp = authed_client.get("/flows/f1")
     assert resp.status_code == 200
@@ -114,8 +114,8 @@ def test_board_pr_gate_renders_link_and_plain_summary(
 ) -> None:
     """No gate de PR o GateSheet mostra o link ESTRUTURAL do PR (pr_url) e o resumo do agente em
     TEXTO PLANO (a tag hostil ESCAPADA), sem a seção de fontes (PR não tem consults)."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PR_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PR_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PR_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PR_GATE)
 
     resp = authed_client.get("/flows/d1")
     assert resp.status_code == 200
@@ -140,8 +140,8 @@ def test_reject_without_reason_is_400(
 ) -> None:
     """Rejeição SEM motivo → 400 (motivo obrigatório, nunca cortável). Precisa do CSRF válido
     para chegar à validação do motivo — obtido do board renderizado."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _GATE)
     csrf = _csrf_from(authed_client.get("/flows/f1").text)
 
     resp = authed_client.post(
@@ -157,8 +157,8 @@ def test_reject_reason_over_cap_is_422(
 ) -> None:
     """Rejeição com motivo além do cap (ADR-0018 §VI: "cap na borda pydantic") → 422, nunca
     truncado em silêncio nem escrito na store."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _GATE)
     csrf = _csrf_from(authed_client.get("/flows/f1").text)
 
     resp = authed_client.post(
@@ -205,8 +205,8 @@ def test_board_promotion_gate_renders_worker_name_form_no_reject(
 ) -> None:
     """O gate de promoção (ADR-0021 §9) mostra o input de worker_name e o botão 'Confirmar
     promoção', SEM form de rejeição (approve-only — não se rejeita um merge)."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PROMO_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PROMO_GATE)
 
     resp = authed_client.get("/flows/d1")
     assert resp.status_code == 200
@@ -230,8 +230,8 @@ def test_promote_without_worker_name_is_400(
     monkeypatch: pytest.MonkeyPatch, authed_client: TestClient
 ) -> None:
     """`worker_name` vazio → 400 — nunca chega a validar merge/registry sem o nome."""
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PROMO_BOARD)
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PROMO_GATE)
     csrf = _csrf_from(authed_client.get("/flows/d1").text)
 
     resp = authed_client.post(
@@ -258,11 +258,13 @@ def test_promote_failure_reopens_board_with_message(
 
     monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
     monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PROMO_BOARD)
+    monkeypatch.setattr(
+        "kubo.api.routes.flows.flow_of_task", lambda db, **kw: RecordID("flow", "d1")
+    )
 
-    def _boom(db: object, *, gate_task: object, worker_name: str) -> None:
+    def _boom(db: object, *, gate_task: object, worker_name: str, **kw: object) -> None:
         raise PromotionError("worker 'feed2' não está na imagem viva; rode ./scripts/deploy.sh")
 
     monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _boom)
@@ -294,11 +296,13 @@ def test_promote_forge_failure_reopens_board_with_502(
 
     monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
     monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PROMO_BOARD)
+    monkeypatch.setattr(
+        "kubo.api.routes.flows.flow_of_task", lambda db, **kw: RecordID("flow", "d1")
+    )
 
-    def _boom(db: object, *, gate_task: object, worker_name: str) -> None:
+    def _boom(db: object, *, gate_task: object, worker_name: str, **kw: object) -> None:
         raise ForgeError("GitHub respondeu HTTP 500")
 
     monkeypatch.setattr("kubo.api.routes.flows.promote_gate", _boom)
@@ -329,11 +333,13 @@ def test_reject_pr_close_failure_reopens_board(
 
     monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
     monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PR_GATE)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PR_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PR_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PR_BOARD)
+    monkeypatch.setattr(
+        "kubo.api.routes.flows.flow_of_task", lambda db, **kw: RecordID("flow", "d1")
+    )
 
-    def _boom(db: object, *, gate_task: object, reason: str) -> None:
+    def _boom(db: object, *, gate_task: object, reason: str, **kw: object) -> None:
         raise ForgeError("GitHub respondeu HTTP 500")
 
     monkeypatch.setattr("kubo.api.routes.flows.reject_gate", _boom)
@@ -380,9 +386,11 @@ def _step_up_client(
 
     monkeypatch.setattr("kubo.api.routes.flows.client.connect_rw", _fake_rw)
     monkeypatch.setattr("kubo.api.routes.flows.client.connect", _fake_rw)
-    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, t: _PROMO_GATE)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, f: _PROMO_BOARD)
-    monkeypatch.setattr("kubo.api.routes.flows.flow_of_task", lambda db, t: RecordID("flow", "d1"))
+    monkeypatch.setattr("kubo.api.routes.flows.read_gate_context", lambda db, **kw: _PROMO_GATE)
+    monkeypatch.setattr("kubo.api.routes.flows.flow_board", lambda db, **kw: _PROMO_BOARD)
+    monkeypatch.setattr(
+        "kubo.api.routes.flows.flow_of_task", lambda db, **kw: RecordID("flow", "d1")
+    )
 
     monkeypatch.setattr("kubo.api.routes.flows.time.time", lambda: promote_at)
     csrf = _csrf_from(client.get("/flows/d1").text)
@@ -434,7 +442,7 @@ def test_promote_allows_fresh_session(
 
     called: dict[str, Any] = {}
 
-    def _spy_promote_gate(db: Any, *, gate_task: RecordID, worker_name: str) -> None:
+    def _spy_promote_gate(db: Any, *, gate_task: RecordID, worker_name: str, **kw: Any) -> None:
         called["db"] = db
         called["gate_task"] = gate_task
         called["worker_name"] = worker_name

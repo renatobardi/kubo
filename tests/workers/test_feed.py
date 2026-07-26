@@ -28,6 +28,7 @@ import pytest
 import respx
 import structlog
 from pydantic import ValidationError
+from surrealdb import RecordID
 
 from kubo.contracts.models import ItemPayload
 from kubo.runtime.context import GraphKnowledge, RunContext
@@ -38,6 +39,9 @@ from kubo.workers.feed import FeedConfig, FeedWorker
 _FEED_URL = "https://example.com/feed"
 _BYTE_CAP = 10 * 1024 * 1024  # 10 MiB (contrato do RED)
 _CONTENT_CAP = 65536
+
+_UNIT_TENANT = RecordID("tenant", "feed-test")
+_UNIT_USER = RecordID("user", "feed-test")
 
 VALID_TWO = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -176,7 +180,7 @@ def _ctx(config: FeedConfig) -> RunContext:
                 base_url=None,
             )
         },
-        knowledge=GraphKnowledge(None),
+        knowledge=GraphKnowledge(None, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER),
         logger=structlog.get_logger(),
     )
 
@@ -469,7 +473,7 @@ def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
     e collected_by corretas. Reexecução com o MESMO feed é no-op (external_id
     estável) — critério de aceite de re-coleta idempotente com feed real."""
     from kubo.runtime import runner
-    from kubo.store import client, migrations
+    from kubo.store import client, migrations, tenancy
 
     db_name = "test_feed_worker_e2e"
     cfg = replace(client.config(), database=db_name)
@@ -477,8 +481,16 @@ def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
         db.query(f"REMOVE DATABASE IF EXISTS {db_name};")
         db.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(db)
+        user = tenancy.create_user(db, firebase_uid="feed-e2e-user")
+        tenant = tenancy.create_tenant(db, name="FeedE2E", owner_user_id=user.id)
         try:
-            run_id_1 = runner.run_worker(db, FeedWorker(), config={"feed_url": _feed_server})
+            run_id_1 = runner.run_worker(
+                db,
+                FeedWorker(),
+                config={"feed_url": _feed_server},
+                tenant_id=tenant.id,
+                user_id=user.id,
+            )
 
             row = db.query("SELECT status FROM $r;", {"r": run_id_1})[0]
             assert row["status"] == "ok"
@@ -494,7 +506,13 @@ def test_e2e_feed_worker_persists_graph_and_second_run_is_idempotent(
             sources = db.query("SELECT count() FROM source GROUP ALL;")
             assert int(sources[0]["count"]) == 1
 
-            run_id_2 = runner.run_worker(db, FeedWorker(), config={"feed_url": _feed_server})
+            run_id_2 = runner.run_worker(
+                db,
+                FeedWorker(),
+                config={"feed_url": _feed_server},
+                tenant_id=tenant.id,
+                user_id=user.id,
+            )
 
             row_2 = db.query("SELECT status FROM $r;", {"r": run_id_2})[0]
             assert row_2["status"] == "ok"

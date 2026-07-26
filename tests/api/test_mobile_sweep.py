@@ -23,7 +23,7 @@ def test_distilled_detail_mobile_header_shows_item_title(
     )
     monkeypatch.setattr(
         "kubo.api.routes.distilled.knowledge.read_distilled",
-        lambda db, rid: DistilledView(
+        lambda db, rid, **kw: DistilledView(
             id=RecordID("distilled", "x1"),
             summary="Resumo do destilado sobre memória",
             claims=[],
@@ -45,7 +45,7 @@ def test_entity_detail_mobile_header_shows_entity_name(
     genérico 'Entidades') e chevron-voltar pra /entities."""
     monkeypatch.setattr(
         "kubo.api.routes.entities.knowledge.read_entity",
-        lambda db, eid: EntityView(
+        lambda db, eid, **kw: EntityView(
             id=RecordID("entity", "e1"), name="Python", kind="tecnologia", mentions=3, distilled=[]
         ),
     )

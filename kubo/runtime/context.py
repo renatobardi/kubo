@@ -19,7 +19,15 @@ from kubo.contracts.worker import DigestView, ItemView, RetrievedView
 from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
 from kubo.store.destinations import record_id_from_destination
-from kubo.store.knowledge import distilled_for_digest, items_without_distilled, search_distilled
+from kubo.store.knowledge import (
+    DistilledListItem,
+    DistilledView,
+    distilled_for_digest,
+    items_without_distilled,
+    list_distilled,
+    read_distilled,
+    search_distilled,
+)
 
 
 class GraphKnowledge:
@@ -32,16 +40,29 @@ class GraphKnowledge:
     o que mata estado compartilhado entre execuções.
     """
 
-    def __init__(self, db: Any) -> None:
-        """Guarda o handle de `db` (só a store o usa) e zera o mapa de refs."""
+    def __init__(
+        self,
+        db: Any,
+        *,
+        tenant_id: RecordID,
+        user_id: RecordID,
+    ) -> None:
+        """Guarda o handle de `db` (só a store o usa), os ids de tenancy e zera o mapa de refs."""
         self._db = db
+        self._tenant_id = tenant_id
+        self._user_id = user_id
         self._ref_map: dict[int, RecordID] = {}
         self._counter = 0
 
     def items_to_distill(self, limit: int) -> list[ItemView]:
         """Lê itens pendentes via store e atribui a cada um um `ref` opaco,
         sequencial e MONOTÔNICO por-instância (nunca reseta entre chamadas)."""
-        rows = items_without_distilled(self._db, limit=limit)
+        rows = items_without_distilled(
+            self._db,
+            tenant_id=self._tenant_id,
+            user_id=self._user_id,
+            limit=limit,
+        )
         views: list[ItemView] = []
         for rid, title, content in rows:
             ref = self._counter
@@ -57,7 +78,13 @@ class GraphKnowledge:
         exposição de id ao worker (entra em `consulted`/citação, vem do retrieval)."""
         return [
             RetrievedView(id=str(doc.id), title=doc.title, summary=doc.summary)
-            for doc in search_distilled(self._db, embedding=embedding, k=k)
+            for doc in search_distilled(
+                self._db,
+                tenant_id=self._tenant_id,
+                user_id=self._user_id,
+                embedding=embedding,
+                k=k,
+            )
         ]
 
     def resolve(self, ref: int) -> RecordID | None:
@@ -65,6 +92,27 @@ class GraphKnowledge:
         (§III.6: ref não-resolvível é ErrorInfo por-payload no runner — `resolve`
         nunca levanta)."""
         return self._ref_map.get(ref)
+
+    def read_distilled(self, distilled: RecordID) -> DistilledView | None:
+        """Lê a visão completa de proveniência de um distilled (ADR-0013 §8.5),
+        escopada ao tenant quando os ids de tenancy estão presentes."""
+        return read_distilled(
+            self._db,
+            distilled,
+            tenant_id=self._tenant_id,
+            user_id=self._user_id,
+        )
+
+    def list_distilled(self, *, limit: int, start: int) -> list[DistilledListItem]:
+        """Página do acervo de destilados, filtrada pelo tenant quando os ids
+        de tenancy estão presentes."""
+        return list_distilled(
+            self._db,
+            tenant_id=self._tenant_id,
+            user_id=self._user_id,
+            limit=limit,
+            start=start,
+        )
 
     def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
         """Digest selection (ADR-0015 §IV): delegates to the store (which resolves watermark +
@@ -82,7 +130,11 @@ class GraphKnowledge:
                 entities=row.entities,
             )
             for row in distilled_for_digest(
-                self._db, destination=record_id_from_destination(destination), limit=limit
+                self._db,
+                tenant_id=self._tenant_id,
+                user_id=self._user_id,
+                destination=record_id_from_destination(destination),
+                limit=limit,
             )
         ]
 

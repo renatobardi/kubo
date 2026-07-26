@@ -16,9 +16,10 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.executors.cli import CliOutcome
-from kubo.store import client, migrations
+from kubo.store import client, migrations, tenancy
 from kubo.workers import gitops
 
 
@@ -72,3 +73,15 @@ def promotion_gate(db: Any, flow: Any) -> Any:
         {"f": flow},
     )
     return rows[0] if rows else None
+
+
+@pytest.fixture
+def user_id(db: Any) -> RecordID:
+    """Usuário de teste criado no banco."""
+    return tenancy.create_user(db, firebase_uid="test-user-uid").id
+
+
+@pytest.fixture
+def tenant_id(db: Any, user_id: RecordID) -> RecordID:
+    """Tenant de teste com o usuário como owner."""
+    return tenancy.create_tenant(db, name="Test Tenant", owner_user_id=user_id).id

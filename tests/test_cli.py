@@ -11,6 +11,7 @@ import argparse
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from surrealdb import RecordID
@@ -30,13 +31,16 @@ from kubo.__main__ import (
 )
 from kubo.errors import ConfigError
 from kubo.runtime.flow_runner import FlowRunResult
-from kubo.store import client, knowledge, migrations
+from kubo.store import client, knowledge, migrations, tenancy
 from kubo.store.knowledge import Chunk, DistilledView, ProvenanceItem, RunRef, SearchHit
 
 _CLI_DB = "test_cli"
 _DIM = 768
 _MODEL = "gemini-embedding-001"
 _TASK_TYPE = "SEMANTIC_SIMILARITY"
+
+_UNIT_TENANT = RecordID("tenant", "cli-test")
+_UNIT_USER = RecordID("user", "cli-test")
 
 
 class FakeEmbedder:
@@ -217,47 +221,75 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_CLI_DB};")
 
 
+@pytest.fixture
+def user_id(db: Any) -> RecordID:
+    return tenancy.create_user(db, firebase_uid="cli-test-user").id
+
+
+@pytest.fixture
+def tenant_id(db: Any, user_id: RecordID) -> RecordID:
+    return tenancy.create_tenant(db, name="CliTest", owner_user_id=user_id).id
+
+
 @pytest.mark.integration
-def test_run_query_orders_results_by_real_proximity(db: Any) -> None:
+def test_run_query_orders_results_by_real_proximity(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """O KNN roda de verdade — o fake NÃO mascara a ordenação: o distilled cujo
     chunk é IDÊNTICO ao vetor da pergunta aparece antes do ortogonal."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.insert_distilled(
-        db, item=item_a, summary="resumo A perto", chunks=[_chunk(0, _vec(1.0))]
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_a,
+        summary="resumo A perto",
+        chunks=[_chunk(0, _vec(1.0))],
     )
     knowledge.insert_distilled(
-        db, item=item_b, summary="resumo B longe", chunks=[_chunk(0, _vec(0.0, 1.0))]
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_b,
+        summary="resumo B longe",
+        chunks=[_chunk(0, _vec(0.0, 1.0))],
     )
     fake = FakeEmbedder(_vec(1.0))
 
-    output = run_query(db, fake, "qualquer pergunta", k=2)
+    output = run_query(db, fake, "qualquer pergunta", k=2, tenant_id=tenant_id, user_id=user_id)
 
     assert output.index("resumo A perto") < output.index("resumo B longe")
 
 
 @pytest.mark.integration
-def test_run_query_deduplicates_hits_from_the_same_distilled(db: Any) -> None:
+def test_run_query_deduplicates_hits_from_the_same_distilled(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Um distilled com 2 chunks perto do vetor da pergunta aparece UMA vez na
     saída — dois chunks do mesmo destilado não duplicam o summary."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.insert_distilled(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         item=item_id,
         summary="resumo único",
         chunks=[_chunk(0, _vec(1.0)), _chunk(1, _vec(0.9, 0.1))],
     )
     fake = FakeEmbedder(_vec(1.0))
 
-    output = run_query(db, fake, "qualquer pergunta", k=5)
+    output = run_query(db, fake, "qualquer pergunta", k=5, tenant_id=tenant_id, user_id=user_id)
 
     assert output.count("resumo único") == 1
 
 
 @pytest.mark.integration
-def test_run_show_with_provenance_contains_full_chain(db: Any) -> None:
+def test_run_show_with_provenance_contains_full_chain(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """`run_show(..., provenance=True)` traz summary + a cadeia item->source
     (canonical/url) + o worker do run — a proveniência completa."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
@@ -269,12 +301,18 @@ def test_run_show_with_provenance_contains_full_chain(db: Any) -> None:
         url="https://x/ep-1",
         title="Episódio 1",
     )
-    run_id = knowledge.start_run(db, worker="scribe")
+    run_id = knowledge.start_run(db, worker="scribe", tenant_id=tenant_id, user_id=user_id)
     distilled_id = knowledge.insert_distilled(
-        db, item=item_id, summary="resumo destilado", chunks=[], run=run_id
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_id,
+        summary="resumo destilado",
+        chunks=[],
+        run=run_id,
     )
 
-    output = run_show(db, str(distilled_id), provenance=True)
+    output = run_show(db, str(distilled_id), provenance=True, tenant_id=tenant_id, user_id=user_id)
 
     assert output is not None
     assert "resumo destilado" in output
@@ -284,14 +322,23 @@ def test_run_show_with_provenance_contains_full_chain(db: Any) -> None:
 
 
 @pytest.mark.integration
-def test_run_show_without_provenance_omits_source_canonical(db: Any) -> None:
+def test_run_show_without_provenance_omits_source_canonical(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Sem `provenance`, o canonical da source não aparece — sucinto por design,
     mesma regra de `format_distilled`."""
     source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
-    distilled_id = knowledge.insert_distilled(db, item=item_id, summary="resumo simples", chunks=[])
+    distilled_id = knowledge.insert_distilled(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_id,
+        summary="resumo simples",
+        chunks=[],
+    )
 
-    output = run_show(db, str(distilled_id), provenance=False)
+    output = run_show(db, str(distilled_id), provenance=False, tenant_id=tenant_id, user_id=user_id)
 
     assert output is not None
     assert "resumo simples" in output
@@ -299,10 +346,15 @@ def test_run_show_without_provenance_omits_source_canonical(db: Any) -> None:
 
 
 @pytest.mark.integration
-def test_run_show_returns_none_for_nonexistent_distilled(db: Any) -> None:
+def test_run_show_returns_none_for_nonexistent_distilled(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Um id de distilled que não existe no grafo devolve None — não levanta e
     não confunde 'sem proveniência' com 'destilado inexistente'."""
-    assert run_show(db, "distilled:nao-existe", provenance=False) is None
+    assert (
+        run_show(db, "distilled:nao-existe", provenance=False, tenant_id=tenant_id, user_id=user_id)
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +373,8 @@ def test_main_query_without_gemini_api_key_exits_with_code_2(
     conexão com o banco é decisão do GREEN, então garantimos o SurrealDB de pé
     para não travar o teste numa suposição de implementação."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr("kubo.__main__.client.connect", MagicMock())
+    monkeypatch.setattr("kubo.__main__._resolve_cli_tenant", lambda _db: (_UNIT_TENANT, _UNIT_USER))
 
     exit_code = main(["query", "pergunta qualquer"])
 
@@ -355,7 +409,7 @@ def test_parser_parses_flow_run() -> None:
 def test_handle_flow_without_run_subcommand_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
     """`kubo flow` sem `run` imprime uso e sai 2."""
     args = argparse.Namespace(flow_command=None)
-    assert _handle_flow(None, args) == 2
+    assert _handle_flow(None, args, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER) == 2
     assert "uso:" in capsys.readouterr().err
 
 
@@ -365,18 +419,24 @@ def test_handle_flow_maps_state_to_exit_code(
     """delivered → exit 0; failed → exit 1; ambos imprimem o id do flow e o estado."""
     monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("delivered"))
     args = argparse.Namespace(flow_command="run", template="analysis", question="q")
-    assert _handle_flow(object(), args) == 0
+    assert _handle_flow(object(), args, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER) == 0
     assert "delivered" in capsys.readouterr().out
 
     monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("failed"))
-    assert _handle_flow(object(), args) == 1
+    assert _handle_flow(object(), args, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER) == 1
 
 
 def test_run_flow_command_rejects_unresolvable_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Settings ausente -> ConfigError antes de construir embedder/destino."""
     monkeypatch.setattr("kubo.__main__.settings_store.get_settings", lambda db: None)
     with pytest.raises(ConfigError, match="configurações"):
-        run_flow_command(object(), template="analysis", question="q")
+        run_flow_command(
+            object(),
+            template="analysis",
+            question="q",
+            tenant_id=_UNIT_TENANT,
+            user_id=_UNIT_USER,
+        )
 
 
 def test_handle_flow_review_state_is_success(
@@ -386,7 +446,7 @@ def test_handle_flow_review_state_is_success(
     `awaiting_review` no analysis. Só `failed` é exit 1."""
     monkeypatch.setattr("kubo.__main__.run_flow_command", lambda *a, **k: _flow_result("review"))
     args = argparse.Namespace(flow_command="run", template="dev-mini", question="add hello()")
-    assert _handle_flow(object(), args) == 0
+    assert _handle_flow(object(), args, tenant_id=_UNIT_TENANT, user_id=_UNIT_USER) == 0
     assert "review" in capsys.readouterr().out
 
 
@@ -404,7 +464,13 @@ def test_run_flow_command_dev_skips_embedder_and_destination(
     monkeypatch.setattr("kubo.__main__.resolve_base_url", lambda: "https://kubo.example")
     monkeypatch.setattr("kubo.__main__.run_flow", lambda db, **kw: captured.update(kw) or _FLOW)
 
-    run_flow_command(object(), template="dev-mini", question="add hello()")
+    run_flow_command(
+        object(),
+        template="dev-mini",
+        question="add hello()",
+        tenant_id=_UNIT_TENANT,
+        user_id=_UNIT_USER,
+    )
 
     assert captured["template_name"] == "dev-mini"
     assert captured["question"] == "add hello()"
