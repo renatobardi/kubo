@@ -34,6 +34,8 @@ from kubo.store import transaction
 Role = Literal["owner", "member"]
 _VALID_ROLES: set[str] = {"owner", "member"}
 
+_MEMBERSHIP_BY_USER_TENANT = "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;"
+
 
 @dataclass(frozen=True)
 class Tenant:
@@ -193,7 +195,7 @@ def get_tenant(db: Any, tenant_id: RecordID) -> Tenant | None:
 def _find_existing_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> Any:
     """Busca a membership pelo par (user, tenant), ou None."""
     rows = db.query(
-        "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;",
+        _MEMBERSHIP_BY_USER_TENANT,
         {"u": user_id, "t": tenant_id},
     )
     return rows[0] if rows else None
@@ -258,7 +260,7 @@ def create_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID, role: 
             raise _map_internal_error(exc, "membership creation failed") from exc
 
     rows = db.query(
-        "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;",
+        _MEMBERSHIP_BY_USER_TENANT,
         {"u": user_id, "t": tenant_id},
     )
     if not rows:
@@ -291,7 +293,7 @@ def assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Non
     no `kubo/store/` deve chamá-la antes de executar.
     """
     rows = db.query(
-        "SELECT * FROM membership WHERE in = $u AND out = $t LIMIT 1;",
+        _MEMBERSHIP_BY_USER_TENANT,
         {"u": user_id, "t": tenant_id},
     )
     if not rows:
