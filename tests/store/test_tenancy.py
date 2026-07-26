@@ -176,3 +176,35 @@ def test_tenant_isolation_via_membership(db: Any) -> None:
         tenancy.assert_membership(db, user_id=user_a.id, tenant_id=tenant_b.id)
     with pytest.raises(MembershipRequiredError):
         tenancy.assert_membership(db, user_id=user_b.id, tenant_id=tenant_a.id)
+
+
+def test_get_or_create_user_and_tenant_creates_on_first_login(db: Any) -> None:
+    """Primeiro login de uma identidade Firebase cria user + tenant + owner membership."""
+    user, tenant = tenancy.get_or_create_user_and_tenant(
+        db, firebase_uid="uid-signup", email="signup@example.com"
+    )
+
+    assert user.firebase_uid == "uid-signup"
+    assert user.email == "signup@example.com"
+    assert tenant.name == "signup@example.com"
+
+    memberships = tenancy.list_memberships_for_user(db, user.id)
+    assert len(memberships) == 1
+    assert memberships[0].role == "owner"
+    assert memberships[0].tenant == tenant.id
+
+
+def test_get_or_create_user_and_tenant_reuses_existing_user(db: Any) -> None:
+    """Segundo login da mesma identidade retorna o user/tenant existentes."""
+    first_user, first_tenant = tenancy.get_or_create_user_and_tenant(
+        db, firebase_uid="uid-returning", email="returning@example.com"
+    )
+
+    second_user, second_tenant = tenancy.get_or_create_user_and_tenant(
+        db, firebase_uid="uid-returning", email="other@example.com"
+    )
+
+    assert second_user.id == first_user.id
+    assert second_tenant.id == first_tenant.id
+    # E-mail não é atualizado no retorno (identidade externa estável).
+    assert second_user.email == "returning@example.com"

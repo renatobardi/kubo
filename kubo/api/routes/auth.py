@@ -23,6 +23,8 @@ from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
 from kubo.api.urls import safe_next
 from kubo.errors import FirebaseTokenError
+from kubo.store import client
+from kubo.store import tenancy as tenancy_store
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -34,11 +36,12 @@ _LOGIN_TEMPLATE = "login.html"
 _SCRYPT_OWNER_UID = "scrypt:owner"
 
 
-def _open_session(request: Request, *, uid: str) -> None:
-    """Regenera a sessão (fixation) e grava role/owner + uid + timestamp de auth."""
+def _open_session(request: Request, *, uid: str, tenant_id: str, role: str) -> None:
+    """Regenera a sessão (fixation) e grava role + uid + tenant_id + timestamp de auth."""
     request.session.clear()
-    request.session["role"] = "owner"
+    request.session["role"] = role
     request.session["uid"] = uid
+    request.session["tenant_id"] = tenant_id
     request.session["auth_at"] = int(time.time())
 
 
@@ -103,7 +106,12 @@ def login_submit(
         )
     try:
         if verify_password(password, request.app.state.password_hash):
-            _open_session(request, uid=_SCRYPT_OWNER_UID)
+            _open_session(
+                request,
+                uid=_SCRYPT_OWNER_UID,
+                tenant_id=request.app.state.breakglass_tenant_id,
+                role="owner",
+            )
             return RedirectResponse(next_path, status_code=303)
         time.sleep(_FAIL_DELAY_SECONDS)
         client = request.client.host if request.client else "unknown"
@@ -126,9 +134,14 @@ def logout(request: Request) -> Response:
 
 
 def _firebase_config_ok(request: Request) -> bool:
-    """True se project id e owner uids estão configurados (fail-closed)."""
+    """True se project id está configurado (fail-closed).
+
+    Owner uids não são mais obrigatórios para login: self-signup cria tenant
+    automaticamente (ADR-0041). A allowlist passa a ser usada só para o papel
+    superadmin (KUBO-116).
+    """
     cfg = request.app.state.firebase_config
-    return bool(cfg.project_id and request.app.state.firebase_owner_uids)
+    return bool(cfg.project_id)
 
 
 @router.post("/auth/firebase")
@@ -152,10 +165,9 @@ def firebase_login(
         )
 
     try:
-        user = verify_id_token(
+        token_user = verify_id_token(
             body.id_token,
             request.app.state.firebase_config.project_id,
-            request.app.state.firebase_owner_uids,
         )
     except FirebaseTokenError as exc:
         _log.warning("api.firebase.failed", code=exc.code)
@@ -173,5 +185,17 @@ def firebase_login(
             status_code=401,
         )
 
-    _open_session(request, uid=user["uid"])
+    with client.connect() as db:
+        tenant_user, tenant = tenancy_store.get_or_create_user_and_tenant(
+            db,
+            firebase_uid=token_user["uid"],
+            email=token_user.get("email") or None,
+        )
+
+    _open_session(
+        request,
+        uid=token_user["uid"],
+        tenant_id=str(tenant.id),
+        role="owner",
+    )
     return RedirectResponse(next_path, status_code=303)

@@ -157,12 +157,12 @@ class RequireLoginMiddleware(BaseHTTPMiddleware):
     """Redireciona toda requisição sem sessão válida para /login, exceto rotas públicas.
 
     Guard num único ponto (não uma dependency por rota) — não há como esquecer de
-    proteger uma rota nova. Sessão válida = `role == "owner"` (KUBO-92)."""
+    proteger uma rota nova. Sessão válida = `role` `owner` ou `member` (KUBO-111)."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         public = path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES)
-        if public or request.session.get("role") == "owner":
+        if public or request.session.get("role") in {"owner", "member"}:
             return await call_next(request)
         return RedirectResponse("/login", status_code=303)
 
@@ -176,6 +176,7 @@ def create_app() -> FastAPI:
     app.state.session_fresh_max_age = cfg.session_fresh_max_age
     app.state.firebase_config = cfg.firebase_config
     app.state.firebase_owner_uids = cfg.firebase_owner_uids
+    app.state.breakglass_tenant_id = os.environ.get("KUBO_BREAKGLASS_TENANT_ID", "")
 
     # Estáticos: htmx vendorizado, font Inter self-hosted, favicon sakura e o
     # app.css gerado pelo Tailwind. O diretório existe no repo (htmx/font/favicon

@@ -298,3 +298,32 @@ def assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Non
     )
     if not rows:
         raise MembershipRequiredError("user does not belong to tenant")
+
+
+def get_or_create_user_and_tenant(
+    db: Any, *, firebase_uid: str, email: str | None = None
+) -> tuple[User, Tenant]:
+    """Garante que uma identidade Firebase tenha um user e um tenant owner.
+
+    Na primeira chamada cria `user` + `tenant` + `membership(role=owner)`.
+    Nas chamadas seguintes retorna o user existente e o primeiro tenant do qual
+    ele é membro.
+    """
+    user = get_user_by_firebase_uid(db, firebase_uid)
+    if user is None:
+        user = create_user(db, firebase_uid=firebase_uid, email=email)
+        tenant_name = (email or firebase_uid).strip()
+        tenant = create_tenant(db, name=tenant_name, owner_user_id=user.id)
+        return user, tenant
+
+    memberships = list_memberships_for_user(db, user.id)
+    if memberships:
+        tenant = get_tenant(db, memberships[0].tenant)
+        if tenant is None:
+            raise StoreError("membership references a missing tenant")
+        return user, tenant
+
+    # User órfão (não deveria acontecer fora migração incompleta) — cria um tenant.
+    tenant_name = (email or firebase_uid or str(user.id)).strip()
+    tenant = create_tenant(db, name=tenant_name, owner_user_id=user.id)
+    return user, tenant
