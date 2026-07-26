@@ -21,7 +21,7 @@ from typing import Any, TypeVar
 
 import litellm
 from litellm import exceptions as litellm_exceptions
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
 
@@ -127,6 +127,8 @@ class ApiExecutorConfig(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 1024
     timeout: float = 60.0
+    # api_key pode vir de tenant_credential (BYOK, KUBO-115). None = litellm usa env.
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class ApiExecutor:
@@ -213,6 +215,7 @@ class ApiExecutor:
                     response_format={"type": "json_object"},
                     num_retries=0,
                     timeout=self._config.timeout,
+                    api_key=self._config.api_key or None,
                 )
             except _TRANSIENT as exc:
                 # A decisão do transiente (honrar retry-after, desistir ou dormir) mora em

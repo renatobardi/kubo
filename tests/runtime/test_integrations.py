@@ -9,6 +9,7 @@ existentes injetadas, o resto negado). Sem SurrealDB — tudo unit.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -176,6 +177,53 @@ def test_resolved_secret_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "super-secret-value" not in repr(resolved["svc"])
     assert "super-secret-value" not in str(resolved["svc"])
+
+
+def _tenant_credential_catalog() -> dict[str, Integration]:
+    """Catálogo com integração cujo segredo vem de tenant_credential."""
+    return {
+        "openai": Integration.model_validate(
+            {
+                "name": "openai",
+                "kind": "llm",
+                "auth": {
+                    "type": "bearer",
+                    "secret_ref": "tenant_credential:openai",
+                },
+            }
+        )
+    }
+
+
+def test_resolve_secret_from_tenant_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """secret_ref tenant_credential:<nome> resolve contra a store de credenciais do tenant."""
+    fake_db = object()
+    fake_tenant = object()
+
+    def _fake_get_credential(db: Any, *, tenant_id: Any, provider: str, user_id: Any = None) -> str:
+        assert db is fake_db
+        assert tenant_id is fake_tenant
+        assert provider == "openai"
+        return "tenant-openai-key"
+
+    monkeypatch.setattr(
+        "kubo.runtime.integrations.tenant_credentials.get_credential",
+        _fake_get_credential,
+    )
+
+    resolved = resolve_integrations(
+        ["openai"], _tenant_credential_catalog(), db=fake_db, tenant_id=fake_tenant
+    )
+
+    assert resolved["openai"].secret == "tenant-openai-key"  # pragma: allowlist secret
+
+
+def test_resolve_tenant_credential_without_context_fails() -> None:
+    """tenant_credential sem db/tenant_id falha fechado (não cai em env)."""
+    with pytest.raises(ConfigError, match="contexto de tenant"):
+        resolve_integrations(["openai"], _tenant_credential_catalog())
 
 
 def test_inline_secret_value_not_echoed_in_error(tmp_path: Path) -> None:
