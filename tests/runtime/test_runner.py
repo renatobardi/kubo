@@ -258,7 +258,7 @@ def test_run_worker_error_does_not_leak_secret(
         integration={
             "name": "svc",
             "kind": "http",
-            "auth": {"type": "bearer", "secret_ref": "env:KUBO_LEAK_TOKEN"},
+            "auth": {"type": "bearer", "secret_ref": "env:KUBO_LEAK_TOKEN"},  # pragma: allowlist secret
         },
     )
     from kubo.runtime.runner import run_worker
