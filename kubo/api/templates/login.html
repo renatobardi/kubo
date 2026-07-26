@@ -115,9 +115,9 @@
 
       async function sendIdToken(idToken) {
         try {
-          const next = encodeURIComponent(window.__KUBO_NEXT || "/");
+          const next = window.__KUBO_NEXT || "/";
           const invite = window.__KUBO_INVITE;
-          let url = "/auth/firebase?next=" + next;
+          let url = "/auth/firebase?next=" + encodeURIComponent(next);
           if (invite) {
             url += "&invite=" + encodeURIComponent(invite);
           }

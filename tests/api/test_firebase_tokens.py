@@ -16,15 +16,12 @@ from jwt import encode as jwt_encode
 
 from kubo.api.firebase_tokens import clear_jwks_cache, verify_id_token
 from kubo.errors import FirebaseTokenError
-from tests.api._firebase_test_helpers import rsa_keypair
+from tests.api._firebase_test_helpers import _JWKS_URL, rsa_keypair
 
 _PROJECT_ID = "kubo-test-project"
 _OWNER_UID = "owner-google-uid"
 _OTHER_UID = "other-uid"
 _KID = "test-kid"
-_JWKS_URL = (
-    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
-)
 
 
 def _mock_jwks(respx_mock: respx.MockRouter, jwk: dict[str, Any]) -> None:
@@ -73,7 +70,7 @@ def test_valid_token_returns_uid_when_in_allowlist(respx_mock: respx.MockRouter)
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem)
 
-    result = verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    result = verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
 
     assert result["uid"] == _OWNER_UID
     assert result["email"] == "owner@example.com"
@@ -85,7 +82,7 @@ def test_valid_token_uses_sub_claim_not_uid(respx_mock: respx.MockRouter) -> Non
     _mock_jwks(respx_mock, jwk)
     token = _token(private_pem=private_pem, include_uid=False)
 
-    result = verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+    result = verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
 
     assert result["uid"] == _OWNER_UID
 
@@ -96,7 +93,7 @@ def test_uid_outside_allowlist_is_rejected(respx_mock: respx.MockRouter) -> None
     token = _token(private_pem=private_pem, sub=_OTHER_UID)
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "uid_not_allowed"
 
 
@@ -106,7 +103,7 @@ def test_empty_allowlist_is_fail_closed(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem)
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, set())
+        verify_id_token(token, _PROJECT_ID, allowed_uids=set())
     assert exc.value.code == "uid_not_allowed"
 
 
@@ -120,7 +117,7 @@ def test_wrong_algorithm_is_rejected(respx_mock: respx.MockRouter) -> None:
     )
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_algorithm"
 
 
@@ -130,7 +127,7 @@ def test_unknown_kid_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, kid="unknown-kid")
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "unknown_kid"
 
 
@@ -140,7 +137,7 @@ def test_expired_token_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, exp=int(time.time()) - 1)
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_token"
 
 
@@ -150,7 +147,7 @@ def test_wrong_audience_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, aud="other-project")
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_token"
 
 
@@ -160,7 +157,7 @@ def test_wrong_issuer_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, iss="https://other.issuer.com")
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_token"
 
 
@@ -170,7 +167,7 @@ def test_email_unverified_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, email_verified=False)
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_token"
 
 
@@ -180,7 +177,7 @@ def test_missing_sub_is_rejected(respx_mock: respx.MockRouter) -> None:
     token = _token(private_pem=private_pem, sub="")
 
     with pytest.raises(FirebaseTokenError) as exc:
-        verify_id_token(token, _PROJECT_ID, {_OWNER_UID})
+        verify_id_token(token, _PROJECT_ID, allowed_uids={_OWNER_UID})
     assert exc.value.code == "invalid_token"
 
 

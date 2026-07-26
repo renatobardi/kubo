@@ -90,6 +90,10 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.api.routes.dashboard.tenancy_store.get_tenant",
         lambda db, tenant_id: _breakglass_tenant,
     )
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.tenancy_store.list_tenants",
+        lambda db, tenant_ids: [_breakglass_tenant] if tenant_ids else [],
+    )
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.list_distilled", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.distilled.knowledge.count_distilled", lambda db: 0)
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])
@@ -142,10 +146,14 @@ def ui_env(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("KUBO_FIREBASE_PROJECT_ID", "kubo-test-project")
     monkeypatch.setenv("KUBO_FIREBASE_OWNER_UIDS", "")
     monkeypatch.setenv("KUBO_FIREBASE_API_KEY", "test-firebase-api-key")  # pragma: allowlist secret
-    monkeypatch.setenv("KUBO_BREAKGLASS_TENANT_ID", "tenant:breakglass")  # pragma: allowlist secret
     monkeypatch.setenv(
-        "KUBO_BREAKGLASS_USER_ID", "user:breakglass-owner"
-    )  # pragma: allowlist secret
+        "KUBO_BREAKGLASS_TENANT_ID",
+        "tenant:breakglass",  # pragma: allowlist secret
+    )
+    monkeypatch.setenv(
+        "KUBO_BREAKGLASS_USER_ID",
+        "user:breakglass-owner",  # pragma: allowlist secret
+    )
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
     return UI_PASSWORD
 

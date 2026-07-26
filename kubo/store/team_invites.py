@@ -9,12 +9,12 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, cast
+from typing import Any
 
 from surrealdb import RecordID
 
 from kubo.errors import StoreError, TeamInviteError
-from kubo.store import tenancy
+from kubo.store import tenancy, transaction
 
 
 @dataclass(frozen=True)
@@ -113,46 +113,38 @@ def get_team_invite_by_token(db: Any, token: str) -> TeamInvite | None:
     return _team_invite_from_row(rows[0]) if rows else None
 
 
-def _find_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Any:
-    """Return the membership for (user, tenant), or None."""
-    rows = db.query(
-        "SELECT * FROM membership WHERE in = $u_id AND out = $t_id LIMIT 1;",
-        {"u_id": user_id, "t_id": tenant_id},
-    )
-    return rows[0] if rows else None
-
-
 def accept_team_invite(db: Any, *, token: str, user_id: RecordID) -> TeamInvite:
     """Accept a pending/non-expired invite and create a membership in the tenant.
 
     Rejects missing, expired, already-accepted or revoked tokens (`TeamInviteError`).
     If the user is already a member of the tenant, only marks the invite accepted.
+    The membership creation and invite status update run inside a single transaction.
     """
-    invite = get_team_invite_by_token(db, token)
-    if invite is None:
-        raise TeamInviteError("team invite not found")
-    if invite.status != "pending":
-        raise TeamInviteError("team invite is not pending")
-    expires = invite.expires_at
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
-    if expires <= _now():
-        raise TeamInviteError("team invite has expired")
-
-    existing = _find_membership(db, user_id=user_id, tenant_id=invite.tenant_id)
-    if existing is None:
-        tenancy.create_membership(
+    try:
+        transaction.run_transaction(
             db,
-            user_id=user_id,
-            tenant_id=invite.tenant_id,
-            role=cast(Literal["owner", "member"], invite.role),
+            [
+                "LET $invite = (SELECT * FROM team_invite WHERE token = $tk "
+                "AND status = 'pending' AND expires_at > time::now() LIMIT 1)",
+                "IF array::len($invite) == 0 { THROW 'TeamInviteError:invalid' }",
+                "LET $tenant_id = $invite[0].tenant_id",
+                "LET $role = $invite[0].role",
+                "LET $existing = (SELECT * FROM membership WHERE in = $u_id "
+                "AND out = $tenant_id LIMIT 1)",
+                "IF array::len($existing) == 0 { RELATE $u_id->membership->$tenant_id "
+                "CONTENT { role: $role, created_at: time::now() } }",
+                "LET $updated = (UPDATE $invite[0].id SET status = 'accepted' "
+                "WHERE status = 'pending' RETURN AFTER)",
+                "IF array::len($updated) == 0 { THROW 'TeamInviteError:conflict' }",
+            ],
+            {"tk": token, "u_id": user_id},
         )
+    except StoreError as exc:
+        if "TeamInviteError" in str(exc):
+            raise TeamInviteError("team invite is invalid, expired, or already used") from exc
+        raise
 
-    db.query(
-        "UPDATE $r SET status = 'accepted' WHERE status = 'pending';",
-        {"r": invite.id},
-    )
     updated = get_team_invite_by_token(db, token)
-    if updated is None or updated.status != "accepted":
-        raise StoreError("team invite accept failed")
+    if updated is None:
+        raise TeamInviteError("team invite not found after accept")
     return updated

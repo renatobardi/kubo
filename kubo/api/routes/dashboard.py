@@ -34,10 +34,12 @@ def _workspaces_for_session(
         return [], tenant_id, role
 
     memberships = tenancy_store.list_memberships_for_user(db, user.id)
+    tenants = tenancy_store.list_tenants(db, [m.tenant for m in memberships])
+    tenant_by_id = {str(t.id): t for t in tenants}
     workspaces: list[dict[str, object]] = []
     for m in memberships:
-        tenant = tenancy_store.get_tenant(db, m.tenant)
-        name = tenant.name if tenant else str(m.tenant)
+        t = tenant_by_id.get(str(m.tenant))
+        name = t.name if t else str(m.tenant)
         workspaces.append(
             {
                 "id": str(m.tenant),

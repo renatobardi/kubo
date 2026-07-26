@@ -8,6 +8,7 @@ Login failure: sleep + structured log (no password/token in log) + 401.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Annotated, Any
@@ -35,6 +36,7 @@ _FAIL_DELAY_SECONDS = 1
 _LOGIN_TEMPLATE = "login.html"
 _MEDIA_TYPE_TEXT = "text/plain"
 _MSG_INVALID_SESSION = "Invalid session."
+_INVITE_TOKEN_RE = re.compile("^[0-9a-f]{32}$")
 
 # Synthetic uid for sessions opened by scrypt login (break-glass).
 _SCRYPT_OWNER_UID = "scrypt:owner"
@@ -308,11 +310,19 @@ def firebase_login(
 
 @router.get("/invite/{token}")
 def invite_landing(request: Request, token: str, next: Annotated[str, Query()] = "") -> Response:
-    """Public landing for a team invite: render login with the invite token embedded."""
+    """Public landing for a team invite: validate token format before rendering login."""
+    invite_token = token if _INVITE_TOKEN_RE.match(token) else None
+    if invite_token is None:
+        return templates.TemplateResponse(
+            request,
+            _LOGIN_TEMPLATE,
+            _login_context(request, error="Invalid invite link.", next_path=next),
+            status_code=400,
+        )
     return templates.TemplateResponse(
         request,
         _LOGIN_TEMPLATE,
-        _login_context(request, next_path=next, invite_token=token),
+        _login_context(request, next_path=next, invite_token=invite_token),
     )
 
 
@@ -372,7 +382,10 @@ def switch_workspace(
     _open_session(
         request,
         uid=uid,
-        tenant_id=tenant_id,
+        tenant_id=_canonical_record_id(membership.tenant),
         role=membership.role,
     )
-    return RedirectResponse(safe_next(next), status_code=303)
+    target = safe_next(next)
+    if request.headers.get("HX-Request"):
+        return Response(status_code=200, headers={"HX-Redirect": target})
+    return RedirectResponse(target, status_code=303)

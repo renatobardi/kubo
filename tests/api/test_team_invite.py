@@ -2,35 +2,26 @@
 
 from __future__ import annotations
 
-import base64
-import json
-import os
-import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import respx
-from itsdangerous import TimestampSigner
-from jwt import encode as jwt_encode
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.firebase_tokens import clear_jwks_cache
-from tests.api._firebase_test_helpers import rsa_keypair
+from tests.api._firebase_test_helpers import (
+    _JWKS_URL,
+    _decode_session_cookie,
+    _firebase_token,
+    rsa_keypair,
+)
 
 _FAKE_BREAKGLASS_TENANT_ID = "tenant:breakglass"
 _FAKE_INVITE_TENANT_ID = "tenant:team-a"
 _FAKE_USER_ID = "user:owner-a"
 _FAKE_INVITE_TOKEN = "invite-token-123"
-
-
-def _decode_session_cookie(set_cookie: str) -> dict[str, Any]:
-    """Decode the itsdangerous-signed session cookie from SessionMiddleware."""
-    cookie_value = set_cookie.split(";")[0].split("=", 1)[1]
-    signer = TimestampSigner(os.environ["SESSION_SECRET"])
-    data = signer.unsign(cookie_value.encode(), max_age=14 * 24 * 3600)
-    return json.loads(base64.b64decode(data))
 
 
 def _fake_user(*, uid: str, user_id: str = _FAKE_USER_ID) -> Any:
@@ -105,31 +96,6 @@ def test_create_invite_generates_token_and_link(
     assert called.get("create") is not None
 
 
-_FIREBASE_PROJECT_ID = "kubo-test-project"
-_JWKS_URL = (
-    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
-)
-
-
-def _firebase_token(*, private_pem: str, uid: str = "new-member-uid", kid: str = "test-kid") -> str:
-    now = int(time.time())
-    payload = {
-        "email": f"{uid}@example.com",
-        "email_verified": True,
-        "aud": _FIREBASE_PROJECT_ID,
-        "iss": f"https://securetoken.google.com/{_FIREBASE_PROJECT_ID}",
-        "iat": now,
-        "exp": now + 3600,
-        "sub": uid,
-    }
-    return jwt_encode(
-        payload,
-        private_pem,
-        algorithm="RS256",
-        headers={"kid": kid, "alg": "RS256"},
-    )
-
-
 def test_firebase_login_with_invite_creates_member(
     respx_mock: respx.MockRouter,
     client: TestClient,
@@ -139,7 +105,7 @@ def test_firebase_login_with_invite_creates_member(
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
-    token = _firebase_token(private_pem=private_pem)
+    token = _firebase_token(private_pem=private_pem, uid="new-member-uid")
 
     called = {}
 
@@ -203,7 +169,7 @@ def test_firebase_login_without_invite_ignores_invite_flow(
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
-    token = _firebase_token(private_pem=private_pem)
+    token = _firebase_token(private_pem=private_pem, uid="new-member-uid")
 
     called = {}
 

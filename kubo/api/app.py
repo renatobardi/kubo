@@ -147,6 +147,12 @@ def _ui_config() -> UiConfig:
         fresh_max_age = int(os.environ.get("SESSION_FRESH_MAX_AGE", "600"))
     except ValueError:
         fresh_max_age = 600
+    breakglass_tenant_id = os.environ.get("KUBO_BREAKGLASS_TENANT_ID", "").strip()
+    if not breakglass_tenant_id:
+        raise ConfigError(
+            "KUBO_BREAKGLASS_TENANT_ID é obrigatório para login break-glass; "
+            "ex.: tenant:breakglass (invariante 8: referência de env)."
+        )
     return UiConfig(
         password_hash=password_hash,
         session_secret=session_secret,
@@ -154,8 +160,8 @@ def _ui_config() -> UiConfig:
         session_fresh_max_age=fresh_max_age,
         firebase_config=firebase_config,
         superadmin_uids=superadmin_uids,
-        breakglass_user_id=os.environ.get("KUBO_BREAKGLASS_USER_ID", ""),
-        breakglass_tenant_id=os.environ.get("KUBO_BREAKGLASS_TENANT_ID", ""),
+        breakglass_user_id=os.environ.get("KUBO_BREAKGLASS_USER_ID", "").strip(),
+        breakglass_tenant_id=breakglass_tenant_id,
     )
 
 

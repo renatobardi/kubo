@@ -39,7 +39,7 @@ def _decrypt(token: str) -> str:
 
 def _record_id(tenant_id: RecordID, provider: str) -> RecordID:
     """Id determinístico para (tenant, provider): provider é parte da chave."""
-    return RecordID("tenant_credential", f"{tenant_id.id}:{provider}")
+    return RecordID("tenant_credential", f"{tenant_id.id}:{provider.strip()}")
 
 
 def set_credential(

@@ -39,15 +39,21 @@
         <h2 class="text-sm font-semibold">Workspace</h2>
         <p class="mt-0.5 text-xs text-muted-foreground">Troque o tenant ativo da sessão.</p>
       </div>
-      <form method="post" action="/auth/switch" class="p-5">
+      <form method="post" action="/auth/switch" hx-post="/auth/switch" hx-swap="none" class="space-y-3 p-5">
         <input type="hidden" name="next" value="/">
-        <label for="tenant_id" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tenant ativo</label>
-        <select id="tenant_id" name="tenant_id" onchange="this.form.submit()"
-                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
-          {% for ws in workspaces %}
-          <option value="{{ ws.id }}" {% if ws.active %}selected{% endif %}>{{ ws.name }} ({{ ws.role }})</option>
-          {% endfor %}
-        </select>
+        <div>
+          <label for="tenant_id" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tenant ativo</label>
+          <select id="tenant_id" name="tenant_id"
+                  class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            {% for ws in workspaces %}
+            <option value="{{ ws.id }}" {% if ws.active %}selected{% endif %}>{{ ws.name }} ({{ ws.role }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit"
+                class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
+          Trocar workspace
+        </button>
       </form>
     </div>
     {% endif %}
