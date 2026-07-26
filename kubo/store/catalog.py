@@ -72,8 +72,9 @@ def _upsert_catalog_item(
     set_clause: str,
     fields: dict[str, Any],
     from_row: Any,
+    after: dict[str, Any],
 ) -> dict[str, Any]:
-    """Cria ou atualiza um item de catálogo e grava changelog."""
+    """Cria ou atualiza um item de catálogo e grava changelog numa transação só."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, table, name)
     existing = db.query(_SELECT_BY_ID, {"r": rid})
@@ -81,11 +82,7 @@ def _upsert_catalog_item(
 
     params: dict[str, Any] = {"r": rid, "t": tenant_id, "n": name}
     params.update(fields)
-    transaction.run_transaction(db, [set_clause], params)
-
-    after = from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
-    _log_changelog(
-        db,
+    changelog_stmt, changelog_params = _changelog_statement(
         tenant_id=tenant_id,
         kind=kind,
         item_name=name,
@@ -93,6 +90,7 @@ def _upsert_catalog_item(
         after=after,
         changed_by=user_id,
     )
+    transaction.run_transaction(db, [set_clause, changelog_stmt], {**params, **changelog_params})
     return after
 
 
@@ -106,16 +104,15 @@ def _delete_catalog_item(
     kind: str,
     from_row: Any,
 ) -> None:
-    """Remove um item de catálogo e grava changelog com after=None."""
+    """Remove um item de catálogo e grava changelog com after=None numa transação só."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, table, name)
     existing = db.query(_SELECT_BY_ID, {"r": rid})
     if not existing:
         raise ConfigError(f"{kind} '{name}' not found in tenant catalog")
     before = from_row(existing[0])
-    db.query(_DELETE_BY_ID, {"r": rid})
-    _log_changelog(
-        db,
+    params: dict[str, Any] = {"r": rid}
+    changelog_stmt, changelog_params = _changelog_statement(
         tenant_id=tenant_id,
         kind=kind,
         item_name=name,
@@ -123,6 +120,7 @@ def _delete_catalog_item(
         after=None,
         changed_by=user_id,
     )
+    transaction.run_transaction(db, [_DELETE_BY_ID, changelog_stmt], {**params, **changelog_params})
 
 
 def _catalog_id(tenant_id: RecordID, table: str, name: str) -> RecordID:
@@ -182,8 +180,7 @@ def _flow_template_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _log_changelog(
-    db: Any,
+def _changelog_statement(
     *,
     tenant_id: RecordID,
     kind: str,
@@ -191,22 +188,27 @@ def _log_changelog(
     before: dict[str, Any] | None,
     after: dict[str, Any] | None,
     changed_by: RecordID,
-) -> None:
-    """Grava uma linha de auditoria em catalog_changelog."""
+) -> tuple[str, dict[str, Any]]:
+    """Monta o statement e os binds do CREATE catalog_changelog.
+
+    Usado dentro da mesma transação da escrita do item, garantindo atomicidade
+    (KUBO-130). Os bind keys usam prefixo `c` para não colidirem com os do item.
+    """
     rid = _fresh_changelog_id()
-    db.query(
-        "CREATE $r SET tenant_id = $t, kind = $k, item_name = $n, "
-        "before = $b, after = $a, changed_by = $u, changed_at = time::now();",
-        {
-            "r": rid,
-            "t": tenant_id,
-            "k": kind,
-            "n": item_name,
-            "b": before,
-            "a": after,
-            "u": changed_by,
-        },
+    stmt = (
+        "CREATE $cr SET tenant_id = $ct, kind = $ck, item_name = $cn, "
+        "before = $cb, after = $ca, changed_by = $cu, changed_at = time::now()"
     )
+    params: dict[str, Any] = {
+        "cr": rid,
+        "ct": tenant_id,
+        "ck": kind,
+        "cn": item_name,
+        "cb": before,
+        "ca": after,
+        "cu": changed_by,
+    }
+    return stmt, params
 
 
 def seed_catalog(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> None:
@@ -303,6 +305,7 @@ def upsert_persona(
             "perms": list(persona.get("permissions", [])),
         },
         from_row=_persona_from_row,
+        after=_persona_from_row(persona),
     )
 
 
@@ -369,6 +372,7 @@ def upsert_integration(
             "b": integration.get("base_url"),
         },
         from_row=_integration_from_row,
+        after=_integration_from_row(integration),
     )
 
 
@@ -438,6 +442,7 @@ def upsert_flow_template(
             "bu": template.get("budget_usd"),
         },
         from_row=_flow_template_from_row,
+        after=_flow_template_from_row(template),
     )
 
 

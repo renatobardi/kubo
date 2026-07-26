@@ -34,19 +34,34 @@ def list_page(
     q: Annotated[str, Query()] = "",
 ) -> Response:
     """Lista de entidades, mais mencionadas primeiro (E2), com busca por nome/kind e
-    paginação completa (0011). `size`/`start` clampados; `q` filtra na store."""
+    paginação completa (0011). `size`/`start` clampados; `q` filtra na store.
+
+    Filtra pelo tenant ativo da sessão (KUBO-130): superadmin lê qualquer tenant,
+    owner/member só o seu."""
     size = clamp_size(size)
     start = clamp_start(start)
     query = q.strip()
     with client.connect() as db:
-        session = resolve_session(db, request)
-        if session is None:
-            return PlainTextResponse("Invalid session.", status_code=403)
-        tenant_id, user_id = session
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        is_superadmin = ctx.role == "superadmin"
         entities = knowledge.list_entities(
-            db, tenant_id=tenant_id, user_id=user_id, limit=size, start=start, query=query
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+            limit=size,
+            start=start,
+            query=query,
         )
-        total = knowledge.count_entities(db, tenant_id=tenant_id, user_id=user_id, query=query)
+        total = knowledge.count_entities(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            superadmin=is_superadmin,
+            query=query,
+        )
     return templates.TemplateResponse(
         request,
         "entities/list.html",
@@ -65,13 +80,7 @@ def detail(request: Request, entity_id: str) -> Response:
     view = None
     if key:
         with client.connect() as db:
-            session = resolve_session(db, request)
-            if session is None:
-                return PlainTextResponse("Invalid session.", status_code=403)
-            tenant_id, user_id = session
-            view = knowledge.read_entity(
-                db, RecordID(_ENTITY_TABLE, key), tenant_id=tenant_id, user_id=user_id
-            )
+            view = knowledge.read_entity(db, RecordID(_ENTITY_TABLE, key))
     if view is None:
         return templates.TemplateResponse(
             request, "entities/not_found.html", {"raw": entity_id}, status_code=404
