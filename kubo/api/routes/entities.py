@@ -87,12 +87,12 @@ def detail(request: Request, entity_id: str) -> Response:
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
         rid = RecordID(_ENTITY_TABLE, key)
-        # Lê sem filtro de tenant para distinguir 404 (não existe) de 403 (outro tenant).
-        # O guard `_entity_in_tenant` faz o gate de tenant antes de devolver a view.
-        exists = db.query("SELECT id FROM $e;", {"e": rid})
-        if not exists:
+        # `_entity_in_tenant` faz o gate tri-state: None=404 (não existe),
+        # False=403 (outro tenant), True=ok (próprio tenant ou superadmin).
+        guard = _entity_in_tenant(db, rid, ctx)
+        if guard is None:
             view = None
-        elif not _entity_in_tenant(db, rid, ctx):
+        elif not guard:
             return PlainTextResponse("Acesso negado.", status_code=403)
         else:
             view = knowledge.read_entity(db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
@@ -103,11 +103,13 @@ def detail(request: Request, entity_id: str) -> Response:
     return templates.TemplateResponse(request, "entities/detail.html", {"view": view})
 
 
-def _entity_in_tenant(db: Any, entity_id: RecordID, ctx: SessionContext) -> bool:
-    """True se a entidade pertence ao tenant ativo OU se a sessão é superadmin."""
+def _entity_in_tenant(db: Any, entity_id: RecordID, ctx: SessionContext) -> bool | None:
+    """Tri-state: True se a entidade pertence ao tenant ativo (ou superadmin),
+    False se pertence a outro tenant, None se não existe. O caller distingue 404
+    de 403 (KUBO-130)."""
     if ctx.role == "superadmin":
         return True
     rows = db.query("SELECT tenant_id FROM $e;", {"e": entity_id})
     if not rows:
-        return False
+        return None
     return rows[0].get("tenant_id") == ctx.tenant_id
