@@ -1,9 +1,9 @@
-"""Rotas de autenticação (ADR-0014 + ADR-0036): /login (GET form + POST scrypt),
-/auth/firebase (POST ID token) e /logout.
+"""Authentication routes (ADR-0014 + ADR-0036): /login (GET form + POST scrypt),
+/auth/firebase (POST ID token) and /logout.
 
-Rotas SÍNCRONAS (`def`): `verify_password` (scrypt, ~50-150ms) e o `time.sleep(1)`
-do rate-limit rodariam no threadpool do Starlette, sem congelar o event loop de
-1 worker. Falha de login: sleep + log estruturado (sem senha/token no log) + 401.
+Synchronous routes (`def`): `verify_password` (scrypt, ~50-150ms) and the `time.sleep(1)`
+rate-limit run in Starlette's threadpool, without freezing the single-worker's event loop.
+Login failure: sleep + structured log (no password/token in log) + 401.
 """
 
 from __future__ import annotations
@@ -34,12 +34,12 @@ router = APIRouter()
 _FAIL_DELAY_SECONDS = 1
 _LOGIN_TEMPLATE = "login.html"
 
-# Identificador sintético para sessões abertas pelo login scrypt (break-glass).
+# Synthetic uid for sessions opened by scrypt login (break-glass).
 _SCRYPT_OWNER_UID = "scrypt:owner"
 
 
 def _open_session(request: Request, *, uid: str, tenant_id: str, role: str) -> None:
-    """Regenera a sessão (fixation) e grava role + uid + tenant_id + timestamp de auth."""
+    """Regenerate the session (fixation) and write role + uid + tenant_id + auth timestamp."""
     request.session.clear()
     request.session["role"] = role
     request.session["uid"] = uid
@@ -48,7 +48,7 @@ def _open_session(request: Request, *, uid: str, tenant_id: str, role: str) -> N
 
 
 class FirebaseLoginBody(BaseModel):
-    """Corpo da requisição POST /auth/firebase (entrada externa hostil)."""
+    """Body of POST /auth/firebase (hostile external input)."""
 
     id_token: str = Field(..., min_length=1)
 
@@ -59,7 +59,7 @@ def _login_context(
     next_path: str = "/",
     invite_token: str | None = None,
 ) -> dict[str, Any]:
-    """Contexto da tela de login: mensagem de erro + config Firebase + next + invite."""
+    """Login screen context: error message + Firebase config + next + invite."""
     return {
         "error": error,
         "next": safe_next(next_path),
@@ -68,11 +68,11 @@ def _login_context(
     }
 
 
-# Gate de concorrência: no máximo UMA tentativa de login processando por vez. Sem
-# ele, o time.sleep(1) da falha só serializa por requisição — N conexões paralelas
-# davam N chutes/segundo e prendiam N threads do pool (self-DoS das outras rotas
-# síncronas). Aquisição não-bloqueante: se já há uma em voo, recusa rápido (429),
-# sem gastar scrypt/sleep nem segurar thread. Rate-limit real, proporcional (ADR-0014).
+# Concurrency gate: at most ONE login attempt processed at a time. Without it, the
+# `time.sleep(1)` on failure would only serialize per-request — N parallel connections
+# gave N guesses/second and held N thread-pool threads (self-DoS of the other sync
+# routes). Non-blocking acquisition: if one is already in flight, reject fast (429)
+# without spending scrypt/sleep or holding a thread. Real, proportional rate-limit (ADR-0014).
 _LOGIN_GATE = threading.Semaphore(1)
 
 
@@ -82,7 +82,7 @@ def login_form(
     next: Annotated[str, Query()] = "",
     invite: Annotated[str, Query()] = "",
 ) -> Response:
-    """Mostra o form de login. Já autenticado? Vai direto ao destino `next`."""
+    """Show the login form. Already authenticated? Go straight to the safe `next`."""
     if request.session.get("role") in {"owner", "member", "superadmin"}:
         return RedirectResponse(safe_next(next), status_code=303)
     return templates.TemplateResponse(
@@ -98,15 +98,16 @@ def login_submit(
     password: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "",
 ) -> Response:
-    """Verifica a senha. Certa: abre a sessão e redireciona ao `next` seguro. Errada:
-    dorme 1s (rate-limit), loga a tentativa e devolve 401 com o form + alerta.
+    """Check the password. Correct: open session and redirect to the safe `next`. Wrong:
+    sleep 1s (rate-limit), log the attempt and return 401 with the form + alert.
 
-    Uma tentativa por vez (gate não-bloqueante): se já há login em voo, recusa na
-    hora (429) sem gastar scrypt/sleep nem prender thread do pool."""
+    One attempt at a time (non-blocking gate): if a login is already in flight, reject
+    immediately (429) without spending scrypt/sleep or holding a thread-pool thread.
+    """
     next_path = safe_next(next)
     if not _LOGIN_GATE.acquire(blocking=False):
-        client = request.client.host if request.client else "unknown"
-        _log.warning("api.login.busy", client=client)
+        client_host = request.client.host if request.client else "unknown"
+        _log.warning("api.login.busy", client=client_host)
         return templates.TemplateResponse(
             request,
             _LOGIN_TEMPLATE,
@@ -123,8 +124,8 @@ def login_submit(
             )
             return RedirectResponse(next_path, status_code=303)
         time.sleep(_FAIL_DELAY_SECONDS)
-        client = request.client.host if request.client else "unknown"
-        _log.warning("api.login.failed", client=client)
+        client_host = request.client.host if request.client else "unknown"
+        _log.warning("api.login.failed", client=client_host)
         return templates.TemplateResponse(
             request,
             _LOGIN_TEMPLATE,
@@ -137,17 +138,17 @@ def login_submit(
 
 @router.post("/logout")
 def logout(request: Request) -> Response:
-    """Encerra a sessão e volta pra tela de login."""
+    """End the session and return to the login screen."""
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
 
 def _firebase_config_ok(request: Request) -> bool:
-    """True se project id está configurado (fail-closed).
+    """True when a project id is configured (fail-closed).
 
-    Owner uids não são mais obrigatórios para login: self-signup cria tenant
-    automaticamente (ADR-0041). A allowlist passa a ser usada só para o papel
-    superadmin (KUBO-116).
+    Owner uids are no longer required for login: self-signup creates a tenant
+    automatically (ADR-0041). The allowlist is now only used for the superadmin
+    role (KUBO-116).
     """
     cfg = request.app.state.firebase_config
     return bool(cfg.project_id)
