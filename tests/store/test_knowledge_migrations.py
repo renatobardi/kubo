@@ -87,6 +87,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0012_settings_singleton.surql",
         "0013_dispatch_destination_record.surql",
         "0014_invite_table.surql",
+        # 0015 (KUBO-113): schema de tenancy (tenant/user/membership).
+        "0015_tenancy_schema.surql",
     }
 
 
