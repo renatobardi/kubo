@@ -106,6 +106,10 @@ class StaleInviteError(KuboError):
     caso genérico para não virar oráculo de estado (ADR-0033, KUBO-62)."""
 
 
+class TeamInviteError(KuboError):
+    """Convite de equipe inválido, expirado, revogado ou já consumido (ADR-0041)."""
+
+
 class MembershipRequiredError(KuboError):
     """Operação tenant-scoped recusada: o usuário não pertence ao tenant ativo."""
 

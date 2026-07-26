@@ -59,7 +59,8 @@ _SESSION_COOKIE = "kubo_session"
 _PUBLIC_PATHS = frozenset({"/login", "/auth/firebase", "/healthz", "/telegram/webhook"})
 # Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
 # futura chamada, digamos, /statics passaria pelo guard sem sessão.
-_PUBLIC_PREFIXES = ("/static/",)
+# /invite/<token> também é público: é a landing do convite de equipe.
+_PUBLIC_PREFIXES = ("/static/", "/invite/")
 
 # Dev/CI default quando KUBO_ALLOWED_HOSTS não é setado; prod seta o IP Tailscale
 # (+ MagicDNS). `testserver` é o Host do TestClient do Starlette.
