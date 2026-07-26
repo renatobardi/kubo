@@ -24,6 +24,10 @@ from kubo.runtime.catalog_defaults import (
 )
 from kubo.store import transaction
 
+# SQL templates reutilizáveis — evitam duplicação de literais identificada pelo Sonar.
+_SELECT_BY_ID = "SELECT * FROM $r;"
+_DELETE_BY_ID = "DELETE $r;"
+
 
 def _catalog_id(tenant_id: RecordID, table: str, name: str) -> RecordID:
     """RecordID determinístico por (tenant, nome) — idempotente e sem SELECT-then-CREATE."""
@@ -171,7 +175,7 @@ def get_persona(
 ) -> dict[str, Any] | None:
     """Lê uma persona pelo nome, ou None se não existe no tenant."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query("SELECT * FROM $r;", {"r": _catalog_id(tenant_id, "catalog_persona", name)})
+    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, "catalog_persona", name)})
     return _persona_from_row(rows[0]) if rows else None
 
 
@@ -182,7 +186,7 @@ def upsert_persona(
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     name = persona["name"]
     rid = _catalog_id(tenant_id, "catalog_persona", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     before = _persona_from_row(existing[0]) if existing else None
 
     transaction.run_transaction(
@@ -201,7 +205,7 @@ def upsert_persona(
             "perms": list(persona.get("permissions", [])),
         },
     )
-    after = _persona_from_row(db.query("SELECT * FROM $r;", {"r": rid})[0])
+    after = _persona_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
     _log_changelog(
         db,
         tenant_id=tenant_id,
@@ -218,11 +222,11 @@ def delete_persona(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
     """Remove uma persona do catálogo do tenant e grava changelog com after=None."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, "catalog_persona", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     if not existing:
         raise ConfigError(f"persona '{name}' not found in tenant catalog")
     before = _persona_from_row(existing[0])
-    db.query("DELETE $r;", {"r": rid})
+    db.query(_DELETE_BY_ID, {"r": rid})
     _log_changelog(
         db,
         tenant_id=tenant_id,
@@ -252,7 +256,7 @@ def get_integration(
 ) -> dict[str, Any] | None:
     """Lê uma integração pelo nome, ou None se não existe no tenant."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query("SELECT * FROM $r;", {"r": _catalog_id(tenant_id, "catalog_integration", name)})
+    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, "catalog_integration", name)})
     return _integration_from_row(rows[0]) if rows else None
 
 
@@ -263,7 +267,7 @@ def upsert_integration(
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     name = integration["name"]
     rid = _catalog_id(tenant_id, "catalog_integration", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     before = _integration_from_row(existing[0]) if existing else None
 
     transaction.run_transaction(
@@ -282,7 +286,7 @@ def upsert_integration(
             "b": integration.get("base_url"),
         },
     )
-    after = _integration_from_row(db.query("SELECT * FROM $r;", {"r": rid})[0])
+    after = _integration_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
     _log_changelog(
         db,
         tenant_id=tenant_id,
@@ -299,11 +303,11 @@ def delete_integration(db: Any, *, tenant_id: RecordID, name: str, user_id: Reco
     """Remove uma integração do catálogo do tenant e grava changelog."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, "catalog_integration", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     if not existing:
         raise ConfigError(f"integration '{name}' not found in tenant catalog")
     before = _integration_from_row(existing[0])
-    db.query("DELETE $r;", {"r": rid})
+    db.query(_DELETE_BY_ID, {"r": rid})
     _log_changelog(
         db,
         tenant_id=tenant_id,
@@ -334,7 +338,7 @@ def get_flow_template(
     """Lê um flow_template pelo nome, ou None se não existe no tenant."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        "SELECT * FROM $r;",
+        _SELECT_BY_ID,
         {"r": _catalog_id(tenant_id, "catalog_flow_template", name)},
     )
     return _flow_template_from_row(rows[0]) if rows else None
@@ -347,7 +351,7 @@ def upsert_flow_template(
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     name = template["name"]
     rid = _catalog_id(tenant_id, "catalog_flow_template", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     before = _flow_template_from_row(existing[0]) if existing else None
 
     transaction.run_transaction(
@@ -369,7 +373,7 @@ def upsert_flow_template(
             "bu": template.get("budget_usd"),
         },
     )
-    after = _flow_template_from_row(db.query("SELECT * FROM $r;", {"r": rid})[0])
+    after = _flow_template_from_row(db.query(_SELECT_BY_ID, {"r": rid})[0])
     _log_changelog(
         db,
         tenant_id=tenant_id,
@@ -386,11 +390,11 @@ def delete_flow_template(db: Any, *, tenant_id: RecordID, name: str, user_id: Re
     """Remove um flow_template do catálogo do tenant e grava changelog."""
     _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _catalog_id(tenant_id, "catalog_flow_template", name)
-    existing = db.query("SELECT * FROM $r;", {"r": rid})
+    existing = db.query(_SELECT_BY_ID, {"r": rid})
     if not existing:
         raise ConfigError(f"flow_template '{name}' not found in tenant catalog")
     before = _flow_template_from_row(existing[0])
-    db.query("DELETE $r;", {"r": rid})
+    db.query(_DELETE_BY_ID, {"r": rid})
     _log_changelog(
         db,
         tenant_id=tenant_id,

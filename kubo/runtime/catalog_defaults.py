@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+_GITHUB_API_URL = "https://api.github.com"
+
 DEFAULT_PERSONAS: list[dict[str, Any]] = [
     {
         "name": "analista",
@@ -70,21 +72,21 @@ DEFAULT_INTEGRATIONS: list[dict[str, Any]] = [
         "kind": "http",
         "auth": {"type": "bearer", "secret_ref": "env:GITHUB_PAT_KUBO"},
         "rate_limit": None,
-        "base_url": "https://api.github.com",
+        "base_url": _GITHUB_API_URL,
     },
     {
         "name": "github-readonly",
         "kind": "http",
         "auth": {"type": "bearer", "secret_ref": "env:GITHUB_TOKEN_READONLY"},
         "rate_limit": None,
-        "base_url": "https://api.github.com",
+        "base_url": _GITHUB_API_URL,
     },
     {
         "name": "github",
         "kind": "http",
         "auth": {"type": "bearer", "secret_ref": "env:GITHUB_PAT_FORGE"},
         "rate_limit": None,
-        "base_url": "https://api.github.com",
+        "base_url": _GITHUB_API_URL,
     },
     {
         "name": "rss",
