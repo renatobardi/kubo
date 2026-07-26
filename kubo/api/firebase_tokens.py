@@ -86,7 +86,7 @@ def _signing_key(jwks: PyJWKSet, kid: str) -> jwt.PyJWK:
 
 
 def verify_id_token(
-    token: str, project_id: str, allowed_uids: set[str] | None = None
+    token: str, project_id: str, *, allowed_uids: set[str] | None = None
 ) -> dict[str, Any]:
     """Verifica um ID token do Firebase e devolve uid/email.
 

@@ -91,6 +91,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0015_tenancy_schema.surql",
         # 0016 (KUBO-115): credenciais cifradas de provedor por tenant.
         "0016_tenant_credential.surql",
+        # 0017 (KUBO-120): convite de equipe.
+        "0017_team_invite.surql",
     }
 
 

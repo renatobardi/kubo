@@ -87,6 +87,7 @@
   <script>
     window.__KUBO_FIREBASE_CONFIG = {{ firebase | tojson }};
     window.__KUBO_NEXT = {{ next | tojson }};
+    window.__KUBO_INVITE = {{ (invite or "") | tojson }};
   </script>
   <!-- pragma: allowlist nextline secret -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" integrity="sha384-AQ3POAMqIhwS81FrUH95ekxqBZHeP5tG2JfEL3+7GuTtfRLWnrRh32UxwzM+//A9" crossorigin="anonymous"></script>
@@ -114,8 +115,13 @@
 
       async function sendIdToken(idToken) {
         try {
-          const next = encodeURIComponent(window.__KUBO_NEXT || "/");
-          const resp = await fetch("/auth/firebase?next=" + next, {
+          const next = window.__KUBO_NEXT || "/";
+          const invite = window.__KUBO_INVITE;
+          let url = "/auth/firebase?next=" + encodeURIComponent(next);
+          if (invite) {
+            url += "&invite=" + encodeURIComponent(invite);
+          }
+          const resp = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id_token: idToken }),

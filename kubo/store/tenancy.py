@@ -192,6 +192,17 @@ def get_tenant(db: Any, tenant_id: RecordID) -> Tenant | None:
     return _tenant_from_row(rows[0]) if rows else None
 
 
+def list_tenants(db: Any, tenant_ids: list[RecordID]) -> list[Tenant]:
+    """Fetch multiple tenants by id in a single query."""
+    if not tenant_ids:
+        return []
+    rows = db.query(
+        "SELECT * FROM tenant WHERE id IN $ids;",
+        {"ids": tenant_ids},
+    )
+    return [_tenant_from_row(r) for r in rows]
+
+
 def _find_existing_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> Any:
     """Busca a membership pelo par (user, tenant), ou None."""
     rows = db.query(
@@ -310,14 +321,14 @@ def assert_membership_or_superadmin(
     *,
     user_id: RecordID,
     tenant_id: RecordID,
-    is_superadmin: bool = False,
+    superadmin: bool = False,
 ) -> None:
     """Garante membership OU papel superadmin; levanta MembershipRequiredError se não.
 
     `superadmin` é a única exceção deliberada à regra de membership (ADR-0041 §VI),
     e deve ser checada explicitamente no ponto de chamada — nunca bypass implícito.
     """
-    if is_superadmin:
+    if superadmin:
         return
     assert_membership(db, user_id=user_id, tenant_id=tenant_id)
 
@@ -338,7 +349,10 @@ def get_or_create_user_and_tenant(
         tenant = create_tenant(db, name=tenant_name, owner_user_id=user.id)
         return user, tenant
 
-    memberships = list_memberships_for_user(db, user.id)
+    memberships = sorted(
+        list_memberships_for_user(db, user.id),
+        key=lambda m: (0 if m.role == "owner" else 1, m.created_at),
+    )
     if memberships:
         tenant = get_tenant(db, memberships[0].tenant)
         if tenant is None:

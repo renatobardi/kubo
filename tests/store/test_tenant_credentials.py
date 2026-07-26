@@ -121,6 +121,20 @@ def test_get_missing_credential_returns_none(db: Any) -> None:
     assert loaded is None
 
 
+def test_provider_is_normalized_with_whitespace(db: Any) -> None:
+    """Provider com espaços em branco é normalizado para a mesma chave."""
+    user, tenant = _owner_and_tenant(db)
+
+    tenant_credentials.set_credential(
+        db, user_id=user.id, tenant_id=tenant.id, provider="  openai  ", secret="key"
+    )
+    loaded = tenant_credentials.get_credential(
+        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
+    )
+
+    assert loaded == "key"
+
+
 def test_credential_isolation_between_tenants(db: Any) -> None:
     """Um tenant não lê a credencial de outro tenant."""
     owner_a = tenancy.create_user(db, firebase_uid="uid-a", email="a@example.com")

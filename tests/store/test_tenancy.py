@@ -193,12 +193,12 @@ def test_assert_membership_or_superadmin_bypasses_for_superadmin(db: Any) -> Non
     # Sem superadmin, recusa.
     with pytest.raises(MembershipRequiredError):
         tenancy.assert_membership_or_superadmin(
-            db, user_id=user.id, tenant_id=tenant.id, is_superadmin=False
+            db, user_id=user.id, tenant_id=tenant.id, superadmin=False
         )
 
     # Com superadmin, passa.
     tenancy.assert_membership_or_superadmin(
-        db, user_id=user.id, tenant_id=tenant.id, is_superadmin=True
+        db, user_id=user.id, tenant_id=tenant.id, superadmin=True
     )
 
 

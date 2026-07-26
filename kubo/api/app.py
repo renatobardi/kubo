@@ -59,7 +59,8 @@ _SESSION_COOKIE = "kubo_session"
 _PUBLIC_PATHS = frozenset({"/login", "/auth/firebase", "/healthz", "/telegram/webhook"})
 # Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
 # futura chamada, digamos, /statics passaria pelo guard sem sessão.
-_PUBLIC_PREFIXES = ("/static/",)
+# /invite/<token> também é público: é a landing do convite de equipe.
+_PUBLIC_PREFIXES = ("/static/", "/invite/")
 
 # Dev/CI default quando KUBO_ALLOWED_HOSTS não é setado; prod seta o IP Tailscale
 # (+ MagicDNS). `testserver` é o Host do TestClient do Starlette.
@@ -146,6 +147,12 @@ def _ui_config() -> UiConfig:
         fresh_max_age = int(os.environ.get("SESSION_FRESH_MAX_AGE", "600"))
     except ValueError:
         fresh_max_age = 600
+    breakglass_tenant_id = os.environ.get("KUBO_BREAKGLASS_TENANT_ID", "").strip()
+    if not breakglass_tenant_id:
+        raise ConfigError(
+            "KUBO_BREAKGLASS_TENANT_ID é obrigatório para login break-glass; "
+            "ex.: tenant:breakglass (invariante 8: referência de env)."
+        )
     return UiConfig(
         password_hash=password_hash,
         session_secret=session_secret,
@@ -153,8 +160,8 @@ def _ui_config() -> UiConfig:
         session_fresh_max_age=fresh_max_age,
         firebase_config=firebase_config,
         superadmin_uids=superadmin_uids,
-        breakglass_user_id=os.environ.get("KUBO_BREAKGLASS_USER_ID", ""),
-        breakglass_tenant_id=os.environ.get("KUBO_BREAKGLASS_TENANT_ID", ""),
+        breakglass_user_id=os.environ.get("KUBO_BREAKGLASS_USER_ID", "").strip(),
+        breakglass_tenant_id=breakglass_tenant_id,
     )
 
 

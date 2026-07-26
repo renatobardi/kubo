@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-import base64
-import json
-import os
-import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import respx
-from itsdangerous import TimestampSigner
-from jwt import encode as jwt_encode
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.api.firebase_tokens import clear_jwks_cache
 from kubo.errors import ConfigError
-from tests.api._firebase_test_helpers import rsa_keypair
+from tests.api._firebase_test_helpers import (
+    _JWKS_URL,
+    _decode_session_cookie,
+    _firebase_token,
+    rsa_keypair,
+)
 from tests.api.conftest import UI_PASSWORD
 
 # Valor incorreto para o teste de rejeição — não é credencial, só "senha errada".
@@ -96,14 +95,6 @@ def test_session_cookie_is_secure_httponly_and_lax(client: TestClient) -> None:
     assert "secure" in set_cookie
     assert "httponly" in set_cookie
     assert "samesite=lax" in set_cookie
-
-
-def _decode_session_cookie(set_cookie: str) -> dict[str, Any]:
-    """Decodifica o cookie itsdangerous assinado pelo SessionMiddleware (só para testes)."""
-    cookie_value = set_cookie.split(";")[0].split("=", 1)[1]
-    signer = TimestampSigner(os.environ["SESSION_SECRET"])
-    data = signer.unsign(cookie_value.encode(), max_age=14 * 24 * 3600)
-    return json.loads(base64.b64decode(data))
 
 
 def test_session_carries_role_owner_and_uid(client: TestClient) -> None:
@@ -186,29 +177,8 @@ def test_create_app_fails_fast_without_secrets(monkeypatch: pytest.MonkeyPatch) 
         create_app()
 
 
-# Helpers para tokens de teste na rota /auth/firebase (KUBO-93).
-
-_FIREBASE_PROJECT_ID = "kubo-test-project"
+# UID usado pelos testes de login Firebase (KUBO-93).
 _FIREBASE_OWNER_UID = "owner-google-uid"
-_JWKS_URL = (
-    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
-)
-
-
-def _firebase_token(
-    *, private_pem: str, uid: str = _FIREBASE_OWNER_UID, kid: str = "test-kid"
-) -> str:
-    now = int(time.time())
-    payload = {
-        "email": "owner@example.com",
-        "email_verified": True,
-        "aud": _FIREBASE_PROJECT_ID,
-        "iss": f"https://securetoken.google.com/{_FIREBASE_PROJECT_ID}",
-        "iat": now,
-        "exp": now + 3600,
-        "sub": uid,
-    }
-    return jwt_encode(payload, private_pem, algorithm="RS256", headers={"kid": kid, "alg": "RS256"})
 
 
 def _fake_user_and_tenant(uid: str) -> tuple[Any, Any]:
@@ -232,7 +202,7 @@ def test_firebase_login_success(
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
-    token = _firebase_token(private_pem=private_pem)
+    token = _firebase_token(private_pem=private_pem, uid=_FIREBASE_OWNER_UID)
 
     monkeypatch.setattr(
         "kubo.api.routes.auth.tenancy_store.get_or_create_user_and_tenant",
@@ -259,7 +229,7 @@ def test_firebase_login_allows_unknown_uid_and_creates_tenant(
     clear_jwks_cache()
     private_pem, jwk = rsa_keypair()
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
-    token = _firebase_token(private_pem=private_pem, uid="new-user-uid")
+    token = _firebase_token(private_pem=private_pem, uid="new-user-uid", email="owner@example.com")
 
     called = {}
 
