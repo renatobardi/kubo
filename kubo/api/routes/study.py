@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import string
 from pathlib import Path
 from typing import Annotated
 
@@ -51,7 +52,7 @@ _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
 _FORMATS: dict[str, MaterialFormat] = {".epub": "epub", ".pdf": "pdf"}
 _DEFAULT_MAX_MB = 50
 # Caracteres aceitos numa chave de record ao virar componente de caminho.
-_SAFE_KEY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+_SAFE_KEY = string.ascii_letters + string.digits + "-_"
 
 
 def _max_bytes() -> int:
