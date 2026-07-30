@@ -110,6 +110,15 @@ class TeamInviteError(KuboError):
     """Convite de equipe inválido, expirado, revogado ou já consumido (ADR-0041)."""
 
 
+class MaterialParseError(KuboError):
+    """Material de estudo ilegível: formato errado, arquivo corrompido ou sem sumário.
+
+    Levantada por `kubo.study.parsing.parse_material` (ADR-0043). A mensagem é
+    ORIENTAÇÃO para o dono ("o arquivo não parece um epub válido"), exibida na tela
+    de Estudos — nunca embute o conteúdo do material nem o erro cru da biblioteca de
+    parse (arquivo enviado é entrada hostil, mesma disciplina do `MalformedOutputError`)."""
+
+
 class MembershipRequiredError(KuboError):
     """Operação tenant-scoped recusada: o usuário não pertence ao tenant ativo."""
 

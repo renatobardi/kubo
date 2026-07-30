@@ -42,6 +42,7 @@ from kubo.api.routes import (
     runs,
     settings,
     sources,
+    study,
     telegram_webhook,
 )
 from kubo.errors import ConfigError
@@ -215,6 +216,7 @@ def create_app() -> FastAPI:
     app.include_router(dispatches.router, prefix="/dispatches")
     app.include_router(telegram_webhook.router, prefix="/telegram")
     app.include_router(settings.router, prefix="/settings")
+    app.include_router(study.router, prefix="/study")
 
     # add_middleware empilha do interno para o externo: o ÚLTIMO é o mais externo.
     app.add_middleware(RequireLoginMiddleware)

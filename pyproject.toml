@@ -12,6 +12,7 @@ dependencies = [
     # DENTRO da imagem no kubo-test (LXC aninhado). O CLI vive no wheel: pinar o wheel
     # pina o CLI. Bump revalida o spike.
     "claude-agent-sdk==0.2.119",
+    "defusedxml>=0.7.1",
     "fastapi>=0.139.0",
     "feedparser>=6.0.11",
     "httpx>=0.28",
@@ -23,6 +24,9 @@ dependencies = [
     # servidor surrealdb:v3.1.5 nos 5 comportamentos + restart (14 testes verdes).
     # Par SDK↔server move junto — ver docker-compose.yml e ci.yml.
     "pyjwt[crypto]>=2.10.0,<3",
+    # Teto de major: o pypdf come material enviado pelo dono (entrada hostil) e um
+    # bump de major muda o comportamento de parse sem aviso — sobe por revisão.
+    "pypdf>=6.14.2,<7",
     "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
     "structlog>=26.1.0",

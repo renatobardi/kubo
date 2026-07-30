@@ -58,6 +58,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "entities",
         "dispatches",
         "destinations",
+        "study",
     ):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
     monkeypatch.setattr(
@@ -107,7 +108,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         user_id=RecordID("user", "breakglass-owner"),
         role="owner",
     )
-    for _mod in ("entities", "dashboard", "distilled", "flows"):
+    for _mod in ("entities", "dashboard", "distilled", "flows", "study"):
         monkeypatch.setattr(
             f"kubo.api.routes.{_mod}.resolve_session",
             lambda request, db, _ctx=_session_ctx: _ctx,
