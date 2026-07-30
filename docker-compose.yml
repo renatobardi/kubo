@@ -193,6 +193,11 @@ services:
       # helper `python -m kubo.api.hashpw`; o secret de sessão é um token aleatório.
       KUBO_PASSWORD_HASH: ${KUBO_PASSWORD_HASH:?defina KUBO_PASSWORD_HASH — gere com python -m kubo.api.hashpw}
       SESSION_SECRET: ${SESSION_SECRET:?defina SESSION_SECRET — token aleatório de 32+ bytes}
+      # Break-glass (ADR-0041, KUBO-111): tenant zero + uid do login de emergência.
+      # Fail-fast como os segredos da UI — o app recusa boot sem eles; deixar o
+      # compose falhar ANTES evita container em crash-loop (incidente 2026-07-30).
+      KUBO_BREAKGLASS_TENANT_ID: ${KUBO_BREAKGLASS_TENANT_ID:?defina KUBO_BREAKGLASS_TENANT_ID — ex. tenant:breakglass}
+      KUBO_BREAKGLASS_USER_ID: ${KUBO_BREAKGLASS_USER_ID:?defina KUBO_BREAKGLASS_USER_ID — ex. user:breakglass-owner}
       # Hosts confiáveis (TrustedHost, anti-DNS-rebinding). Default = IP Tailscale do
       # publish; localhost é sempre permitido no código (healthcheck). Vírgula separa.
       KUBO_ALLOWED_HOSTS: ${KUBO_ALLOWED_HOSTS:-100.66.254.24}
