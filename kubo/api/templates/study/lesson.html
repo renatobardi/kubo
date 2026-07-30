@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% set lesson_url = "/study/lessons/" ~ (lesson.id.id | urlencode) %}
+{% set reaction_labels = {"facil": "Fácil", "ok": "Ok", "dificil": "Difícil"} %}
+{% set mobile_title = "Lição do dia" %}
+{% block title %}Lição do dia · Estudos · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Lição do dia", "Leia, responda o quiz e marque como concluída. A correção aparece na hora.") }}
+
+  <section class="flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-xl bg-card p-4 text-sm ring-1 ring-foreground/10">
+    <span class="text-xs font-semibold text-muted-foreground">Dia de estudo</span>
+    <span>{{ lesson.scheduled_for.isoformat() | short_datetime }}</span>
+    {% if log %}
+    <span class="text-xs font-semibold text-muted-foreground">Concluída em</span>
+    <span>{{ log.completed_at.isoformat() | short_datetime }}</span>
+    <span class="text-xs font-semibold text-muted-foreground">Acertos</span>
+    <span>{{ log.correct_count }} de {{ questions | length }}</span>
+    {% if log.reaction %}
+    <span class="text-xs font-semibold text-muted-foreground">Reação</span>
+    <span>{{ reaction_labels[log.reaction] or log.reaction }}</span>
+    {% endif %}
+    {% endif %}
+  </section>
+
+  {% if blocks.recap %}
+  <section class="rounded-xl bg-primary/5 p-4 ring-1 ring-primary/20">
+    <h2 class="text-sm font-medium">Recapitulando o que você errou</h2>
+    <div class="mt-2 space-y-2 text-sm leading-relaxed">
+      {% for paragraph in blocks.recap %}<p>{{ paragraph }}</p>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% for block in [("Conceito", blocks.concept), ("Cenário", blocks.scenario), ("Na sua rotina", blocks.application)] %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">{{ block[0] }}</h2>
+    <div class="mt-2 space-y-2 text-sm leading-relaxed">
+      {% for paragraph in block[1] %}<p>{{ paragraph }}</p>{% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <section class="space-y-2">
+    <h2 class="text-sm font-medium">Quiz <span class="text-xs font-normal text-muted-foreground">({{ questions | length }})</span></h2>
+
+    {% if log %}
+    {% for question in questions %}
+    <article class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+      <div class="flex items-baseline gap-2">
+        <span class="shrink-0 text-xs {% if question.correct %}text-primary{% else %}text-destructive{% endif %}">{% if question.correct %}✓{% else %}✗{% endif %}</span>
+        <h3 class="min-w-0 flex-1 text-sm font-medium">{{ question.question }}</h3>
+      </div>
+      <ul class="mt-2 space-y-1 text-sm">
+        {% for option in question.options %}
+        <li class="flex gap-2 {% if loop.index0 == question.answer_index %}font-medium{% elif loop.index0 == question.chosen %}text-destructive{% else %}text-muted-foreground{% endif %}">
+          <span class="shrink-0 text-xs">{% if loop.index0 == question.answer_index %}certa{% elif loop.index0 == question.chosen %}sua{% else %}&nbsp;{% endif %}</span>
+          <span class="min-w-0">{{ option }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="mt-2 text-xs text-muted-foreground">{{ question.explanation }}</p>
+    </article>
+    {% endfor %}
+
+    {% else %}
+    <form method="post" action="{{ lesson_url }}/complete" class="space-y-2">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% for question in questions %}
+      <fieldset class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <legend class="text-sm font-medium">{{ question.question }}</legend>
+        <div class="mt-2 space-y-2">
+          {% for option in question.options %}
+          <label class="flex cursor-pointer items-start gap-2 text-sm">
+            <input type="radio" name="answer_{{ question.index }}" value="{{ loop.index0 }}" required class="mt-0.5 size-3.5 shrink-0 accent-primary">
+            <span class="min-w-0">{{ option }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% endfor %}
+
+      <fieldset class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <legend class="text-sm font-medium">Como foi? <span class="text-xs font-normal text-muted-foreground">(opcional)</span></legend>
+        <div class="mt-2 flex flex-wrap gap-2">
+          {% for value in reactions %}
+          <label class="flex h-9 cursor-pointer items-center gap-2 rounded-4xl px-3 text-sm ring-1 ring-foreground/10 hover:bg-muted">
+            <input type="radio" name="reaction" value="{{ value }}" class="size-3.5 accent-primary">
+            {{ reaction_labels[value] or value }}
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      <button type="submit" class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">Concluir lição</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

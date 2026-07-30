@@ -161,18 +161,19 @@ def test_unknown_timezone_is_rejected() -> None:
 
 def test_load_schedules_reads_real_repo_config() -> None:
     """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108), migração
-    do GitHub pro sweep (#110) e KUBO-44 (digest sai do YAML): 1 `sweep: rss` + 1
-    `sweep: github-repo` (ADR-0025 §4/§5) + 1 destilador diário ATIVO (ADR-0013 §VIII) —
-    3 entries, timezone explícita, ZERO worker `feed` estático, ZERO flow agendado
-    (FlowEntry aposentado, #110) e ZERO digest no YAML."""
-    from kubo.scheduler import SweepEntry, WorkerEntry, load_schedules
+    do GitHub pro sweep (#110), KUBO-44 (digest sai do YAML) e KUBO-137 (véspera de Estudos):
+    1 `sweep: rss` + 1 `sweep: github-repo` (ADR-0025 §4/§5) + 1 destilador diário ATIVO
+    (ADR-0013 §VIII) + 1 `job: study-eve` (ADR-0043) — 4 entries, timezone explícita, ZERO
+    worker `feed` estático, ZERO flow agendado (FlowEntry aposentado, #110) e ZERO digest
+    no YAML."""
+    from kubo.scheduler import JobEntry, SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
     worker_entries = [e for e in schedules.schedules if isinstance(e, WorkerEntry)]
     sweep_entries = [e for e in schedules.schedules if isinstance(e, SweepEntry)]
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 3
+    assert len(schedules.schedules) == 4
     # A coleta de feeds virou um sweep dirigido por Cadastro; nenhum worker `feed` estático.
     assert not any(e.worker == "feed" for e in worker_entries)
     assert {e.sweep for e in sweep_entries} == {"rss", "github-repo"}
@@ -194,6 +195,12 @@ def test_load_schedules_reads_real_repo_config() -> None:
     github = next(e for e in sweep_entries if e.sweep == "github-repo")
     assert github.cron == "0 7 * * *"
 
+    # A véspera de Estudos (KUBO-137): job interno, várias janelas de RETRY na mesma noite
+    # (a geração é idempotente por (plano, dia)).
+    eve = [e for e in schedules.schedules if isinstance(e, JobEntry)]
+    assert [e.job for e in eve] == ["study-eve"]
+    assert eve[0].cron == "0 18-22 * * *"
+
 
 def test_distiller_entry_config_validates() -> None:
     """O entry ATIVO do destilador (`max_items: 50`, D56) valida contra o schema do
@@ -214,14 +221,14 @@ def test_distiller_entry_config_validates() -> None:
 
 
 def test_build_scheduler_creates_yaml_digest_and_poll_jobs() -> None:
-    """Com settings, o scheduler monta: 3 jobs do YAML (2 sweeps + distiller) + digest + poll = 5.
-    Não inicia o scheduler (`.start()` bloquearia)."""
+    """Com settings, o scheduler monta: 4 jobs do YAML (2 sweeps + distiller + véspera de
+    Estudos) + digest + poll = 6. Não inicia o scheduler (`.start()` bloquearia)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules(), _scheduler_settings())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 5
+    assert len(scheduler.get_jobs()) == 6
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:

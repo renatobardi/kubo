@@ -33,6 +33,7 @@ from kubo.store.study import (
     get_lesson_for_day,
     get_log_for_lesson,
     list_active_plans,
+    list_chapters_by_ids,
     list_lessons,
     next_unlessoned_entry,
     recent_misses,
@@ -446,6 +447,52 @@ def test_lesson_is_invisible_to_another_member_of_same_tenant(
         )
 
     assert get_log_for_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson.id) is None
+
+
+def test_list_chapters_by_ids_returns_the_requested_order_and_only_own_chapters(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Os capítulos de uma lição chegam ao tutor NA ORDEM pedida — e só os do dono.
+
+    A entrada do plano aponta capítulos por id, em qualquer ordem; devolver na ordem do
+    banco montaria o prompt fora da ordem de leitura. E um id de outro membro do mesmo
+    tenant simplesmente não volta: se voltasse, o material alheio entraria na lição.
+    """
+    plan = _active_plan(db, tenant_id, user_id, entries=3)
+    entries = [
+        next_unlessoned_entry(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan.id),
+    ]
+    assert entries[0] is not None
+    mine = [
+        row["id"]
+        for row in db.query(
+            "SELECT * FROM material_chapter WHERE user_id = $u ORDER BY seq;", {"u": user_id}
+        )
+    ]
+    other_id = _other_member(db, tenant_id)
+    theirs = create_material(
+        db,
+        tenant_id=tenant_id,
+        user_id=other_id,
+        title="Livro do vizinho",
+        fmt="epub",
+        original_filename="v.epub",
+        file_path="/data/v.epub",
+        size_bytes=10,
+        chapters=[ParsedChapter(seq=1, title="Cap do vizinho", content="segredo", part=None)],
+    )
+    their_chapter = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m;", {"m": theirs.id}
+    )[0]["id"]
+
+    scope = {"tenant_id": tenant_id, "user_id": user_id}
+    requested = [mine[2], mine[0], their_chapter]
+
+    chapters = list_chapters_by_ids(db, chapter_ids=requested, **scope)
+
+    assert [c.id for c in chapters] == [mine[2], mine[0]]
+    assert list_chapters_by_ids(db, chapter_ids=[], **scope) == []
+    assert list_chapters_by_ids(db, chapter_ids=mine, tenant_id=tenant_id, user_id=other_id) == []
 
 
 def test_lesson_store_requires_membership(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:

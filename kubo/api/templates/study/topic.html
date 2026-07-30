@@ -70,8 +70,36 @@
     {% endif %}
   </section>
 
+  {% if plan.status == "active" %}
+  {% set current = today_lesson or next_lesson %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">{% if today_lesson %}Lição de hoje{% else %}Próxima lição{% endif %}</h2>
+    {% if current %}
+    <p class="mt-1 text-sm text-muted-foreground">{{ current.scheduled_for.isoformat() | short_datetime }}</p>
+    <a href="/study/lessons/{{ current.id.id | urlencode }}" class="mt-3 inline-flex h-9 items-center rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80">Abrir a lição</a>
+    {% else %}
+    <p class="mt-1 text-sm text-muted-foreground">A lição do próximo dia de estudo é preparada na véspera, à noite.</p>
+    {% endif %}
+  </section>
+
   <section class="space-y-2">
-    <h2 class="text-sm font-medium">Lições <span class="text-xs font-normal text-muted-foreground">({{ entries | length }})</span></h2>
+    <h2 class="text-sm font-medium">Histórico de lições <span class="text-xs font-normal text-muted-foreground">({{ total }})</span></h2>
+    {% if not lessons %}
+      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">Nenhuma lição gerada ainda.</div>
+    {% endif %}
+    {% for lesson in lessons %}
+    <a href="/study/lessons/{{ lesson.id.id | urlencode }}" class="flex items-baseline gap-2 rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+      <span class="shrink-0 text-xs text-muted-foreground">{{ lesson.scheduled_for.isoformat() | short_datetime }}</span>
+      <span class="min-w-0 flex-1 truncate text-sm">{{ lesson.concept }}</span>
+      <span class="shrink-0 text-xs {% if (lesson.id | string) in completed %}text-primary{% else %}text-muted-foreground{% endif %}">{% if (lesson.id | string) in completed %}concluída{% else %}pendente{% endif %}</span>
+    </a>
+    {% endfor %}
+    {% if total > 0 %}{{ macros.pagination(topic_url, start, size, total) }}{% endif %}
+  </section>
+  {% endif %}
+
+  <section class="space-y-2">
+    <h2 class="text-sm font-medium">Lições do plano <span class="text-xs font-normal text-muted-foreground">({{ entries | length }})</span></h2>
     {% if not entries %}
       <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">Nenhuma lição neste plano.</div>
     {% endif %}
