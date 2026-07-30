@@ -12,7 +12,7 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from surrealdb import RecordID
@@ -654,3 +654,160 @@ def activate_plan(
         raise StoreError("study plan vanished during activation")
     _log.info("store.study_plan.activated", plan=str(plan_id))
     return active
+
+
+# --- Lição e registro de estudo (KUBO-137) ---------------------------------------------
+#
+# Mesmo contrato das seções acima: keyword-only, `assert_membership` no topo, filtro por
+# tenant E user. A Lição é gerada pelo job da véspera e lida na UI pelo dono; o Registro
+# de estudo é o que ele respondeu, e alimenta a recapitulação da lição seguinte.
+
+if TYPE_CHECKING:
+    # Só para TIPO: `kubo.study.tutor` importa `MaterialChapter` DAQUI, então um import
+    # em runtime fecharia o ciclo (módulo parcialmente inicializado) e derrubaria tudo
+    # que depende da store de Estudos.
+    from kubo.study.tutor import LessonOutput
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """A lição de um dia de estudo: os blocos gerados e o quiz, congelados no banco.
+
+    `quiz` é lista de dicts (campo FLEXIBLE) porque a lição é um SNAPSHOT: a correção
+    de uma lição antiga tem que usar o quiz como ele foi gerado, mesmo que o modelo da
+    persona mude depois.
+    """
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    study_plan: RecordID
+    plan_entry: RecordID
+    scheduled_for: datetime
+    concept: str
+    scenario: str
+    application: str
+    recap: str | None
+    quiz: list[dict[str, Any]]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class StudyLog:
+    """Registro de estudo: o que o dono respondeu, quanto acertou e como reagiu."""
+
+    id: RecordID
+    lesson: RecordID
+    answers: list[int]
+    correct_count: int
+    reaction: str | None
+    completed_at: datetime
+
+
+def list_active_plans(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[StudyPlan]:
+    """Planos ATIVOS do usuário no tenant — os únicos que produzem lição."""
+    raise NotImplementedError
+
+
+def create_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    entry_id: RecordID,
+    scheduled_for: datetime,
+    output: LessonOutput,
+) -> Lesson:
+    """Persiste a lição de um dia do plano e devolve o registro criado.
+
+    (plano, dia) é UNIQUE: uma segunda geração para o mesmo dia é StoreError legível.
+    É o que torna o job da véspera idempotente — várias janelas de retry no mesmo dia
+    não podem render duas lições para o mesmo dia de estudo.
+    """
+    raise NotImplementedError
+
+
+def get_lesson(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, lesson_id: RecordID
+) -> Lesson | None:
+    """Lê uma lição do usuário; None se não existe ou é de outro usuário."""
+    raise NotImplementedError
+
+
+def get_lesson_for_day(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    scheduled_for: datetime,
+) -> Lesson | None:
+    """Lição do plano marcada para um dia; None quando ainda não foi gerada."""
+    raise NotImplementedError
+
+
+def list_lessons(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    limit: int,
+    start: int,
+) -> list[Lesson]:
+    """Página do histórico de lições do plano, mais recentes primeiro."""
+    raise NotImplementedError
+
+
+def count_lessons(db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID) -> int:
+    """Total de lições já geradas para o plano."""
+    raise NotImplementedError
+
+
+def next_unlessoned_entry(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> PlanEntry | None:
+    """Menor `seq` do plano que ainda não virou lição; None quando o plano acabou.
+
+    A ORDEM DO PLANO NUNCA MUDA (ADR-0043): o que decide a próxima lição é o `seq`
+    aprovado pelo dono, não o desempenho nem a data.
+    """
+    raise NotImplementedError
+
+
+def complete_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+    answers: Sequence[int],
+    correct_count: int,
+    reaction: str | None,
+) -> StudyLog:
+    """Grava o registro de estudo da lição e devolve o que ficou no banco.
+
+    Um registro POR LIÇÃO (índice UNIQUE): concluir de novo é StoreError legível — o
+    segundo envio não pode reescrever o desempenho que já alimentou a recapitulação.
+    `correct_count` vem pronto de quem chama: a correção é contra o quiz da lição, e
+    quem tem o quiz em mãos é a rota.
+    """
+    raise NotImplementedError
+
+
+def get_log_for_lesson(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, lesson_id: RecordID
+) -> StudyLog | None:
+    """Registro de estudo da lição; None enquanto ela não foi concluída."""
+    raise NotImplementedError
+
+
+def recent_misses(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID, limit: int = 10
+) -> list[str]:
+    """Enunciados errados nos registros mais recentes do plano, do mais novo ao mais velho.
+
+    É a matéria-prima da recapitulação: a lição seguinte abre pelo que o dono errou.
+    """
+    raise NotImplementedError
