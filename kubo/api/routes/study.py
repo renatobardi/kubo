@@ -770,3 +770,33 @@ def activate_plan(
         return PlainTextResponse(_PLAN_LOCKED, status_code=409)
     _log.info("study.plan.activated", plan=str(active.id))
     return RedirectResponse(_topic_url(topic.id, flag="ativado"), status_code=303)
+
+
+# --- Lição do dia (KUBO-137) -----------------------------------------------------------
+#
+# Mesma tríade de escrita das rotas acima: verify_csrf → sessão → connect_rw → 303 (PRG).
+
+_LESSONS_ROUTE = "/study/lessons"
+_LESSON_TABLE = "lesson"
+_NOT_IMPLEMENTED = "Lição ainda não implementada."
+
+
+@router.get("/lessons/{key}")
+def lesson_detail(request: Request, key: str) -> Response:
+    """A lição do dia: recapitulação, conceito, cenário, aplicação e o quiz.
+
+    Sem registro de estudo, o quiz é um formulário; com registro, vira correção
+    (acerto/erro por questão + explicação), a reação e quando o dono concluiu.
+    """
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/lessons/{key}/complete")
+def complete_lesson(
+    request: Request,
+    key: str,
+    reaction: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Corrige as respostas contra o quiz da lição e grava o registro de estudo."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)

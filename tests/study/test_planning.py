@@ -12,7 +12,7 @@ from datetime import date
 
 import pytest
 
-from kubo.study.planning import compute_target_date
+from kubo.study.planning import compute_target_date, next_study_day
 
 _WEEK = ["mon", "tue", "wed", "thu", "fri"]
 
@@ -94,3 +94,48 @@ def test_non_positive_lesson_count_is_an_error(count: int) -> None:
     """Plano sem lição não tem data-alvo; devolver `start` esconderia o erro."""
     with pytest.raises(ValueError):
         compute_target_date(start=date(2026, 8, 3), weekdays=_WEEK, lesson_count=count)
+
+
+# --- next_study_day (KUBO-137): o dia que o job da véspera prepara ---------------------
+#
+# A pergunta é outra: `compute_target_date` conta ocorrências a partir de `start`
+# INCLUSIVE; aqui o dia de referência é a VÉSPERA, e por isso ele nunca é a resposta.
+
+
+def test_next_study_day_skips_the_reference_day_itself() -> None:
+    """Rodando na véspera, o dia habilitado de HOJE não conta — a lição é a de amanhã."""
+    today = date(2026, 8, 5)
+    assert today.weekday() == 2  # quarta, habilitada em _WEEK
+
+    assert next_study_day(after=today, weekdays=_WEEK) == date(2026, 8, 6)  # quinta
+
+
+def test_next_study_day_jumps_the_weekend() -> None:
+    """Sexta à noite com cadência seg-sex prepara a lição de SEGUNDA, não de sábado."""
+    friday = date(2026, 8, 7)
+    assert friday.weekday() == 4
+
+    assert next_study_day(after=friday, weekdays=_WEEK) == date(2026, 8, 10)  # segunda
+
+
+def test_next_study_day_from_a_disabled_day_finds_the_next_enabled_one() -> None:
+    """Véspera num dia sem estudo (sábado) ainda aponta para o próximo dia habilitado."""
+    saturday = date(2026, 8, 8)
+    assert saturday.weekday() == 5
+
+    assert next_study_day(after=saturday, weekdays=_WEEK) == date(2026, 8, 10)
+
+
+def test_next_study_day_with_a_single_weekday_advances_a_full_week() -> None:
+    """Cadência de um dia só: a partir do próprio dia, o próximo é uma semana depois."""
+    sunday = date(2026, 8, 9)
+    assert sunday.weekday() == 6
+
+    assert next_study_day(after=sunday, weekdays=["sun"]) == date(2026, 8, 16)
+
+
+@pytest.mark.parametrize("weekdays", [[], ["monday"]])
+def test_next_study_day_rejects_invalid_cadence(weekdays: list[str]) -> None:
+    """Cadência vazia ou com dia inventado é erro — nunca uma data qualquer."""
+    with pytest.raises(ValueError):
+        next_study_day(after=date(2026, 8, 5), weekdays=weekdays)
