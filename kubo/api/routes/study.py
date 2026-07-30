@@ -16,7 +16,7 @@ import os
 import secrets
 import string
 from collections.abc import Callable, Sequence
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
@@ -39,6 +39,7 @@ from kubo.store import study as study_store
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.planner import Planner, PlanProposal, mechanical_proposal
 from kubo.study.planning import compute_target_date, next_study_day
+from kubo.study.progress import PlanProgress, compute_progress, count_study_days
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -346,6 +347,8 @@ _TOO_MANY_CHAPTERS = "O material tem capítulos demais para propor um plano — 
 _NO_PLAN = "Este tema ainda não tem plano proposto."
 # Estado do plano que já produz lição (a store é a dona do vocabulário).
 _ACTIVE_STATUS = "active"
+# Estado anterior à ativação: sem régua de progresso, e sem pausar/retomar (KUBO-138).
+_PROPOSED_STATUS = "proposed"
 _PLAN_LOCKED = "Este plano já foi ativado e não aceita mais edição."
 
 
@@ -518,6 +521,35 @@ def _midnight_utc(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=_display_tz()).astimezone(timezone.utc)
 
 
+def _plan_progress(
+    db: Any,
+    *,
+    plan: study_store.StudyPlan | None,
+    entries: list[study_store.PlanEntry],
+    scope: dict[str, Any],
+) -> PlanProgress | None:
+    """A régua do plano hoje, ou None quando ainda não há régua.
+
+    A régua nasce na ATIVAÇÃO: plano ainda proposto (ou tema sem plano) não tem progresso
+    a mostrar, e derivar atraso do nada inventaria cobrança para quem está curando o
+    plano. Nada aqui lê "meta batida" (ADR-0043): as conclusões saem dos registros de
+    estudo e viram o dia LOCAL do dono — comparar dias em UTC faria a lição das 21h
+    contar para o dia seguinte.
+    """
+    if plan is None or plan.status == _PROPOSED_STATUS or not entries:
+        return None
+    tz = _display_tz()
+    completions = study_store.completion_dates(db, plan_id=plan.id, **scope)
+    return compute_progress(
+        activated_on=(plan.activated_at or plan.created_at).astimezone(tz).date(),
+        today=_today(),
+        weekdays=plan.weekdays,
+        total=len(entries),
+        completions=[moment.astimezone(tz).date() for moment in completions],
+        paused_days=plan.paused_days,
+    )
+
+
 def _plan_lessons(db: Any, plan: study_store.StudyPlan, scope: dict[str, Any]) -> dict[str, Any]:
     """Lição do dia (ou a da próxima data de estudo) + histórico do plano ATIVO.
 
@@ -583,12 +615,14 @@ def topic_detail(
                 for lesson in lessons
                 if study_store.get_log_for_lesson(db, lesson_id=lesson.id, **scope) is not None
             }
+        progress = _plan_progress(db, plan=plan, entries=entries, scope=scope)
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
         {
             "topic": topic,
             "plan": plan,
+            "progress": progress,
             "entries": entries,
             "lessons": lessons,
             "completed": completed,
@@ -675,12 +709,17 @@ def _plan_edit(
     key: str,
     csrf: str,
     apply: Callable[[Any, study_store.StudyPlan, list[Any]], None],
+    *,
+    refused: str = _PLAN_LOCKED,
 ) -> Response:
-    """Molde comum das três edições da proposta (remover, mover, cadência).
+    """Molde comum das escritas sobre o plano (remover, mover, cadência, pausar, retomar).
 
     Mesma tríade das outras escritas — CSRF → sessão → `connect_rw` → 303 (PRG) — com a
-    leitura do plano e das lições feita uma vez: as três precisam contar as lições para
-    recalcular a data-alvo. A única variação entre elas é `apply`.
+    leitura do plano e das lições feita uma vez: todas precisam contar as lições para
+    recalcular a data-alvo. A variação entre elas é `apply` e o texto de `refused`, que
+    o 409 devolve: "não aceita mais edição" e "não está no estado necessário" são
+    recusas diferentes, e mostrar a errada mandaria o dono procurar o problema no lugar
+    errado.
     """
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
@@ -1013,7 +1052,22 @@ async def complete_lesson(request: Request, key: str) -> Response:
 #
 # Mesma tríade de escrita das rotas acima: verify_csrf → sessão → connect_rw → 303 (PRG).
 
-_NOT_IMPLEMENTED = "Pausar/retomar ainda não implementado."
+_PLAN_STATE_REFUSED = "O plano não está no estado necessário para esta ação."
+
+
+def _frozen_study_days(plan: study_store.StudyPlan) -> int:
+    """Dias de estudo congelados por ESTA pausa — o que o retomar soma ao acumulador.
+
+    Conta de `paused_at` até ONTEM: hoje ainda dá para estudar, então incluí-lo
+    perdoaria um dia que o dono não perdeu. Sem `paused_at` (plano gravado antes da
+    migração 0024) não há intervalo a congelar.
+    """
+    if plan.paused_at is None:
+        return 0
+    paused_on = plan.paused_at.astimezone(_display_tz()).date()
+    return count_study_days(
+        start=paused_on, end=_today() - timedelta(days=1), weekdays=plan.weekdays
+    )
 
 
 @router.post("/topics/{key}/plan/pause")
@@ -1023,7 +1077,11 @@ def pause_plan(
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
     """Pausa o plano ativo: sem geração na véspera, sem sino, e o atraso congela."""
-    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+    def _apply(db: Any, plan: study_store.StudyPlan, entries: list[Any]) -> None:
+        study_store.pause_plan(db, plan_id=plan.id, tenant_id=plan.tenant_id, user_id=plan.user_id)
+
+    return _plan_edit(request, key, csrf, _apply, refused=_PLAN_STATE_REFUSED)
 
 
 @router.post("/topics/{key}/plan/resume")
@@ -1033,4 +1091,18 @@ def resume_plan(
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
     """Retoma o plano pausado, com a data-alvo recalculada a partir do que resta."""
-    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+    def _apply(db: Any, plan: study_store.StudyPlan, entries: list[Any]) -> None:
+        scope = {"tenant_id": plan.tenant_id, "user_id": plan.user_id}
+        done = study_store.count_completed_lessons(db, plan_id=plan.id, **scope)
+        study_store.resume_plan(
+            db,
+            plan_id=plan.id,
+            paused_days_add=_frozen_study_days(plan),
+            # O alvo é recalculado a partir do que RESTA, contado de hoje: herdar o alvo
+            # congelado devolveria uma data que passou enquanto o plano estava parado.
+            new_target=_target_datetime(weekdays=plan.weekdays, lesson_count=len(entries) - done),
+            **scope,
+        )
+
+    return _plan_edit(request, key, csrf, _apply, refused=_PLAN_STATE_REFUSED)

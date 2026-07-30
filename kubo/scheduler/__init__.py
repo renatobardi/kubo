@@ -24,12 +24,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from kubo.distribution.config import resolve_base_url
+from kubo.distribution.telegram import send_telegram
 from kubo.embedding import Embedder, GeminiEmbedder
-from kubo.errors import ConfigError, format_validation_error
+from kubo.errors import ConfigError, SenderError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.runtime.personas import resolve_persona
 from kubo.runtime.runner import run_worker
-from kubo.scheduler.study import generate_upcoming_lessons
+from kubo.scheduler.study import generate_upcoming_lessons, send_daily_study_bell
 from kubo.scheduler.sweep import DEST_DISPATCH, SWEEP_DISPATCH
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
@@ -91,7 +93,8 @@ class SweepEntry(BaseModel):
 class JobEntry(BaseModel):
     """Uma entrada de JOB interno (KUBO-137): trabalho agendado que NÃO é worker sob
     contrato nem sweep de coleta. `job` é o nome fixo do job (`Literal`, validado na
-    borda) — o único hoje é `study-eve`, a geração da lição da véspera.
+    borda): `study-eve` gera a lição da véspera e `study-bell` toca o sino da manhã
+    (KUBO-138).
 
     Job interno não vira `WorkerEntry` de propósito: não tem manifest, não produz
     `RunResult` e não abre um `run` (invariante 6 vale para worker, e forçá-lo aqui
@@ -99,7 +102,7 @@ class JobEntry(BaseModel):
     disjunto (`job`) desambigua a união, como `worker` e `sweep`."""
 
     model_config = ConfigDict(extra="forbid")
-    job: Literal["study-eve"]
+    job: Literal["study-eve", "study-bell"]
     cron: str
 
 
@@ -331,6 +334,65 @@ def execute_study_eve_job() -> None:
         raise
 
 
+def _bell_notifier(db: Any, tenant_id: Any, user_id: Any) -> Callable[[str], None]:
+    """Costura de envio do sino (KUBO-138): manda o texto pelos destinos Telegram ATIVOS.
+
+    Mesma fronteira outbound e mesma resolução de destino/segredo do digest (ADR-0029):
+    destinos vêm do banco, o token vem da integração `telegram` resolvida pelo runtime
+    (env ou credencial de tenant), NUNCA de `os.environ` daqui. `parse_mode=None` (texto
+    puro) porque a mensagem carrega o título do material do dono — marcá-la como HTML
+    faria um título com `<` derrubar o envio.
+
+    A resolução é feita DENTRO do envio (e não na montagem): assim uma integração
+    faltando vira aviso do plano — que o sino registra e segue — em vez de derrubar o
+    job inteiro antes do primeiro plano.
+    """
+
+    def _send(text: str) -> None:
+        catalog = load_integrations(db, tenant_id, user_id)
+        resolved = resolve_integrations(["telegram"], catalog, db=db, tenant_id=tenant_id)
+        token = resolved["telegram"].secret
+        if not token:
+            raise SenderError("integração 'telegram' sem segredo resolvido")
+        targets = destination_store.active_destinations(db, channel="telegram")
+        if not targets:
+            raise SenderError("nenhum destino telegram ativo para o sino de Estudos")
+        for target in targets:
+            send_telegram(token=token, chat_id=target.address, text=text, parse_mode=None)
+
+    return _send
+
+
+def execute_study_bell_job() -> None:
+    """Executa o sino de Estudos (KUBO-138): o aviso da manhã de cada plano ativo.
+
+    Conexão POR execução como os demais jobs (ADR-0010), relógio lido AQUI e passado por
+    parâmetro. O cron de 1x/dia É a cerca anti-spam: no máximo uma mensagem por plano
+    por dia, sem nenhuma tabela de "notificação enviada".
+    """
+    try:
+        with client.connect(client.config()) as db:
+            tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+            send_daily_study_bell(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                now=datetime.now(timezone.utc),
+                notifier=_bell_notifier(db, tenant_id, user_id),
+            )
+    except Exception:  # noqa: BLE001 — loga estruturado e repropaga (molde de execute_job)
+        _log.exception("scheduler_job_failed", job="study-bell")
+        raise
+
+
+# Cada job interno do YAML tem uma função fixa em código (nunca um nome vindo de dado):
+# o `Literal` de `JobEntry` e este mapa são as duas metades da mesma cerca.
+_JOB_DISPATCH: dict[str, Callable[[], None]] = {
+    "study-eve": execute_study_eve_job,
+    "study-bell": execute_study_bell_job,
+}
+
+
 def _cron_trigger(cron: str, tz: ZoneInfo, *, label: str) -> CronTrigger:
     """Parseia `cron` em `CronTrigger`, com `ConfigError` legível (padrão de domínio do
     módulo) no lugar da `ValueError` crua da lib — `label` identifica a entry no erro."""
@@ -382,7 +444,7 @@ def _add_study_job(scheduler: BlockingScheduler, entry: JobEntry, tz: ZoneInfo) 
     o cron — mesma postura de `_add_sweep_job`: nada de erro descoberto no 1º disparo.
     """
     trigger = _cron_trigger(entry.cron, tz, label=f"job '{entry.job}'")
-    scheduler.add_job(execute_study_eve_job, trigger=trigger, id=entry.job)
+    scheduler.add_job(_JOB_DISPATCH[entry.job], trigger=trigger, id=entry.job)
 
 
 def _digest_trigger(cron: str, tz: ZoneInfo) -> CronTrigger:

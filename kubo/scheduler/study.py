@@ -13,18 +13,24 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
 from surrealdb import RecordID
 
+from kubo.distribution.config import resolve_base_url
 from kubo.store import study as study_store
 from kubo.store import tenancy
-from kubo.study.planning import next_study_day
+from kubo.study.planning import next_study_day, normalized_weekdays
+from kubo.study.progress import PlanProgress, compute_progress
 
 _log = structlog.get_logger(__name__)
+
+# Atraso a partir do qual a cutucada SUBSTITUI o sino (ADR-0043, KUBO-138). Uma lição de
+# atraso é vida normal; duas é o ponto em que avisar ajuda em vez de ser ruído.
+_NUDGE_THRESHOLD = 2
 
 
 def _display_tz() -> ZoneInfo:
@@ -36,15 +42,19 @@ def _display_tz() -> ZoneInfo:
     return ZoneInfo(os.environ.get("TZ") or "America/Sao_Paulo")
 
 
-def _next_day(now: datetime, weekdays: list[str]) -> datetime:
-    """Meia-noite (na tz do dono) do próximo dia habilitado, em UTC.
+def _midnight_utc(day: date, tz: ZoneInfo) -> datetime:
+    """Meia-noite do dia na tz do dono, em UTC — a chave de `scheduled_for` no banco.
 
     O domínio raciocina em `date`; o storage é UTC. A conversão é aqui, no mesmo
     sentido de `_target_datetime` das rotas — nunca o contrário.
     """
-    tz = _display_tz()
-    day = next_study_day(after=now.astimezone(tz).date(), weekdays=weekdays)
     return datetime.combine(day, time.min, tzinfo=tz).astimezone(timezone.utc)
+
+
+def _next_day(now: datetime, weekdays: list[str]) -> datetime:
+    """Meia-noite (na tz do dono) do próximo dia habilitado, em UTC."""
+    tz = _display_tz()
+    return _midnight_utc(next_study_day(after=now.astimezone(tz).date(), weekdays=weekdays), tz)
 
 
 def generate_upcoming_lessons(
@@ -160,4 +170,112 @@ def send_daily_study_bell(
     Notificador que falha não derruba o job: o log registra e os planos seguintes
     seguem (mesma postura do digest).
     """
-    raise NotImplementedError("KUBO-138: send_daily_study_bell")
+    tz = _display_tz()
+    today = now.astimezone(tz).date()
+    scope: dict[str, Any] = {"tenant_id": tenant_id, "user_id": user_id}
+    # Plano PAUSADO já não está aqui: pausar é o pedido de parar de ser cobrado, e uma
+    # varredura própria e mais larga reabriria a cobrança pelas costas da pausa.
+    plans = study_store.list_active_plans(db, **scope)
+    sent: list[str] = []
+    for plan in plans:
+        message = _bell_for_plan(db, plan=plan, today=today, tz=tz, scope=scope)
+        if message is None:
+            continue
+        try:
+            notifier(message)
+        except Exception:  # noqa: BLE001 — indisponibilidade de minutos não pode matar o cron
+            # Só o id do plano: o texto carrega título de material e é dado pessoal.
+            _log.warning("study.bell.notify_failed", plan=str(plan.id))
+            continue
+        sent.append(message)
+    _log.info("study.bell.done", plans=len(plans), sent=len(sent))
+    return sent
+
+
+def _bell_for_plan(
+    db: Any,
+    *,
+    plan: study_store.StudyPlan,
+    today: date,
+    tz: ZoneInfo,
+    scope: dict[str, Any],
+) -> str | None:
+    """A mensagem do dia para UM plano, ou None quando o dia é de silêncio.
+
+    A ordem é comportamento: fora da cadência nada acontece; a completude vem ANTES da
+    lição de hoje (no dia seguinte à última lição a véspera não gerou nada, e um plano
+    atrás do guard de "existe lição" nunca fecharia); e a cutucada SUBSTITUI o sino, em
+    vez de somar-se a ele.
+    """
+    if today.weekday() not in normalized_weekdays(plan.weekdays):
+        return None
+    entries = study_store.list_plan_entries(db, plan_id=plan.id, **scope)
+    title = _topic_title(db, plan=plan, scope=scope)
+    done = study_store.count_completed_lessons(db, plan_id=plan.id, **scope)
+    if entries and done >= len(entries):
+        study_store.complete_plan(db, plan_id=plan.id, **scope)
+        _log.info("study.bell.plan_completed", plan=str(plan.id))
+        return f"Plano concluído: {title} — as {len(entries)} lições foram estudadas. Parabéns!"
+    lesson = study_store.get_lesson_for_day(
+        db, plan_id=plan.id, scheduled_for=_midnight_utc(today, tz), **scope
+    )
+    if lesson is None:
+        _log.info("study.bell.no_lesson", plan=str(plan.id))
+        return None
+    link = f"{resolve_base_url()}/study/lessons/{lesson.id.id}"
+    progress = _progress_of(db, plan=plan, entries=entries, today=today, tz=tz, scope=scope)
+    if progress.behind >= _NUDGE_THRESHOLD:
+        return _nudge_text(title=title, progress=progress, link=link)
+    return f"Lição de hoje: {title}{_lesson_position(lesson, entries)}\n{link}"
+
+
+def _topic_title(db: Any, *, plan: study_store.StudyPlan, scope: dict[str, Any]) -> str:
+    """Título do tema do plano — o que o dono reconhece na mensagem."""
+    topic = study_store.get_topic(db, topic_id=plan.topic, **scope)
+    return topic.title if topic is not None else "seu plano de estudo"
+
+
+def _lesson_position(lesson: study_store.Lesson, entries: list[study_store.PlanEntry]) -> str:
+    """Sufixo `— lição N de M` da mensagem; vazio quando a lição não casa com o plano.
+
+    Diz ao dono ONDE ele está no plano sem uma leitura nova: a posição vem das lições
+    já carregadas para a régua.
+    """
+    seq = next((e.seq for e in entries if str(e.id) == str(lesson.plan_entry)), None)
+    return f" — lição {seq} de {len(entries)}" if seq is not None else ""
+
+
+def _progress_of(
+    db: Any,
+    *,
+    plan: study_store.StudyPlan,
+    entries: list[study_store.PlanEntry],
+    today: date,
+    tz: ZoneInfo,
+    scope: dict[str, Any],
+) -> PlanProgress:
+    """A régua do plano hoje — derivada (ADR-0043), nunca lida de uma tabela de meta.
+
+    As conclusões saem do banco em UTC e viram o dia LOCAL do dono aqui: comparar dias
+    no relógio do container faria a lição das 21h contar para o dia seguinte.
+    """
+    completions = study_store.completion_dates(db, plan_id=plan.id, **scope)
+    return compute_progress(
+        activated_on=(plan.activated_at or plan.created_at).astimezone(tz).date(),
+        today=today,
+        weekdays=plan.weekdays,
+        total=len(entries),
+        completions=[moment.astimezone(tz).date() for moment in completions],
+        paused_days=plan.paused_days,
+    )
+
+
+def _nudge_text(*, title: str, progress: PlanProgress, link: str) -> str:
+    """A cutucada: quantas lições faltam e para onde o ritmo REAL está empurrando o fim.
+
+    Sem ritmo medível não há data a mostrar (o dono nunca concluiu nada) — a cutucada
+    sai assim mesmo, só sem a projeção: inventar uma data seria pior que omiti-la.
+    """
+    target = progress.projected_target
+    pace = f" No ritmo atual, você termina em {target:%d/%m/%Y}." if target is not None else ""
+    return f"{title}: {progress.behind} lições atrasadas.{pace}\n{link}"

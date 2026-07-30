@@ -16,7 +16,7 @@ from datetime import date
 
 import pytest
 
-from kubo.study.progress import compute_progress
+from kubo.study.progress import compute_progress, count_study_days
 
 _WEEK = ["mon", "tue", "wed", "thu", "fri"]
 
@@ -299,3 +299,36 @@ def test_invalid_cadence_is_an_error(weekdays: list[str]) -> None:
             total=10,
             completions=[],
         )
+
+
+def test_finished_plan_has_nothing_left_to_project() -> None:
+    """Plano com tudo estudado não projeta data: não há lição restante para prever.
+
+    Projetar aqui devolveria uma data no futuro para um plano que ACABOU — a tela
+    mostra o estado concluído, não uma promessa.
+    """
+    progress = compute_progress(
+        activated_on=_START,
+        today=_FRIDAY,
+        weekdays=_WEEK,
+        total=5,
+        completions=_days(3, 4, 5, 6, 7),
+    )
+
+    assert progress.done == progress.total
+    assert progress.projected_target is None
+
+
+def test_count_study_days_counts_both_ends_of_the_window() -> None:
+    """Os dias de estudo da janela, extremos INCLUSIVE — a unidade da régua.
+
+    O fim de semana no meio não conta, e o mesmo dia nas duas pontas conta uma vez.
+    """
+    assert count_study_days(start=_START, end=_FRIDAY, weekdays=_WEEK) == 5
+    assert count_study_days(start=_START, end=date(2026, 8, 10), weekdays=_WEEK) == 6
+    assert count_study_days(start=_START, end=_START, weekdays=_WEEK) == 1
+
+
+def test_count_study_days_of_an_inverted_window_is_zero() -> None:
+    """Fim antes do começo é zero, não erro: pausar e retomar no mesmo dia congela nada."""
+    assert count_study_days(start=_FRIDAY, end=_START, weekdays=_WEEK) == 0

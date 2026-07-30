@@ -66,7 +66,11 @@ def db() -> Iterator[Any]:
 
 
 def _output(prefix: str = "Aula 1") -> LessonOutput:
-    """Saída da persona tutor: blocos + uma questão cuja resposta certa é o índice 0."""
+    """Saída da persona tutor: blocos + duas questões cuja resposta certa é o índice 0.
+
+    DUAS questões porque `LessonOutput.quiz` exige `min_length=2` (KUBO-137) — um quiz
+    de uma questão nem chega a ser construído. Mesmo molde de `tests/store/test_lesson.py`.
+    """
     return LessonOutput(
         concept=f"{prefix}: o conceito.",
         scenario=f"{prefix}: o cenário.",
@@ -74,11 +78,12 @@ def _output(prefix: str = "Aula 1") -> LessonOutput:
         recap=None,
         quiz=[
             QuizItem(
-                question=f"{prefix} Q1?",
+                question=f"{prefix} Q{i}?",
                 options=["Certa", "Errada"],
                 answer_index=0,
-                explanation=f"{prefix}: porque sim.",
+                explanation=f"{prefix}: porque sim {i}.",
             )
+            for i in (1, 2)
         ],
     )
 
