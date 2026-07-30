@@ -70,9 +70,9 @@ decisão futura que reabre esta ADR, não default.
   entrada hostil por padrão (regra do repo); o parsing acontece na borda com validação, e a
   dependência nova de parsing fica sujeita a justificativa no PR + pip-audit.
 - **Custo/quota LLM com cerca de volume nomeada:** geração é no máximo **1 lição/dia por
-  plano ativo**, com **cap de planos ativos por usuário** (valor definido na spec de produto
-  KUBO-133/build) — rate limit de provider já mordeu este projeto; a cerca nasce junto com o
-  módulo, em BYOK o custo é do tenant.
+  plano ativo**, com cap de **3 planos ativos por usuário** (mesmo valor registrado na spec
+  §3.6 — mudar um exige mudar o outro) — rate limit de provider já mordeu este projeto; a
+  cerca nasce junto com o módulo, em BYOK o custo é do tenant.
 - **Neutras/operacionais:** horários dos jobs no regime de operação existente; conteúdo de
   lição é destilação com proveniência — nunca reprodução extensa do material (obra de
   terceiros, uso pessoal, user-scoped).

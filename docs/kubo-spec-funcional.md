@@ -261,7 +261,7 @@ mini-quiz — adaptando conteúdo ao desempenho recente (erro vira recapitulaç�
 plano nunca muda sozinha). Telegram é sino outbound; leitura, quiz e acompanhamento vivem na
 UI. Meta é **derivação, nunca entidade**: progresso, streak, desvio e data-alvo projetada
 são calculados de plano + registros. Cerca de volume: no máximo 1 lição/dia por plano ativo,
-com cap de planos ativos por usuário.
+com cap de **3 planos ativos por usuário** (valor único com o ADR-0043).
 
 Vocabulário canônico: seção "Estudos" do `CONTEXT.md`. Detalhe de produto: spec KUBO-133
 (épico KUBO-132, Jira). Racional e fronteiras com o escopo negativo: ADR-0043.
