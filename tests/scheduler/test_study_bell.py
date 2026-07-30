@@ -15,8 +15,9 @@ aí o módulo inteiro perde a função.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, time, timezone
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -315,3 +316,160 @@ def test_one_message_per_active_plan(store: dict[str, _Spy]) -> None:
 
     assert len(notifier.messages) == 2
     assert f"{_BASE_URL}/study/lessons/p2-hoje" in notifier.messages[1]
+
+
+# --- Caminho de envio de produção (revisão de segurança) -------------------------------
+#
+# O sino não é o digest: o estado de estudo é dado pessoal do dono, e um destino
+# cadastrado para receber o digest NÃO consentiu em receber o que ele estuda. Estes
+# testes cercam o notificador de PRODUÇÃO — o único ponto que resolve destino e segredo.
+
+
+class _FakeCtx:
+    """Context manager mínimo devolvendo um db fake (molde de `_DummyCtx`)."""
+
+    def __init__(self, db: Any) -> None:
+        self._db = db
+
+    def __enter__(self) -> Any:
+        return self._db
+
+    def __exit__(self, *_: object) -> bool:
+        return False
+
+
+def _settings(*, paused: bool = False, default: Any = None) -> Any:
+    from kubo.store.settings import Settings
+
+    return Settings(
+        id=RecordID("settings", "global"),
+        digest_cron="30 9 * * *",
+        distribution_paused=paused,
+        default_destination=default,
+    )
+
+
+def _destination(channel: Literal["telegram", "email"] = "telegram") -> Any:
+    from kubo.store.destinations import Destination
+
+    return Destination(
+        id=RecordID("destination", "d1"),
+        name="Dono",
+        kind="digest",
+        channel=channel,
+        address="12345",
+        enabled=True,
+        archived_at=None,
+    )
+
+
+def test_paused_distribution_silences_the_whole_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`distribution_paused` cala o sino inteiro — nem varredura de planos acontece.
+
+    Pausar a distribuição é o interruptor geral do dono. Se o sino o ignorasse, pausar
+    o digest deixaria de significar silêncio e viraria "silêncio, menos aquilo".
+    """
+    from kubo import scheduler
+
+    monkeypatch.setattr(scheduler.client, "config", lambda: None)
+    monkeypatch.setattr(scheduler.client, "connect", lambda _cfg=None: _FakeCtx(object()))
+    monkeypatch.setattr(scheduler, "resolve_scheduler_tenant_and_user", lambda db: (_TENANT, _USER))
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings(paused=True))
+    called: list[int] = []
+    monkeypatch.setattr(scheduler, "send_daily_study_bell", lambda *a, **kw: called.append(1))
+
+    scheduler.execute_study_bell_job()
+
+    assert called == []
+
+
+def test_the_bell_sends_only_to_the_default_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UM destino: o padrão do settings — nunca difusão para todos os destinos Telegram.
+
+    Difundir mandaria o que o dono estuda para todo endereço cadastrado para o digest.
+    """
+    from kubo import scheduler
+
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings())
+    monkeypatch.setattr(
+        scheduler.settings_store, "resolve_default_destination", lambda db, s: _destination()
+    )
+    monkeypatch.setattr(scheduler, "load_integrations", lambda db, t, u: {})
+    monkeypatch.setattr(
+        scheduler,
+        "resolve_integrations",
+        lambda declared, catalog, **kw: {"telegram": type("R", (), {"secret": "t0ken"})()},
+    )
+    sends: list[dict[str, Any]] = []
+    monkeypatch.setattr(scheduler, "send_telegram", lambda **kw: sends.append(kw))
+
+    scheduler._bell_notifier(object(), _TENANT, _USER)("Lição de hoje")
+
+    assert len(sends) == 1
+    assert sends[0]["chat_id"] == "12345"
+    assert sends[0]["text"] == "Lição de hoje"
+
+
+def test_without_a_default_destination_the_bell_stays_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sem destino padrão não há para quem tocar o sino — e nada é enviado no lugar.
+
+    O fallback tentador (mandar para qualquer destino Telegram) é exatamente o que a
+    revisão de segurança barrou.
+    """
+    from kubo import scheduler
+    from kubo.errors import ConfigError, SenderError
+
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings())
+
+    def _no_default(db: Any, s: Any) -> Any:
+        raise ConfigError("destino padrão não definido")
+
+    monkeypatch.setattr(scheduler.settings_store, "resolve_default_destination", _no_default)
+    sends: list[dict[str, Any]] = []
+    monkeypatch.setattr(scheduler, "send_telegram", lambda **kw: sends.append(kw))
+
+    with pytest.raises(SenderError):
+        scheduler._bell_notifier(object(), _TENANT, _USER)("Lição de hoje")
+
+    assert sends == []
+
+
+def test_a_non_telegram_default_destination_is_not_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Destino padrão de e-mail não recebe o sino: o canal do sino é o Telegram."""
+    from kubo import scheduler
+    from kubo.errors import SenderError
+
+    monkeypatch.setattr(scheduler.settings_store, "get_settings", lambda db: _settings())
+    monkeypatch.setattr(
+        scheduler.settings_store,
+        "resolve_default_destination",
+        lambda db, s: _destination("email"),
+    )
+    sends: list[dict[str, Any]] = []
+    monkeypatch.setattr(scheduler, "send_telegram", lambda **kw: sends.append(kw))
+
+    with pytest.raises(SenderError):
+        scheduler._bell_notifier(object(), _TENANT, _USER)("Lição de hoje")
+
+    assert sends == []
+
+
+def test_a_plan_with_broken_cadence_does_not_block_the_others(store: dict[str, _Spy]) -> None:
+    """Cadência corrompida no banco derruba UM plano, não o job: o vizinho recebe o sino.
+
+    `normalized_weekdays` levanta ValueError em dia inválido; sem a cerca por plano, um
+    registro estragado calaria o Telegram do dono para TODOS os planos, todo dia.
+    """
+    # `replace` e lista NOVA: `_plan()` compartilha a lista `_WEEK` do módulo, e mutá-la
+    # aqui corromperia a cadência de todos os outros testes do arquivo.
+    broken = replace(_plan("p1"), weekdays=[*_WEEK, "segunda-feira"])
+    store["list_active_plans"].result = [broken, _plan("p2")]
+    store["get_lesson_for_day"].result = lambda kw: _lesson(str(kw["plan_id"].id))
+    notifier = _FakeNotifier()
+
+    sent = _run(notifier)
+
+    assert len(sent) == 1
+    assert f"{_BASE_URL}/study/lessons/p2-hoje" in sent[0]

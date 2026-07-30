@@ -89,14 +89,20 @@ def generate_upcoming_lessons(
 
     created: list[RecordID] = []
     for plan in plans:
-        lesson_id = _lesson_for_plan(
-            db,
-            plan=plan,
-            day=_next_day(now, plan.weekdays),
-            scope=scope,
-            tutor=tutor,
-            work_context=work_context,
-        )
+        try:
+            lesson_id = _lesson_for_plan(
+                db,
+                plan=plan,
+                day=_next_day(now, plan.weekdays),
+                scope=scope,
+                tutor=tutor,
+                work_context=work_context,
+            )
+        except ValueError:
+            # Cadência corrompida no banco (dia inválido) derruba ESTE plano, não a noite
+            # inteira: os planos seguintes ainda têm lição amanhã.
+            _log.warning("study.eve.invalid_cadence", plan=str(plan.id))
+            continue
         if lesson_id is not None:
             created.append(lesson_id)
     _log.info("study.eve.done", plans=len(plans), created=len(created))
@@ -178,7 +184,13 @@ def send_daily_study_bell(
     plans = study_store.list_active_plans(db, **scope)
     sent: list[str] = []
     for plan in plans:
-        message = _bell_for_plan(db, plan=plan, today=today, tz=tz, scope=scope)
+        try:
+            message = _bell_for_plan(db, plan=plan, today=today, tz=tz, scope=scope)
+        except ValueError:
+            # Cadência corrompida no banco (dia inválido) derruba ESTE plano, não o job:
+            # sem a cerca, um registro estragado calaria o sino de todos os planos.
+            _log.warning("study.bell.invalid_cadence", plan=str(plan.id))
+            continue
         if message is None:
             continue
         try:

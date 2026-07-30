@@ -62,6 +62,8 @@ _FORMATS: dict[str, MaterialFormat] = {".epub": "epub", ".pdf": "pdf"}
 _DEFAULT_MAX_MB = 50
 # Caracteres aceitos numa chave de record ao virar componente de caminho.
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
+# Teto de uma chave de URL em CAMPO DE LOG: uma chave real (hex de 32) cabe com folga.
+_MAX_LOG_KEY = 64
 
 
 def _max_bytes() -> int:
@@ -90,6 +92,16 @@ def _safe_key(value: str) -> str:
     """Chave de record reduzida ao alfabeto seguro para virar componente de caminho."""
     cleaned = "".join(c for c in value if c in _SAFE_KEY)
     return cleaned or "sem-chave"
+
+
+def _log_key(raw: str) -> str:
+    """Chave da URL pronta para virar CAMPO DE LOG: aparada e truncada.
+
+    O path param é entrada de fora e vai cru para o log; uma chave de 100 kB inflaria a
+    linha (e o disco) sem acrescentar nada — o que identifica um record cabe de sobra em
+    `_MAX_LOG_KEY`. Truncar, e não recusar: o log é diagnóstico, não validação.
+    """
+    return raw.strip()[:_MAX_LOG_KEY]
 
 
 def _format_of(file: UploadFile | None) -> MaterialFormat | None:
@@ -511,7 +523,7 @@ def create_topic(
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
-        _log.warning("study.topic.store_failed", material=key.strip())
+        _log.warning("study.topic.store_failed", material=_log_key(key))
         return _reject(request, "Não foi possível criar o tema deste material.")
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
@@ -652,47 +664,57 @@ def propose_plan(
         return PlainTextResponse(_DENIED, status_code=403)
     scope = {"tenant_id": ctx.tenant_id, "user_id": ctx.user_id}
     try:
-        with client.connect_rw() as db:
-            topic = _topic_of(db, key, ctx)
+        # Leitura + persona na conexão de LEITURA: a chamada ao LLM leva até 60s, e
+        # segurá-los dentro do `connect_rw` prenderia a conexão privilegiada de escrita
+        # (ADR-0018) por todo esse tempo, à mercê da latência de um provedor externo. A
+        # escrita abre depois, e dura o que a store demora.
+        with client.connect() as ro:
+            topic = _topic_of(ro, key, ctx)
             if topic is None:
                 return _topic_missing(request, key)
-            chapters = _all_chapters(db, material_id=topic.material, scope=scope)
+            chapters = _all_chapters(ro, material_id=topic.material, scope=scope)
             if not chapters:
                 return PlainTextResponse(_NO_CHAPTERS, status_code=400)
             if len(chapters) > _MAX_PLAN_CHAPTERS:
                 return PlainTextResponse(_TOO_MANY_CHAPTERS, status_code=400)
-            return _save_proposal(db, topic=topic, chapters=chapters, ctx=ctx)
+            proposal = build_planner(ro, ctx).propose(chapters)
+        return _save_proposal(topic=topic, chapters=chapters, proposal=proposal, ctx=ctx)
     except ConfigError:
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
         # Repropor sobre plano já ativado é a única recusa esperada aqui.
-        _log.warning("study.plan.propose_refused", topic=key.strip())
+        _log.warning("study.plan.propose_refused", topic=_log_key(key))
         return PlainTextResponse(_PLAN_LOCKED, status_code=409)
 
 
 def _save_proposal(
-    db: Any, *, topic: study_store.Topic, chapters: list[Any], ctx: SessionContext
+    *,
+    topic: study_store.Topic,
+    chapters: list[Any],
+    proposal: PlanProposal | None,
+    ctx: SessionContext,
 ) -> Response:
-    """Roda a persona (ou o fallback), grava a proposta e devolve o 303 do PRG.
+    """Grava a proposta (ou o fallback mecânico) e devolve o 303 do PRG.
 
-    Extraído do handler para manter a complexidade sob o teto (C901) — o handler cuida
-    dos portões (CSRF, sessão, material), este pedaço cuida da proposta em si.
+    Recebe a proposta PRONTA: a persona já rodou na conexão de leitura, e a de escrita
+    abre aqui, só para o tempo da store. Extraído do handler para manter a complexidade
+    sob o teto (C901) — o handler cuida dos portões, este pedaço da gravação.
     """
-    proposal = build_planner(db, ctx).propose(chapters)
     mechanical = proposal is None
     if proposal is None:
         proposal = mechanical_proposal(chapters)
     entries = _proposal_entries(proposal, chapters)
-    plan = study_store.save_plan_proposal(
-        db,
-        topic_id=topic.id,
-        weekdays=list(_DEFAULT_WEEKDAYS),
-        target_date=_target_datetime(weekdays=_DEFAULT_WEEKDAYS, lesson_count=len(entries)),
-        entries=entries,
-        tenant_id=ctx.tenant_id,
-        user_id=ctx.user_id,
-    )
+    with client.connect_rw() as db:
+        plan = study_store.save_plan_proposal(
+            db,
+            topic_id=topic.id,
+            weekdays=list(_DEFAULT_WEEKDAYS),
+            target_date=_target_datetime(weekdays=_DEFAULT_WEEKDAYS, lesson_count=len(entries)),
+            entries=entries,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+        )
     _log.info(
         "study.plan.proposed",
         plan=str(plan.id),
@@ -741,8 +763,8 @@ def _plan_edit(
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
-        _log.warning("study.plan.not_editable", topic=key.strip())
-        return PlainTextResponse(_PLAN_LOCKED, status_code=409)
+        _log.warning("study.plan.not_editable", topic=_log_key(key))
+        return PlainTextResponse(refused, status_code=409)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -851,7 +873,7 @@ def activate_plan(
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
-        _log.warning("study.plan.not_activatable", topic=key.strip())
+        _log.warning("study.plan.not_activatable", topic=_log_key(key))
         return PlainTextResponse(_PLAN_LOCKED, status_code=409)
     _log.info("study.plan.activated", plan=str(active.id))
     return RedirectResponse(_topic_url(topic.id, flag="ativado"), status_code=303)
@@ -1043,7 +1065,7 @@ async def complete_lesson(request: Request, key: str) -> Response:
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
         # A recusa esperada é a segunda conclusão (UNIQUE por lição).
-        _log.warning("study.lesson.complete_refused", lesson=key.strip())
+        _log.warning("study.lesson.complete_refused", lesson=_log_key(key))
         return PlainTextResponse(_ALREADY_DONE, status_code=409)
     return RedirectResponse(f"{_LESSONS_ROUTE}/{lesson.id.id}", status_code=303)
 

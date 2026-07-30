@@ -1,10 +1,16 @@
 """Persona `tutor` (ADR-0043, KUBO-137): capítulos → a lição do dia.
 
 Molde de `kubo/study/planner.py` — classe fina sobre um `Executor`, sem flow e sem
-banco. O texto dos capítulos é conteúdo NÃO CONFIÁVEL (vai no `untrusted_content`);
-o contexto de trabalho do dono e as questões erradas recentes são dado DELE, e vão na
-instrução. A coerência do quiz é revalidada AQUI, em código: o LLM propõe, o sistema
-confere.
+banco. A coerência do quiz é revalidada AQUI, em código: o LLM propõe, o sistema confere.
+
+De que lado cada dado viaja (revisão de segurança da pilha de Estudos):
+- `untrusted_content` (a cerca que o `ApiExecutor` demarca e anti-spoofa) leva TUDO que
+  nasceu do arquivo enviado: o texto dos capítulos, o TÍTULO DA LIÇÃO (derivado do
+  sumário do epub — nada no caminho valida esse texto) e as QUESTÕES ERRADAS recentes
+  (enunciados que a persona escreveu lendo o material: promovê-los a instrução deixaria
+  o epub dirigir a lição seguinte por dois saltos);
+- a instrução leva só o que é do SISTEMA ou digitado pelo DONO: o prompt da persona, o
+  contexto de trabalho e a REGRA de recapitulação.
 """
 
 from __future__ import annotations
@@ -74,11 +80,10 @@ class Tutor:
         `misses` vazio significa lição sem recapitulação: o prompt instrui a omitir o
         bloco, e a pós-validação NÃO exige `recap`.
         """
-        instruction = _instruction(
-            self._prompt, entry_title=entry_title, work_context=work_context, misses=misses
-        )
+        instruction = _instruction(self._prompt, work_context=work_context, has_misses=bool(misses))
+        content = _content(chapters, entry_title=entry_title, misses=misses)
         try:
-            lesson = self._executor.complete(instruction, _content(chapters), LessonOutput)
+            lesson = self._executor.complete(instruction, content, LessonOutput)
         except (ExecutorError, ValidationError):
             _log.info("study.tutor.failed", chapters=len(chapters))
             return None
@@ -88,33 +93,51 @@ class Tutor:
         return lesson
 
 
-def _instruction(prompt: str, *, entry_title: str, work_context: str, misses: Sequence[str]) -> str:
-    """Instrução da persona + o que é DADO DO DONO: lição, contexto e erros recentes.
+def _instruction(prompt: str, *, work_context: str, has_misses: bool) -> str:
+    """Instrução da persona + o que é do SISTEMA ou digitado pelo DONO.
 
-    Nada do texto do material entra aqui: o material vai no `untrusted_content`, senão
-    um capítulo com "ignore as instruções acima" ditaria a instrução.
+    Nada que tenha nascido do arquivo enviado entra aqui — nem o texto dos capítulos, nem
+    o título da lição (que vem do sumário do epub), nem os enunciados errados (escritos
+    pela persona LENDO o epub). Tudo isso vai no `untrusted_content`, senão um capítulo
+    com "ignore as instruções acima" ditaria a instrução, direto ou por um salto.
+
+    `has_misses` é BOOLEANO de propósito: a instrução carrega a REGRA de recapitulação, e
+    o texto dos erros fica do lado de lá da cerca.
     """
-    parts = [prompt, f"Lição de hoje: {entry_title}"]
+    parts = [prompt]
     if work_context.strip():
         parts.append(f"Contexto de trabalho do aluno: {work_context}")
-    if misses:
+    if has_misses:
         parts.append(
-            "Questões que o aluno errou recentemente (abra a lição com uma "
-            "recapitulação delas):\n" + "\n".join(f"- {miss}" for miss in misses)
+            "O conteúdo abaixo lista questões que o aluno errou recentemente: abra a "
+            "lição com uma recapitulação delas."
         )
     else:
         parts.append("O aluno não errou nada recentemente: NÃO inclua recapitulação.")
     return "\n\n".join(parts)
 
 
-def _content(chapters: Sequence[MaterialChapter]) -> str:
-    """Texto dos capítulos (conteúdo NÃO confiável), com teto de volume.
+def _content(
+    chapters: Sequence[MaterialChapter], *, entry_title: str, misses: Sequence[str]
+) -> str:
+    """Todo o material NÃO confiável do prompt, com teto de volume.
 
-    O corte é no FIM da string INTEIRA — títulos incluídos — porque o que o teto
-    protege é o tamanho do que chega ao provedor, não o de cada pedaço. `_MAX_PROMPT_TEXT`
-    é lido do módulo a cada chamada: mexer no teto não exige reconstruir o tutor.
+    Ordem deliberada: título e erros recentes primeiro, capítulos depois. O corte é no
+    FIM da string INTEIRA, então o que fica de fora é a cauda do texto dos capítulos — e
+    nunca a lista de erros, de que a recapitulação depende.
+
+    O teto vale para o bloco INTEIRO porque o que ele protege é o tamanho do que chega ao
+    provedor, não o de cada pedaço. `_MAX_PROMPT_TEXT` é lido do módulo a cada chamada:
+    mexer no teto não exige reconstruir o tutor.
     """
-    full = "\n\n".join(f"## {chapter.title}\n{chapter.content}" for chapter in chapters)
+    parts = [f"Lição de hoje: {entry_title}"]
+    if misses:
+        parts.append(
+            "Questões que o aluno errou recentemente (para a recapitulação):\n"
+            + "\n".join(f"- {miss}" for miss in misses)
+        )
+    parts.extend(f"## {chapter.title}\n{chapter.content}" for chapter in chapters)
+    full = "\n\n".join(parts)
     if len(full) <= _MAX_PROMPT_TEXT:
         return full
     # Só o tamanho vai ao log: o conteúdo é material pessoal do dono (CLAUDE.md §Logs).

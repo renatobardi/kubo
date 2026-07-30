@@ -335,30 +335,40 @@ def execute_study_eve_job() -> None:
 
 
 def _bell_notifier(db: Any, tenant_id: Any, user_id: Any) -> Callable[[str], None]:
-    """Costura de envio do sino (KUBO-138): manda o texto pelos destinos Telegram ATIVOS.
+    """Costura de envio do sino (KUBO-138): manda o texto ao destino PADRÃO do settings.
 
-    Mesma fronteira outbound e mesma resolução de destino/segredo do digest (ADR-0029):
-    destinos vêm do banco, o token vem da integração `telegram` resolvida pelo runtime
-    (env ou credencial de tenant), NUNCA de `os.environ` daqui. `parse_mode=None` (texto
-    puro) porque a mensagem carrega o título do material do dono — marcá-la como HTML
-    faria um título com `<` derrubar o envio.
+    UM destino, não difusão. O que o dono estuda é dado pessoal, e um endereço cadastrado
+    para receber o digest não consentiu em receber isso — varrer `active_destinations`
+    entregaria o estado de estudo a todo destino Telegram da casa. O padrão é o único
+    endereço que o dono elegeu explicitamente como "o meu", pelo mesmo helper do digest
+    (`resolve_default_destination`).
 
-    A resolução é feita DENTRO do envio (e não na montagem): assim uma integração
-    faltando vira aviso do plano — que o sino registra e segue — em vez de derrubar o
-    job inteiro antes do primeiro plano.
+    O token vem da integração `telegram` resolvida pelo runtime (env ou credencial de
+    tenant), NUNCA de `os.environ` daqui. `parse_mode=None` (texto puro) porque a mensagem
+    carrega o título do material do dono — marcá-la como HTML faria um título com `<`
+    derrubar o envio.
+
+    A resolução é feita DENTRO do envio (e não na montagem): destino ausente, de outro
+    canal ou integração sem segredo viram `SenderError`, que o sino registra por plano e
+    segue — em vez de derrubar o job antes do primeiro plano.
     """
 
     def _send(text: str) -> None:
+        settings = settings_store.get_settings(db)
+        if settings is None:
+            raise SenderError("settings não encontrado — sino sem destino padrão")
+        try:
+            destination = settings_store.resolve_default_destination(db, settings)
+        except ConfigError as exc:
+            raise SenderError(f"sino sem destino padrão utilizável: {exc}") from exc
+        if destination.channel != "telegram":
+            raise SenderError(f"destino padrão é do canal {destination.channel!r}, não telegram")
         catalog = load_integrations(db, tenant_id, user_id)
         resolved = resolve_integrations(["telegram"], catalog, db=db, tenant_id=tenant_id)
         token = resolved["telegram"].secret
         if not token:
             raise SenderError("integração 'telegram' sem segredo resolvido")
-        targets = destination_store.active_destinations(db, channel="telegram")
-        if not targets:
-            raise SenderError("nenhum destino telegram ativo para o sino de Estudos")
-        for target in targets:
-            send_telegram(token=token, chat_id=target.address, text=text, parse_mode=None)
+        send_telegram(token=token, chat_id=destination.address, text=text, parse_mode=None)
 
     return _send
 
@@ -369,9 +379,20 @@ def execute_study_bell_job() -> None:
     Conexão POR execução como os demais jobs (ADR-0010), relógio lido AQUI e passado por
     parâmetro. O cron de 1x/dia É a cerca anti-spam: no máximo uma mensagem por plano
     por dia, sem nenhuma tabela de "notificação enviada".
+
+    `distribution_paused` cala o sino ANTES de qualquer varredura (mesma postura e mesma
+    ordem do sweep do digest): pausar a distribuição é o interruptor geral do dono, e um
+    canal que o ignorasse transformaria "pausado" em "pausado, menos aquilo".
     """
     try:
         with client.connect(client.config()) as db:
+            settings = settings_store.get_settings(db)
+            if settings is None or settings.distribution_paused:
+                _log.info(
+                    "study.bell.skipped",
+                    reason="paused" if settings is not None else "no_settings",
+                )
+                return
             tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
             send_daily_study_bell(
                 db,
