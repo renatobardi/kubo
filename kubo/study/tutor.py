@@ -12,8 +12,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from kubo.errors import ExecutorError
 from kubo.executors.base import Executor
 from kubo.store.study import MaterialChapter
 
@@ -73,4 +74,59 @@ class Tutor:
         `misses` vazio significa lição sem recapitulação: o prompt instrui a omitir o
         bloco, e a pós-validação NÃO exige `recap`.
         """
-        raise NotImplementedError
+        instruction = _instruction(
+            self._prompt, entry_title=entry_title, work_context=work_context, misses=misses
+        )
+        try:
+            lesson = self._executor.complete(instruction, _content(chapters), LessonOutput)
+        except (ExecutorError, ValidationError):
+            _log.info("study.tutor.failed", chapters=len(chapters))
+            return None
+        if not _is_coherent(lesson):
+            _log.info("study.tutor.incoherent", questions=len(lesson.quiz))
+            return None
+        return lesson
+
+
+def _instruction(prompt: str, *, entry_title: str, work_context: str, misses: Sequence[str]) -> str:
+    """Instrução da persona + o que é DADO DO DONO: lição, contexto e erros recentes.
+
+    Nada do texto do material entra aqui: o material vai no `untrusted_content`, senão
+    um capítulo com "ignore as instruções acima" ditaria a instrução.
+    """
+    parts = [prompt, f"Lição de hoje: {entry_title}"]
+    if work_context.strip():
+        parts.append(f"Contexto de trabalho do aluno: {work_context}")
+    if misses:
+        parts.append(
+            "Questões que o aluno errou recentemente (abra a lição com uma "
+            "recapitulação delas):\n" + "\n".join(f"- {miss}" for miss in misses)
+        )
+    else:
+        parts.append("O aluno não errou nada recentemente: NÃO inclua recapitulação.")
+    return "\n\n".join(parts)
+
+
+def _content(chapters: Sequence[MaterialChapter]) -> str:
+    """Texto dos capítulos (conteúdo NÃO confiável), com teto de volume.
+
+    O corte é no FIM da string INTEIRA — títulos incluídos — porque o que o teto
+    protege é o tamanho do que chega ao provedor, não o de cada pedaço. `_MAX_PROMPT_TEXT`
+    é lido do módulo a cada chamada: mexer no teto não exige reconstruir o tutor.
+    """
+    full = "\n\n".join(f"## {chapter.title}\n{chapter.content}" for chapter in chapters)
+    if len(full) <= _MAX_PROMPT_TEXT:
+        return full
+    # Só o tamanho vai ao log: o conteúdo é material pessoal do dono (CLAUDE.md §Logs).
+    _log.warning("study.tutor.content_truncated", chars=len(full), cap=_MAX_PROMPT_TEXT)
+    return full[:_MAX_PROMPT_TEXT]
+
+
+def _is_coherent(lesson: LessonOutput) -> bool:
+    """True se toda questão aponta para uma alternativa que existe.
+
+    `answer_index` fora da faixa passa pelo modelo (`ge=0` não sabe quantas opções há)
+    e daria ao dono um quiz impossível de acertar — a conferência é em código, como o
+    `_is_coherent` do planner.
+    """
+    return all(item.answer_index < len(item.options) for item in lesson.quiz)

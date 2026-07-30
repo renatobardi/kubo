@@ -155,7 +155,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
         "get_lesson_for_day": _Spy(None),
         "next_unlessoned_entry": _Spy(None),
         "recent_misses": _Spy([]),
-        "list_chapters": _Spy(_chapters()),
+        "list_chapters_by_ids": _Spy(_chapters()),
         "create_lesson": _Spy(),
     }
     for name, spy in spies.items():

@@ -33,13 +33,12 @@ from kubo.api.rendering import templates
 from kubo.api.session import SessionContext, resolve_session
 from kubo.errors import ConfigError, MaterialParseError, StoreError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
-from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
-from kubo.runtime.personas import Persona, load_personas
+from kubo.runtime.personas import resolve_persona
 from kubo.store import client
 from kubo.store import study as study_store
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.planner import Planner, PlanProposal, mechanical_proposal
-from kubo.study.planning import compute_target_date
+from kubo.study.planning import compute_target_date, next_study_day
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -345,6 +344,8 @@ _MAX_PLAN_CHAPTERS = 200
 _NO_CHAPTERS = "O material não tem capítulos para virar plano."
 _TOO_MANY_CHAPTERS = "O material tem capítulos demais para propor um plano — reduza na conferência."
 _NO_PLAN = "Este tema ainda não tem plano proposto."
+# Estado do plano que já produz lição (a store é a dona do vocabulário).
+_ACTIVE_STATUS = "active"
 _PLAN_LOCKED = "Este plano já foi ativado e não aceita mais edição."
 
 
@@ -364,22 +365,6 @@ class MoveDirection(BaseModel):
     direction: Literal["up", "down"]
 
 
-def _planner_persona(db: Any, ctx: SessionContext) -> Persona:
-    """Persona `planner` do catálogo do tenant; ausente, o default de código.
-
-    O seed não retro-semeia tenants criados antes desta fatia (ADR-0042), e um caminho
-    de LEITURA não escreve no catálogo — mudança de catálogo é auditada e pertence ao
-    dono. Por isso o default entra em memória, com log, e nunca por upsert.
-    """
-    personas = load_personas(db, ctx.tenant_id, ctx.user_id)
-    found = personas.get(_PLANNER_PERSONA)
-    if found is not None:
-        return found
-    _log.info("study.planner.persona_default", persona=_PLANNER_PERSONA)
-    default = next(p for p in DEFAULT_PERSONAS if p["name"] == _PLANNER_PERSONA)
-    return Persona.model_validate(default)
-
-
 def build_planner(db: Any, ctx: SessionContext) -> Planner:
     """Monta o `Planner` com a persona `planner` do catálogo do tenant.
 
@@ -387,7 +372,7 @@ def build_planner(db: Any, ctx: SessionContext) -> Planner:
     esta função por um fake, então NENHUM teste toca LiteLLM. Recebe `db` e `ctx` porque
     a persona é do catálogo do tenant (ADR-0042), não de um YAML global.
     """
-    persona = _planner_persona(db, ctx)
+    persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, _PLANNER_PERSONA)
     executor = ApiExecutor(
         ApiExecutorConfig(
             model=persona.model or "groq/llama-3.3-70b-versatile",
@@ -528,9 +513,50 @@ def create_topic(
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
+def _midnight_utc(day: date) -> datetime:
+    """Meia-noite do dia na tz do dono, em UTC — a chave de `scheduled_for` no banco."""
+    return datetime.combine(day, time.min, tzinfo=_display_tz()).astimezone(timezone.utc)
+
+
+def _plan_lessons(db: Any, plan: study_store.StudyPlan, scope: dict[str, Any]) -> dict[str, Any]:
+    """Lição do dia (ou a da próxima data de estudo) + histórico do plano ATIVO.
+
+    Enquanto o plano está `proposed` não há lição nenhuma para ler — por isso a leitura
+    inteira fica atrás do estado do plano, e não espalhada em ifs no template.
+    """
+    today = _today()
+    current = study_store.get_lesson_for_day(
+        db, plan_id=plan.id, scheduled_for=_midnight_utc(today), **scope
+    )
+    upcoming = None
+    if current is None:
+        upcoming = study_store.get_lesson_for_day(
+            db,
+            plan_id=plan.id,
+            scheduled_for=_midnight_utc(next_study_day(after=today, weekdays=plan.weekdays)),
+            **scope,
+        )
+    return {"today_lesson": current, "next_lesson": upcoming}
+
+
 @router.get("/topics/{key}")
-def topic_detail(request: Request, key: str) -> Response:
-    """Tela do tema: propor plano, revisar a proposta ou ver o plano ativo."""
+def topic_detail(
+    request: Request,
+    key: str,
+    start: Annotated[int, Query()] = 0,
+    size: Annotated[int, Query()] = 20,
+) -> Response:
+    """Tela do tema: propor plano, revisar a proposta ou ver o plano ativo.
+
+    Com plano ativo mostra também a lição de hoje (ou a da próxima data) e o histórico
+    paginado das lições já geradas.
+    """
+    size = clamp_size(size)
+    start = clamp_start(start)
+    lessons: list[study_store.Lesson] = []
+    completed: set[str] = set()
+    total = 0
+    current: dict[str, Any] = {"today_lesson": None, "next_lesson": None}
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
@@ -543,6 +569,20 @@ def topic_detail(request: Request, key: str) -> Response:
         entries = (
             study_store.list_plan_entries(db, plan_id=plan.id, **scope) if plan is not None else []
         )
+        if plan is not None and plan.status == _ACTIVE_STATUS:
+            current = _plan_lessons(db, plan, scope)
+            lessons = study_store.list_lessons(
+                db, plan_id=plan.id, limit=size, start=start, **scope
+            )
+            total = study_store.count_lessons(db, plan_id=plan.id, **scope)
+            # Uma leitura de registro por lição DA PÁGINA (no máximo `size`, clampado):
+            # o estado concluída/pendente é o que o dono procura na lista, e a alternativa
+            # seria uma consulta agregada nova só para a tela.
+            completed = {
+                str(lesson.id)
+                for lesson in lessons
+                if study_store.get_log_for_lesson(db, lesson_id=lesson.id, **scope) is not None
+            }
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -550,10 +590,16 @@ def topic_detail(request: Request, key: str) -> Response:
             "topic": topic,
             "plan": plan,
             "entries": entries,
+            "lessons": lessons,
+            "completed": completed,
+            "start": start,
+            "size": size,
+            "total": total,
             "weekday_values": _WEEKDAY_VALUES,
             "csrf": csrf_token(request),
             "mechanical": request.query_params.get("mecanico") == "1",
             "activated": request.query_params.get("ativado") == "1",
+            **current,
         },
     )
 
@@ -778,7 +824,74 @@ def activate_plan(
 
 _LESSONS_ROUTE = "/study/lessons"
 _LESSON_TABLE = "lesson"
-_NOT_IMPLEMENTED = "Lição ainda não implementada."
+_LESSON_TEMPLATE = "study/lesson.html"
+_LESSON_NOT_FOUND_TEMPLATE = "study/lesson_not_found.html"
+
+_BAD_ANSWERS = "Responda todas as questões do quiz para concluir a lição."
+_BAD_REACTION = "Reação inválida — escolha fácil, ok ou difícil."
+_ALREADY_DONE = "Esta lição já foi concluída."
+
+# Reações aceitas (espelho do ASSERT de `study_log.reaction` na migração 0023). Vazio é
+# "não reagiu", não erro: a reação é opcional.
+_REACTIONS = ("facil", "ok", "dificil")
+
+
+def _paragraphs(text: str | None) -> list[str]:
+    """Quebra um bloco da lição em parágrafos, uma linha não-vazia por parágrafo.
+
+    A quebra é AQUI e não no template porque o template não pode marcar `\n` como HTML
+    sem `|safe` — e `|safe` em texto vindo do LLM seria XSS com passe livre. O template
+    itera parágrafos já escapados.
+    """
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def _lesson_of(db: Any, key: str, ctx: SessionContext) -> study_store.Lesson | None:
+    """Lição do usuário pela chave da URL; None quando não existe ou é de outro."""
+    lesson_key = key.strip()
+    if not lesson_key:
+        return None
+    # A tabela do RecordID é SEMPRE `lesson`; o path param só escolhe a chave.
+    return study_store.get_lesson(
+        db,
+        lesson_id=RecordID(_LESSON_TABLE, lesson_key),
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id,
+    )
+
+
+def _lesson_missing(request: Request, key: str) -> Response:
+    """404 da tela da lição — lição de outro usuário é INEXISTENTE, não 'negada'."""
+    return templates.TemplateResponse(
+        request, _LESSON_NOT_FOUND_TEMPLATE, {"raw": key}, status_code=404
+    )
+
+
+def _questions(
+    lesson: study_store.Lesson, log: study_store.StudyLog | None
+) -> list[dict[str, Any]]:
+    """Questões do quiz prontas para a tela, com a resposta marcada quando há registro.
+
+    A correção é montada aqui (não no template) para que a explicação só exista na
+    estrutura quando a lição já foi concluída — antes disso, o gabarito não pode nem
+    chegar ao HTML.
+    """
+    questions: list[dict[str, Any]] = []
+    for index, item in enumerate(lesson.quiz):
+        chosen = log.answers[index] if log is not None and index < len(log.answers) else None
+        answer_index = item.get("answer_index")
+        questions.append(
+            {
+                "index": index,
+                "question": str(item.get("question", "")),
+                "options": list(item.get("options") or []),
+                "chosen": chosen,
+                "answer_index": answer_index,
+                "correct": chosen == answer_index,
+                "explanation": str(item.get("explanation", "")) if log is not None else "",
+            }
+        )
+    return questions
 
 
 @router.get("/lessons/{key}")
@@ -788,15 +901,109 @@ def lesson_detail(request: Request, key: str) -> Response:
     Sem registro de estudo, o quiz é um formulário; com registro, vira correção
     (acerto/erro por questão + explicação), a reação e quando o dono concluiu.
     """
-    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        lesson = _lesson_of(db, key, ctx)
+        if lesson is None:
+            return _lesson_missing(request, key)
+        log = study_store.get_log_for_lesson(
+            db, lesson_id=lesson.id, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+        )
+    return templates.TemplateResponse(
+        request,
+        _LESSON_TEMPLATE,
+        {
+            "lesson": lesson,
+            "log": log,
+            "blocks": {
+                "recap": _paragraphs(lesson.recap),
+                "concept": _paragraphs(lesson.concept),
+                "scenario": _paragraphs(lesson.scenario),
+                "application": _paragraphs(lesson.application),
+            },
+            "questions": _questions(lesson, log),
+            "reactions": _REACTIONS,
+            "csrf": csrf_token(request),
+        },
+    )
+
+
+def _answers_from_form(form: Any, lesson: study_store.Lesson) -> list[int] | None:
+    """Uma resposta por questão do quiz, ou None quando o envio não casa com ele.
+
+    Questão em branco é o caso perigoso: aceitá-la deslocaria as respostas seguintes e
+    gravaria uma correção silenciosamente errada. Por isso a exigência é de contagem
+    EXATA, e cada índice tem que existir entre as alternativas daquela questão.
+    """
+    answers: list[int] = []
+    for index, item in enumerate(lesson.quiz):
+        raw = form.get(f"answer_{index}")
+        if not isinstance(raw, str):
+            return None
+        try:
+            answer = int(raw)
+        except ValueError:
+            return None
+        options = list(item.get("options") or [])
+        if not 0 <= answer < len(options):
+            return None
+        answers.append(answer)
+    return answers
 
 
 @router.post("/lessons/{key}/complete")
-def complete_lesson(
-    request: Request,
-    key: str,
-    reaction: Annotated[str, Form()] = "",
-    csrf: Annotated[str, Form()] = "",
-) -> Response:
-    """Corrige as respostas contra o quiz da lição e grava o registro de estudo."""
-    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+async def complete_lesson(request: Request, key: str) -> Response:
+    """Corrige as respostas contra o quiz da lição e grava o registro de estudo.
+
+    ÚNICA rota `async` do módulo (o resto é síncrono, store bloqueante): os campos do
+    quiz têm nome dinâmico (`answer_0`, `answer_1`, ...), e só `await request.form()`
+    lê um formulário cujo shape depende do dado. As chamadas de store seguem
+    bloqueantes — aceitável no regime de um usuário por vez desta fase.
+    """
+    form = await request.form()
+    if not verify_csrf(request, str(form.get("csrf") or "")):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    reaction = str(form.get("reaction") or "").strip()
+    if reaction and reaction not in _REACTIONS:
+        # Recusado ANTES da store: o ASSERT da migração devolveria um erro de banco,
+        # e o dono veria 500 no lugar do motivo.
+        return PlainTextResponse(_BAD_REACTION, status_code=400)
+    # Sessão pela conexão de LEITURA, antes da de escrita — mesmo idioma das outras
+    # escritas do módulo (ADR-0018): autorizar não é trabalho do usuário de escrita.
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    try:
+        with client.connect_rw() as db:
+            lesson = _lesson_of(db, key, ctx)
+            if lesson is None:
+                return _lesson_missing(request, key)
+            answers = _answers_from_form(form, lesson)
+            if answers is None:
+                return PlainTextResponse(_BAD_ANSWERS, status_code=400)
+            study_store.complete_lesson(
+                db,
+                lesson_id=lesson.id,
+                answers=answers,
+                # A nota é da ROTA, contra o quiz CONGELADO da lição: aceitar um
+                # `correct_count` do formulário poria o desempenho — que alimenta a
+                # recapitulação — nas mãos de quem responde.
+                correct_count=sum(
+                    1
+                    for answer, item in zip(answers, lesson.quiz, strict=False)
+                    if answer == item.get("answer_index")
+                ),
+                reaction=reaction or None,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+            )
+    except ConfigError:
+        _log.warning("study.write_unavailable")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except StoreError:
+        # A recusa esperada é a segunda conclusão (UNIQUE por lição).
+        _log.warning("study.lesson.complete_refused", lesson=key.strip())
+        return PlainTextResponse(_ALREADY_DONE, status_code=409)
+    return RedirectResponse(f"{_LESSONS_ROUTE}/{lesson.id.id}", status_code=303)

@@ -279,6 +279,27 @@ def test_invalid_answers_are_refused_before_the_store(
     assert calls == []
 
 
+def test_invalid_reaction_is_refused_before_the_store(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reação fora de fácil/ok/difícil é recusada na borda, com motivo legível.
+
+    O `ASSERT` da migração já barraria o valor, mas só depois da viagem ao banco — e o
+    dono veria um 500 no lugar do porquê. Vazio continua valendo: reagir é opcional.
+    """
+    calls = _spy(monkeypatch, "complete_lesson", _log())
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        _COMPLETE_URL,
+        data={"csrf": csrf, "reaction": "adorei", **_answers()},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 400
+    assert calls == []
+
+
 def test_second_completion_is_refused_with_409(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
