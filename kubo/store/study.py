@@ -12,7 +12,7 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from surrealdb import RecordID
@@ -29,9 +29,13 @@ _MAX_PAGE = 100
 _MATERIAL_SCOPE = "tenant_id = $tenant AND user_id = $user"
 _CHAPTER_SCOPE = f"material = $material AND {_MATERIAL_SCOPE}"
 _ENTRY_SCOPE = f"study_plan = $plan AND {_MATERIAL_SCOPE}"
+# `lesson` também aponta o plano por `study_plan`: mesmo recorte da lição planejada.
+_LESSON_SCOPE = _ENTRY_SCOPE
 
 # Único estado editável do plano (ADR-0043): ativar congela a meta.
 _PROPOSED = "proposed"
+# Único estado que produz lição (KUBO-137): o job da véspera só olha para estes.
+_ACTIVE = "active"
 # `seq` fora da faixa válida (1..N), usado como estacionamento nas trocas de posição:
 # o índice `plan_entry_seq` é UNIQUE e não tolera duas lições no mesmo lugar nem por
 # um passo intermediário.
@@ -654,3 +658,365 @@ def activate_plan(
         raise StoreError("study plan vanished during activation")
     _log.info("store.study_plan.activated", plan=str(plan_id))
     return active
+
+
+# --- Lição e registro de estudo (KUBO-137) ---------------------------------------------
+#
+# Mesmo contrato das seções acima: keyword-only, `assert_membership` no topo, filtro por
+# tenant E user. A Lição é gerada pelo job da véspera e lida na UI pelo dono; o Registro
+# de estudo é o que ele respondeu, e alimenta a recapitulação da lição seguinte.
+
+if TYPE_CHECKING:
+    # Só para TIPO: `kubo.study.tutor` importa `MaterialChapter` DAQUI, então um import
+    # em runtime fecharia o ciclo (módulo parcialmente inicializado) e derrubaria tudo
+    # que depende da store de Estudos.
+    from kubo.study.tutor import LessonOutput
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """A lição de um dia de estudo: os blocos gerados e o quiz, congelados no banco.
+
+    `quiz` é lista de dicts (campo FLEXIBLE) porque a lição é um SNAPSHOT: a correção
+    de uma lição antiga tem que usar o quiz como ele foi gerado, mesmo que o modelo da
+    persona mude depois.
+    """
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    study_plan: RecordID
+    plan_entry: RecordID
+    scheduled_for: datetime
+    concept: str
+    scenario: str
+    application: str
+    recap: str | None
+    quiz: list[dict[str, Any]]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class StudyLog:
+    """Registro de estudo: o que o dono respondeu, quanto acertou e como reagiu."""
+
+    id: RecordID
+    lesson: RecordID
+    answers: list[int]
+    correct_count: int
+    reaction: str | None
+    completed_at: datetime
+
+
+def _lesson_from_row(row: dict[str, Any]) -> Lesson:
+    """Constrói uma `Lesson` a partir de uma linha do banco."""
+    return Lesson(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        study_plan=row["study_plan"],
+        plan_entry=row["plan_entry"],
+        scheduled_for=_as_datetime(row["scheduled_for"]),
+        concept=row["concept"],
+        scenario=row["scenario"],
+        application=row["application"],
+        recap=row.get("recap"),
+        quiz=_quiz_of(row),
+        created_at=_as_datetime(row["created_at"]),
+    )
+
+
+def _quiz_of(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Quiz congelado da lição (campo FLEXIBLE) como lista de dicts."""
+    raw: list[dict[str, Any]] = list(row.get("quiz") or [])
+    return [dict(item) for item in raw]
+
+
+def _log_from_row(row: dict[str, Any]) -> StudyLog:
+    """Constrói um `StudyLog` a partir de uma linha do banco."""
+    answers: list[Any] = list(row.get("answers") or [])
+    return StudyLog(
+        id=row["id"],
+        lesson=row["lesson"],
+        answers=[int(a) for a in answers],
+        correct_count=int(row["correct_count"]),
+        reaction=row.get("reaction"),
+        completed_at=_as_datetime(row["completed_at"]),
+    )
+
+
+def list_chapters_by_ids(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    chapter_ids: Sequence[RecordID],
+) -> list[MaterialChapter]:
+    """Capítulos do usuário pelos ids pedidos, NA ORDEM em que foram pedidos.
+
+    É como o job da véspera carrega os capítulos de uma lição do plano (que aponta
+    capítulos por id, possivelmente fora de ordem de `seq`). Id de outro usuário
+    simplesmente não volta — invisível é invisível, não "negado".
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    ids = list(chapter_ids)
+    if not ids:
+        return []
+    rows = db.query(
+        f"SELECT * FROM material_chapter WHERE id IN $ids AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"ids": ids, "tenant": tenant_id, "user": user_id},
+    )
+    # Chaveado por `str(id)`: `RecordID` compara por igualdade mas NÃO é hashable
+    # (verificado contra o SDK) — usá-lo como chave de dict/set explode em runtime.
+    by_id = {str(row["id"]): _chapter_from_row(row) for row in rows}
+    return [by_id[key] for key in (str(chapter_id) for chapter_id in ids) if key in by_id]
+
+
+def list_active_plans(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[StudyPlan]:
+    """Planos ATIVOS do usuário no tenant — os únicos que produzem lição."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_plan WHERE status = '{_ACTIVE}' AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "ORDER BY created_at;",
+        {"tenant": tenant_id, "user": user_id},
+    )
+    return [_plan_from_row(row) for row in rows]
+
+
+def create_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    entry_id: RecordID,
+    scheduled_for: datetime,
+    output: LessonOutput,
+) -> Lesson:
+    """Persiste a lição de um dia do plano e devolve o registro criado.
+
+    (plano, dia) é UNIQUE: uma segunda geração para o mesmo dia é StoreError legível.
+    É o que torna o job da véspera idempotente — várias janelas de retry no mesmo dia
+    não podem render duas lições para o mesmo dia de estudo.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_id = _fresh("lesson")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $lesson SET tenant_id = $tenant, user_id = $user, study_plan = $plan, "
+            "plan_entry = $entry, scheduled_for = $day, concept = $concept, "
+            "scenario = $scenario, application = $application, recap = $recap, quiz = $quiz"
+        ],
+        {
+            "lesson": lesson_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "plan": plan_id,
+            "entry": entry_id,
+            "day": scheduled_for,
+            "concept": output.concept,
+            "scenario": output.scenario,
+            "application": output.application,
+            "recap": output.recap,
+            "quiz": [item.model_dump() for item in output.quiz],
+        },
+    )
+    lesson = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    if lesson is None:
+        raise StoreError("lesson vanished during creation")
+    _log.info(
+        "store.lesson.created",
+        lesson=str(lesson_id),
+        plan=str(plan_id),
+        day=scheduled_for.date().isoformat(),
+    )
+    return lesson
+
+
+def get_lesson(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, lesson_id: RecordID
+) -> Lesson | None:
+    """Lê uma lição do usuário; None se não existe ou é de outro usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE id = $lesson AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _lesson_from_row(rows[0]) if rows else None
+
+
+def get_lesson_for_day(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    scheduled_for: datetime,
+) -> Lesson | None:
+    """Lição do plano marcada para um dia; None quando ainda não foi gerada."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE {_LESSON_SCOPE} AND scheduled_for = $day LIMIT 1;",  # noqa: S608
+        {"plan": plan_id, "day": scheduled_for, "tenant": tenant_id, "user": user_id},
+    )
+    return _lesson_from_row(rows[0]) if rows else None
+
+
+def list_lessons(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    limit: int,
+    start: int,
+) -> list[Lesson]:
+    """Página do histórico de lições do plano, mais recentes primeiro."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    page = max(1, min(int(limit), _MAX_PAGE))
+    offset = max(0, int(start))
+    # Mesmo quirk de LIMIT/START de `list_chapters`: literais já clampados, nunca
+    # conteúdo vindo de fora.
+    query = (
+        f"SELECT * FROM lesson WHERE {_LESSON_SCOPE} "  # noqa: S608
+        f"ORDER BY scheduled_for DESC LIMIT {page} START {offset};"
+    )
+    rows = db.query(query, {"plan": plan_id, "tenant": tenant_id, "user": user_id})
+    return [_lesson_from_row(row) for row in rows]
+
+
+def count_lessons(db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID) -> int:
+    """Total de lições já geradas para o plano."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT count() FROM lesson WHERE {_LESSON_SCOPE} GROUP ALL;",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
+def next_unlessoned_entry(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> PlanEntry | None:
+    """Menor `seq` do plano que ainda não virou lição; None quando o plano acabou.
+
+    A ORDEM DO PLANO NUNCA MUDA (ADR-0043): o que decide a próxima lição é o `seq`
+    aprovado pelo dono, não o desempenho nem a data.
+    """
+    entries = list_plan_entries(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    rows = db.query(
+        f"SELECT plan_entry FROM lesson WHERE {_LESSON_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    lessoned = {str(row["plan_entry"]) for row in rows}
+    return next((entry for entry in entries if str(entry.id) not in lessoned), None)
+
+
+def complete_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+    answers: Sequence[int],
+    correct_count: int,
+    reaction: str | None,
+) -> StudyLog:
+    """Grava o registro de estudo da lição e devolve o que ficou no banco.
+
+    Um registro POR LIÇÃO (índice UNIQUE): concluir de novo é StoreError legível — o
+    segundo envio não pode reescrever o desempenho que já alimentou a recapitulação.
+    `correct_count` vem pronto de quem chama: a correção é contra o quiz da lição, e
+    quem tem o quiz em mãos é a rota.
+    """
+    lesson = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    if lesson is None:
+        # Lição de outro usuário e lição inexistente falham IGUAL, e falham ANTES de
+        # qualquer escrita: um registro gravado aqui carimbaria desempenho na lição alheia.
+        raise StoreError("lição não encontrada")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $log SET tenant_id = $tenant, user_id = $user, lesson = $lesson, "
+            "answers = $answers, correct_count = $correct, reaction = $reaction"
+        ],
+        {
+            "log": _fresh("study_log"),
+            "tenant": tenant_id,
+            "user": user_id,
+            "lesson": lesson.id,
+            "answers": [int(answer) for answer in answers],
+            "correct": int(correct_count),
+            "reaction": reaction,
+        },
+    )
+    log = get_log_for_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson.id)
+    if log is None:
+        raise StoreError("study log vanished during creation")
+    _log.info(
+        "store.study_log.created",
+        lesson=str(lesson.id),
+        correct=int(correct_count),
+        reaction=reaction,
+    )
+    return log
+
+
+def get_log_for_lesson(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, lesson_id: RecordID
+) -> StudyLog | None:
+    """Registro de estudo da lição; None enquanto ela não foi concluída."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_log WHERE lesson = $lesson AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _log_from_row(rows[0]) if rows else None
+
+
+def recent_misses(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID, limit: int = 10
+) -> list[str]:
+    """Enunciados errados nos registros mais recentes do plano, do mais novo ao mais velho.
+
+    É a matéria-prima da recapitulação: a lição seguinte abre pelo que o dono errou.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    scope = {"plan": plan_id, "tenant": tenant_id, "user": user_id}
+    lessons = db.query(
+        f"SELECT * FROM lesson WHERE {_LESSON_SCOPE};",  # noqa: S608
+        scope,
+    )
+    if not lessons:
+        return []
+    quizzes = {str(row["id"]): _quiz_of(row) for row in lessons}
+    logs = db.query(
+        f"SELECT * FROM study_log WHERE lesson IN $lessons AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "ORDER BY completed_at DESC;",
+        {
+            "lessons": [row["id"] for row in lessons],
+            "tenant": tenant_id,
+            "user": user_id,
+        },
+    )
+    misses: list[str] = []
+    for row in logs:
+        log = _log_from_row(row)
+        misses.extend(_missed_questions(quizzes.get(str(log.lesson), []), log.answers))
+        if len(misses) >= limit:
+            break
+    return misses[:limit]
+
+
+def _missed_questions(quiz: Sequence[dict[str, Any]], answers: Sequence[int]) -> list[str]:
+    """Enunciados das questões cuja resposta marcada não é a certa.
+
+    Questão sem resposta correspondente (registro mais curto que o quiz) NÃO conta como
+    erro: o que alimenta a recapitulação é o que o dono errou, não o que faltou casar.
+    """
+    return [
+        str(item.get("question", ""))
+        for item, answer in zip(quiz, answers, strict=False)
+        if answer != item.get("answer_index")
+    ]

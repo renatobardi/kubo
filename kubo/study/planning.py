@@ -30,6 +30,22 @@ def normalized_weekdays(weekdays: Collection[str]) -> set[int]:
     return enabled
 
 
+def next_study_day(*, after: date, weekdays: Collection[str]) -> date:
+    """Próximo dia habilitado ESTRITAMENTE depois de `after`.
+
+    Usado pelo job da véspera (KUBO-137): a lição gerada hoje é a do PRÓXIMO dia de
+    estudo, então `after` (hoje) nunca conta como resposta, mesmo sendo habilitado.
+    `weekdays` inválido/vazio é ValueError, pela mesma validação de
+    `normalized_weekdays`.
+    """
+    enabled = normalized_weekdays(weekdays)
+    # Distância a partir do dia SEGUINTE a `after` (por isso o `- 1` antes do módulo e
+    # o `+ 1` depois): a menor delas é o próximo dia habilitado, e o próprio `after`
+    # nunca entra na conta.
+    ahead = min((day - after.weekday() - 1) % 7 for day in enabled) + 1
+    return after + timedelta(days=ahead)
+
+
 def compute_target_date(*, start: date, weekdays: Collection[str], lesson_count: int) -> date:
     """Data da última lição: a `lesson_count`-ésima ocorrência de um dia habilitado.
 

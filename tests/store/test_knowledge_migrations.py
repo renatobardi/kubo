@@ -110,6 +110,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0021_study_foundation.surql",
         # 0022 (KUBO-136, ADR-0043): topic/study_plan/plan_entry.
         "0022_study_plan.surql",
+        # 0023 (KUBO-137, ADR-0043): lesson/study_log.
+        "0023_lesson.surql",
     }
 
 

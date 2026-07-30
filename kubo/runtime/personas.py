@@ -16,13 +16,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, Self
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
 from kubo.runtime.catalog_loader import (
     load_items_from_db,
     load_items_from_dir,
     load_yaml_item,
 )
+
+_log = structlog.get_logger(__name__)
 
 _KIND = "persona"
 
@@ -90,3 +94,22 @@ def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
         Persona,
         _KIND,
     )
+
+
+def resolve_persona(db: Any, tenant_id: Any, user_id: Any, name: str) -> Persona:
+    """Persona do catálogo do tenant por nome; ausente, o default de CÓDIGO.
+
+    O seed não retro-semeia tenants criados antes de uma persona nova (ADR-0042), e
+    quem só LÊ o catálogo não escreve nele — mudança de catálogo é auditada e pertence
+    ao dono. Por isso o default entra em memória, com log, e NUNCA por upsert.
+
+    Compartilhada por quem monta persona fora de uma sessão de UI (o job da véspera) e
+    por quem monta dentro dela (as rotas de Estudos): a mesma persona precisa resolver
+    igual nos dois caminhos, senão a lição gerada pelo cron e a proposta feita na tela
+    seguiriam prompts diferentes.
+    """
+    found = load_personas(db, tenant_id, user_id).get(name)
+    if found is not None:
+        return found
+    _log.info("persona.default_used", persona=name)
+    return Persona.model_validate(next(p for p in DEFAULT_PERSONAS if p["name"] == name))

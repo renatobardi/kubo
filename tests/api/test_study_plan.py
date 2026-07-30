@@ -160,6 +160,16 @@ def stub_plan_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.study.build_planner", lambda db, ctx: _FakePlanner(_proposal())
     )
+    # Leituras de Lição (KUBO-137): a tela do tema com plano ATIVO mostra a lição do dia
+    # e o histórico. Vazias por padrão — o comportamento delas é de `test_lesson.py`.
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_lesson_for_day", lambda db, **kw: None
+    )
+    monkeypatch.setattr("kubo.api.routes.study.study_store.list_lessons", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.study.study_store.count_lessons", lambda db, **kw: 0)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_log_for_lesson", lambda db, **kw: None
+    )
 
 
 def _proposal() -> PlanProposal:
