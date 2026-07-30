@@ -16,7 +16,7 @@ import os
 import secrets
 import string
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
@@ -31,6 +31,7 @@ from kubo.errors import ConfigError, MaterialParseError, StoreError
 from kubo.store import client
 from kubo.store import study as study_store
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
+from kubo.study.planner import Planner
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -298,3 +299,91 @@ def material_detail(
             "total": total,
         },
     )
+
+
+# --- Tema e plano (KUBO-136) -----------------------------------------------------------
+#
+# Mesma tríade de escrita das rotas acima: verify_csrf → sessão → connect_rw → 303 (PRG).
+# Formulários clássicos, sem JS novo (molde do gate, ADR-0018).
+
+_NOT_IMPLEMENTED = "Ainda não implementado."
+
+
+def build_planner(db: Any, ctx: SessionContext) -> Planner:
+    """Monta o `Planner` com a persona `planner` do catálogo do tenant.
+
+    Costura injetável (molde de `get_finder` em sources.py): os testes de rota trocam
+    esta função por um fake, então NENHUM teste toca LiteLLM. Recebe `db` e `ctx` porque
+    a persona é do catálogo do tenant (ADR-0042), não de um YAML global.
+    """
+    raise NotImplementedError
+
+
+@router.post("/materials/{key}/topic")
+def create_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Cria o tema do material (título herdado do material) e redireciona pro tema."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.get("/topics/{key}")
+def topic_detail(request: Request, key: str) -> Response:
+    """Tela do tema: propor plano, revisar a proposta ou ver o plano ativo."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/propose")
+def propose_plan(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Propõe o plano pela persona; LLM indisponível cai na proposta mecânica."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/entries/{seq}/remove")
+def remove_entry(
+    request: Request,
+    key: str,
+    seq: int,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Remove uma lição da proposta e recalcula a data-alvo."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/entries/{seq}/move")
+def move_entry(
+    request: Request,
+    key: str,
+    seq: int,
+    direction: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Move uma lição da proposta para cima ou para baixo."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/cadence")
+def set_cadence(
+    request: Request,
+    key: str,
+    weekdays: Annotated[list[str] | None, Form()] = None,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Troca os dias da semana da proposta e recalcula a data-alvo."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/activate")
+def activate_plan(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Ativa o plano proposto — a partir daqui a data-alvo está congelada."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)

@@ -12,7 +12,7 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from surrealdb import RecordID
@@ -218,3 +218,187 @@ def count_chapters(
         {"material": material_id, "tenant": tenant_id, "user": user_id},
     )
     return int(rows[0]["count"]) if rows else 0
+
+
+# --- Tema e plano de estudo (KUBO-136) -------------------------------------------------
+#
+# Mesmo contrato do Material acima: keyword-only, `assert_membership` no topo, filtro por
+# tenant E user. Um tema/plano de outro membro do mesmo tenant é invisível, não "negado".
+
+
+@dataclass(frozen=True)
+class Topic:
+    """Tema de estudo: um material lido com um objetivo (1 material = 1 tema)."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    material: RecordID
+    title: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class StudyPlan:
+    """Plano do tema: cadência + data-alvo derivada. Só `active` produz lição.
+
+    `target_date` é recalculada a cada edição enquanto `proposed` e CONGELADA na
+    ativação (ADR-0043): a meta é o que o dono aprovou, não o que a cadência diria
+    depois.
+    """
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    topic: RecordID
+    status: str
+    weekdays: list[str]
+    target_date: datetime | None
+    activated_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PlanEntry:
+    """Uma lição planejada: posição (`seq`, contíguo 1..N) e capítulos que cobre."""
+
+    id: RecordID
+    study_plan: RecordID
+    seq: int
+    title: str
+    chapters: list[RecordID]
+
+
+@dataclass(frozen=True)
+class PlanEntryInput:
+    """Entrada de lição na gravação da proposta (sem id: a store cria)."""
+
+    seq: int
+    title: str
+    chapter_ids: Sequence[RecordID]
+
+
+def create_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+    title: str,
+) -> Topic:
+    """Cria o tema de um material do usuário.
+
+    Material de outro usuário é INEXISTENTE daqui (StoreError, não "negado"); material
+    que já tem tema também falha — o índice UNIQUE é a regra "1 material = 1 tema".
+    """
+    raise NotImplementedError
+
+
+def get_topic(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, topic_id: RecordID
+) -> Topic | None:
+    """Lê um tema do usuário; None se não existe ou é de outro usuário."""
+    raise NotImplementedError
+
+
+def get_topic_for_material(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> Topic | None:
+    """Tema do material, se já existe — o que decide entre 'Criar tema' e 'Ver tema'."""
+    raise NotImplementedError
+
+
+def list_topics(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Topic]:
+    """Lista os temas do usuário no tenant, mais recentes primeiro."""
+    raise NotImplementedError
+
+
+def save_plan_proposal(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    weekdays: Sequence[str],
+    target_date: datetime | None,
+    entries: Sequence[PlanEntryInput],
+) -> StudyPlan:
+    """Grava (ou substitui) a proposta de plano do tema, atomicamente.
+
+    Repropor sobre um plano `proposed` apaga plano e lições e recria — propor de novo é
+    recomeçar a curadoria, não acumular lições órfãs. Sobre plano já ativado é StoreError:
+    o plano ativo é o compromisso congelado, e reescrevê-lo apagaria o que o dono aprovou.
+    """
+    raise NotImplementedError
+
+
+def get_plan_for_topic(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, topic_id: RecordID
+) -> StudyPlan | None:
+    """Plano do tema (1 tema = 1 plano); None enquanto nada foi proposto."""
+    raise NotImplementedError
+
+
+def list_plan_entries(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> list[PlanEntry]:
+    """Lições do plano ordenadas por `seq`, sem paginação (o domínio limita a 200)."""
+    raise NotImplementedError
+
+
+def remove_plan_entry(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    seq: int,
+    new_target: datetime | None,
+) -> None:
+    """Remove uma lição do plano proposto e re-sequencia as demais (1..N contíguo).
+
+    `new_target` vem pronto de quem chama: o cálculo da data-alvo é do domínio
+    (`kubo.study.planning`), não da store. Plano não-proposto é StoreError.
+    """
+    raise NotImplementedError
+
+
+def move_plan_entry(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    seq: int,
+    direction: Literal["up", "down"],
+) -> None:
+    """Troca a lição de posição com a vizinha, dentro da transação.
+
+    Mover a primeira para cima (ou a última para baixo) não faz nada — é o fim da lista,
+    não um erro. Plano não-proposto é StoreError.
+    """
+    raise NotImplementedError
+
+
+def set_plan_cadence(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    weekdays: Sequence[str],
+    new_target: datetime | None,
+) -> None:
+    """Troca os dias da semana do plano proposto e grava a nova data-alvo."""
+    raise NotImplementedError
+
+
+def activate_plan(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> StudyPlan:
+    """Ativa o plano proposto: carimba `activated_at` e congela a data-alvo.
+
+    Ativar um plano já ativo é StoreError legível — o duplo clique não pode reiniciar a
+    meta que já está valendo.
+    """
+    raise NotImplementedError
