@@ -11,10 +11,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+import structlog
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from kubo.errors import ExecutorError
 from kubo.executors.base import Executor
 from kubo.store.study import MaterialChapter
+
+_log = structlog.get_logger(__name__)
+
+# Teto de `title` do modelo — o título vem do sumário do arquivo (entrada hostil).
+_MAX_TITLE = 200
 
 
 class PlanLesson(BaseModel):
@@ -48,7 +55,15 @@ class Planner:
         ordem interna não crescente. A postura é a do Finder: erro vira None e quem
         chama decide o fallback — nunca gravar um plano que não bate com o material.
         """
-        raise NotImplementedError
+        try:
+            proposal = self._executor.complete(self._prompt, _summary(chapters), PlanProposal)
+        except (ExecutorError, ValidationError):
+            _log.info("study.planner.failed", chapters=len(chapters))
+            return None
+        if not _is_coherent(proposal, {chapter.seq for chapter in chapters}):
+            _log.info("study.planner.incoherent", chapters=len(chapters))
+            return None
+        return proposal
 
 
 def mechanical_proposal(chapters: Sequence[MaterialChapter]) -> PlanProposal:
@@ -57,4 +72,54 @@ def mechanical_proposal(chapters: Sequence[MaterialChapter]) -> PlanProposal:
     Existe para que a indisponibilidade do LLM atrase a curadoria, não o estudo — a
     UI avisa que a proposta é mecânica e o dono edita.
     """
-    raise NotImplementedError
+    return PlanProposal(
+        lessons=[
+            PlanLesson(title=_lesson_title(chapter), chapter_seqs=[chapter.seq])
+            for chapter in _in_reading_order(chapters)
+        ]
+    )
+
+
+def _in_reading_order(chapters: Sequence[MaterialChapter]) -> list[MaterialChapter]:
+    """Capítulos na ordem do `seq` — a ordem do livro, não a da lista recebida."""
+    return sorted(chapters, key=lambda chapter: chapter.seq)
+
+
+def _lesson_title(chapter: MaterialChapter) -> str:
+    """Título de lição derivado do capítulo, dentro dos limites do modelo.
+
+    O título vem do sumário do arquivo enviado (entrada hostil): vazio ou longo demais
+    quebraria a validação do `PlanLesson` e derrubaria a tela em vez do fallback.
+    """
+    return chapter.title.strip()[:_MAX_TITLE] or f"Capítulo {chapter.seq}"
+
+
+def _summary(chapters: Sequence[MaterialChapter]) -> str:
+    """Sumário do material (seq, parte, título) — o conteúdo NÃO-CONFIÁVEL do prompt.
+
+    Só o sumário: o texto dos capítulos não cabe no orçamento de tokens e não é
+    necessário para agrupar — o agrupamento é sobre a estrutura, não sobre o conteúdo.
+    """
+    return "\n".join(
+        f"{chapter.seq}. {chapter.title}" + (f" [{chapter.part}]" if chapter.part else "")
+        for chapter in _in_reading_order(chapters)
+    )
+
+
+def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:
+    """True se a proposta bate com o material: `seq` existente, único e em ordem.
+
+    A checagem é sobre a proposta INTEIRA — uma lição incoerente invalida tudo, porque
+    salvar o resto daria ao dono um plano que não cobre o livro que ele mandou estudar.
+    """
+    seen: set[int] = set()
+    for lesson in proposal.lessons:
+        seqs = lesson.chapter_seqs
+        if any(seq not in known for seq in seqs):
+            return False
+        if any(a >= b for a, b in zip(seqs, seqs[1:], strict=False)):
+            return False
+        if seen & set(seqs):
+            return False
+        seen |= set(seqs)
+    return True

@@ -338,6 +338,33 @@ def test_propose_on_material_without_chapters_does_not_save(
     assert calls == []
 
 
+def test_propose_refuses_a_material_with_too_many_chapters(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Material grande demais é recusado ANTES da persona, com motivo acionável.
+
+    `PlanProposal.lessons` tem teto de 200: acima disso nem a proposta mecânica é
+    construível. Sem esta cerca a tela devolveria 500 (erro de validação do modelo) e o
+    dono não saberia que o caminho é reduzir o material na conferência.
+    """
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_chapters", lambda db, **kw: _chapters(201)
+    )
+    planner = _FakePlanner(_proposal())
+    monkeypatch.setattr("kubo.api.routes.study.build_planner", lambda db, ctx: planner)
+    calls = _spy(monkeypatch, "save_plan_proposal", _plan())
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        f"{_TOPIC_URL}/plan/propose", data={"csrf": csrf}, follow_redirects=False
+    )
+
+    assert resp.status_code == 400
+    assert "capítulos demais" in resp.text
+    assert planner.calls == []
+    assert calls == []
+
+
 def test_remove_entry_delegates_to_the_store_and_redirects(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
