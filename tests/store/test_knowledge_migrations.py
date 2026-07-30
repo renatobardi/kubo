@@ -112,6 +112,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0022_study_plan.surql",
         # 0023 (KUBO-137, ADR-0043): lesson/study_log.
         "0023_lesson.surql",
+        # 0024 (KUBO-138, ADR-0043): pausa do plano (paused_at/paused_days).
+        "0024_plan_pause.surql",
     }
 
 

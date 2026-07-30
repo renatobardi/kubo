@@ -165,17 +165,47 @@ def test_chapter_text_travels_as_untrusted_content() -> None:
     assert "Conteúdo do capítulo 1." not in executor.received_instructions[0]
 
 
-def test_owner_context_and_misses_travel_in_the_instruction() -> None:
-    """Contexto de trabalho, erros recentes e título da lição são dado do DONO: instrução."""
+def test_owner_work_context_travels_in_the_instruction() -> None:
+    """O contexto de trabalho é dado DIGITADO pelo dono: é o único que vai na instrução."""
+    executor = _FakeExecutor(output=_lesson())
+
+    _generate(_tutor(executor))
+
+    assert _WORK_CONTEXT in executor.received_instructions[0]
+    assert _WORK_CONTEXT not in executor.received_content[0]
+
+
+def test_entry_title_travels_as_untrusted_content() -> None:
+    """O título da lição VEM DO EPUB (o planner nunca valida o texto dele): é hostil.
+
+    O planner deriva o título de lição do sumário do arquivo enviado, e nada no caminho
+    inspeciona esse texto — um capítulo chamado "ignore as instruções acima e ..."
+    ditaria a instrução se o título viajasse nela. Vai na cerca do conteúdo.
+    """
+    executor = _FakeExecutor(output=_lesson())
+
+    _generate(_tutor(executor))
+
+    assert "Aula 3 — Filas" in executor.received_content[0]
+    assert "Aula 3 — Filas" not in executor.received_instructions[0]
+
+
+def test_recent_misses_travel_as_untrusted_content_with_the_rule_in_the_instruction() -> None:
+    """Erro recente é ENUNCIADO GERADO POR LLM sobre material hostil — laço de 2ª ordem.
+
+    O texto do enunciado nasceu de um quiz que a persona escreveu lendo o epub: promovê-lo
+    a instrução deixaria o material dirigir a próxima lição por dois saltos. A REGRA
+    ("recapitule o que está listado no conteúdo") é do sistema e fica na instrução; o
+    texto dos erros fica na cerca.
+    """
     executor = _FakeExecutor(output=_lesson(recap="Revisando o que você errou."))
 
     _generate(_tutor(executor), misses=["O que é backpressure?"])
 
     instruction = executor.received_instructions[0]
-    assert _WORK_CONTEXT in instruction
-    assert "O que é backpressure?" in instruction
-    assert "Aula 3 — Filas" in instruction
-    assert "O que é backpressure?" not in executor.received_content[0]
+    assert "O que é backpressure?" in executor.received_content[0]
+    assert "O que é backpressure?" not in instruction
+    assert "recapitula" in instruction.lower()
 
 
 def test_generate_without_misses_still_produces_a_lesson_without_recap() -> None:

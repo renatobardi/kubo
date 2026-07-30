@@ -170,6 +170,9 @@ def stub_plan_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_log_for_lesson", lambda db, **kw: None
     )
+    # Régua de progresso (KUBO-138): a tela do tema com plano ativado deriva o progresso
+    # das conclusões. Vazia por padrão — o comportamento dela é de `test_plan_lifecycle.py`.
+    monkeypatch.setattr("kubo.api.routes.study.study_store.completion_dates", lambda db, **kw: [])
 
 
 def _proposal() -> PlanProposal:

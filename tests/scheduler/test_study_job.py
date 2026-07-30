@@ -15,6 +15,7 @@ importada: a implementação as acessa como atributo do módulo (idioma de
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -303,3 +304,25 @@ def test_tutor_receives_the_entry_title_the_owner_context_and_recent_misses(
     assert call["work_context"] == _WORK_CONTEXT
     assert list(call["misses"]) == ["O que é backpressure?"]
     assert store["recent_misses"].calls[0]["plan_id"] == plan.id
+
+
+def test_a_plan_with_broken_cadence_does_not_block_the_others(store: dict[str, _Spy]) -> None:
+    """Cadência corrompida no banco derruba UM plano, não a noite: o vizinho gera lição.
+
+    `next_study_day` levanta ValueError em dia inválido; sem a cerca por plano, um
+    registro estragado deixaria TODOS os planos seguintes sem lição no dia seguinte.
+    """
+    # Lista NOVA (e não `plan.weekdays.append`): `_plan()` compartilha a lista `_WEEK` do
+    # módulo, e mutá-la aqui corromperia a cadência dos outros testes do arquivo.
+    broken = replace(_plan("p1"), weekdays=[*_WEEK, "segunda-feira"])
+    second = _plan("p2")
+    store["list_active_plans"].result = [broken, second]
+    store["next_unlessoned_entry"].result = lambda kw: _entry(_plan(str(kw["plan_id"].id)))
+    store["create_lesson"].result = lambda kw: _lesson(
+        _plan(str(kw["plan_id"].id)), _entry(_plan(str(kw["plan_id"].id))), kw["scheduled_for"]
+    )
+
+    created = _run(_FakeTutor(_output()))
+
+    assert len(created) == 1
+    assert [call["plan_id"] for call in store["create_lesson"].calls] == [second.id]

@@ -36,6 +36,9 @@ _LESSON_SCOPE = _ENTRY_SCOPE
 _PROPOSED = "proposed"
 # Único estado que produz lição (KUBO-137): o job da véspera só olha para estes.
 _ACTIVE = "active"
+# Estados do ciclo de vida (KUBO-138): pausado congela a régua, completo fecha o plano.
+_PAUSED = "paused"
+_COMPLETED = "completed"
 # `seq` fora da faixa válida (1..N), usado como estacionamento nas trocas de posição:
 # o índice `plan_entry_seq` é UNIQUE e não tolera duas lições no mesmo lugar nem por
 # um passo intermediário.
@@ -268,6 +271,12 @@ class StudyPlan:
     target_date: datetime | None
     activated_at: datetime | None
     created_at: datetime
+    # Pausa (KUBO-138): `paused_at` marca desde quando o plano está parado; `paused_days`
+    # acumula os dias de estudo congelados por todas as pausas já retomadas — é o que
+    # impede o atraso de crescer enquanto o dono não está estudando. Defaults porque a
+    # maioria dos planos nunca pausa (e para não quebrar quem já constrói o dataclass).
+    paused_at: datetime | None = None
+    paused_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -306,6 +315,7 @@ def _plan_from_row(row: dict[str, Any]) -> StudyPlan:
     """Constrói um `StudyPlan` a partir de uma linha do banco."""
     target = row.get("target_date")
     activated = row.get("activated_at")
+    paused = row.get("paused_at")
     return StudyPlan(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -316,6 +326,9 @@ def _plan_from_row(row: dict[str, Any]) -> StudyPlan:
         target_date=_as_datetime(target) if target is not None else None,
         activated_at=_as_datetime(activated) if activated is not None else None,
         created_at=_as_datetime(row["created_at"]),
+        paused_at=_as_datetime(paused) if paused is not None else None,
+        # Plano gravado antes da migração 0024 não tem o campo: zero é "nunca pausou".
+        paused_days=int(row.get("paused_days") or 0),
     )
 
 
@@ -501,17 +514,14 @@ def _editable_plan(
     plano já ativado falha com outra mensagem — a edição pertence à fase de proposta,
     e mexer no plano ativo apagaria o compromisso que o dono já assumiu.
     """
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        f"SELECT * FROM study_plan WHERE id = $plan AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
-        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    return _plan_in_status(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan_id,
+        expected=_PROPOSED,
+        refused="plano já ativado não pode ser editado",
     )
-    if not rows:
-        raise StoreError("plano não encontrado")
-    plan = _plan_from_row(rows[0])
-    if plan.status != _PROPOSED:
-        raise StoreError("plano já ativado não pode ser editado")
-    return plan
 
 
 def remove_plan_entry(
@@ -1020,3 +1030,195 @@ def _missed_questions(quiz: Sequence[dict[str, Any]], answers: Sequence[int]) ->
         for item, answer in zip(quiz, answers, strict=False)
         if answer != item.get("answer_index")
     ]
+
+
+# --- Ciclo de vida do plano (KUBO-138) -------------------------------------------------
+#
+# Mesmo contrato das seções acima: keyword-only, `assert_membership` no topo, filtro por
+# tenant E user. `paused_days` é ACUMULADOR: o cálculo de quantos dias congelar é do
+# domínio (`kubo.study.progress`), a store só soma o que recebe — mesma divisão de
+# `new_target` nas edições da proposta.
+
+
+def _plan_in_status(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    expected: str,
+    refused: str,
+) -> StudyPlan:
+    """Plano do usuário no estado exigido, ou StoreError legível.
+
+    Molde de `_editable_plan`, com o estado como PARÂMETRO: plano de outro usuário e
+    plano inexistente falham igual (invisível é invisível); estado errado falha com a
+    mensagem da transição que o chamou. A leitura é a mesma da escrita seguinte, então
+    a transição nunca depende do estado que o chamador imaginou ter.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_plan WHERE id = $plan AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not rows:
+        raise StoreError("plano não encontrado")
+    plan = _plan_from_row(rows[0])
+    if plan.status != expected:
+        raise StoreError(refused)
+    return plan
+
+
+def _reload_plan(db: Any, *, tenant_id: RecordID, user_id: RecordID, plan: StudyPlan) -> StudyPlan:
+    """Relê o plano depois da transição — o que volta é o que ficou no banco."""
+    stored = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=plan.topic)
+    if stored is None:
+        raise StoreError("study plan vanished during transition")
+    return stored
+
+
+def pause_plan(db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID) -> StudyPlan:
+    """Pausa o plano ATIVO: grava `paused_at` e para a geração da véspera e o sino.
+
+    Qualquer outro estado é StoreError legível — pausar um plano proposto ou já
+    completo não tem significado, e deixar passar carimbaria `paused_at` num plano
+    que nunca contou dias.
+    """
+    plan = _plan_in_status(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan_id,
+        expected=_ACTIVE,
+        refused="plano não está ativo",
+    )
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE study_plan SET status = '{_PAUSED}', paused_at = time::now() "  # noqa: S608
+            f"WHERE id = $plan AND {_MATERIAL_SCOPE}"
+        ],
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    _log.info("store.study_plan.paused", plan=str(plan_id))
+    return _reload_plan(db, tenant_id=tenant_id, user_id=user_id, plan=plan)
+
+
+def resume_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    paused_days_add: int,
+    new_target: datetime | None,
+) -> StudyPlan:
+    """Retoma o plano pausado: soma os dias congelados, limpa `paused_at`, grava o alvo.
+
+    `paused_days_add` é somado ao acumulador (não substitui): duas pausas seguidas
+    congelam a régua duas vezes. Plano não-pausado é StoreError.
+    """
+    plan = _plan_in_status(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan_id,
+        expected=_PAUSED,
+        refused="plano não está pausado",
+    )
+    # A soma é feita AQUI, sobre o plano que a guarda acabou de ler, e não numa expressão
+    # SurrealQL sobre o próprio campo: o valor gravado fica explícito no parâmetro.
+    total_paused = plan.paused_days + max(0, int(paused_days_add))
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE study_plan SET status = '{_ACTIVE}', paused_at = NONE, "  # noqa: S608
+            f"paused_days = $days, target_date = $target WHERE id = $plan AND {_MATERIAL_SCOPE}"
+        ],
+        {
+            "plan": plan_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "days": total_paused,
+            "target": new_target,
+        },
+    )
+    _log.info("store.study_plan.resumed", plan=str(plan_id), paused_days=total_paused)
+    return _reload_plan(db, tenant_id=tenant_id, user_id=user_id, plan=plan)
+
+
+def complete_plan(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> StudyPlan:
+    """Fecha o plano ATIVO cujas lições acabaram — transição feita pelo job do sino."""
+    plan = _plan_in_status(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan_id,
+        expected=_ACTIVE,
+        refused="plano não está ativo",
+    )
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE study_plan SET status = '{_COMPLETED}' "  # noqa: S608
+            f"WHERE id = $plan AND {_MATERIAL_SCOPE}"
+        ],
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    _log.info("store.study_plan.completed", plan=str(plan_id))
+    return _reload_plan(db, tenant_id=tenant_id, user_id=user_id, plan=plan)
+
+
+def _plan_lesson_ids(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> list[RecordID]:
+    """Ids das lições do plano — o recorte por usuário das duas leituras de conclusão.
+
+    Lição de outro usuário nunca entra na lista, então o registro de estudo dele
+    também não: um corte só por tenant somaria o avanço do colega ao do dono.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT id FROM lesson WHERE {_LESSON_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [row["id"] for row in rows]
+
+
+def count_completed_lessons(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> int:
+    """Quantas lições do plano têm registro de estudo — o `done` da régua de progresso.
+
+    NÃO é `count_lessons`: aquela conta lição GERADA, esta conta lição ESTUDADA.
+    """
+    lessons = _plan_lesson_ids(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    if not lessons:
+        return 0
+    rows = db.query(
+        f"SELECT count() FROM study_log WHERE lesson IN $lessons AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "GROUP ALL;",
+        {"lessons": lessons, "tenant": tenant_id, "user": user_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
+def completion_dates(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> list[datetime]:
+    """`completed_at` dos registros do plano, do mais antigo ao mais novo.
+
+    Devolve datetime em UTC (o storage); a conversão para o dia LOCAL do dono é de
+    quem chama — o domínio raciocina em `date`, a store nunca inventa timezone.
+    """
+    lessons = _plan_lesson_ids(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    if not lessons:
+        return []
+    rows = db.query(
+        f"SELECT completed_at FROM study_log WHERE lesson IN $lessons AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "ORDER BY completed_at;",
+        {"lessons": lessons, "tenant": tenant_id, "user": user_id},
+    )
+    return [_as_datetime(row["completed_at"]) for row in rows]

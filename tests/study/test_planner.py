@@ -151,3 +151,30 @@ def test_mechanical_proposal_respects_chapter_seq_not_list_position() -> None:
     proposal = mechanical_proposal(chapters)
 
     assert [lesson.chapter_seqs for lesson in proposal.lessons] == [[1], [2], [3]]
+
+
+def test_summary_is_capped_before_reaching_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O sumário enviado respeita `_MAX_SUMMARY_TEXT`, com o corte NO FIM.
+
+    Os títulos vêm do arquivo que o dono enviou e nada os limita antes daqui: sem o teto,
+    um epub com milhares de "capítulos" (ou um título com o livro dentro) faria o custo
+    da proposta refém do upload. O teto é lido do módulo a cada chamada.
+    """
+    cap = 100
+    monkeypatch.setattr("kubo.study.planner._MAX_SUMMARY_TEXT", cap)
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+
+    Planner(executor=executor, prompt=_PROMPT).propose(_chapters(80))
+
+    content = executor.received_content[0]
+    assert len(content) <= cap
+    assert "80. Capítulo 80" not in content
+
+
+def test_a_short_summary_is_not_truncated() -> None:
+    """Controle do teste acima: abaixo do teto, o sumário chega inteiro."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+
+    Planner(executor=executor, prompt=_PROMPT).propose(_chapters(4))
+
+    assert "4. Capítulo 4" in executor.received_content[0]

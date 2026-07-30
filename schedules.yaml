@@ -50,3 +50,9 @@ schedules:
   # a janela seguinte só age se a anterior falhou (LLM fora do ar, por exemplo).
   - job: study-eve
     cron: "0 18-22 * * *"
+  # ── SINO DE ESTUDOS — o aviso da manhã (KUBO-138, ADR-0043) ───────────────────
+  # O oposto da véspera: 1x/dia, cedo, sobre os planos ativos. UMA janela só — aqui o
+  # cron É a cerca anti-spam (no máximo uma mensagem por plano por dia), então repetir
+  # a hora como na véspera viraria ruído no Telegram do dono, não retry.
+  - job: study-bell
+    cron: "0 7 * * *"
