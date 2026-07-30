@@ -108,6 +108,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0020_tenant_contract.surql",
         # 0021 (KUBO-135, ADR-0043): work_context no user + material/material_chapter.
         "0021_study_foundation.surql",
+        # 0022 (KUBO-136, ADR-0043): topic/study_plan/plan_entry.
+        "0022_study_plan.surql",
     }
 
 
