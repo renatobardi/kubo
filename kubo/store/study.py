@@ -268,6 +268,12 @@ class StudyPlan:
     target_date: datetime | None
     activated_at: datetime | None
     created_at: datetime
+    # Pausa (KUBO-138): `paused_at` marca desde quando o plano está parado; `paused_days`
+    # acumula os dias de estudo congelados por todas as pausas já retomadas — é o que
+    # impede o atraso de crescer enquanto o dono não está estudando. Defaults porque a
+    # maioria dos planos nunca pausa (e para não quebrar quem já constrói o dataclass).
+    paused_at: datetime | None = None
+    paused_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -1020,3 +1026,66 @@ def _missed_questions(quiz: Sequence[dict[str, Any]], answers: Sequence[int]) ->
         for item, answer in zip(quiz, answers, strict=False)
         if answer != item.get("answer_index")
     ]
+
+
+# --- Ciclo de vida do plano (KUBO-138) -------------------------------------------------
+#
+# Mesmo contrato das seções acima: keyword-only, `assert_membership` no topo, filtro por
+# tenant E user. `paused_days` é ACUMULADOR: o cálculo de quantos dias congelar é do
+# domínio (`kubo.study.progress`), a store só soma o que recebe — mesma divisão de
+# `new_target` nas edições da proposta.
+
+
+def pause_plan(db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID) -> StudyPlan:
+    """Pausa o plano ATIVO: grava `paused_at` e para a geração da véspera e o sino.
+
+    Qualquer outro estado é StoreError legível — pausar um plano proposto ou já
+    completo não tem significado, e deixar passar carimbaria `paused_at` num plano
+    que nunca contou dias.
+    """
+    raise NotImplementedError("KUBO-138: pause_plan")
+
+
+def resume_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    paused_days_add: int,
+    new_target: datetime | None,
+) -> StudyPlan:
+    """Retoma o plano pausado: soma os dias congelados, limpa `paused_at`, grava o alvo.
+
+    `paused_days_add` é somado ao acumulador (não substitui): duas pausas seguidas
+    congelam a régua duas vezes. Plano não-pausado é StoreError.
+    """
+    raise NotImplementedError("KUBO-138: resume_plan")
+
+
+def complete_plan(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> StudyPlan:
+    """Fecha o plano ATIVO cujas lições acabaram — transição feita pelo job do sino."""
+    raise NotImplementedError("KUBO-138: complete_plan")
+
+
+def count_completed_lessons(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> int:
+    """Quantas lições do plano têm registro de estudo — o `done` da régua de progresso.
+
+    NÃO é `count_lessons`: aquela conta lição GERADA, esta conta lição ESTUDADA.
+    """
+    raise NotImplementedError("KUBO-138: count_completed_lessons")
+
+
+def completion_dates(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
+) -> list[datetime]:
+    """`completed_at` dos registros do plano, do mais antigo ao mais novo.
+
+    Devolve datetime em UTC (o storage); a conversão para o dia LOCAL do dono é de
+    quem chama — o domínio raciocina em `date`, a store nunca inventa timezone.
+    """
+    raise NotImplementedError("KUBO-138: completion_dates")

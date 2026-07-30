@@ -1007,3 +1007,30 @@ async def complete_lesson(request: Request, key: str) -> Response:
         _log.warning("study.lesson.complete_refused", lesson=key.strip())
         return PlainTextResponse(_ALREADY_DONE, status_code=409)
     return RedirectResponse(f"{_LESSONS_ROUTE}/{lesson.id.id}", status_code=303)
+
+
+# --- Pausar e retomar o plano (KUBO-138) -----------------------------------------------
+#
+# Mesma tríade de escrita das rotas acima: verify_csrf → sessão → connect_rw → 303 (PRG).
+
+_NOT_IMPLEMENTED = "Pausar/retomar ainda não implementado."
+
+
+@router.post("/topics/{key}/plan/pause")
+def pause_plan(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Pausa o plano ativo: sem geração na véspera, sem sino, e o atraso congela."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)
+
+
+@router.post("/topics/{key}/plan/resume")
+def resume_plan(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Retoma o plano pausado, com a data-alvo recalculada a partir do que resta."""
+    return PlainTextResponse(_NOT_IMPLEMENTED, status_code=501)

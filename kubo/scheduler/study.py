@@ -129,3 +129,35 @@ def _lesson_for_plan(
         db, plan_id=plan.id, entry_id=entry.id, scheduled_for=day, output=output, **scope
     )
     return lesson.id
+
+
+# --- Sino do dia (KUBO-138) ------------------------------------------------------------
+#
+# Roda de MANHÃ (o oposto da véspera acima) sobre os planos ativos do mesmo par
+# (tenant, user). Uma mensagem por plano por dia, no máximo: o cron de 1x/dia É a cerca
+# anti-spam — nenhuma tabela de "notificação enviada".
+
+
+def send_daily_study_bell(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    now: datetime,
+    notifier: Callable[[str], None],
+) -> list[str]:
+    """Avisa o dono sobre o estudo do dia; devolve as mensagens enviadas.
+
+    Por plano ativo: sem dia de estudo hoje ou sem lição gerada, silêncio (nada é
+    enviado "por via das dúvidas"). Plano cujas lições acabaram vira `completed` com
+    mensagem de parabéns. Atraso de 2 lições ou mais troca o sino pela cutucada com a
+    data-alvo projetada — é UMA mensagem ou OUTRA, nunca as duas.
+
+    `now` entra por PARÂMETRO e `notifier` é a costura injetável (molde de
+    `tutor_factory`): em produção manda pelo caminho outbound do Telegram, em teste é
+    um fake — NENHUM teste toca a rede.
+
+    Notificador que falha não derruba o job: o log registra e os planos seguintes
+    seguem (mesma postura do digest).
+    """
+    raise NotImplementedError("KUBO-138: send_daily_study_bell")
