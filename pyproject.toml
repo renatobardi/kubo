@@ -24,7 +24,9 @@ dependencies = [
     # servidor surrealdb:v3.1.5 nos 5 comportamentos + restart (14 testes verdes).
     # Par SDK↔server move junto — ver docker-compose.yml e ci.yml.
     "pyjwt[crypto]>=2.10.0,<3",
-    "pypdf>=6.14.2",
+    # Teto de major: o pypdf come material enviado pelo dono (entrada hostil) e um
+    # bump de major muda o comportamento de parse sem aviso — sobe por revisão.
+    "pypdf>=6.14.2,<7",
     "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
     "structlog>=26.1.0",

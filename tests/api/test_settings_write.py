@@ -34,6 +34,14 @@ _BREAKGLASS_UID = "user:breakglass-owner"
 _real_get_settings_impl = settings_store.get_settings
 _real_active_destinations_impl = destinations.active_destinations
 _real_get_user_by_firebase_uid_impl = tenancy.get_user_by_firebase_uid
+# O stub de create_user do conftest entra por "routes.auth.tenancy_store" — que é o
+# MESMO objeto de módulo kubo.store.tenancy, então vaza para chamadas diretas daqui.
+_real_create_user_impl = tenancy.create_user
+# O login escolhe o tenant da sessão via memberships; com o stub do conftest a sessão
+# apontaria pro tenant fake e o resolve_session negaria o POST de perfil.
+_real_list_memberships_impl = tenancy.list_memberships_for_user
+_real_get_tenant_impl = tenancy.get_tenant
+_real_list_tenants_impl = tenancy.list_tenants
 
 
 def _real_get_settings(db: Any) -> settings_store.Settings | None:
@@ -317,6 +325,10 @@ def profile_app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     monkeypatch.setattr(
         "kubo.store.tenancy.get_user_by_firebase_uid", _real_get_user_by_firebase_uid_impl
     )
+    monkeypatch.setattr("kubo.store.tenancy.create_user", _real_create_user_impl)
+    monkeypatch.setattr("kubo.store.tenancy.list_memberships_for_user", _real_list_memberships_impl)
+    monkeypatch.setattr("kubo.store.tenancy.get_tenant", _real_get_tenant_impl)
+    monkeypatch.setattr("kubo.store.tenancy.list_tenants", _real_list_tenants_impl)
     root_cfg = replace(client.config(), database=_PROFILE_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_PROFILE_DB};")

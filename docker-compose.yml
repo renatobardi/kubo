@@ -123,8 +123,13 @@ services:
       # kubo-api; SEM `:?` — ausente, o worker levanta ConfigError legível no run, o resto do
       # scheduler segue. Runbook: docs/runbook.md.
       GITHUB_TOKEN_READONLY: ${GITHUB_TOKEN_READONLY:-}  # pragma: allowlist secret
+      # Estudos (ADR-0043): volume dos materiais montado READ-ONLY aqui — quem ingere
+      # é a UI; o scheduler só lê o arquivo original quando precisar reprocessá-lo.
+      KUBO_MATERIALS_DIR: /data/materials
       # Timezone explícita: alinha timestamps de log ao horário do schedules.yaml.
       TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - study-materials:/data/materials:ro
     # Sem healthcheck: BlockingScheduler sem porta não tem check honesto; a restart
     # policy é o mecanismo de recuperação e `docker compose logs -f` é a
     # observabilidade da fase 1 (runbook). Log rotation porque o scheduler emite
@@ -251,7 +256,14 @@ services:
       # token serve os dois alvos (kubo-forge e kubo, ambos públicos — ver .env.example). SEM
       # `:?` — ausente, o promote dá 503/erro no uso, o resto da UI segue. Setup: runbook §2e.
       GITHUB_TOKEN_READONLY: ${GITHUB_TOKEN_READONLY:-}  # pragma: allowlist secret
+      # Estudos (ADR-0043, KUBO-135): volume dos materiais enviados pelo dono, montado
+      # RW porque a ingestão acontece AQUI (a rota grava o arquivo antes de registrar o
+      # Material no banco). Teto de upload em KUBO_MATERIAL_MAX_MB (default 50 no código).
+      KUBO_MATERIALS_DIR: /data/materials
+      KUBO_MATERIAL_MAX_MB: ${KUBO_MATERIAL_MAX_MB:-}
       TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - study-materials:/data/materials
     # Imagem slim não tem curl: healthcheck via python/urllib no /healthz (sem auth,
     # sem banco). localhost é sempre permitido no TrustedHost (append no código).
     healthcheck:
@@ -320,3 +332,6 @@ services:
 volumes:
   surreal-data:
   surreal-backups:
+  # Arquivos originais dos Materiais de estudo (ADR-0043). Volume próprio, não o
+  # surreal-data: o banco guarda os capítulos extraídos; o arquivo é o insumo bruto.
+  study-materials:

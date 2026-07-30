@@ -54,6 +54,12 @@ def _parsed() -> ParsedMaterial:
 def stub_study_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Leituras vazias por padrão e volume de materiais apontado para o tmp do teste."""
     monkeypatch.setenv("KUBO_MATERIALS_DIR", str(tmp_path))
+    # Escrita usa connect_rw (ADR-0018); no unit não há KUBO_RW_SURREAL_PASS, então o
+    # stub entra ANTES de rw_config() explodir — 503 de env ausente é caso do
+    # test_sources.py, não deste arquivo.
+    from tests.api.conftest import _fake_connect
+
+    monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_materials", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_material", lambda db, **kw: None)
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_chapters", lambda db, **kw: [])
@@ -238,3 +244,69 @@ def test_detail_returns_404_for_unknown_material(authed_client: TestClient) -> N
     resp = authed_client.get("/study/materials/nao-existe")
 
     assert resp.status_code == 404
+
+
+def test_upload_denies_without_session_before_parsing(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, parse_spy: list[str]
+) -> None:
+    """Sem sessão resolvível, o 403 vem ANTES de ler/parsear o corpo.
+
+    Autorização depois do parse significa gastar memória a mando de quem não passou
+    no gate — a ordem é a defesa, não um detalhe de escrita."""
+    csrf = _csrf(authed_client)
+    monkeypatch.setattr("kubo.api.routes.study.resolve_session", lambda request, db: None)
+
+    resp = authed_client.post(
+        "/study/materials",
+        files={"file": ("livro.epub", _EPUB_BYTES, "application/epub+zip")},
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 403
+    assert parse_spy == []
+
+
+def test_upload_rejects_declared_content_length_above_limit(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, parse_spy: list[str]
+) -> None:
+    """Content-Length declarando corpo acima do teto é 400 sem sequer ler o arquivo."""
+    monkeypatch.setenv("KUBO_MATERIAL_MAX_MB", "1")
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/study/materials",
+        files={"file": ("grande.epub", _EPUB_BYTES, "application/epub+zip")},
+        data={"csrf": csrf},
+        headers={"Content-Length": str(50 * 1024 * 1024)},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 400
+    assert parse_spy == []
+
+
+def test_upload_removes_saved_file_on_unexpected_error(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Falha INESPERADA (não ConfigError/StoreError) também não deixa órfão no volume.
+
+    A limpeza não pode depender do catálogo de exceções conhecidas: qualquer erro
+    depois da gravação deixaria um arquivo sem registro, lixo que só cresce."""
+
+    def _boom(db: object, **kw: object) -> Material:
+        raise RuntimeError("falha inesperada na store")
+
+    monkeypatch.setattr("kubo.api.routes.study.parse_material", lambda data, fmt: _parsed())
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_material", _boom)
+    csrf = _csrf(authed_client)
+
+    with pytest.raises(RuntimeError):
+        authed_client.post(
+            "/study/materials",
+            files={"file": ("livro.epub", _EPUB_BYTES, "application/epub+zip")},
+            data={"csrf": csrf},
+            follow_redirects=False,
+        )
+
+    assert list(tmp_path.rglob("*.epub")) == []

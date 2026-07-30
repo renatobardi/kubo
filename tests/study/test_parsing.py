@@ -225,3 +225,120 @@ def test_format_mismatch_is_rejected() -> None:
         parse_material(_epub(), "pdf")
     with pytest.raises(MaterialParseError):
         parse_material(_pdf(texts=["x"]), "epub")
+
+
+# ── Cercas de volume (achado ALTO da revisão de segurança) ───────────────────
+# Material é entrada hostil: um epub de 0,2 MB com XHTML compressível e navPoints
+# repetidos produziu 4 GB em memória. As bombas aqui são EM MINIATURA — os tetos são
+# rebaixados por monkeypatch para provar a cerca sem alocar gigabytes no teste.
+
+
+def _flat_ncx(entries: list[tuple[str, str]]) -> str:
+    """NCX plano (sem aninhamento) com um navPoint por par (título, src)."""
+    points = "".join(
+        f'<navPoint id="n{i}" playOrder="{i}">'
+        f"<navLabel><text>{title}</text></navLabel>"
+        f'<content src="{src}"/>'
+        f"</navPoint>"
+        for i, (title, src) in enumerate(entries, start=1)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+        f"<navMap>{points}</navMap></ncx>"
+    )
+
+
+def _epub_with(*, ncx: str, chapters: dict[str, str]) -> bytes:
+    """Epub válido com o sumário e os capítulos dados — o OPF padrão é reaproveitado."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            zipfile.ZipInfo("mimetype"),
+            "application/epub+zip",
+            compress_type=zipfile.ZIP_STORED,
+        )
+        zf.writestr("META-INF/container.xml", _CONTAINER)
+        zf.writestr("OEBPS/content.opf", _OPF)
+        zf.writestr("OEBPS/toc.ncx", ncx)
+        for href, text in chapters.items():
+            zf.writestr(f"OEBPS/{href}", _xhtml(text))
+    return buf.getvalue()
+
+
+def test_epub_rejects_entry_larger_than_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uma entrada do zip que DESCOMPRIME acima do teto é recusada.
+
+    O arquivo comprimido é minúsculo (texto repetitivo): confiar no tamanho do zip —
+    ou no `file_size` do header, que o atacante escreve — deixaria a bomba passar."""
+    monkeypatch.setattr("kubo.study.parsing._MAX_ENTRY_BYTES", 5_000)
+    data = _epub_with(
+        ncx=_flat_ncx([("Capítulo Um", "cap1.xhtml")]),
+        chapters={"cap1.xhtml": "a" * 50_000},
+    )
+
+    with pytest.raises(MaterialParseError) as exc:
+        parse_material(data, "epub")
+
+    assert str(exc.value).strip(), "MaterialParseError sem mensagem para o dono"
+
+
+def test_epub_rejects_total_text_amplified_by_repeated_navpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N navPoints apontando pro MESMO arquivo somam N vezes o texto — o teto total pega.
+
+    Nenhuma entrada isolada estoura `_MAX_ENTRY_BYTES`; o dano vem da repetição, que
+    só o acumulador entre capítulos enxerga."""
+    monkeypatch.setattr("kubo.study.parsing._MAX_TOTAL_TEXT", 1_000)
+    ncx = _flat_ncx([(f"Capítulo {i}", "cap1.xhtml") for i in range(1, 11)])
+    data = _epub_with(ncx=ncx, chapters={"cap1.xhtml": "b" * 500})
+
+    with pytest.raises(MaterialParseError):
+        parse_material(data, "epub")
+
+
+def test_epub_rejects_too_many_chapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sumário com capítulos demais é recusado — a cerca vem ANTES de abrir os arquivos."""
+    monkeypatch.setattr("kubo.study.parsing._MAX_CHAPTERS", 3)
+    ncx = _flat_ncx([(f"Capítulo {i}", "cap1.xhtml") for i in range(1, 6)])
+    data = _epub_with(ncx=ncx, chapters={"cap1.xhtml": "texto do capítulo"})
+
+    with pytest.raises(MaterialParseError):
+        parse_material(data, "epub")
+
+
+def test_pdf_rejects_total_text_above_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O teto de texto total vale para o PDF também, não só para o epub."""
+    monkeypatch.setattr("kubo.study.parsing._MAX_TOTAL_TEXT", 10)
+
+    with pytest.raises(MaterialParseError):
+        parse_material(_pdf(texts=["Texto bem maior que dez caracteres"]), "pdf")
+
+
+def test_epub_rejects_deeply_nested_navmap() -> None:
+    """NCX com aninhamento absurdo é recusado com erro legível, não RecursionError.
+
+    O navMap é percorrido em profundidade; sem teto, um sumário hostil de milhares de
+    níveis estoura a pilha do Python e vira 500 genérico em vez de recusa honesta."""
+    depth = 3000
+    nested = (
+        '<navPoint id="leaf"><navLabel><text>Fundo</text></navLabel>'
+        '<content src="cap1.xhtml"/></navPoint>'
+    )
+    for i in range(depth):
+        nested = (
+            f'<navPoint id="n{i}"><navLabel><text>Nível {i}</text></navLabel>'
+            f'<content src="cap1.xhtml"/>{nested}</navPoint>'
+        )
+    ncx = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+        f"<navMap>{nested}</navMap></ncx>"
+    )
+    data = _epub_with(ncx=ncx, chapters={"cap1.xhtml": "texto"})
+
+    with pytest.raises(MaterialParseError) as exc:
+        parse_material(data, "epub")
+
+    assert str(exc.value).strip(), "MaterialParseError sem mensagem para o dono"

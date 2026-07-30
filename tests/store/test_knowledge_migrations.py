@@ -106,6 +106,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0019_tenant_scoped_domain.surql",
         # 0020 (KUBO-123): contrato de tenancy obrigatória.
         "0020_tenant_contract.surql",
+        # 0021 (KUBO-135, ADR-0043): work_context no user + material/material_chapter.
+        "0021_study_foundation.surql",
     }
 
 

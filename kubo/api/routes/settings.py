@@ -20,10 +20,12 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.errors import ConfigError, format_validation_error
 from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
+from kubo.store import tenancy as tenancy_store
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -32,6 +34,7 @@ _TEMPLATE = "settings/index.html"
 _SETTINGS_ROUTE = "/settings"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 _WRITE_LOG = "settings.write_unavailable"
+_DENIED = "Acesso negado."
 
 
 def _default_cron() -> str:
@@ -99,6 +102,7 @@ def _render_page(
     notice: str | None = None,
     status: int = 200,
     unpause_mode: str = "backlog",
+    work_context: str = "",
 ) -> Response:
     """Renderiza a tela de Configurações com os valores atuais e as opções de destino."""
     return templates.TemplateResponse(
@@ -112,18 +116,33 @@ def _render_page(
             "unpause_mode": unpause_mode,
             "csrf": csrf_token(request),
             "notice": notice,
+            "work_context": work_context,
         },
         status_code=status,
     )
 
 
+def _session_work_context(request: Request, db: object) -> str:
+    """Contexto de trabalho do usuário da sessão, ou vazio sem sessão resolvível.
+
+    A tela renderiza mesmo sem membership real (fixtures de settings usam o
+    singleton global) — identidade só é obrigatória no POST /settings/profile.
+    """
+    ctx = resolve_session(request, db)
+    if ctx is None:
+        return ""
+    user = tenancy_store.get_user(db, ctx.user_id)
+    return (user.work_context or "") if user else ""
+
+
 @router.get("")
 def settings_page(request: Request) -> Response:
-    """Tela de Configurações: lê settings + destinos elegíveis."""
+    """Tela de Configurações: lê settings + destinos elegíveis + perfil do usuário."""
     with client.connect() as ro:
         settings = settings_store.get_settings(ro)
         choices = settings_store.default_destination_choices(ro)
-    return _render_page(request, settings, choices)
+        work_context = _session_work_context(request, ro)
+    return _render_page(request, settings, choices, work_context=work_context)
 
 
 @router.post("")
@@ -193,4 +212,62 @@ def update_settings(
     except ConfigError:
         _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_SETTINGS_ROUTE, status_code=303)
+
+
+class ProfileForm(BaseModel):
+    """Validação de borda do perfil: contexto de trabalho curto, sem espaço sobrando."""
+
+    work_context: str
+
+    @field_validator("work_context")
+    @classmethod
+    def _strip_and_cap(cls, v: str) -> str:
+        text = v.strip()
+        if len(text) > 4000:
+            raise ValueError("contexto de trabalho passa de 4000 caracteres")
+        return text
+
+
+def _current_page(request: Request, *, notice: str, status: int) -> Response:
+    """Re-renderiza a tela de Configurações preservando os valores atuais."""
+    with client.connect() as ro:
+        settings = settings_store.get_settings(ro)
+        choices = settings_store.default_destination_choices(ro)
+        work_context = _session_work_context(request, ro)
+    return _render_page(
+        request, settings, choices, notice=notice, status=status, work_context=work_context
+    )
+
+
+@router.post("/profile")
+def update_profile(
+    request: Request,
+    work_context: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Grava o contexto de trabalho do USUÁRIO da sessão (ADR-0043).
+
+    O texto entra em prompts de personas — a UI avisa para nunca incluir segredos.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    try:
+        form = ProfileForm(work_context=work_context)
+    except ValidationError as exc:
+        return _current_page(request, notice=format_validation_error(exc), status=400)
+
+    with client.connect() as ro:
+        ctx = resolve_session(request, ro)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    try:
+        with client.connect_rw() as db:
+            tenancy_store.update_user_work_context(
+                db, user_id=ctx.user_id, work_context=form.work_context
+            )
+    except ConfigError:
+        _log.warning(_WRITE_LOG)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    _log.info("settings.profile.updated", user=str(ctx.user_id), chars=len(form.work_context))
     return RedirectResponse(_SETTINGS_ROUTE, status_code=303)
