@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
-from kubo.store import client, destinations, migrations
+from kubo.store import client, destinations, migrations, tenancy
 from kubo.store import settings as settings_store
 from kubo.store.client import connect as _real_connect
 from tests.api.conftest import UI_PASSWORD
@@ -24,11 +24,16 @@ from tests.api.conftest import UI_PASSWORD
 pytestmark = pytest.mark.integration
 
 _DB = "test_settings_write"
+_PROFILE_DB = "test_settings_profile"
 _RW_PASS = secrets.token_urlsafe(24)
+# firebase_uid do usuário break-glass: é o que o login por senha põe em `session["uid"]`
+# e o que `resolve_session` procura na tabela `user`.
+_BREAKGLASS_UID = "user:breakglass-owner"
 
 # Captura a implementação real antes do conftest sobrescrever atributos da store.
 _real_get_settings_impl = settings_store.get_settings
 _real_active_destinations_impl = destinations.active_destinations
+_real_get_user_by_firebase_uid_impl = tenancy.get_user_by_firebase_uid
 
 
 def _real_get_settings(db: Any) -> settings_store.Settings | None:
@@ -296,3 +301,127 @@ def test_unpause_without_change_does_nothing(app_db: Any) -> None:
     )
     assert resp.status_code == 303
     assert _digest_dispatch_count(str(dest.id)) == 0
+
+
+@pytest.fixture
+def profile_app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """App real + db efêmero com um usuário/tenant DE VERDADE por trás da sessão.
+
+    O `app_db` acima basta para settings (singleton global), mas o contexto de trabalho
+    é do USUÁRIO: `resolve_session` precisa achar o `user` na tabela e a membership real.
+    Por isso o break-glass aponta para o tenant recém-criado e o
+    `get_user_by_firebase_uid` volta a ser o real (a conftest stuba o global)."""
+    monkeypatch.setenv("SURREAL_DB", _PROFILE_DB)
+    monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
+    monkeypatch.setattr("kubo.store.client.connect", _real_connect)
+    monkeypatch.setattr(
+        "kubo.store.tenancy.get_user_by_firebase_uid", _real_get_user_by_firebase_uid_impl
+    )
+    root_cfg = replace(client.config(), database=_PROFILE_DB)
+    with _real_connect(root_cfg) as root:
+        root.query(f"REMOVE DATABASE IF EXISTS {_PROFILE_DB};")
+        root.use(root_cfg.namespace, root_cfg.database)
+        migrations.apply_migrations(root)
+        user = tenancy.create_user(root, firebase_uid=_BREAKGLASS_UID)
+        tenant = tenancy.create_tenant(root, name="Estudos", owner_user_id=user.id)
+        monkeypatch.setenv("KUBO_BREAKGLASS_USER_ID", _BREAKGLASS_UID)
+        monkeypatch.setenv("KUBO_BREAKGLASS_TENANT_ID", str(tenant.id))
+        root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
+        try:
+            yield create_app()
+        finally:
+            root.query("REMOVE USER IF EXISTS kubo_rw ON ROOT;")
+            root.query(f"REMOVE DATABASE IF EXISTS {_PROFILE_DB};")
+
+
+def _profile_login_csrf(app: Any) -> tuple[TestClient, str]:
+    """Autentica e devolve (client, csrf) lido da tela de Configurações do db de perfil."""
+    tc = TestClient(app, base_url="https://testserver")
+    login = tc.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
+    assert login.status_code == 303
+    m = re.search(r'name="csrf" value="([0-9a-f]+)"', tc.get("/settings").text)
+    assert m, "csrf ausente no form de Configurações"
+    return tc, m.group(1)
+
+
+def _work_context() -> Any:
+    """Lê COMO ROOT o work_context do usuário break-glass."""
+    with _real_connect(replace(client.config(), database=_PROFILE_DB)) as root:
+        rows = root.query(
+            "SELECT work_context FROM user WHERE firebase_uid = $uid;",
+            {"uid": _BREAKGLASS_UID},
+        )
+    assert rows, "usuário break-glass sumiu do banco"
+    return rows[0].get("work_context")
+
+
+def test_profile_page_shows_work_context_form(profile_app_db: Any) -> None:
+    """A tela de Configurações traz o campo de contexto de trabalho com o aviso de segredo."""
+    tc, _ = _profile_login_csrf(profile_app_db)
+
+    html = tc.get("/settings").text
+
+    assert 'name="work_context"' in html
+    assert "segredos" in html.lower()
+
+
+def test_update_work_context_persists(profile_app_db: Any) -> None:
+    """POST /settings/profile grava o contexto no usuário da sessão (read-back como root)."""
+    tc, csrf = _profile_login_csrf(profile_app_db)
+
+    resp = tc.post(
+        "/settings/profile",
+        data={"work_context": "Trabalho com plataformas de dados.", "csrf": csrf},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    assert _work_context() == "Trabalho com plataformas de dados."
+
+
+def test_update_work_context_rejects_bad_csrf(profile_app_db: Any) -> None:
+    """CSRF errado é 403, sem escrita."""
+    tc, _ = _profile_login_csrf(profile_app_db)
+
+    resp = tc.post(
+        "/settings/profile",
+        data={"work_context": "não deveria gravar", "csrf": "bad"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 403
+    assert _work_context() is None
+
+
+def test_update_work_context_rejects_oversized_text(profile_app_db: Any) -> None:
+    """Acima de 4000 chars volta 400 e não persiste — o limite é validado na borda."""
+    tc, csrf = _profile_login_csrf(profile_app_db)
+
+    resp = tc.post(
+        "/settings/profile",
+        data={"work_context": "x" * 4001, "csrf": csrf},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 400
+    assert _work_context() is None
+
+
+def test_empty_work_context_clears_the_field(profile_app_db: Any) -> None:
+    """Enviar o campo vazio APAGA o contexto — o dono precisa conseguir se retratar."""
+    tc, csrf = _profile_login_csrf(profile_app_db)
+    first = tc.post(
+        "/settings/profile",
+        data={"work_context": "Contexto antigo.", "csrf": csrf},
+        follow_redirects=False,
+    )
+    assert first.status_code == 303
+
+    resp = tc.post(
+        "/settings/profile",
+        data={"work_context": "", "csrf": csrf},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    assert _work_context() is None

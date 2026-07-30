@@ -167,6 +167,15 @@ def get_user(db: Any, user_id: RecordID) -> User | None:
     return _user_from_row(rows[0]) if rows else None
 
 
+def update_user_work_context(db: Any, *, user_id: RecordID, work_context: str) -> User:
+    """Grava o contexto de trabalho do usuário e devolve o user atualizado.
+
+    Dado do USUÁRIO, não do tenant — por isso não exige `assert_membership`. String
+    vazia limpa o campo (grava None). Levanta `StoreError` se o user não existe.
+    """
+    raise NotImplementedError
+
+
 def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
     """Cria um tenant novo e uma membership `owner` para o usuário indicado.
 
