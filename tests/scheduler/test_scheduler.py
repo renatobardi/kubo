@@ -866,3 +866,23 @@ def test_check_and_reschedule_digest_keeps_current_when_settings_missing() -> No
 
     assert new_cron == "30 9 * * *"
     scheduler.reschedule_job.assert_not_called()
+
+
+def test_distiller_usa_claude_haiku() -> None:
+    """O destilador diário roda no Claude Haiku 4.5 (KUBO-139)."""
+    from kubo.scheduler import _DISTILLER_MODEL
+
+    assert _DISTILLER_MODEL == "anthropic/claude-haiku-4-5"
+
+
+def test_distiller_e_tutor_tem_folga_de_max_tokens_para_thinking() -> None:
+    """Os tetos de tokens do destilador e do tutor comportam thinking + JSON (KUBO-139).
+
+    Nos modelos Claude atuais o thinking adaptativo é ligado por padrão e consome do
+    MESMO `max_tokens` da resposta: os tetos antigos truncariam o JSON no meio e o item
+    voltaria como saída malformada — falha silenciosa, indistinguível de LLM ruim.
+    """
+    from kubo.scheduler import _DISTILLER_MAX_TOKENS, _TUTOR_MAX_TOKENS
+
+    assert _DISTILLER_MAX_TOKENS >= 8192
+    assert _TUTOR_MAX_TOKENS >= 8192

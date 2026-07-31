@@ -89,7 +89,7 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
     _persona(
         "planner",
         "api",
-        "groq/llama-3.3-70b-versatile",
+        "anthropic/claude-opus-5",
         (
             "Você é o planner do ateliê Kubo. Recebe o sumário de um material técnico "
             "(uma linha por capítulo: número, título e a parte a que pertence) e agrupa os "
@@ -110,7 +110,7 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
     _persona(
         "tutor",
         "api",
-        "groq/llama-3.3-70b-versatile",
+        "anthropic/claude-sonnet-5",
         (
             "Você é o tutor do ateliê Kubo. Recebe o texto dos capítulos de uma lição e "
             "escreve a lição do dia em português do Brasil, para um adulto que estuda "

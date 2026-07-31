@@ -352,9 +352,11 @@ _TOPIC_TABLE = "topic"
 _TOPICS_ROUTE = "/study/topics"
 
 _PLANNER_PERSONA = "planner"
-# 4096 (e não o default de 1024): o JSON de um plano com dezenas de lições trunca no
-# meio e volta como saída malformada — o fallback mecânico esconderia a causa.
-_PLANNER_MAX_TOKENS = 4096
+# Bem acima do default de 1024: o JSON de um plano com dezenas de lições trunca no meio
+# e volta como saída malformada — o fallback mecânico esconderia a causa. Nos modelos
+# Claude o thinking adaptativo é ligado por padrão e divide ESTE mesmo teto com a
+# resposta, então o orçamento do JSON não pode ser o teto inteiro.
+_PLANNER_MAX_TOKENS = 16384
 _PLANNER_TIMEOUT = 60.0
 
 # Cadência inicial de uma proposta nova: dias úteis. O dono ajusta na própria tela.

@@ -560,3 +560,15 @@ def test_material_detail_links_to_existing_topic(
 
     assert _TOPIC_URL in with_topic
     assert f"/study/materials/{_MATERIAL_ID.id}/topic" in without_topic
+
+
+def test_planner_tem_folga_de_max_tokens_para_thinking() -> None:
+    """O teto de tokens do planner comporta thinking + JSON da proposta (KUBO-139).
+
+    Nos modelos Claude atuais o thinking adaptativo é ligado por padrão e consome do
+    MESMO `max_tokens` da resposta: o teto antigo truncaria o JSON no meio e a proposta
+    voltaria como saída malformada (falha silenciosa, a tela cai no plano mecânico).
+    """
+    from kubo.api.routes.study import _PLANNER_MAX_TOKENS
+
+    assert _PLANNER_MAX_TOKENS >= 8192
