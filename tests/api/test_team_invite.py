@@ -11,6 +11,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.firebase_tokens import clear_jwks_cache
+from kubo.errors import TeamInviteError
 from tests.api._firebase_test_helpers import (
     _JWKS_URL,
     _decode_session_cookie,
@@ -22,6 +23,14 @@ _FAKE_BREAKGLASS_TENANT_ID = "tenant:breakglass"
 _FAKE_INVITE_TENANT_ID = "tenant:team-a"
 _FAKE_USER_ID = "user:owner-a"
 _FAKE_INVITE_TOKEN = "invite-token-123"
+
+
+@pytest.fixture(autouse=True)
+def stub_writer_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Escrita de auth via `connect_rw` stubada (helper compartilhado na conftest)."""
+    from tests.api.conftest import stub_auth_writer
+
+    stub_auth_writer(monkeypatch)
 
 
 def _fake_user(*, uid: str, user_id: str = _FAKE_USER_ID) -> Any:
@@ -158,6 +167,36 @@ def test_firebase_login_with_invite_creates_member(
     assert session["tenant_id"] == _FAKE_INVITE_TENANT_ID
     assert session["uid"] == "new-member-uid"
     assert called["accept"] == (_FAKE_INVITE_TOKEN, "user:newmember")
+
+
+def test_firebase_login_with_invalid_invite_is_401(
+    respx_mock: respx.MockRouter,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid/expired/used invite is 401 with the login form, never a session."""
+    clear_jwks_cache()
+    private_pem, jwk = rsa_keypair()
+    respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
+    token = _firebase_token(private_pem=private_pem, uid="new-member-uid")
+
+    def _reject(db: Any, *, token: str, user_id: RecordID) -> Any:
+        raise TeamInviteError("team invite is invalid, expired, or already used")
+
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.team_invites_store.accept_team_invite",
+        _reject,
+    )
+
+    resp = client.post(
+        f"/auth/firebase?invite={_FAKE_INVITE_TOKEN}",
+        json={"id_token": token},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 401
+    assert "set-cookie" not in resp.headers
+    assert "Convite inválido" in resp.text
 
 
 def test_firebase_login_without_invite_ignores_invite_flow(

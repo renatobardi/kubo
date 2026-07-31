@@ -7,6 +7,7 @@ rota /entities só devolve entidades do tenant ativo, sem mock de membership.
 from __future__ import annotations
 
 import os
+import secrets
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -31,6 +32,9 @@ _BREAKGLASS_UID = "user:breakglass-owner"
 _BREAKGLASS_USER_ID_STR = "user:breakglass-owner"
 _BREAKGLASS_TENANT_ID_STR = "tenant:breakglass"
 _SUPERADMIN_UID = "uid-superadmin-123"
+# O login Firebase GRAVA (user/tenant/membership) e por isso abre `connect_rw` (ADR-0018);
+# sem o kubo_rw EDITOR a rota responderia 503 em vez de 303.
+_RW_PASS = secrets.token_urlsafe(24)
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +55,7 @@ def _ui_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "test-webhook-secret",  # pragma: allowlist secret
     )
     monkeypatch.setenv("SURREAL_DB", "test_tenant_isolation")
+    monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
     monkeypatch.delenv("KUBO_ALLOWED_HOSTS", raising=False)
 
 
@@ -62,6 +67,7 @@ def db() -> Iterator[Any]:
         conn.query("REMOVE DATABASE IF EXISTS test_tenant_isolation;")
         conn.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(conn)
+        conn.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
 
         # Breakglass user/tenant para login via /login
         conn.query(
@@ -78,6 +84,7 @@ def db() -> Iterator[Any]:
         )
 
         yield conn
+        conn.query("REMOVE USER IF EXISTS kubo_rw ON ROOT;")
         conn.query("REMOVE DATABASE IF EXISTS test_tenant_isolation;")
 
 

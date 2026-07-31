@@ -25,7 +25,7 @@ from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
 from kubo.api.session import parse_record_id as _parse_record_id
 from kubo.api.urls import safe_next
-from kubo.errors import FirebaseTokenError, TeamInviteError
+from kubo.errors import ConfigError, FirebaseTokenError, TeamInviteError
 from kubo.store import client
 from kubo.store import team_invites as team_invites_store
 from kubo.store import tenancy as tenancy_store
@@ -38,6 +38,8 @@ _LOGIN_TEMPLATE = "login.html"
 _MEDIA_TYPE_TEXT = "text/plain"
 _MSG_INVALID_SESSION = "Invalid session."
 _INVITE_TOKEN_RE = re.compile("^[0-9a-f]{32}$")
+_WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
+_WRITE_LOG = "auth.write_unavailable"
 
 # Synthetic uid for sessions opened by scrypt login (break-glass).
 _SCRYPT_OWNER_UID = "scrypt:owner"
@@ -184,6 +186,46 @@ def _membership_for_session(db: Any, uid: str, tenant_id: str) -> Any | None:
     return _membership_for_tenant(memberships, tenant_id)
 
 
+def _invite_denied(request: Request, message: str, *, next_path: str, invite: str) -> Response:
+    """401 do fluxo de convite, preservando o token no form de login."""
+    return templates.TemplateResponse(
+        request,
+        _LOGIN_TEMPLATE,
+        _login_context(request, message, next_path=next_path, invite_token=invite),
+        status_code=401,
+    )
+
+
+def _accept_invite(
+    request: Request, *, uid: str, email: str | None, invite: str, next_path: str
+) -> tuple[Any, str] | Response:
+    """Aceita um convite de equipe: cria o user (se novo) e a membership no tenant do convite.
+
+    ESCRITA — abre `connect_rw` (kubo_rw EDITOR, ADR-0018); `ConfigError` sobe para o
+    handler traduzir em 503. Devolve `(tenant, role)` ou a resposta 401 do convite inválido.
+    """
+    with client.connect_rw() as db:
+        tenant_user = tenancy_store.get_user_by_firebase_uid(db, uid)
+        if tenant_user is None:
+            tenant_user = tenancy_store.create_user(db, firebase_uid=uid, email=email)
+        try:
+            accepted = team_invites_store.accept_team_invite(
+                db, token=invite, user_id=tenant_user.id
+            )
+        except TeamInviteError as exc:
+            _log.warning("api.firebase.invite_failed", reason=str(exc))
+            return _invite_denied(
+                request,
+                "Convite inválido, expirado ou já usado.",
+                next_path=next_path,
+                invite=invite,
+            )
+        tenant = tenancy_store.get_tenant(db, accepted.tenant_id)
+        if tenant is None:
+            return _invite_denied(request, "Convite inválido.", next_path=next_path, invite=invite)
+        return tenant, accepted.role
+
+
 @router.post("/auth/firebase")
 def firebase_login(
     request: Request,
@@ -232,71 +274,57 @@ def firebase_login(
         )
 
     uid = token_user["uid"]
-    if tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids):
-        with client.connect() as db:
-            user = tenancy_store.get_user_by_firebase_uid(db, uid)
-            if user is None:
-                tenancy_store.create_user(
-                    db,
-                    firebase_uid=uid,
-                    email=token_user.get("email") or None,
-                )
-        _open_session(
-            request,
-            uid=uid,
-            tenant_id=request.app.state.breakglass_tenant_id,
-            role="superadmin",
-        )
-        return RedirectResponse(next_path, status_code=303)
-
-    if invite:
-        with client.connect() as db:
-            tenant_user = tenancy_store.get_user_by_firebase_uid(db, uid)
-            if tenant_user is None:
-                tenant_user = tenancy_store.create_user(
-                    db,
-                    firebase_uid=uid,
-                    email=token_user.get("email") or None,
-                )
-            try:
-                accepted = team_invites_store.accept_team_invite(
-                    db, token=invite, user_id=tenant_user.id
-                )
-            except TeamInviteError as exc:
-                _log.warning("api.firebase.invite_failed", reason=str(exc))
-                return templates.TemplateResponse(
-                    request,
-                    _LOGIN_TEMPLATE,
-                    _login_context(
-                        request,
-                        "Convite inválido, expirado ou já usado.",
-                        next_path=next_path,
-                        invite_token=invite,
-                    ),
-                    status_code=401,
-                )
-            tenant = tenancy_store.get_tenant(db, accepted.tenant_id)
-            if tenant is None:
-                return templates.TemplateResponse(
-                    request,
-                    _LOGIN_TEMPLATE,
-                    _login_context(
-                        request,
-                        "Convite inválido.",
-                        next_path=next_path,
-                        invite_token=invite,
-                    ),
-                    status_code=401,
-                )
-            role = accepted.role
-    else:
-        with client.connect() as db:
-            tenant_user, tenant = tenancy_store.get_or_create_user_and_tenant(
-                db,
-                firebase_uid=uid,
-                email=token_user.get("email") or None,
+    # Todo bloco abaixo GRAVA (user, tenant, membership) — precisa do kubo_rw EDITOR.
+    # Com o kubo_ro (VIEWER) do servidor o SurrealDB engole o CREATE em silêncio e o
+    # signup morre em `user vanished during creation`. Molde ADR-0018: connect_rw
+    # por-request, ConfigError (credencial ausente) → 503.
+    try:
+        if tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids):
+            with client.connect_rw() as db:
+                user = tenancy_store.get_user_by_firebase_uid(db, uid)
+                if user is None:
+                    tenancy_store.create_user(
+                        db,
+                        firebase_uid=uid,
+                        email=token_user.get("email") or None,
+                    )
+            _open_session(
+                request,
+                uid=uid,
+                tenant_id=request.app.state.breakglass_tenant_id,
+                role="superadmin",
             )
-        role = "owner"
+            return RedirectResponse(next_path, status_code=303)
+
+        if invite:
+            outcome = _accept_invite(
+                request,
+                uid=uid,
+                email=token_user.get("email") or None,
+                invite=invite,
+                next_path=next_path,
+            )
+            if isinstance(outcome, Response):
+                return outcome
+            tenant, role = outcome
+        else:
+            with client.connect_rw() as db:
+                _, tenant = tenancy_store.get_or_create_user_and_tenant(
+                    db,
+                    firebase_uid=uid,
+                    email=token_user.get("email") or None,
+                )
+            role = "owner"
+    except ConfigError:
+        _log.warning(_WRITE_LOG, route="auth.firebase")
+        # Mesma cortesia dos outros caminhos de indisponibilidade desta rota
+        # (config_missing/jwks_unavailable): re-renderiza o form com a mensagem.
+        return templates.TemplateResponse(
+            request,
+            _LOGIN_TEMPLATE,
+            _login_context(request, _WRITE_UNAVAILABLE, next_path=next_path),
+            status_code=503,
+        )
 
     _open_session(
         request,
@@ -344,16 +372,22 @@ def create_invite(request: Request) -> Response:
     if tenant_record is None:
         return Response(_MSG_INVALID_SESSION, status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
-    with client.connect() as db:
-        membership = _membership_for_session(db, uid, tenant_id)
-        if membership is None or membership.role != "owner":
-            return Response("Only owner can invite.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
+    # Autorização é leitura pura (kubo_ro); só a criação do convite escreve (kubo_rw).
+    with client.connect() as ro:
+        membership = _membership_for_session(ro, uid, tenant_id)
+    if membership is None or membership.role != "owner":
+        return Response("Only owner can invite.", status_code=403, media_type=_MEDIA_TYPE_TEXT)
 
-        invite = team_invites_store.create_team_invite(
-            db,
-            tenant_id=tenant_record,
-            created_by=membership.user,
-        )
+    try:
+        with client.connect_rw() as db:
+            invite = team_invites_store.create_team_invite(
+                db,
+                tenant_id=tenant_record,
+                created_by=membership.user,
+            )
+    except ConfigError:
+        _log.warning(_WRITE_LOG, route="auth.invite")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
     link = f"{request.base_url}invite/{invite.token}"
     return PlainTextResponse(link)
