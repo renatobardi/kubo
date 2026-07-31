@@ -1,6 +1,6 @@
 # ADR-0044 — `tenant_id` obrigatório em `source`, `run` e `dispatch`; unicidade por tenant
 
-> Status: aceito · Data: 2026-07-31
+> Status: proposto · Data: 2026-07-31
 
 ## Contexto
 
@@ -24,8 +24,8 @@ A migração `0025_dispatch_run_source_tenant.surql` (KUBO-128, entregue via PRs
 **4. O `upsert_source` lookup-first continua correto sob a chave nova.**
 Ele já busca por `(tenant_id, kind, canonical)` antes de decidir entre reusar e criar (`knowledge.py:98-109`). O índice novo é exatamente a chave que a busca usa; o desarme da colisão entre os dois escritores (coletor e UI), estabelecido no épico Cadastro, sobrevive intacto.
 
-**5. O backfill para `tenant:breakglass` é reconhecido como linha morta e fica como está.**
-A migração contém `UPDATE ... SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE`. Ele nunca atualizou nenhuma linha e não tem como atualizar (ver abaixo). Não removemos: uma migração aplicada não se reescreve, e o custo de mantê-la é zero.
+**5. O destino do backfill (`tenant:breakglass`) fica como está — mas o seu efeito real segue EM ABERTO.**
+Este ponto é o motivo de o ADR estar `proposto` e não `aceito`. A migração aplicada não se reescreve de qualquer forma; o que falta não é uma decisão, é entender o que de fato aconteceu com os dados (ver abaixo).
 
 ## Consequências
 
@@ -35,16 +35,22 @@ A migração contém `UPDATE ... SET tenant_id = tenant:breakglass WHERE tenant_
 
 **Neutras.** Ambientes existentes não precisaram de intervenção manual: a DDL entrou sobre dados já conformes.
 
-### A verificação que sustenta o ponto 5
+### O que a investigação estabeleceu — e o que ficou em aberto
 
-O texto da migração diz que dados legados vão para o tenant administrativo. Isso **não descreve o que aconteceu**, e a diferença importa o bastante para ficar registrada — foi investigada com evidência, não deduzida (critério de aceite do KUBO-146):
+O texto da migração diz que dados legados vão para o tenant administrativo. Em PRD, **não foi isso que se observou**, e a explicação ainda não fecha. Registrado como pergunta aberta em vez de conclusão bonita, porque o critério de aceite do KUBO-146 é evidência, não dedução — e a dedução é justamente o que falhou aqui duas vezes.
 
-- **PRD** (2026-07-31, pós-migração): `source` 55, `dispatch` 11, `run` 319, `destination` 3. Linhas em `tenant:breakglass`: **zero**. Linhas sem tenant: **zero**. Tudo sob o tenant pessoal do dono.
-- **DEV** (`kubo-test`): `source` 179, `run` 782, `dispatch` 5, `destination` 1 — todas sob `breakglass`, que é o tenant legítimo daquele ambiente. Sem tenant: **zero**.
+**Estabelecido (medido):**
 
-A causa é o ponto de partida deste ADR: o código já gravava `tenant_id` antes de o schema exigir. Quando a DDL chegou, não havia linha órfã. E o cenário de risco que se imagina ao ler o backfill — "num ambiente novo, a base de coleta inteira vai para a conta administrativa" — **não é alcançável**: ambiente novo nasce com as tabelas vazias, e os dois ambientes que existem já migraram sem nenhuma linha órfã. Não há terceiro caso.
+- A `0025` é a única migração que declara `tenant_id` em `source`/`run`/`dispatch`.
+- O código anterior ao commit `48fd026` **não** gravava `tenant_id` em `source` — a tabela era global por decisão (KUBO-123). Logo, no momento da migração existiam sim linhas sem tenant: o backfill tinha alvo.
+- **DEV** (`kubo-test`): 179 `source` criadas entre 05/07 e 21/07; `0025` aplicada em 31/07 20:33; **todas** em `tenant:breakglass`. Coerente com o backfill tendo disparado.
+- **PRD**: 55 `source` criadas em 25/07 (ids surrogate de 32 caracteres, `created_at` é `READONLY`); `0025` aplicada em 31/07 20:35; **zero** em `breakglass`, todas no tenant pessoal do dono — que só passou a existir em 31/07, depois do reset de identidade. O mesmo vale para `run` (319), `dispatch` (11) e o acervo de conhecimento (`item` 5948, `distilled`, `entity`, `chunk`): nada em `breakglass`.
 
-Registro adjacente, para não virar folclore: durante a investigação levantou-se a suspeita de perda de registros em `dispatch` (uma contagem anterior de 25 contra as 11 atuais). **Não se confirmou.** Não existe job de expurgo de `dispatch` em nenhum ponto do código, e os 11 registros cobrem 25/07 a 31/07 num padrão coerente de duas entregas diárias (Telegram + e-mail), com a lacuna do dia 30 correspondendo ao incidente de crash-loop já documentado. A contagem anterior era medição malfeita, não dado sumido.
+**Em aberto:** por que o PRD não tem uma única linha em `breakglass` se, na hora da migração, aquelas linhas não tinham tenant. Os candidatos óbvios foram descartados por leitura de código: o script de reset de identidade não toca `source`/`run`/`dispatch`; `upsert_source` e `upsert_seed_source` fazem lookup **por tenant**, então re-semear criaria linhas novas em vez de mover as existentes — e o total permaneceu 55. Enquanto isso não for explicado, **não se pode afirmar nem que o backfill é linha morta, nem que o destino `breakglass` é seguro** — os dois ambientes se comportaram de forma diferente e só um deles foi entendido.
+
+Consequência prática: o ADR não pode ser aceito, e a pergunta continua no KUBO-146.
+
+**Registro adjacente, para não virar folclore:** levantou-se a suspeita de perda de registros em `dispatch` (uma contagem anterior de 25 contra as 11 atuais). **Não se confirmou.** Não existe job de expurgo de `dispatch` em nenhum ponto do código, e os 11 registros cobrem 25/07 a 31/07 num padrão coerente de duas entregas diárias (Telegram + e-mail), com a lacuna do dia 30 correspondendo ao incidente de crash-loop já documentado. A contagem anterior era medição malfeita, não dado sumido.
 
 ## Alternativas rejeitadas
 
