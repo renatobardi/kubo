@@ -220,6 +220,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", default="kubo", help="Nome do projeto compose (default: kubo)")
     args = parser.parse_args(argv)
 
+    # Sanitização reconhecível pelo taint-tracking (SonarCloud S8705): além do
+    # _validate_names dentro dos waits, o valor que segue adiante é o TEXTO DO
+    # MATCH da whitelist de caracteres — argv nunca flui cru para o subprocess.
+    service_m = _NAME_RE.fullmatch(args.service)
+    project_m = _NAME_RE.fullmatch(args.project)
+    if service_m is None or project_m is None:
+        bad = args.service if service_m is None else args.project
+        print(f"[health-guard] FALHOU: nome inválido: '{bad}'", file=sys.stderr)
+        return 1
+    args.service = service_m.group(0)
+    args.project = project_m.group(0)
+
     if args.mode == "healthy":
         rc, msg = wait_healthy(args.service, project=args.project, timeout=args.timeout)
     else:
