@@ -54,18 +54,20 @@ _DIGEST_POLL_MINUTES = 5
 # o valor explicitamente para não depender de default oculto.
 _DIGEST_MAX_ITEMS = 50
 
-# Modelo do destilador PINADO POR EVIDÊNCIA (smoke ao vivo 2026-07-11, ADR-0013 §V):
-# 10/10 saídas válidas/PT-BR, 0 canary leak. Trocar = editar aqui + PR (gate humano,
+# Modelo do destilador PINADO no código: trocar = editar aqui + PR (gate humano,
 # ADR-0010) — nunca fica configurável em schedules.yaml (evitaria o gate).
-_DISTILLER_MODEL = "groq/llama-3.3-70b-versatile"
+_DISTILLER_MODEL = "anthropic/claude-haiku-4-5"
 # summary até 8000 chars + entidades no JSON precisa de folga; o default 1024 do
-# ApiExecutorConfig truncaria a resposta antes do fim do JSON.
-_DISTILLER_MAX_TOKENS = 4096
+# ApiExecutorConfig truncaria a resposta antes do fim do JSON. Nos modelos Claude o
+# thinking adaptativo é ligado por padrão e divide ESTE mesmo teto com a resposta —
+# daí a folga sobre os 4096 que já bastavam para o JSON sozinho.
+_DISTILLER_MAX_TOKENS = 16384
 
 # Persona da lição da véspera (KUBO-137). O JSON de uma lição com quiz não cabe no
-# default de 1024 tokens — truncaria no meio e voltaria como saída malformada.
+# default de 1024 tokens — truncaria no meio e voltaria como saída malformada. Mesma
+# folga do destilador: o thinking sai do orçamento da resposta.
 _TUTOR_PERSONA = "tutor"
-_TUTOR_MAX_TOKENS = 4096
+_TUTOR_MAX_TOKENS = 16384
 _TUTOR_TIMEOUT = 60.0
 
 
