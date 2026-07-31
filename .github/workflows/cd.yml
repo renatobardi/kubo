@@ -30,9 +30,9 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.meta.outputs.image }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -43,7 +43,7 @@ jobs:
           echo "image=${{ env.IMAGE_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: .
           push: true
@@ -67,9 +67,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Tailscale (dev identity)
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        uses: tailscale/github-action@2976a889fced77bb9d364be5297d56cbd6f178d8 # v4.0.0
         with:
           authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
@@ -101,9 +101,9 @@ jobs:
     outputs:
       digest: ${{ steps.collect.outputs.digest }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Tailscale (dev identity)
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        uses: tailscale/github-action@2976a889fced77bb9d364be5297d56cbd6f178d8 # v4.0.0
         with:
           authkey: ${{ secrets.TS_AUTHKEY_DEV }}
           tags: tag:cd-dev
@@ -136,9 +136,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Tailscale (prd identity)
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        uses: tailscale/github-action@2976a889fced77bb9d364be5297d56cbd6f178d8 # v4.0.0
         with:
           authkey: ${{ secrets.TS_AUTHKEY_PRD }}
           tags: tag:cd-prd
