@@ -246,6 +246,15 @@ SIDEBAR_WIDTH_ICON   = 3rem   (colapsada em ícones)
 ```
 Tokens próprios (`--sidebar-*`) — no dark ela usa a cor de `card` (um degrau acima do background), no claro um off-white. `--sidebar-primary` é mais vivo que o `--primary` do conteúdo.
 
+### Indicador de progresso (toda ação de escrita)
+Estado `data-busy` no controle que disparou o envio: rótulo escondido, spinner de `currentColor` no centro, opacidade 0.7 e `pointer-events: none`. Não há variante — é um só, em botão de texto e em botão de ícone.
+
+**Não é um componente que se aplica; é um comportamento que já está lá.** Um ouvinte delegado de `submit` no parcial `_busy.html` (incluído por `base.html` e `login.html`) cobre todo `<form method="post">` — os que existem e os que ainda serão escritos. Nenhuma tela declara spinner próprio, e nenhum form precisa "lembrar" de pedir o indicador; a única obrigação de quem escreve uma tela nova é que a ação saia por um controle de submit de verdade, e não por JS avulso — condição verificada em `tests/api/test_busy_indicator.py`.
+
+O segundo envio é engolido enquanto o primeiro está em curso: sem isso, um clique repetido dispara um segundo upload ou uma segunda chamada paga ao modelo.
+
+CSS puro, deliberadamente fora do Tailwind: o `app.css` é gerado no build da imagem, então um utilitário novo só existiria após rebuildar — e o indicador ficaria invisível em qualquer ambiente servindo um css anterior, falhando em silêncio justamente no sinal que existe para acabar com o silêncio. Sob `prefers-reduced-motion` o giro desacelera em vez de sumir (o sinal é a informação; a animação é só o veículo).
+
 ### Inventário completo de UI (shadcn)
 badge, breadcrumb, button, card, command (⌘K palette), dialog, dropdown-menu, input, input-group, label, popover, scroll-area, select, separator, sheet, sidebar, skeleton, switch, table, textarea, tooltip.
 
