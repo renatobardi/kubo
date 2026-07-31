@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import secrets
 import string
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field, ValidationError
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from surrealdb import RecordID
@@ -31,7 +32,7 @@ from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
 from kubo.api.session import SessionContext, resolve_session
-from kubo.errors import ConfigError, MaterialParseError, StoreError
+from kubo.errors import ConfigError, MaterialParseError, MembershipRequiredError, StoreError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client
@@ -42,7 +43,36 @@ from kubo.study.planning import compute_target_date, next_study_day
 from kubo.study.progress import PlanProgress, compute_progress, count_study_days
 
 _log = structlog.get_logger(__name__)
-router = APIRouter()
+
+# Estudos é ESTRITO por desenho (dado pessoal, ADR-0043): a store chama
+# `assert_membership` mesmo para superadmin, cujo bypass (ADR-0041 §VI) só vale na
+# sessão. Sem tradução, a recusa subia como 500 (KUBO-141).
+_NOT_A_MEMBER = "Estudos é pessoal: sua conta não pertence a este workspace."
+
+
+class _MembershipAwareRoute(APIRoute):
+    """Traduz `MembershipRequiredError` em 403 para TODA rota deste router.
+
+    Um ponto de tradução em vez de 14 try/except — e no router do módulo, não em
+    `app.add_exception_handler`, que é GLOBAL e mudaria as rotas que hoje deixam a
+    exceção subir de propósito.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        """Envelopa o handler original com a recusa legível."""
+        handler = super().get_route_handler()
+
+        async def _translated(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except MembershipRequiredError:
+                _log.warning("study.membership_required", path=_log_key(request.url.path))
+                return PlainTextResponse(_NOT_A_MEMBER, status_code=403)
+
+        return _translated
+
+
+router = APIRouter(route_class=_MembershipAwareRoute)
 
 _LIST_TEMPLATE = "study/list.html"
 _DETAIL_TEMPLATE = "study/detail.html"
