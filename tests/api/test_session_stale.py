@@ -23,11 +23,11 @@ from starlette.testclient import TestClient
 # Páginas tenant-scoped de módulos diferentes: o comportamento é do resolvedor de
 # sessão, não de uma rota específica. Se alguém "consertar" só a que apareceu no
 # incidente, as outras aqui denunciam.
-_PAGINAS = ("/distilled", "/study/materials", "/sources")
+_PAGES = ("/distilled", "/study/materials", "/sources")
 
 
 @pytest.fixture
-def sessao_orfa(monkeypatch: pytest.MonkeyPatch) -> None:
+def orphan_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """O usuário da sessão sumiu do banco — cookie válido apontando pro vazio.
 
     A conftest troca `resolve_session` por um dublê em cada módulo de rota, para que
@@ -43,9 +43,9 @@ def sessao_orfa(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.mark.parametrize("path", _PAGINAS)
-def test_sessao_orfa_redireciona_para_login(
-    authed_client: TestClient, sessao_orfa: None, path: str
+@pytest.mark.parametrize("path", _PAGES)
+def test_orphan_session_redirects_to_login(
+    authed_client: TestClient, orphan_session: None, path: str
 ) -> None:
     """Sessão irresolvível → 303 para /login, nunca 403 de texto puro."""
     resp = authed_client.get(path, follow_redirects=False)
@@ -54,7 +54,7 @@ def test_sessao_orfa_redireciona_para_login(
     assert resp.headers["location"].startswith("/login")
 
 
-def test_sessao_orfa_limpa_o_cookie(authed_client: TestClient, sessao_orfa: None) -> None:
+def test_orphan_session_clears_cookie(authed_client: TestClient, orphan_session: None) -> None:
     """O redirect vem com a sessão LIMPA.
 
     Sem isso o usuário volta pro /login carregando a mesma sessão podre e roda em
@@ -63,9 +63,12 @@ def test_sessao_orfa_limpa_o_cookie(authed_client: TestClient, sessao_orfa: None
 
     assert resp.status_code == 303
     assert "set-cookie" in resp.headers, "o redirect precisa reemitir/limpar o cookie de sessão"
+    set_cookie = resp.headers["set-cookie"]
+    assert "kubo_session=null" in set_cookie, "o redirect precisa limpar o cookie de sessão"
+    assert "expires=Thu, 01 Jan 1970" in set_cookie, "o cookie limpo deve ter expiração no passado"
 
 
-def test_sessao_valida_segue_intacta(authed_client: TestClient) -> None:
+def test_valid_session_stays_intact(authed_client: TestClient) -> None:
     """Contraprova: com o usuário existindo, a página responde normalmente.
 
     Sem esta, um bug que redirecionasse TODO mundo pro login passaria nos testes
@@ -75,7 +78,7 @@ def test_sessao_valida_segue_intacta(authed_client: TestClient) -> None:
     assert resp.status_code == 200
 
 
-def test_rota_de_escrita_tambem_redireciona(
+def test_write_route_also_redirects(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Não é só GET: POST com sessão órfã também sai pelo login.
@@ -107,18 +110,18 @@ def test_rota_de_escrita_tambem_redireciona(
     assert resp.headers["location"].startswith("/login")
 
 
-def test_login_explica_por_que_o_usuario_voltou(client: TestClient) -> None:
+def test_login_explains_why_user_returned(client: TestClient) -> None:
     """A tela de login diz que a sessão expirou, em vez de aparecer do nada.
 
     Sem o aviso, o usuário que estava logado é cuspido no login sem explicação e
     conclui que o Kubo quebrou — o mesmo susto do 403, com roupa melhor."""
-    html = client.get("/login?expirada=1").text
+    html = client.get("/login?expired=1").text
 
     assert "sess" in html.lower()
     assert "expir" in html.lower()
 
 
-def test_login_normal_nao_mostra_aviso(client: TestClient) -> None:
+def test_normal_login_shows_no_notice(client: TestClient) -> None:
     """Contraprova: quem chega ao login pelo caminho normal não vê aviso nenhum."""
     html = client.get("/login").text
 

@@ -21,7 +21,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,8 +46,6 @@ from kubo.api.routes import (
     telegram_webhook,
 )
 from kubo.errors import ConfigError, StaleSessionError
-
-_log = structlog.get_logger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -208,7 +205,7 @@ def create_app() -> FastAPI:
         return "ok"
 
     @app.exception_handler(StaleSessionError)
-    def _sessao_sem_lastro(request: Request, exc: StaleSessionError) -> Response:
+    def _stale_session_handler(request: Request, exc: StaleSessionError) -> Response:
         """Sessão que perdeu o lastro: limpa o cookie e devolve o usuário ao login.
 
         Ponto único, como o `RequireLoginMiddleware` — sem isto, cada uma das ~30
@@ -216,9 +213,8 @@ def create_app() -> FastAPI:
         existe mais", e a que esquecesse voltaria a trancar o usuário (KUBO-140).
         O handler roda por dentro do SessionMiddleware, então o `clear()` chega ao
         Set-Cookie da resposta."""
-        _log.info("session.stale", path=request.url.path, motivo=str(exc))
         request.session.clear()
-        return RedirectResponse("/login?expirada=1", status_code=303)
+        return RedirectResponse("/login?expired=1", status_code=303)
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)

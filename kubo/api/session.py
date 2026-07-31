@@ -81,6 +81,9 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
             superadmin=is_superadmin,
         )
     except MembershipRequiredError as exc:
+        # A sessão traz o próprio `tenant_id`; uma membership recusada aqui só pode
+        # significar que o vínculo foi revogado enquanto o cookie ainda existe.
+        # Rotas ainda retornam 403 para recurso de outro tenant com sessão válida.
         raise StaleSessionError("membership da sessão não é mais válida") from exc
     return SessionContext(
         tenant_id=tenant,
