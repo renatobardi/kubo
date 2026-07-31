@@ -15,7 +15,7 @@ import pytest
 
 from scripts import health_guard as hg
 
-_CID = "a1b2c3d4e5f6"
+_CID = "a1b2c3d4e5f6"  # pragma: allowlist secret (id fake de container, não credencial)
 
 
 class _FakeRun:
