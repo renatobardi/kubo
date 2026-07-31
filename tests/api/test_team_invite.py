@@ -27,13 +27,10 @@ _FAKE_INVITE_TOKEN = "invite-token-123"
 
 @pytest.fixture(autouse=True)
 def stub_writer_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Escrita de auth usa `connect_rw` (ADR-0018); no unit não há KUBO_RW_SURREAL_PASS,
-    então o stub entra ANTES de `rw_config()` explodir — 503 de env ausente é caso do
-    `test_sources.py`, não deste arquivo. O stub NÃO pode viver na conftest: o objeto
-    `client` é o MESMO de todas as rotas e envenenaria os 503 de fontes."""
-    from tests.api.conftest import _fake_connect
+    """Escrita de auth via `connect_rw` stubada (helper compartilhado na conftest)."""
+    from tests.api.conftest import stub_auth_writer
 
-    monkeypatch.setattr("kubo.api.routes.auth.client.connect_rw", _fake_connect)
+    stub_auth_writer(monkeypatch)
 
 
 def _fake_user(*, uid: str, user_id: str = _FAKE_USER_ID) -> Any:

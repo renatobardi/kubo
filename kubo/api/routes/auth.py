@@ -309,7 +309,7 @@ def firebase_login(
             tenant, role = outcome
         else:
             with client.connect_rw() as db:
-                tenant_user, tenant = tenancy_store.get_or_create_user_and_tenant(
+                _, tenant = tenancy_store.get_or_create_user_and_tenant(
                     db,
                     firebase_uid=uid,
                     email=token_user.get("email") or None,
@@ -317,7 +317,14 @@ def firebase_login(
             role = "owner"
     except ConfigError:
         _log.warning(_WRITE_LOG, route="auth.firebase")
-        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+        # Mesma cortesia dos outros caminhos de indisponibilidade desta rota
+        # (config_missing/jwks_unavailable): re-renderiza o form com a mensagem.
+        return templates.TemplateResponse(
+            request,
+            _LOGIN_TEMPLATE,
+            _login_context(request, _WRITE_UNAVAILABLE, next_path=next_path),
+            status_code=503,
+        )
 
     _open_session(
         request,
