@@ -46,3 +46,9 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0036](0036-auth-prd-firebase-scrypt.md) | Autenticação da PRD: Firebase (Google + GitHub) + scrypt break-glass | aceito |
 | [0037](0037-esteira-cd-build-once-promocao-gated.md) | Esteira de CD: build-once, promoção via Tailscale, gate de aprovação | aceito |
 | [0038](0038-identidade-distribuicao-prd.md) | Identidade de distribuição da PRD: e-mail (Resend) + canais Telegram | aceito |
+| [0039](0039-modelo-dados-tenancy.md) | Modelo de dados de tenancy (isolamento row-level + credenciais de tenant cifradas) | aceito |
+| [0040](0040-pool-conteudo-publico-compartilhado.md) | Pool de conteúdo público compartilhado entre tenants (mecanismo de dedup) | aceito |
+| [0041](0041-auth-onboarding-multiusuario.md) | Autenticação e onboarding multiusuário | aceito |
+| [0042](0042-catalogo-por-tenant-changelog.md) | Catálogo por-tenant no banco + changelog de auditoria | aceito |
+| [0043](0043-modulo-estudos-dominio-primeira-classe.md) | Módulo Estudos como domínio de 1ª classe | aceito |
+| [0044](0044-tenant-obrigatorio-source-run-dispatch.md) | `tenant_id` obrigatório em `source`, `run` e `dispatch`; unicidade por tenant | proposto |
