@@ -323,11 +323,11 @@ def test_dispatches_route_is_tenant_scoped(db: Any, test_client: TestClient) -> 
     _switch(test_client, tenant_a.id)
     html_a = test_client.get("/dispatches").text
     assert "1 de 1" in html_a
-    assert str(dest_a) in html_a
-    assert str(dest_b) not in html_a
+    assert dest_a.id in html_a
+    assert dest_b.id not in html_a
 
     _switch(test_client, tenant_b.id)
     html_b = test_client.get("/dispatches").text
     assert "1 de 1" in html_b
-    assert str(dest_b) in html_b
-    assert str(dest_a) not in html_b
+    assert dest_b.id in html_b
+    assert dest_a.id not in html_b
