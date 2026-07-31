@@ -47,6 +47,7 @@ router = APIRouter()
 _LIST_TEMPLATE = "study/list.html"
 _DETAIL_TEMPLATE = "study/detail.html"
 _NOT_FOUND_TEMPLATE = "study/not_found.html"
+_NEW_TEMPLATE = "study/new.html"
 _MATERIALS_ROUTE = "/study/materials"
 _MATERIAL_TABLE = "material"
 
@@ -164,6 +165,19 @@ def list_materials_page(request: Request) -> Response:
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     return _render_list(request, materials)
+
+
+@router.get("/new")
+def new_study_page(request: Request) -> Response:
+    """Guia de entrada do módulo: os 3 passos do estudo, com o envio de material.
+
+    Tela de LEITURA: o formulário posta na rota de escrita que já existe
+    (`POST /study/materials`) — nenhum caminho de escrita novo nasce aqui.
+    """
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    return templates.TemplateResponse(request, _NEW_TEMPLATE, {"csrf": csrf_token(request)})
 
 
 def _declares_oversized_body(request: Request, limit: int) -> bool:
@@ -332,6 +346,7 @@ def material_detail(
 # Formulários clássicos, sem JS novo (molde do gate, ADR-0018).
 
 _TOPIC_TEMPLATE = "study/topic.html"
+_TOPICS_LIST_TEMPLATE = "study/topics.html"
 _TOPIC_NOT_FOUND_TEMPLATE = "study/topic_not_found.html"
 _TOPIC_TABLE = "topic"
 _TOPICS_ROUTE = "/study/topics"
@@ -581,6 +596,25 @@ def _plan_lessons(db: Any, plan: study_store.StudyPlan, scope: dict[str, Any]) -
             **scope,
         )
     return {"today_lesson": current, "next_lesson": upcoming}
+
+
+@router.get("/topics")
+def list_topics_page(request: Request) -> Response:
+    """Lista os temas do usuário com o estado do plano de cada um."""
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        scope = {"tenant_id": ctx.tenant_id, "user_id": ctx.user_id}
+        # Uma leitura de plano por tema: o estado do plano é O que o dono procura nesta
+        # lista, e a alternativa seria uma consulta agregada nova só para a tela — mesmo
+        # trade-off já assumido para `get_log_for_lesson` em `topic_detail`. A lista de
+        # temas de um dono é curta por natureza (um tema = um livro que ele está lendo).
+        rows = [
+            {"topic": topic, "plan": study_store.get_plan_for_topic(db, topic_id=topic.id, **scope)}
+            for topic in study_store.list_topics(db, **scope)
+        ]
+    return templates.TemplateResponse(request, _TOPICS_LIST_TEMPLATE, {"rows": rows})
 
 
 @router.get("/topics/{key}")

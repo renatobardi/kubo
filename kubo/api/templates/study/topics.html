@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{# Rótulos de estado do plano: os MESMOS de `study/topic.html` — a lista e o detalhe
+   não podem chamar o mesmo estado por nomes diferentes. Fallback = o próprio status
+   (molde do macro `state_label`). #}
+{% set status_labels = {"proposed": "Proposta em revisão", "active": "Plano ativo", "paused": "Pausado", "completed": "Concluído"} %}
+{% block title %}Planos · Estudos · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Planos", "Seus temas de estudo e em que pé está o plano de cada um.") }}
+
+  {% if not rows %}
+    <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
+      Nenhum tema ainda. Comece enviando um material em
+      <a href="/study/new" class="text-primary underline underline-offset-2">Novo estudo</a>.
+    </div>
+  {% else %}
+  <div class="space-y-2">
+    {% for row in rows %}
+      <a href="/study/topics/{{ row.topic.id.id | urlencode }}"
+         class="flex flex-wrap items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">
+        <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ row.topic.title }}</span>
+        {% if not row.plan %}
+          <span class="shrink-0 rounded-4xl px-2 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">Sem plano</span>
+        {% elif row.plan.status == "active" %}
+          <span class="shrink-0 rounded-4xl bg-primary/10 px-2 py-0.5 text-xs text-primary">{{ status_labels.get(row.plan.status, row.plan.status) }}</span>
+        {% else %}
+          <span class="shrink-0 rounded-4xl bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ status_labels.get(row.plan.status, row.plan.status) }}</span>
+        {% endif %}
+        {# `target_date` é datetime (não ISO): o filtro parseia string, então o
+           `.isoformat()` é obrigatório — mesmo cuidado de `study/topic.html`. #}
+        {% if row.plan and row.plan.target_date %}
+          <span class="shrink-0 text-xs text-muted-foreground">alvo {{ row.plan.target_date.isoformat() | short_datetime }}</span>
+        {% endif %}
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

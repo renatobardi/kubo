@@ -26,6 +26,7 @@ class NavItem(TypedDict):
 # Nomes de grupo — constantes (SonarCloud S1192: literal repetido 3x+ entre NAV e
 # MOBILE_TABS). Também a fonte única que o mapeamento de tabs mobile referencia.
 GROUP_KNOWLEDGE = "Conhecimento"
+GROUP_STUDY = "Estudos"
 GROUP_WORK = "Trabalho"
 GROUP_DISTRIBUTION = "Distribuição"
 
@@ -36,11 +37,13 @@ NAV: list[NavItem] = [
     {"label": "Destilados", "route": "/distilled", "group": GROUP_KNOWLEDGE, "icon": "book-open"},
     {"label": "Entidades", "route": "/entities", "group": GROUP_KNOWLEDGE, "icon": "network"},
     {"label": "Fontes", "route": "/sources", "group": GROUP_KNOWLEDGE, "icon": "rss"},
+    {"label": "Materiais", "route": "/study/materials", "group": GROUP_STUDY, "icon": "library"},
+    {"label": "Planos", "route": "/study/topics", "group": GROUP_STUDY, "icon": "graduation-cap"},
+    {"label": "Novo estudo", "route": "/study/new", "group": GROUP_STUDY, "icon": "plus-circle"},
     {"label": "Fluxos", "route": "/flows", "group": GROUP_WORK, "icon": "workflow"},
     {"label": "Execuções", "route": "/runs", "group": GROUP_WORK, "icon": "activity"},
     {"label": "Destinos", "route": "/destinations", "group": GROUP_DISTRIBUTION, "icon": "send"},
     {"label": "Envios", "route": "/dispatches", "group": GROUP_DISTRIBUTION, "icon": "mail"},
-    {"label": "Estudos", "route": "/study/materials", "group": None, "icon": "graduation-cap"},
     {"label": "Configurações", "route": "/settings", "group": None, "icon": "settings"},
 ]
 
