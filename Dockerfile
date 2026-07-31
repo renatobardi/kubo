@@ -76,7 +76,15 @@ COPY --from=tailwind /build/app.css ./kubo/api/static/app.css
 RUN uv sync --frozen --no-dev --no-editable
 
 # non-root: uid fixo alto, dono de /app (inclui o .venv criado acima).
-RUN useradd --create-home --uid 10001 kubo && chown -R kubo:kubo /app
+# /data/materials pré-criado e chown'ado AQUI: named volume novo montado num dir
+# pré-existente da imagem herda a ownership desse dir (comportamento padrão do
+# Docker) — sem isto o volume `study-materials` nasce root:root e o upload de
+# Material dá PermissionError como uid 10001 (incidente 2026-07-31). Volume JÁ
+# existente não é tocado (a herança só vale na criação); o chown manual feito em
+# DEV/PRD permanece válido. O mount RO do kubo-scheduler só lê — 755 basta.
+RUN useradd --create-home --uid 10001 kubo \
+    && mkdir -p /data/materials \
+    && chown -R kubo:kubo /app /data/materials
 USER kubo
 
 ENV PATH="/app/.venv/bin:$PATH"

@@ -339,4 +339,7 @@ volumes:
   surreal-backups:
   # Arquivos originais dos Materiais de estudo (ADR-0043). Volume próprio, não o
   # surreal-data: o banco guarda os capítulos extraídos; o arquivo é o insumo bruto.
+  # Ownership: o Dockerfile pré-cria /data/materials como kubo (uid 10001) para o
+  # volume novo herdar a ownership da imagem — mesmo problema do volume do
+  # surrealdb acima, resolvido sem `user: root` porque aqui a imagem é nossa.
   study-materials:
