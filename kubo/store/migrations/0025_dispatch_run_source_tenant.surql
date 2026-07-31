@@ -1,15 +1,8 @@
 -- Migration 0025 — tenant_id em dispatch, run, source e destination (KUBO-128).
 -- DDL idempotente via OVERWRITE. tenant_id obrigatório (ASSERT != NONE):
 -- dados legados sem tenant_id são backfilled abaixo para o tenant breakglass
--- antes do ASSERT; se houver múltiplos tenants em prod, rodar backfill manual
--- antes do deploy (KUBO-128 follow-up).
-
--- ── Backfill: registros legados sem tenant_id apontam para o tenant breakglass.
--- Idempotente: só atualiza onde tenant_id IS NONE.
-UPDATE dispatch SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
-UPDATE run SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
-UPDATE source SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
-UPDATE destination SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+-- DEPOIS do DEFINE FIELD (o campo precisa existir antes do UPDATE);
+-- se houver múltiplos tenants em prod, rodar backfill manual antes do deploy.
 
 -- ── dispatch: fato de entrega de digest (ADR-0015) ────────────────────────────
 DEFINE FIELD OVERWRITE tenant_id ON dispatch TYPE record<tenant> ASSERT $value != NONE;
@@ -24,6 +17,14 @@ DEFINE FIELD OVERWRITE tenant_id ON source TYPE record<tenant> ASSERT $value != 
 -- tenant_id opcional nesta fase: rollout suave, ASSERT vem quando todos os
 -- callers forem migrados (KUBO-128 follow-up).
 DEFINE FIELD OVERWRITE tenant_id ON destination TYPE option<record<tenant>>;
+
+-- ── Backfill: registros legados sem tenant_id apontam para o tenant breakglass.
+-- Idempotente: só atualiza onde tenant_id IS NONE. RODA APÓS o DEFINE FIELD
+-- (o campo precisa existir na tabela antes do UPDATE).
+UPDATE dispatch SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE run SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE source SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE destination SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
 
 -- Unicidade de source passa a ser por (tenant_id, kind, canonical), não global.
 -- Permite que dois tenants cadastrem a mesma URL de feed independentemente.
