@@ -95,16 +95,18 @@ def _require_dim_matches(ch: Chunk) -> None:
         )
 
 
-def _find_source_id(db: Any, *, kind: str, canonical: str) -> RecordID | None:
-    """Resolve o record de uma source pela chave natural (kind, canonical), ou None.
+def _find_source_id(db: Any, *, tenant_id: RecordID, kind: str, canonical: str) -> RecordID | None:
+    """Resolve o record de uma source pela chave natural (tenant, kind, canonical), ou None.
 
     Lookup por CAMPO (não por id derivado): acha o record qualquer que seja o esquema do
     id — sha256 legado (pré-ADR-0025) ou surrogate cadastrado pela UI. É a peça que faz
     os dois escritores (`create_source` da UI e `upsert_source` do coletor) convergirem
-    na mesma (kind, canonical), sem um segundo record que o índice UNIQUE barraria."""
+    na mesma (kind, canonical) dentro do tenant, sem um segundo record que o índice
+    UNIQUE barraria."""
     rows = db.query(
-        "SELECT id FROM source WHERE kind = $kind AND canonical = $canonical;",
-        {"kind": kind, "canonical": canonical},
+        "SELECT id FROM source WHERE tenant_id = $tenant AND kind = $kind "
+        "AND canonical = $canonical;",
+        {"tenant": tenant_id, "kind": kind, "canonical": canonical},
     )
     return rows[0]["id"] if rows else None
 
@@ -112,35 +114,35 @@ def _find_source_id(db: Any, *, kind: str, canonical: str) -> RecordID | None:
 def create_source(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     kind: str,
     canonical: str,
     title: str | None = None,
 ) -> RecordID:
     """Cadastra uma fonte NOVA (id surrogate, desacoplado da canonical — ADR-0025) e a
-    recusa se já existir (kind, canonical). Escrita da UI (#105), distinta de
+    recusa se já existir (kind, canonical) no tenant. Escrita da UI (#105), distinta de
     `upsert_source` (chave natural, idempotente): aqui duplicata é ERRO, não no-op.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. A tabela `source` é tenant-scoped (KUBO-128).
 
     Duplicata é detectada por lookup ANTES da escrita → `DuplicateSourceError` (sinal limpo
     para o aviso soft da UI, sem parsear mensagem de erro). O `CREATE` roda pelo wrapper
-    transacional VERIFICADO: uma violação residual do índice UNIQUE(kind, canonical) (corrida
-    TOCTOU, quase impossível single-user) falha ALTO como `StoreError`, nunca perde a escrita
-    em silêncio. Nasce ativo (`enabled=true`, `tags=[]`); `created_at` vem do DEFAULT READONLY."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
-    if _find_source_id(db, kind=kind, canonical=canonical) is not None:
+    transacional VERIFICADO: uma violação residual do índice UNIQUE(tenant_id, kind, canonical)
+    (corrida TOCTOU, quase impossível single-user) falha ALTO como `StoreError`, nunca perde a
+    escrita em silêncio. Nasce ativo (`enabled=true`, `tags=[]`); `created_at` vem do DEFAULT
+    READONLY."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    if _find_source_id(db, tenant_id=tenant_id, kind=kind, canonical=canonical) is not None:
         raise DuplicateSourceError(f"fonte já cadastrada: kind={kind} canonical={canonical}")
     rid = _fresh("source")
     run_transaction(
         db,
         [
-            "CREATE $r SET kind = $kind, canonical = $canonical, title = $title, "
-            "enabled = true, tags = []"
+            "CREATE $r SET tenant_id = $tenant, kind = $kind, canonical = $canonical, "
+            "title = $title, enabled = true, tags = []"
         ],
-        {"r": rid, "kind": kind, "canonical": canonical, "title": title},
+        {"r": rid, "tenant": tenant_id, "kind": kind, "canonical": canonical, "title": title},
     )
     return rid
 
@@ -148,29 +150,33 @@ def create_source(
 def upsert_source(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     kind: str,
     canonical: str,
     title: str | None = None,
 ) -> RecordID:
-    """Cria/atualiza uma source pela chave natural (kind, canonical). Idempotente.
+    """Cria/atualiza uma source pela chave natural (tenant, kind, canonical). Idempotente.
 
     Lookup-first (ADR-0025, nota da migration 0009): resolve o record existente por CAMPO e
     reusa seu id — sha256 legado ou surrogate cadastrado pela UI — em vez de derivar o id da
     canonical. Ausente → cunha surrogate (`_fresh`). Isto faz o coletor convergir com o
-    `create_source` da UI na mesma (kind, canonical): sem lookup-first, um repo cadastrado pela
-    UI e depois coletado geraria um segundo record que o índice UNIQUE barraria, quebrando a run.
+    `create_source` da UI na mesma (kind, canonical) dentro do tenant: sem lookup-first, um
+    repo cadastrado pela UI e depois coletado geraria um segundo record que o índice UNIQUE
+    barraria, quebrando a run.
 
     `title = title ?? $title` (coalesce): o coletor APENDE itens, não edita o Cadastro (#106). Um
     título que o dono editou pela UI SOBREVIVE ao sweep — sem o coalesce, `SET title = $title`
     reverteria a edição a cada coleta, em silêncio. Cadastro SEM título ainda é preenchido pelo
     feed na 1ª coleta (o record novo nasce com title NONE, então NONE ?? $title = $title)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _find_source_id(db, kind=kind, canonical=canonical) or _fresh("source")
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rid = _find_source_id(db, tenant_id=tenant_id, kind=kind, canonical=canonical) or _fresh(
+        "source"
+    )
     db.query(
-        "UPSERT $r SET kind = $kind, canonical = $canonical, title = title ?? $title;",
-        {"r": rid, "kind": kind, "canonical": canonical, "title": title},
+        "UPSERT $r SET tenant_id = $tenant, kind = $kind, canonical = $canonical, "
+        "title = title ?? $title;",
+        {"r": rid, "tenant": tenant_id, "kind": kind, "canonical": canonical, "title": title},
     )
     return rid
 
@@ -178,8 +184,8 @@ def upsert_source(
 def upsert_seed_source(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     kind: str,
     canonical: str,
     title: str | None,
@@ -189,11 +195,11 @@ def upsert_seed_source(
     o bootstrap das 6 fontes legadas para o modelo dirigido-por-Cadastro, migrando canonical+
     title+tags do antigo `schedules.yaml` para o DB (a única fonte-de-verdade daqui pra frente).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. A tabela `source` é tenant-scoped (KUBO-128).
 
     Lookup-first (como `upsert_source`): reusa o id existente — sha256 legado da coleta ou
-    surrogate da UI — ou cunha um surrogate se ausente. Convergem no mesmo (kind, canonical).
+    surrogate da UI — ou cunha um surrogate se ausente. Convergem no mesmo (kind, canonical)
+    dentro do tenant.
 
     COALESCE em cada campo do dono, nunca SET cego — o #107 está vivo, o dono pode ter pausado
     ou re-tageado uma fonte ANTES deste seed rodar, e o seed preenche lacuna, jamais reverte:
@@ -202,14 +208,23 @@ def upsert_seed_source(
     quando está vazio (`[]` = 'nunca setado', decisão explícita da migration 0009), preservando
     qualquer edição de tags do dono. Num record NOVO todos os campos partem de NONE/[], então o
     coalesce cai no valor do seed — bootstrap completo em ambiente limpo."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _find_source_id(db, kind=kind, canonical=canonical) or _fresh("source")
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rid = _find_source_id(db, tenant_id=tenant_id, kind=kind, canonical=canonical) or _fresh(
+        "source"
+    )
     db.query(
-        "UPSERT $r SET kind = $kind, canonical = $canonical, "
+        "UPSERT $r SET tenant_id = $tenant, kind = $kind, canonical = $canonical, "
         "title = title ?? $title, "
         "enabled = enabled ?? true, "
         "tags = (IF array::len(tags ?? []) = 0 THEN $tags ELSE tags END);",
-        {"r": rid, "kind": kind, "canonical": canonical, "title": title, "tags": tags},
+        {
+            "r": rid,
+            "tenant": tenant_id,
+            "kind": kind,
+            "canonical": canonical,
+            "title": title,
+            "tags": tags,
+        },
     )
     return rid
 
@@ -850,8 +865,8 @@ def _run_filter(query: str | None) -> tuple[str, dict[str, Any]]:
 def list_runs(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     limit: int,
     start: int,
     query: str | None = None,
@@ -859,17 +874,21 @@ def list_runs(
     """Página de execuções, mais recentes primeiro (tela de Execuções, fase 2),
     opcionalmente filtrada por `query` (worker ou status).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `run` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     Projeta o `error` inteiro (não só o kind) para o painel expansível — o objeto é
     contratualmente seguro (ErrorInfo: `extra=forbid`, `message`<=500 sem conteúdo
     coletado). `items` é derivado de `stats` (E6). `limit`/`start` clampados na borda;
     LIMIT/START interpolados como literal (não aceitam bind, quirk do v3)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
     where, params = _run_filter(query)
+    if where:
+        where = f"{where} AND tenant_id = $tenant"
+    else:
+        where = " WHERE tenant_id = $tenant"
+    params["tenant"] = tenant_id
     q = (
         "SELECT worker, status, error, error.kind AS error_kind, stats, "  # noqa: S608
         f"started_at, finished_at FROM run{where} "
@@ -895,16 +914,20 @@ def list_runs(
 def count_runs(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     query: str | None = None,
 ) -> int:
     """Total de execuções sob o MESMO filtro de `list_runs` (para o 'X de Y').
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `run` é global, logo nenhum filtro de tenant é aplicado (KUBO-123)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    Membership checada. Filtra pelo tenant ativo (KUBO-128)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     where, params = _run_filter(query)
+    if where:
+        where = f"{where} AND tenant_id = $tenant"
+    else:
+        where = " WHERE tenant_id = $tenant"
+    params["tenant"] = tenant_id
     rows = db.query(f"SELECT count() FROM run{where} GROUP ALL;", params)  # noqa: S608
     return int(rows[0]["count"]) if rows else 0
 
@@ -1008,23 +1031,22 @@ class SourceStat:
     archived_at: str | None
 
 
-def sources_with_stats(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None
-) -> list[SourceStat]:
+def sources_with_stats(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[SourceStat]:
     """Lista as fontes com contagem de itens, o carimbo da última coleta (E4) e o ESTADO (#107).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     `array::len(<-from_source<-item)` conta os itens da fonte; `time::max(...)` pega o
     `collected_at` mais recente (math::max explode em datetime — probe 0010). Fonte sem
     item nenhum → agregação NONE → `last_collected_at` None (o badge trata o estado).
     `enabled`/`archived_at` derivam o badge de estado (ativo/pausado/arquivado) na tela."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         "SELECT id, canonical, kind, title, enabled, archived_at, "
         "array::len(<-from_source<-item) AS items, "
-        "time::max(<-from_source<-item.collected_at) AS last FROM source;"
+        "time::max(<-from_source<-item.collected_at) AS last FROM source "
+        "WHERE tenant_id = $tenant;",
+        {"tenant": tenant_id},
     )
     return [
         SourceStat(
@@ -1057,20 +1079,21 @@ class SourceDetail:
 
 
 def get_source(
-    db: Any, id: RecordID, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None
+    db: Any, id: RecordID, *, tenant_id: RecordID, user_id: RecordID
 ) -> SourceDetail | None:
     """Lê o Cadastro INTEIRO por id, ou None se não existir (record ausente → SELECT vazio).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128): source de outro tenant
+    não é visível.
 
     Porta única para 'o estado completo de UMA fonte' — o form de edição (#106) o usa para
     popular os campos e para o pré-check de staleness (existe? arquivada?). `archived_at` volta
     como string ISO (None quando ativa), simétrico ao `last_collected_at` de sources_with_stats."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        "SELECT id, kind, canonical, title, tags, enabled, archived_at FROM $r;",
-        {"r": id},
+        "SELECT id, kind, canonical, title, tags, enabled, archived_at FROM $r "
+        "WHERE tenant_id = $tenant;",
+        {"r": id, "tenant": tenant_id},
     )
     if not rows:
         return None
@@ -1119,8 +1142,8 @@ def active_sources(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         "SELECT id, kind, canonical, title, tags, created_at FROM source "
-        "WHERE enabled = true AND archived_at IS NONE AND kind = $kind;",
-        {"kind": kind},
+        "WHERE tenant_id = $tenant AND enabled = true AND archived_at IS NONE AND kind = $kind;",
+        {"tenant": tenant_id, "kind": kind},
     )
     return [
         ActiveSource(
@@ -1138,8 +1161,8 @@ def active_sources(
 def edit_source(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     id: RecordID,
     title: str | None,
     tags: list[str],
@@ -1149,22 +1172,22 @@ def edit_source(
     portanto as arestas `from_source` dos itens já coletados (histórico intacto, ADR-0025). O
     `kind` NÃO é editável: mudá-lo trocaria o coletor e falsearia a proveniência dos itens.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     Full-replace dos três campos (o form sempre manda os três). Duas guardas antes da escrita:
     (1) STALENESS — Cadastro inexistente ou arquivado saiu do estado editável → `StaleSourceError`
     (409 na rota), com o `UPDATE ... WHERE archived_at IS NONE` como cinto contra corrida (não
     grava em cadastro arquivado nem que passe o pré-check); (2) UNICIDADE — editar a canonical
-    para uma que já existe em OUTRO Cadastro do mesmo kind viola UNIQUE(kind, canonical) →
-    `DuplicateSourceError`. O lookup exclui o PRÓPRIO record (senão editar só o título colidiria
-    consigo mesmo). O índice do banco segue como garantia dura contra a corrida TOCTOU residual
-    (um insert concorrente da mesma chave entre o lookup e a escrita → StoreError, nunca mudo)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    para uma que já existe em OUTRO Cadastro do mesmo kind no mesmo tenant viola
+    UNIQUE(tenant_id, kind, canonical) → `DuplicateSourceError`. O lookup exclui o PRÓPRIO record
+    (senão editar só o título colidiria consigo mesmo). O índice do banco segue como garantia dura
+    contra a corrida TOCTOU residual (um insert concorrente da mesma chave entre o lookup e a
+    escrita → StoreError, nunca mudo)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     current = get_source(db, id, tenant_id=tenant_id, user_id=user_id)
     if current is None or current.archived_at is not None:
         raise StaleSourceError(f"fonte não editável (inexistente ou arquivada): {id}")
-    other = _find_source_id(db, kind=current.kind, canonical=canonical)
+    other = _find_source_id(db, tenant_id=tenant_id, kind=current.kind, canonical=canonical)
     if other is not None and str(other) != str(id):
         raise DuplicateSourceError(
             f"fonte já cadastrada: kind={current.kind} canonical={canonical}"
@@ -1186,8 +1209,8 @@ def edit_source(
 def set_source_enabled(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     id: RecordID,
     enabled: bool,
 ) -> None:
@@ -1196,14 +1219,13 @@ def set_source_enabled(
     de arquivar (ADR-0025 §8, emenda #107): o sweep varre só os ativos, então pausar já tira do
     ar sem apagar. Restaurar de pausa é retomar; nenhum dado se perde.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     Só age sobre Cadastro NÃO arquivado — `enabled` de um arquivado é sempre `false` e mexê-lo
     quebraria o invariante `archived_at IS NOT NONE ⟹ enabled=false`. O `WHERE archived_at IS NONE`
     é o cinto: 0 linhas (inexistente ou arquivado) → `StaleSourceError`, nunca um toggle silencioso
     num arquivado."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     updated = db.query(
         "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE;",
         {"r": id, "enabled": enabled},
@@ -1212,20 +1234,17 @@ def set_source_enabled(
         raise StaleSourceError(f"fonte não pausável/retomável (inexistente ou arquivada): {id}")
 
 
-def archive_source(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None, id: RecordID
-) -> None:
+def archive_source(db: Any, *, tenant_id: RecordID, user_id: RecordID, id: RecordID) -> None:
     """Arquiva um Cadastro (soft delete, ADR-0025 §8): `enabled=false` E `archived_at=time::now()`
     num ÚNICO statement — atômico, nunca deixa o estado divergente arquivado-mas-ativo. Preserva
     todo o histórico (nenhuma aresta some); tira só da operação. Reversível por `restore_source`.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     `WHERE archived_at IS NONE` torna a operação idempotente-segura e detecta staleness: já
     arquivado ou inexistente → 0 linhas → `StaleSourceError` (o gate reapresenta, sem re-arquivar
     por cima nem carimbar `archived_at` de novo)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     updated = db.query(
         "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
         {"r": id},
@@ -1234,20 +1253,17 @@ def archive_source(
         raise StaleSourceError(f"fonte não arquivável (inexistente ou já arquivada): {id}")
 
 
-def restore_source(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None, id: RecordID
-) -> None:
+def restore_source(db: Any, *, tenant_id: RecordID, user_id: RecordID, id: RecordID) -> None:
     """Restaura um Cadastro arquivado (ADR-0025 §8): `enabled=true` E `archived_at=NONE` num ÚNICO
     statement — atômico, o oposto exato de `archive_source`. Volta ao estado ATIVO (varrido pelo
     sweep de novo). Restaurar sempre reativa: não existe 'restaurar para pausado' (seria dois
     passos — restaurar, depois pausar).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `source` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     `WHERE archived_at IS NOT NONE` só casa Cadastro de fato arquivado: não-arquivado ou
     inexistente → 0 linhas → `StaleSourceError`."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     updated = db.query(
         "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE;",
         {"r": id},
@@ -1256,30 +1272,24 @@ def restore_source(
         raise StaleSourceError(f"fonte não restaurável (inexistente ou não arquivada): {id}")
 
 
-def source_item_count(
-    db: Any, id: RecordID, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None
-) -> int:
+def source_item_count(db: Any, id: RecordID, *, tenant_id: RecordID, user_id: RecordID) -> int:
     """Conta os itens que apontam para um Cadastro via `<-from_source<-item` (0 se nenhum).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    As tabelas `source` e `item` são globais, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     Porta única para 'quantos itens penduram nesta fonte' — a guarda do hard delete (#107) e a
     tela de confirmação a usam para decidir apagável (zero) vs orientar a arquivar (>0)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query("SELECT array::len(<-from_source<-item) AS items FROM $r;", {"r": id})
     return int(rows[0]["items"]) if rows else 0
 
 
-def delete_source(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None, id: RecordID
-) -> None:
+def delete_source(db: Any, *, tenant_id: RecordID, user_id: RecordID, id: RecordID) -> None:
     """Hard delete de um Cadastro — a PRIMEIRA e única exceção ao 'a store não deleta' (ADR-0025
     §8), ESTREITA: só quando **zero itens** apontam via `from_source`. Cadastro com histórico
     carrega proveniência ('o produto') e o caminho é ARQUIVAR — `SourceHasHistoryError`, sem apagar.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    As tabelas `source` e `item` são globais, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
 
     Três desfechos, sem lost-delete mudo: inexistente → `StaleSourceError`; com itens →
     `SourceHasHistoryError`; zero itens → apaga. O `DELETE ... WHERE ... = 0` avalia a condição no
@@ -1625,17 +1635,20 @@ def search_distilled(
     return docs
 
 
-def start_run(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None, worker: str
-) -> RecordID:
+def start_run(db: Any, *, tenant_id: RecordID, user_id: RecordID, worker: str) -> RecordID:
     """Abre um `run` (status 'running', started_at). Retorna o id para finish/fail.
+
+    Membership checada. Grava `tenant_id` no record (KUBO-128).
 
     `stats` fica no default {} do schema até um produtor exigir escrevê-lo (M5+) —
     a store não expõe superfície sem teste que a exija (anti-especulação, plano §3.2).
     """
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _fresh("run")
-    db.query("CREATE $r SET worker = $worker, status = 'running';", {"r": rid, "worker": worker})
+    db.query(
+        "CREATE $r SET tenant_id = $tenant, worker = $worker, status = 'running';",
+        {"r": rid, "tenant": tenant_id, "worker": worker},
+    )
     return rid
 
 
@@ -1643,17 +1656,19 @@ def finish_run(
     db: Any,
     run: RecordID,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     stats: dict[str, Any] | None = None,
 ) -> None:
     """Fecha um `run` com sucesso (status 'ok', finished_at, `stats` opcional).
+
+    Membership checada (KUBO-128).
 
     `stats` são contadores da execução (ex.: itens vistos/gravados) — vão para o
     campo FLEXIBLE `run.stats`. A forma tipada vem do contrato (`RunResult.stats`,
     ADR-0009); a store só recebe o dict já serializado. Ausente = `{}` (default do
     schema preservado)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     db.query(
         "UPDATE $r SET status = 'ok', finished_at = time::now(), stats = $stats;",
         {"r": run, "stats": dict(stats) if stats else {}},
@@ -1664,27 +1679,27 @@ def fail_run(
     db: Any,
     run: RecordID,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     error: dict[str, Any],
 ) -> None:
     """Fecha um `run` com falha (status 'error', finished_at, erro estruturado)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     db.query(
         "UPDATE $r SET status = 'error', finished_at = time::now(), error = $error;",
         {"r": run, "error": dict(error)},
     )
 
 
-def run_status(
-    db: Any, run: RecordID, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None
-) -> str | None:
+def run_status(db: Any, run: RecordID, *, tenant_id: RecordID, user_id: RecordID) -> str | None:
     """Status de um `run` ('running'|'ok'|'error'), ou None se o id não existe.
+
+    Membership checada (KUBO-128).
 
     Porta única (invariante 2) para o flow runner decidir delivered vs failed sem
     tocar a store diretamente — a leitura de status mora aqui, ao lado de
     start/finish/fail_run."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query("SELECT VALUE status FROM $r;", {"r": run})
     return str(rows[0]) if rows else None
 
@@ -1723,8 +1738,8 @@ class DigestRow:
 def insert_dispatch(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     destination: RecordID,
     channel: str,
     status: str,
@@ -1738,16 +1753,20 @@ def insert_dispatch(
     do servidor). `items` são record<distilled> para AUDITORIA — não é aresta (sem
     consumidor de drill-down). `destination` é `record<destination>` (cutover KUBO-48).
 
+    Membership checada. Grava `tenant_id` no record (KUBO-128).
+
     `artifact` (`digest`|`report`, ADR-0016 §V) discrimina a entrega. Default `digest`
     é só conveniência de borda da store; a explicitude real mora no contrato
     (`DispatchPayload.artifact` sem default) — o runner sempre passa o valor do payload."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rid = _fresh("dispatch")
     db.query(
-        "CREATE $r SET destination = $dest, channel = $ch, status = $st, artifact = $art, "
-        "watermark = $wm, item_count = $ic, items = $items, error = $err;",
+        "CREATE $r SET tenant_id = $tenant, destination = $dest, channel = $ch, "
+        "status = $st, artifact = $art, watermark = $wm, item_count = $ic, "
+        "items = $items, error = $err;",
         {
             "r": rid,
+            "tenant": tenant_id,
             "dest": destination,
             "ch": channel,
             "st": status,
@@ -1765,23 +1784,25 @@ def last_dispatch_watermark(
     db: Any,
     destination: RecordID,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
 ) -> Any | None:
     """Watermark do último dispatch de DIGEST `ok` daquele destino, ou None se não há
     nenhum (sinal de bootstrap, ADR-0015 §III.2/§III.3). SÓ `ok` avança: um error
     posterior com watermark maior é ignorado — é assim que o retry-de-graça funciona (o
     perdido reentra amanhã).
 
+    Membership checada. Filtra pelo tenant ativo (KUBO-128).
+
     Filtra `artifact = 'digest'` (fix E1, ADR-0016 §V): um dispatch de `report` para o
     mesmo destino (Telegram do dono) NÃO pode mover o watermark do digest, senão o digest
     de amanhã pularia destilados em silêncio. `watermark` na projeção (quirk do ORDER BY
     no v3); LIMIT literal."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        "SELECT watermark FROM dispatch WHERE destination = $d "
+        "SELECT watermark FROM dispatch WHERE destination = $d AND tenant_id = $tenant "
         "AND status = 'ok' AND artifact = 'digest' ORDER BY watermark DESC LIMIT 1;",
-        {"d": destination},
+        {"d": destination, "tenant": tenant_id},
     )
     return rows[0]["watermark"] if rows else None
 
@@ -1893,8 +1914,8 @@ def _dispatch_filter(query: str | None) -> tuple[str, dict[str, Any]]:
 def list_dispatches(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     limit: int,
     start: int,
     query: str | None = None,
@@ -1904,12 +1925,16 @@ def list_dispatches(
     painel expansível (ErrorInfo é seguro: extra=forbid, message<=500). `limit`/`start`
     clampados; LIMIT/START interpolados como literal (não aceitam bind, quirk do v3).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `dispatch` é global, logo nenhum filtro de tenant é aplicado (KUBO-123)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    Membership checada. Filtra pelo tenant ativo (KUBO-128)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     limit = max(1, min(int(limit), _MAX_PAGE))
     start = max(0, int(start))
     where, params = _dispatch_filter(query)
+    if where:
+        where = f"{where} AND tenant_id = $tenant"
+    else:
+        where = " WHERE tenant_id = $tenant"
+    params["tenant"] = tenant_id
     q = (
         "SELECT channel, meta::id(destination) AS destination, status, item_count, error, "  # noqa: S608
         f"error.kind AS error_kind, sent_at FROM dispatch{where} "
@@ -1933,15 +1958,19 @@ def list_dispatches(
 def count_dispatches(
     db: Any,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    tenant_id: RecordID,
+    user_id: RecordID,
     query: str | None = None,
 ) -> int:
     """Total de envios sob o MESMO filtro de `list_dispatches` (para o 'X de Y').
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `dispatch` é global, logo nenhum filtro de tenant é aplicado (KUBO-123)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    Membership checada. Filtra pelo tenant ativo (KUBO-128)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     where, params = _dispatch_filter(query)
+    if where:
+        where = f"{where} AND tenant_id = $tenant"
+    else:
+        where = " WHERE tenant_id = $tenant"
+    params["tenant"] = tenant_id
     rows = db.query(f"SELECT count() FROM dispatch{where} GROUP ALL;", params)  # noqa: S608
     return int(rows[0]["count"]) if rows else 0

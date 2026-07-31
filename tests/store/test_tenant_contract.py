@@ -222,7 +222,10 @@ def test_entity_and_distilled_require_tenant(db: Any) -> None:
     with pytest.raises(MembershipRequiredError):
         list_entities(db, tenant_id=tenant_a.id, user_id=owner_b.id, limit=10, start=0)
 
-    source = db.query("CREATE source SET kind='rss', canonical='c', title='t'")[0]["id"]
+    source = db.query(
+        "CREATE source SET tenant_id=$t, kind='rss', canonical='c', title='t'",
+        {"t": tenant_a.id},
+    )[0]["id"]
     item = db.query("CREATE item SET external_id='x', content='c';")[0]["id"]
     db.query("RELATE $i->from_source->$s;", {"i": item, "s": source})
 

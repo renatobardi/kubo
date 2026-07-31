@@ -107,7 +107,9 @@ def test_main_writes_doc_against_seeded_db(db, tenant_id, user_id, tmp_path, mon
     e grava o doc. Prova o encanamento store→doc contra o banco real (achado CodeRabbit).
     `chdir` em tmp_path para o `validated_out` (confina ao cwd) aceitar o `--out`."""
     monkeypatch.chdir(tmp_path)
-    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item = knowledge.upsert_item(
         db, source=src, external_id="e1", content="conteúdo original do item para auditar"
     )

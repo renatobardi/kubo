@@ -82,6 +82,11 @@ def _redact(text: str, token: str) -> str:
     return text.replace(token, _REDACTED) if token else text
 
 
+def telegram_token() -> str:
+    """Bot token from env, or empty string when not configured."""
+    return os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
+
 def invite_link(token: str) -> str:
     """Deep link do Telegram para que o convidado clique e mande `/start <token>`.
 

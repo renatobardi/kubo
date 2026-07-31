@@ -290,9 +290,9 @@ def test_delete_with_dispatches_is_blocked_via_real_route(app_db: Any) -> None:
     )
     with _real_connect(replace(client.config(), database=_DB)) as root:
         root.query(
-            "CREATE dispatch SET destination = $d, channel = 'telegram', status = 'ok', "
-            "watermark = time::now(), item_count = 0, items = [];",
-            {"d": RecordID("destination", key)},
+            "CREATE dispatch SET tenant_id = $t, destination = $d, channel = 'telegram', "
+            "status = 'ok', watermark = time::now(), item_count = 0, items = [];",
+            {"t": RecordID("tenant", "breakglass"), "d": RecordID("destination", key)},
         )
     resp = tc.post(f"/destinations/{key}/delete", data={"csrf": csrf}, follow_redirects=False)
     assert resp.status_code == 409

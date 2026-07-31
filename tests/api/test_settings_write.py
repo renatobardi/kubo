@@ -16,6 +16,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.api.session import resolve_session as _real_resolve_session
 from kubo.store import client, destinations, migrations, tenancy
 from kubo.store import settings as settings_store
 from kubo.store.client import connect as _real_connect
@@ -322,6 +323,9 @@ def profile_app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     monkeypatch.setenv("SURREAL_DB", _PROFILE_DB)
     monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
+    # Undo the autouse stub_store mock so settings uses the real resolve_session
+    # (needed for profile tests that rely on a real user in the DB).
+    monkeypatch.setattr("kubo.api.routes.settings.resolve_session", _real_resolve_session)
     monkeypatch.setattr(
         "kubo.store.tenancy.get_user_by_firebase_uid", _real_get_user_by_firebase_uid_impl
     )

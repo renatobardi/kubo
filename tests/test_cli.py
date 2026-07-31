@@ -237,7 +237,9 @@ def test_run_query_orders_results_by_real_proximity(
 ) -> None:
     """O KNN roda de verdade — o fake NÃO mascara a ordenação: o distilled cujo
     chunk é IDÊNTICO ao vetor da pergunta aparece antes do ortogonal."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.insert_distilled(
@@ -269,7 +271,9 @@ def test_run_query_deduplicates_hits_from_the_same_distilled(
 ) -> None:
     """Um distilled com 2 chunks perto do vetor da pergunta aparece UMA vez na
     saída — dois chunks do mesmo destilado não duplicam o summary."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.insert_distilled(
         db,
@@ -292,7 +296,14 @@ def test_run_show_with_provenance_contains_full_chain(
 ) -> None:
     """`run_show(..., provenance=True)` traz summary + a cadeia item->source
     (canonical/url) + o worker do run — a proveniência completa."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+    source_id = knowledge.upsert_source(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://x/feed",
+        title="Feed X",
+    )
     item_id = knowledge.upsert_item(
         db,
         source=source_id,
@@ -327,7 +338,9 @@ def test_run_show_without_provenance_omits_source_canonical(
 ) -> None:
     """Sem `provenance`, o canonical da source não aparece — sucinto por design,
     mesma regra de `format_distilled`."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
         db,

@@ -52,12 +52,12 @@ def test_seed_creates_all_extra_feeds(db: Any, tenant_id: RecordID, user_id: Rec
     moonshot = by_canonical["https://medium.com/feed/@kimi_moonshot"]
     assert moonshot.title == "Moonshot AI / Kimi"
 
-    moonshot_detail = knowledge.get_source(db, moonshot.id)
+    moonshot_detail = knowledge.get_source(db, moonshot.id, tenant_id=tenant_id, user_id=user_id)
     assert moonshot_detail is not None
     assert moonshot_detail.enabled is True
 
 
-def test_seed_is_idempotent(db: Any) -> None:
+def test_seed_is_idempotent(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Rodar duas vezes não duplica: a segunda chamada processa tudo, mas upsert é no-op."""
     assert seed_extra_rss_sources(db) == len(FEEDS)
     assert seed_extra_rss_sources(db) == len(FEEDS)
@@ -65,33 +65,39 @@ def test_seed_is_idempotent(db: Any) -> None:
     assert _count_source(db) == len(FEEDS)
 
 
-def test_seed_preserves_owner_edits(db: Any) -> None:
+def test_seed_preserves_owner_edits(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """O seed não sobrescreve título, tags ou pausa definidos pelo dono."""
     rid = knowledge.create_source(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         kind="rss",
         canonical="https://medium.com/feed/@kimi_moonshot",
         title="Meu título",
     )
     knowledge.edit_source(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         id=rid,
         title="Meu título",
         tags=["custom"],
         canonical="https://medium.com/feed/@kimi_moonshot",
     )
-    knowledge.set_source_enabled(db, id=rid, enabled=False)
+    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
 
     seed_extra_rss_sources(db)
 
-    got = knowledge.get_source(db, rid)
+    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
     assert got is not None
     assert got.title == "Meu título"
     assert got.tags == ["custom"]
     assert got.enabled is False
 
 
-def test_main_connects_and_seeds(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_connects_and_seeds(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """main() usa client.connect_rw e devolve a quantidade de feeds processados."""
 
     class _FakeConnect:

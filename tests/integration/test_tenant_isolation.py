@@ -204,3 +204,130 @@ def test_non_superadmin_cannot_switch_to_foreign_tenant(db: Any, test_client: Te
         follow_redirects=False,
     )
     assert resp.status_code == 403
+
+
+# ── KUBO-128: isolamento de tenant em dispatch, source (legado) e run ──────────
+
+
+def test_sources_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
+    """Sessão no tenant A só enxerga source de A; após switch para B, só a de B (KUBO-128)."""
+    _login(test_client)
+
+    tenant_a = tenancy.create_tenant(db, name="Src Tenant A", owner_user_id=_BREAKGLASS_USER_ID)
+    tenant_b = tenancy.create_tenant(db, name="Src Tenant B", owner_user_id=_BREAKGLASS_USER_ID)
+
+    from kubo.store.knowledge import create_source
+
+    create_source(
+        db,
+        tenant_id=tenant_a.id,
+        user_id=_BREAKGLASS_USER_ID,
+        kind="rss",
+        canonical="https://a.example.com/feed.xml",
+        title="Feed A",
+    )
+    create_source(
+        db,
+        tenant_id=tenant_b.id,
+        user_id=_BREAKGLASS_USER_ID,
+        kind="rss",
+        canonical="https://b.example.com/feed.xml",
+        title="Feed B",
+    )
+
+    _switch(test_client, tenant_a.id)
+    html_a = test_client.get("/sources").text
+    assert "Feed A" in html_a
+    assert "Feed B" not in html_a
+
+    _switch(test_client, tenant_b.id)
+    html_b = test_client.get("/sources").text
+    assert "Feed B" in html_b
+    assert "Feed A" not in html_b
+
+
+def test_runs_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
+    """Sessão no tenant A só enxerga run de A; após switch para B, só a de B (KUBO-128)."""
+    _login(test_client)
+
+    tenant_a = tenancy.create_tenant(db, name="Run Tenant A", owner_user_id=_BREAKGLASS_USER_ID)
+    tenant_b = tenancy.create_tenant(db, name="Run Tenant B", owner_user_id=_BREAKGLASS_USER_ID)
+
+    from kubo.store.knowledge import start_run
+
+    start_run(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID, worker="feed-a")
+    start_run(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID, worker="feed-b")
+
+    _switch(test_client, tenant_a.id)
+    html_a = test_client.get("/runs").text
+    assert "1 de 1" in html_a
+    assert "feed-a" in html_a
+    assert "feed-b" not in html_a
+
+    _switch(test_client, tenant_b.id)
+    html_b = test_client.get("/runs").text
+    assert "1 de 1" in html_b
+    assert "feed-b" in html_b
+    assert "feed-a" not in html_b
+
+
+def test_dispatches_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
+    """Sessão no tenant A só enxerga dispatch de A; após switch para B, só a de B (KUBO-128)."""
+    _login(test_client)
+
+    tenant_a = tenancy.create_tenant(db, name="Disp Tenant A", owner_user_id=_BREAKGLASS_USER_ID)
+    tenant_b = tenancy.create_tenant(db, name="Disp Tenant B", owner_user_id=_BREAKGLASS_USER_ID)
+
+    from kubo.store.destinations import create_destination
+    from kubo.store.knowledge import insert_dispatch
+
+    dest_a = create_destination(
+        db,
+        name="Destino A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
+        tenant_id=tenant_a.id,
+    )
+    dest_b = create_destination(
+        db,
+        name="Destino B",
+        kind="pessoa",
+        channel="telegram",
+        address="222",
+        tenant_id=tenant_b.id,
+    )
+    insert_dispatch(
+        db,
+        tenant_id=tenant_a.id,
+        user_id=_BREAKGLASS_USER_ID,
+        destination=dest_a,
+        channel="telegram",
+        status="ok",
+        watermark=None,
+        item_count=1,
+        items=[],
+    )
+    insert_dispatch(
+        db,
+        tenant_id=tenant_b.id,
+        user_id=_BREAKGLASS_USER_ID,
+        destination=dest_b,
+        channel="telegram",
+        status="ok",
+        watermark=None,
+        item_count=2,
+        items=[],
+    )
+
+    _switch(test_client, tenant_a.id)
+    html_a = test_client.get("/dispatches").text
+    assert "1 de 1" in html_a
+    assert dest_a.id in html_a
+    assert dest_b.id not in html_a
+
+    _switch(test_client, tenant_b.id)
+    html_b = test_client.get("/dispatches").text
+    assert "1 de 1" in html_b
+    assert dest_b.id in html_b
+    assert dest_a.id not in html_b

@@ -139,6 +139,9 @@ def _session_work_context(request: Request, db: object) -> str:
 def settings_page(request: Request) -> Response:
     """Tela de Configurações: lê settings + destinos elegíveis + perfil do usuário."""
     with client.connect() as ro:
+        ctx = resolve_session(request, ro)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
         settings = settings_store.get_settings(ro)
         choices = settings_store.default_destination_choices(ro)
         work_context = _session_work_context(request, ro)
@@ -166,6 +169,9 @@ def update_settings(
         )
     except ValidationError as exc:
         with client.connect() as ro:
+            ctx = resolve_session(request, ro)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
             settings = settings_store.get_settings(ro)
             choices = settings_store.default_destination_choices(ro)
         return _render_page(
@@ -179,6 +185,9 @@ def update_settings(
 
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
             if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),
@@ -208,6 +217,7 @@ def update_settings(
                 default_destination=form.default_destination,
                 unpause_recent=unpause_recent,
                 destinations=destinations,
+                tenant_id=ctx.tenant_id,
             )
     except ConfigError:
         _log.warning(_WRITE_LOG)

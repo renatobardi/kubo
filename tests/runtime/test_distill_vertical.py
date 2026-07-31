@@ -130,7 +130,14 @@ def test_run_worker_distills_pending_items_into_graph(
     fake) -> run_worker persiste 2 `distilled`, cada um com >=1 `chunk`
     embeddado, a entidade citada vira `entity`/`mentions`, `produced_by` liga
     cada distilled ao run, e o run fecha em 'ok'."""
-    source = upsert_source(db, kind="rss", canonical="https://x/feed", title="Feed X")
+    source = upsert_source(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://x/feed",
+        title="Feed X",
+    )
     item_a = upsert_item(
         db,
         source=source,
@@ -187,7 +194,9 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
     Qual dos dois itens (a/b) recebe o malformado depende da ORDEM em que a
     store devolve os pendentes (hash do record id, não o external_id) — o
     teste não assume essa correlação; assume só "1 pulado + 1 persistido"."""
-    source = upsert_source(db, kind="rss", canonical="https://x/feed")
+    source = upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item_a = upsert_item(db, source=source, external_id="a", content="conteúdo bruto A")
     item_b = upsert_item(db, source=source, external_id="b", content="conteúdo bruto B")
 
@@ -222,7 +231,9 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
     """3 itens; o 2º estoura RateLimitExhausted -> PARA o loop (o 3º nunca é
     chamado): só o 1º item é persistido, e o run fecha em 'error' com o erro
     kind 'rate_limit_exhausted' (ADR-0013 §V, falha sistêmica, não por-item)."""
-    source = upsert_source(db, kind="rss", canonical="https://x/feed")
+    source = upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     upsert_item(db, source=source, external_id="a", content="conteúdo bruto A")
     upsert_item(db, source=source, external_id="b", content="conteúdo bruto B")
     upsert_item(db, source=source, external_id="c", content="conteúdo bruto C")

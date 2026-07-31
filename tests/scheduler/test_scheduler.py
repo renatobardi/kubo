@@ -73,9 +73,23 @@ def scheduler_db() -> Iterator[Any]:
         conn.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(conn)
         user = tenancy.create_user(conn, firebase_uid=f"scheduler-{secrets.token_hex(8)}")
-        tenancy.create_tenant(conn, name="Scheduler Test", owner_user_id=user.id)
+        tenant = tenancy.create_tenant(conn, name="Scheduler Test", owner_user_id=user.id)
+        conn._test_tenant_id = tenant.id  # type: ignore[attr-defined]
+        conn._test_user_id = user.id  # type: ignore[attr-defined]
         yield conn
         conn.query(f"REMOVE DATABASE IF EXISTS {_JOB_DB};")
+
+
+@pytest.fixture
+def user_id(scheduler_db: Any) -> RecordID:
+    """User de teste criado no scheduler_db."""
+    return scheduler_db._test_user_id  # type: ignore[attr-defined]
+
+
+@pytest.fixture
+def tenant_id(scheduler_db: Any) -> RecordID:
+    """Tenant de teste criado no scheduler_db."""
+    return scheduler_db._test_tenant_id  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +715,7 @@ def test_execute_sweep_job_dispatches_github_repo_with_repo_and_since(
 
 @pytest.mark.integration
 def test_execute_sweep_job_honors_active_filter_against_real_db(
-    scheduler_db: Any, monkeypatch: pytest.MonkeyPatch
+    scheduler_db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Fiação real (ADR-0010 item V): `execute_sweep_job` abre a PRÓPRIA conexão, lê os ativos do
     banco de verdade e despacha só por eles. Semeia 2 rss ativos + 1 pausado + 1 arquivado + 1
@@ -713,13 +727,47 @@ def test_execute_sweep_job_honors_active_filter_against_real_db(
 
     job_cfg = replace(client.config(), database=_JOB_DB)
     monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
-    knowledge.create_source(scheduler_db, kind="rss", canonical="https://a.test/feed", title="A")
-    knowledge.create_source(scheduler_db, kind="rss", canonical="https://b.test/feed", title="B")
-    paused = knowledge.create_source(scheduler_db, kind="rss", canonical="https://p.test/feed")
-    knowledge.set_source_enabled(scheduler_db, id=paused, enabled=False)
-    archived = knowledge.create_source(scheduler_db, kind="rss", canonical="https://x.test/feed")
-    knowledge.archive_source(scheduler_db, id=archived)
-    knowledge.create_source(scheduler_db, kind="github-repo", canonical="https://github.com/o/r")
+    knowledge.create_source(
+        scheduler_db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://a.test/feed",
+        title="A",
+    )
+    knowledge.create_source(
+        scheduler_db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://b.test/feed",
+        title="B",
+    )
+    paused = knowledge.create_source(
+        scheduler_db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://p.test/feed",
+    )
+    knowledge.set_source_enabled(
+        scheduler_db, tenant_id=tenant_id, user_id=user_id, id=paused, enabled=False
+    )
+    archived = knowledge.create_source(
+        scheduler_db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://x.test/feed",
+    )
+    knowledge.archive_source(scheduler_db, tenant_id=tenant_id, user_id=user_id, id=archived)
+    knowledge.create_source(
+        scheduler_db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="github-repo",
+        canonical="https://github.com/o/r",
+    )
     dispatched: list[str] = []
     monkeypatch.setattr(
         scheduler,

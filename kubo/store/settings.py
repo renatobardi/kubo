@@ -75,9 +75,10 @@ def put_settings_and_reset(
     default_destination: RecordID | None,
     unpause_recent: bool,
     destinations: list[destination_store.Destination],
+    tenant_id: RecordID,
 ) -> None:
     """Update `settings:global` and, if `unpause_recent`, reset watermarks in a
-    single atomic transaction."""
+    single atomic transaction. `tenant_id` is written on each dispatch (KUBO-128)."""
     statements: list[str] = [
         "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
         "default_destination = $dest",
@@ -90,7 +91,9 @@ def put_settings_and_reset(
     }
     if unpause_recent:
         for i, destination in enumerate(destinations):
-            stmt, p = reset_watermark_statement(prefix=f"d{i}_", destination=destination)
+            stmt, p = reset_watermark_statement(
+                prefix=f"d{i}_", destination=destination, tenant_id=tenant_id
+            )
             statements.append(stmt)
             params |= p
     run_transaction(db, statements, params)

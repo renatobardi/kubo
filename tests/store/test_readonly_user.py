@@ -46,7 +46,14 @@ def ro_env() -> Iterator[tuple[Any, Any, RecordID, RecordID]]:
         # Grafo completo (source -> item -> distilled -> entity) para o viewer LER as
         # MESMAS projeções 2-hop das telas, não só um SELECT simples.
         knowledge.start_run(root, worker="feed", tenant_id=tenant.id, user_id=user.id)
-        src = knowledge.upsert_source(root, kind="rss", canonical="https://x/feed", title="Feed")
+        src = knowledge.upsert_source(
+            root,
+            tenant_id=tenant.id,
+            user_id=user.id,
+            kind="rss",
+            canonical="https://x/feed",
+            title="Feed",
+        )
         item = knowledge.upsert_item(root, source=src, external_id="e1", content="c", title="Post")
         ent = knowledge.get_or_create_entity(
             root, tenant_id=tenant.id, user_id=user.id, name="Python", kind="tecnologia"
@@ -98,10 +105,10 @@ def test_readonly_user_can_do_graph_projections(
     view = knowledge.read_entity(viewer, entities[0].id, tenant_id=tenant_id, user_id=user_id)
     assert view is not None and len(view.distilled) == 1
 
-    sources = knowledge.sources_with_stats(viewer)
+    sources = knowledge.sources_with_stats(viewer, tenant_id=tenant_id, user_id=user_id)
     assert sources and sources[0].items == 1 and sources[0].last_collected_at is not None
 
-    runs = knowledge.list_runs(viewer, limit=20, start=0)
+    runs = knowledge.list_runs(viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)
     assert runs and runs[0].worker == "feed"
 
 

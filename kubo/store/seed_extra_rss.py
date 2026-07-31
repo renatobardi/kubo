@@ -19,6 +19,7 @@ from typing import Any
 
 import structlog
 
+from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store.knowledge import upsert_seed_source
 
@@ -156,11 +157,20 @@ FEEDS: list[FeedSeed] = [
 def seed_extra_rss_sources(db: Any) -> int:
     """Semeia os feeds adicionais como Cadastros rss ativos.
 
-    Idempotente por (kind, canonical) e não-destrutivo: títulos/tags/pausa do
+    Idempotente por (tenant_id, kind, canonical) e não-destrutivo: títulos/tags/pausa do
     dono sobrevivem. Devolve o número de feeds processados.
     """
+    tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
     for feed in FEEDS:
-        upsert_seed_source(db, kind="rss", canonical=feed.canonical, title=feed.title, tags=[])
+        upsert_seed_source(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            kind="rss",
+            canonical=feed.canonical,
+            title=feed.title,
+            tags=[],
+        )
     return len(FEEDS)
 
 

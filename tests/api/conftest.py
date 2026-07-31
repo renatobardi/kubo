@@ -58,6 +58,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "entities",
         "dispatches",
         "destinations",
+        "settings",
         "study",
     ):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
@@ -101,6 +102,10 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.list_runs", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.runs.knowledge.count_runs", lambda db, **kw: 0)
     monkeypatch.setattr("kubo.api.routes.sources.knowledge.sources_with_stats", lambda db, **kw: [])
+    monkeypatch.setattr("kubo.api.routes.sources.knowledge.get_source", lambda db, id, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.sources.knowledge.source_item_count", lambda db, id, **kw: 0
+    )
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.list_entities", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.entities.knowledge.count_entities", lambda db, **kw: 0)
     _session_ctx = SimpleNamespace(
@@ -108,7 +113,18 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         user_id=RecordID("user", "breakglass-owner"),
         role="owner",
     )
-    for _mod in ("entities", "dashboard", "distilled", "flows", "study"):
+    for _mod in (
+        "entities",
+        "dashboard",
+        "distilled",
+        "flows",
+        "runs",
+        "sources",
+        "dispatches",
+        "settings",
+        "destinations",
+        "study",
+    ):
         monkeypatch.setattr(
             f"kubo.api.routes.{_mod}.resolve_session",
             lambda request, db, _ctx=_session_ctx: _ctx,

@@ -13,13 +13,16 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
 
 from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
 
 router = APIRouter()
+
+_DENIED = "Acesso negado."
 
 
 @router.get("")
@@ -30,13 +33,30 @@ def list_page(
     q: Annotated[str, Query()] = "",
 ) -> Response:
     """Página de envios, mais recentes primeiro, com busca (canal/destino/status) e
-    paginação completa. `size`/`start` clampados; `q` filtra na store."""
+    paginação completa. `size`/`start` clampados; `q` filtra na store.
+
+    Filtra pelo tenant ativo da sessão (KUBO-128)."""
     size = clamp_size(size)
     start = clamp_start(start)
     query = q.strip()
     with client.connect() as db:
-        dispatches = knowledge.list_dispatches(db, limit=size, start=start, query=query)
-        total = knowledge.count_dispatches(db, query=query)
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        dispatches = knowledge.list_dispatches(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            limit=size,
+            start=start,
+            query=query,
+        )
+        total = knowledge.count_dispatches(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            query=query,
+        )
     return templates.TemplateResponse(
         request,
         "dispatches/list.html",

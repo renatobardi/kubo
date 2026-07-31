@@ -60,7 +60,9 @@ def _distilled_at(
         {"s": summary, "c": created_at, "tenant": tenant_id},
     )[0]["id"]
     if title is not None:
-        src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
+        src = knowledge.upsert_source(
+            db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+        )
         item = knowledge.upsert_item(
             db, source=src, external_id=f"ext::{title}", content="x", title=title
         )
@@ -86,6 +88,8 @@ def test_insert_dispatch_records_the_delivery_fact(
     d1 = _distilled_at(db, tenant_id, user_id, summary="a", created_at=now)
     rid = knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -102,11 +106,15 @@ def test_insert_dispatch_records_the_delivery_fact(
     assert row["sent_at"] is not None
 
 
-def test_insert_dispatch_error_carries_structured_error(db: Any) -> None:
+def test_insert_dispatch_error_carries_structured_error(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """dispatch com status=error carrega o erro estruturado (FLEXIBLE) — visível em Envios."""
     now = datetime.now(timezone.utc)
     rid = knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="error",
@@ -120,17 +128,26 @@ def test_insert_dispatch_error_carries_structured_error(db: Any) -> None:
     assert row["error"]["kind"] == "telegram_http"
 
 
-def test_last_watermark_is_none_without_prior_dispatch(db: Any) -> None:
+def test_last_watermark_is_none_without_prior_dispatch(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """Sem dispatch anterior daquele destino → None (sinal de bootstrap now-24h)."""
-    assert knowledge.last_dispatch_watermark(db, _dest("owner-telegram")) is None
+    assert (
+        knowledge.last_dispatch_watermark(
+            db, _dest("owner-telegram"), tenant_id=tenant_id, user_id=user_id
+        )
+        is None
+    )
 
 
-def test_last_watermark_only_ok_advances(db: Any) -> None:
+def test_last_watermark_only_ok_advances(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Só dispatch `ok` avança o watermark; um error POSTERIOR com watermark maior é ignorado."""
     early = datetime.now(timezone.utc) - timedelta(hours=2)
     late = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("d"),
         channel="telegram",
         status="ok",
@@ -140,6 +157,8 @@ def test_last_watermark_only_ok_advances(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("d"),
         channel="telegram",
         status="error",
@@ -147,15 +166,20 @@ def test_last_watermark_only_ok_advances(db: Any) -> None:
         item_count=0,
         items=[],
     )
-    assert knowledge.last_dispatch_watermark(db, _dest("d")) == early
+    assert (
+        knowledge.last_dispatch_watermark(db, _dest("d"), tenant_id=tenant_id, user_id=user_id)
+        == early
+    )
 
 
-def test_last_watermark_is_per_destination(db: Any) -> None:
+def test_last_watermark_is_per_destination(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """O watermark é isolado por destino — telegram e e-mail não se cruzam."""
     tg = datetime.now(timezone.utc) - timedelta(hours=1)
     em = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("tg"),
         channel="telegram",
         status="ok",
@@ -165,6 +189,8 @@ def test_last_watermark_is_per_destination(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("em"),
         channel="email",
         status="ok",
@@ -172,8 +198,14 @@ def test_last_watermark_is_per_destination(db: Any) -> None:
         item_count=1,
         items=[],
     )
-    assert knowledge.last_dispatch_watermark(db, _dest("tg")) == tg
-    assert knowledge.last_dispatch_watermark(db, _dest("em")) == em
+    assert (
+        knowledge.last_dispatch_watermark(db, _dest("tg"), tenant_id=tenant_id, user_id=user_id)
+        == tg
+    )
+    assert (
+        knowledge.last_dispatch_watermark(db, _dest("em"), tenant_id=tenant_id, user_id=user_id)
+        == em
+    )
 
 
 def test_digest_bootstrap_excludes_legado_older_than_24h(
@@ -200,6 +232,8 @@ def test_digest_selects_only_newer_than_watermark(
     old = _distilled_at(db, tenant_id, user_id, summary="antigo", created_at=base)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("d"),
         channel="telegram",
         status="ok",
@@ -272,7 +306,7 @@ def test_watermark_round_trip_closes_the_loop(
             db,
             tenant_id=tenant_id,
             user_id=user_id,
-            item=_orphan_item(db, i),
+            item=_orphan_item(db, tenant_id, user_id, i),
             summary=f"item {i}",
             chunks=[],
         )
@@ -283,6 +317,8 @@ def test_watermark_round_trip_closes_the_loop(
     watermark = max(v.created_at for v in picked)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("d"),
         channel="telegram",
         status="ok",
@@ -298,21 +334,25 @@ def test_watermark_round_trip_closes_the_loop(
     )
 
 
-def _orphan_item(db: Any, seq: int) -> RecordID:
+def _orphan_item(db: Any, tenant_id: RecordID, user_id: RecordID, seq: int) -> RecordID:
     """Item mínimo para o distilled derivar (derived_from exige endpoint existente)."""
-    src = knowledge.upsert_source(db, kind="rss", canonical=f"wm-src::{seq}")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"wm-src::{seq}"
+    )
     return knowledge.upsert_item(db, source=src, external_id=f"wm::{seq}", content="x", title="T")
 
 
 # ── list_dispatches / count_dispatches (tela de Envios, 12.7) ──────────────────
 
 
-def test_list_dispatches_most_recent_first(db: Any) -> None:
+def test_list_dispatches_most_recent_first(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """A tela de Envios lê os dispatches, mais recentes primeiro, com os campos de
     exibição (canal/destino/status/item_count/sent_at)."""
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -322,6 +362,8 @@ def test_list_dispatches_most_recent_first(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-email"),
         channel="email",
         status="error",
@@ -330,7 +372,7 @@ def test_list_dispatches_most_recent_first(db: Any) -> None:
         items=[],
         error={"kind": "smtp_send", "message": "conn refused"},
     )
-    rows = knowledge.list_dispatches(db, limit=50, start=0)
+    rows = knowledge.list_dispatches(db, tenant_id=tenant_id, user_id=user_id, limit=50, start=0)
     assert len(rows) == 2
     # o de e-mail foi inserido depois → vem primeiro (sent_at DESC)
     first = rows[0]
@@ -344,11 +386,13 @@ def test_list_dispatches_most_recent_first(db: Any) -> None:
     assert tele.item_count == 3
 
 
-def test_list_dispatches_filters_by_query(db: Any) -> None:
+def test_list_dispatches_filters_by_query(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """A busca filtra por canal/destino/status (substring, case-insensitive)."""
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -358,6 +402,8 @@ def test_list_dispatches_filters_by_query(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-email"),
         channel="email",
         status="ok",
@@ -365,16 +411,32 @@ def test_list_dispatches_filters_by_query(db: Any) -> None:
         item_count=1,
         items=[],
     )
-    assert len(knowledge.list_dispatches(db, limit=50, start=0, query="email")) == 1
-    assert len(knowledge.list_dispatches(db, limit=50, start=0, query="TELEGRAM")) == 1
-    assert knowledge.count_dispatches(db, query="email") == 1
-    assert knowledge.count_dispatches(db) == 2
+    assert (
+        len(
+            knowledge.list_dispatches(
+                db, tenant_id=tenant_id, user_id=user_id, limit=50, start=0, query="email"
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            knowledge.list_dispatches(
+                db, tenant_id=tenant_id, user_id=user_id, limit=50, start=0, query="TELEGRAM"
+            )
+        )
+        == 1
+    )
+    assert knowledge.count_dispatches(db, tenant_id=tenant_id, user_id=user_id, query="email") == 1
+    assert knowledge.count_dispatches(db, tenant_id=tenant_id, user_id=user_id) == 2
 
 
 # ── E1 (ADR-0016 §V): artifact isola o watermark do digest do de report ─────────
 
 
-def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
+def test_report_dispatch_does_not_move_digest_watermark(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """O bug latente que o E1 corrige: um dispatch de RELATÓRIO para o MESMO destino do
     digest (Telegram do dono) não pode mover o watermark do digest — senão o digest de
     amanhã pularia destilados em silêncio. O report entra com watermark None (forma de
@@ -383,6 +445,8 @@ def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
     digest_wm = datetime.now(timezone.utc) - timedelta(hours=2)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -393,6 +457,8 @@ def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -401,10 +467,17 @@ def test_report_dispatch_does_not_move_digest_watermark(db: Any) -> None:
         item_count=0,
         items=[],
     )
-    assert knowledge.last_dispatch_watermark(db, _dest("owner-telegram")) == digest_wm
+    assert (
+        knowledge.last_dispatch_watermark(
+            db, _dest("owner-telegram"), tenant_id=tenant_id, user_id=user_id
+        )
+        == digest_wm
+    )
 
 
-def test_gate_dispatch_does_not_move_digest_watermark(db: Any) -> None:
+def test_gate_dispatch_does_not_move_digest_watermark(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """ADR-0018 §III: a notificação de GATE (novo `artifact="gate"`) grava um dispatch no
     mesmo destino do digest — e NÃO pode mover o watermark do digest (senão a notificação
     de gate faria o digest de amanhã pular destilados). Gate entra com watermark None; o
@@ -412,6 +485,8 @@ def test_gate_dispatch_does_not_move_digest_watermark(db: Any) -> None:
     digest_wm = datetime.now(timezone.utc) - timedelta(hours=2)
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -422,6 +497,8 @@ def test_gate_dispatch_does_not_move_digest_watermark(db: Any) -> None:
     )
     knowledge.insert_dispatch(
         db,
+        tenant_id=tenant_id,
+        user_id=user_id,
         destination=_dest("owner-telegram"),
         channel="telegram",
         status="ok",
@@ -430,4 +507,9 @@ def test_gate_dispatch_does_not_move_digest_watermark(db: Any) -> None:
         item_count=0,
         items=[],
     )
-    assert knowledge.last_dispatch_watermark(db, _dest("owner-telegram")) == digest_wm
+    assert (
+        knowledge.last_dispatch_watermark(
+            db, _dest("owner-telegram"), tenant_id=tenant_id, user_id=user_id
+        )
+        == digest_wm
+    )

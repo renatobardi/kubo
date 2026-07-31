@@ -22,6 +22,7 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
+from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
@@ -112,9 +113,16 @@ def seed_feed_cadastros(db: Any) -> int:
     permanece para proteger pausa/título que o dono já tenha mudado ANTES do 1º seed."""
     if _marker_seen(db, "feed_cadastros"):
         return 0
+    tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
     for feed in FEED_CADASTROS:
         upsert_seed_source(
-            db, kind="rss", canonical=feed.canonical, title=feed.title, tags=feed.tags
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            kind="rss",
+            canonical=feed.canonical,
+            title=feed.title,
+            tags=feed.tags,
         )
     _mark(db, "feed_cadastros")
     return len(FEED_CADASTROS)

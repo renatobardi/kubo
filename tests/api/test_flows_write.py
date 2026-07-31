@@ -61,7 +61,9 @@ class _FakeEmbedder:
 
 
 def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, title: str) -> None:
-    src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+    )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"e::{title}", content="x", title=title
     )
