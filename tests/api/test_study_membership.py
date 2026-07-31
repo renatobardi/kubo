@@ -21,7 +21,9 @@ from kubo.errors import MembershipRequiredError
 from kubo.store.study import Material
 
 _MATERIAL_ID = RecordID("material", "abc123")
-_NOT_A_MEMBER = "não pertence a este workspace"
+# Corpo EXATO esperado: a rota devolve PlainTextResponse, então igualdade pega tanto
+# mudança de texto quanto conteúdo extra grudado na recusa.
+_NOT_A_MEMBER = "Estudos é pessoal: sua conta não pertence a este workspace."
 
 
 def _material() -> Material:
@@ -72,7 +74,7 @@ def test_list_refuses_with_403_when_not_a_member(
     resp = authed_client.get("/study/materials")
 
     assert resp.status_code == 403
-    assert _NOT_A_MEMBER in resp.text
+    assert resp.text == _NOT_A_MEMBER
 
 
 def test_detail_refuses_with_403_when_not_a_member(
@@ -84,7 +86,7 @@ def test_detail_refuses_with_403_when_not_a_member(
     resp = authed_client.get(f"/study/materials/{_MATERIAL_ID.id}")
 
     assert resp.status_code == 403
-    assert _NOT_A_MEMBER in resp.text
+    assert resp.text == _NOT_A_MEMBER
 
 
 def test_write_refuses_with_403_when_not_a_member(
@@ -104,4 +106,4 @@ def test_write_refuses_with_403_when_not_a_member(
     )
 
     assert resp.status_code == 403
-    assert _NOT_A_MEMBER in resp.text
+    assert resp.text == _NOT_A_MEMBER
