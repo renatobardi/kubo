@@ -44,7 +44,7 @@ Escopo negativo é contrato, não sugestão. Cada item abaixo foi considerado e 
 
 - **É plataforma multi-tenant real** (revisado 2026-07-25 — pivot de produto, mapa wayfinder [KUBO-104](https://oute.atlassian.net/browse/KUBO-104), ADRs 0039–0042; revoga o item anterior deste bullet). Múltiplos tenants (equipes com exatamente 1 owner + membros convidados) coexistem no mesmo runtime e no mesmo banco, isolados por `tenant_id` row-level (ADR-0039) — não por VPC/namespace separado. Amigos deixam de ser só *destinatários* de distribuição: podem virar membros de um tenant, com acesso de workspace compartilhado (sem isolamento intra-tenant, ADR-0039). Consequência **preservada**: continua **sem proxy de credenciais** — não porque o sistema seja single-operador (não é mais), mas porque API keys de tenant vivem cifradas em repouso no próprio banco único (`tenant_credential`, ADR-0039 §IV), sem componente de infra novo.
 - **Não é workflow engine genérico.** Sem canvas builder, sem DSL de workflow. Templates de Flow são dado declarativo (armazenamento migrou de YAML global do repo para catálogo por-tenant no banco, ADR-0042); lógica que o template não expressa pertence a skill de persona ou a worker, nunca ao template.
-- **Não é ferramenta de project management standalone.** Kanban/issues/tasks são *modelo de dados no grafo* + views; não competem com produtos de PM. Sem drag-and-drop como prioridade, sem sync externo de PM.
+- **Não é ferramenta de project management standalone.** Kanban/issues/tasks são *modelo de dados no grafo* + views; não competem com produtos de PM. Sem drag-and-drop como prioridade, sem sync externo de PM. *(Emendado 2026-07-29 — ADR-0043: o módulo Estudos (§3.6) introduz plano de estudo, progresso e acompanhamento **sem revogar este item** — a fronteira é "meta é derivação, nunca entidade": progresso/streak/data-alvo são calculados de plano + registros; segue proibido motor de metas, kanban genérico e sync de PM.)*
 - **Não adota orquestrador pesado na largada.** Sem Prefect/Dagster/Temporal/Airflow. APScheduler + webhooks FastAPI. A migração futura é localizada porque pipeline é entidade no grafo.
 - **Não constrói UI rica na fase 1.** A view é descartável; o grafo não. UI mínima (FastAPI + HTMX ou TUI) até o substrato provar valor.
 - **Não persegue autonomia total.** Promoção de código gerado a pipeline operacional **sempre** passa por gate humano. Proibido por spec neste estágio.
@@ -246,6 +246,25 @@ Query sobre o grafo → artefato → canal.
 - **Artefatos:** relatório (markdown/HTML), dashboard (view HTML gerada), digest.
 - **Canais (integrações YAML):** Telegram bot, SMTP, arquivo. Destinatários: dono e convidados (lista declarada — amigos recebem, não operam).
 - **Uso interno:** notificações de gate e de falha de pipeline usam esta mesma camada.
+
+### 3.6 Estudos (emendado 2026-07-29 — ADR-0043)
+
+Domínio de 1ª classe para estudo pessoal do usuário, fora do pipeline de coleta — todas as
+entidades **user-scoped** dentro do tenant (dado pessoal; sem compartilhamento intra-tenant
+na fase 1, ADR-0043): o usuário sobe um **Material** (epub/PDF; original opaco em volume
+gerenciado, capítulos parseados como dados no banco), que vira um **Tema**; uma persona
+propõe o **Plano de estudo** (sequência, cadência e **data-alvo proposta**, que congelam na
+ativação) que o usuário revisa e **ativa** (padrão propor→aprovar); na véspera de cada dia
+de estudo o scheduler gera a **Lição** — conceito destilado com proveniência no capítulo,
+cenário, aplicação ao **Perfil de contexto de trabalho** (campo do usuário, transversal) e
+mini-quiz — adaptando conteúdo ao desempenho recente (erro vira recapitulação; a ordem do
+plano nunca muda sozinha). Telegram é sino outbound; leitura, quiz e acompanhamento vivem na
+UI. Meta é **derivação, nunca entidade**: progresso, streak, desvio e data-alvo projetada
+são calculados de plano + registros. Cerca de volume: no máximo 1 lição/dia por plano ativo,
+com cap de **3 planos ativos por usuário** (valor único com o ADR-0043).
+
+Vocabulário canônico: seção "Estudos" do `CONTEXT.md`. Detalhe de produto: spec KUBO-133
+(épico KUBO-132, Jira). Racional e fronteiras com o escopo negativo: ADR-0043.
 
 ---
 

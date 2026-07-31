@@ -34,3 +34,44 @@ para aquela fonte — mapeamento fixo em código, nunca configurável como dado.
 A passada de coleta em horário fixo que varre todos os [[Cadastro de fonte|cadastros]]
 habilitados e dispara um run por cadastro. Contrasta com agendamento por-fonte (adiado). O
 relógio fixo diz *quando*; o cadastro diz *o quê*; o código diz *como*. Ver ADR-0025.
+
+## Estudos
+
+Domínio de 1ª classe do estudo pessoal do dono: o Kubo cura material em plano, gera lições
+contextualizadas e acompanha o progresso. Código: `study`.
+
+**Material**:
+Um documento que o dono sobe (epub/PDF) para servir de lastro a um [[Tema]]. A ingestão
+extrai capítulos/seções como dados; toda [[Lição]] tem proveniência num trecho do material.
+Código: `material`. _Evite_: "livro", "arquivo".
+
+**Tema**:
+A unidade de estudo que o dono seleciona. Nasce de um [[Material]] — sem material, sem tema.
+Código: `topic`. _Evite_: "curso", "trilha".
+
+**Plano de estudo**:
+A timeline de um [[Tema]]: sequência de lições, cadência e data-alvo. Proposto por persona a
+partir da estrutura do material, revisado e ativado pelo dono. A meta é derivada dele
+(progresso vs. esperado, streak, atraso) — não existe entidade de meta separada.
+Código: `study_plan`. _Evite_: "cronograma", "meta" como entidade.
+
+**Lição**:
+A unidade diária de estudo, gerada na véspera, em 4 blocos: conceito destilado, cenário,
+aplicação no [[Perfil de contexto de trabalho]] e [[Quiz]]. Destilação com proveniência,
+nunca reprodução do material. Adapta conteúdo ao desempenho recente (erro vira
+recapitulação), sem reordenar o plano. Código: `lesson`. _Evite_: "aula", "capítulo".
+
+**Quiz**:
+As perguntas de fixação dentro de uma [[Lição]] (2-3 por lição). As respostas alimentam a
+geração da lição seguinte. Código: `quiz`.
+
+**Registro de estudo**:
+O rastro de uma [[Lição]] estudada: conclusão, respostas do quiz e reação opcional
+(fácil/ok/difícil). É o dado que torna o estudo adaptativo. Código: `study_log`.
+_Evite_: "progresso" para o registro individual (progresso é o agregado derivado).
+
+**Perfil de contexto de trabalho**:
+Texto curto no cadastro do usuário descrevendo seu mundo profissional. Transversal ao Kubo:
+qualquer persona pode consumi-lo para contextualizar output; Estudos é o primeiro cliente.
+Entra em prompts — nunca contém segredos. Código: `work_context`. _Evite_: "bio", "perfil"
+solto.

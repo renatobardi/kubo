@@ -58,6 +58,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "entities",
         "dispatches",
         "destinations",
+        "study",
     ):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
     monkeypatch.setattr(
@@ -121,6 +122,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "dispatches",
         "settings",
         "destinations",
+        "study",
     ):
         monkeypatch.setattr(
             f"kubo.api.routes.{_mod}.resolve_session",
@@ -202,3 +204,14 @@ def authed_client(client: TestClient) -> TestClient:
     resp = client.post("/login", data={"password": UI_PASSWORD}, follow_redirects=False)
     assert resp.status_code == 303
     return client
+
+
+def stub_auth_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub de `connect_rw` para os testes de rotas de auth (ADR-0018).
+
+    Helper OPT-IN (não é fixture autouse): só os arquivos de auth o chamam, então os
+    testes de fontes seguem provando o 503 de env ausente. O isolamento vem do escopo
+    por-teste do monkeypatch — o alvo resolve para o módulo compartilhado
+    `kubo.store.client`, e o undo automático o restaura ao fim de cada teste.
+    """
+    monkeypatch.setattr("kubo.api.routes.auth.client.connect_rw", _fake_connect)

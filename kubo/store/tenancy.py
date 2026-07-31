@@ -51,13 +51,16 @@ class Tenant:
 class User:
     """Identidade humana (Firebase), distinta de `persona` (papel de agente).
 
-    `email` é PII/sensível — `repr=False` impede vazamento em logs.
+    `email` é PII/sensível — `repr=False` impede vazamento em logs. `work_context`
+    (texto livre do dono que entra em prompts de persona, ADR-0043) segue a mesma
+    disciplina: nunca aparece num log por acidente.
     """
 
     id: RecordID
     firebase_uid: str
     email: str | None = field(repr=False)
     created_at: datetime
+    work_context: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,7 @@ def _user_from_row(row: dict[str, Any]) -> User:
         firebase_uid=row["firebase_uid"],
         email=row.get("email"),
         created_at=_as_datetime(row["created_at"]),
+        work_context=row.get("work_context"),
     )
 
 
@@ -165,6 +169,25 @@ def get_user(db: Any, user_id: RecordID) -> User | None:
     """Lê um user pelo id."""
     rows = db.query("SELECT * FROM $u;", {"u": user_id})
     return _user_from_row(rows[0]) if rows else None
+
+
+def update_user_work_context(db: Any, *, user_id: RecordID, work_context: str) -> User:
+    """Grava o contexto de trabalho do usuário e devolve o user atualizado.
+
+    Dado do USUÁRIO, não do tenant — por isso não exige `assert_membership`. String
+    vazia limpa o campo (grava None). Levanta `StoreError` se o user não existe.
+    """
+    if get_user(db, user_id) is None:
+        raise StoreError("user not found")
+    text = work_context.strip()
+    db.query(
+        "UPDATE $u SET work_context = $ctx;",
+        {"u": user_id, "ctx": text or None},
+    )
+    user = get_user(db, user_id)
+    if user is None:
+        raise StoreError("user vanished during update")
+    return user
 
 
 def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:

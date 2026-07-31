@@ -25,6 +25,14 @@ from tests.api.conftest import UI_PASSWORD
 _WRONG_LOGIN = "nope"
 
 
+@pytest.fixture(autouse=True)
+def stub_writer_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Escrita de auth via `connect_rw` stubada (helper compartilhado na conftest)."""
+    from tests.api.conftest import stub_auth_writer
+
+    stub_auth_writer(monkeypatch)
+
+
 def test_login_page_is_public(client: TestClient) -> None:
     """GET /login não exige sessão (200, mostra o form e os botões Firebase)."""
     resp = client.get("/login")

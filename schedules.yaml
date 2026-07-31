@@ -43,3 +43,16 @@ schedules:
   # o corte). Pausar/arquivar pela UI de fato para a coleta a partir daqui.
   - sweep: github-repo
     cron: "0 7 * * *"
+  # ── VÉSPERA DE ESTUDOS — lição do próximo dia (KUBO-137, ADR-0043) ────────────
+  # Job interno (não é worker sob contrato nem sweep): gera a lição do PRÓXIMO dia de
+  # estudo de cada plano ativo. Várias janelas entre 18h e 22h são RETRY, não repetição:
+  # o índice UNIQUE (plano, dia) e a checagem prévia tornam a geração idempotente, então
+  # a janela seguinte só age se a anterior falhou (LLM fora do ar, por exemplo).
+  - job: study-eve
+    cron: "0 18-22 * * *"
+  # ── SINO DE ESTUDOS — o aviso da manhã (KUBO-138, ADR-0043) ───────────────────
+  # O oposto da véspera: 1x/dia, cedo, sobre os planos ativos. UMA janela só — aqui o
+  # cron É a cerca anti-spam (no máximo uma mensagem por plano por dia), então repetir
+  # a hora como na véspera viraria ruído no Telegram do dono, não retry.
+  - job: study-bell
+    cron: "0 7 * * *"

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Novo estudo · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Novo estudo", "Do arquivo à lição diária, em três passos.") }}
+
+  <ol class="grid gap-3 sm:grid-cols-3">
+    {% for step in [
+      ("Enviar o material", "Um .epub ou .pdf. Os capítulos são separados pelo sumário do arquivo."),
+      ("Criar o tema", "Na conferência do material, o tema nasce com o título do livro."),
+      ("Propor e ativar o plano", "A persona agrupa os capítulos em lições. Você revisa, ajusta a cadência e ativa.")
+    ] %}
+      <li class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <span class="flex size-7 items-center justify-center rounded-4xl bg-muted text-xs font-semibold text-muted-foreground">{{ loop.index }}</span>
+        <h2 class="mt-2 text-sm font-medium">{{ step[0] }}</h2>
+        <p class="mt-1 text-xs text-muted-foreground">{{ step[1] }}</p>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <h2 class="text-sm font-medium">Passo 1 — enviar material</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Aceita <code class="rounded bg-muted px-1">.epub</code> e <code class="rounded bg-muted px-1">.pdf</code>. Depois do envio você cai direto na conferência dos capítulos.</p>
+    </div>
+    {# MESMA rota de escrita da lista de Materiais — esta tela não estreia caminho novo. #}
+    <form method="post" action="/study/materials" enctype="multipart/form-data" class="space-y-4 p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <div>
+        <label for="new-material-file" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Arquivo do material</label>
+        <input id="new-material-file" name="file" type="file" accept=".epub,.pdf" required
+               class="w-full rounded-4xl border border-input bg-input/30 px-4 py-2 text-sm outline-none file:mr-3 file:rounded-4xl file:border-0 file:bg-muted file:px-3 file:py-1 file:text-xs file:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+
+      <button type="submit"
+              class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">
+        Enviar material
+      </button>
+    </form>
+  </section>
+
+  <p class="text-sm text-muted-foreground">
+    Já enviou algum arquivo? Veja seus
+    <a href="/study/materials" class="text-primary underline underline-offset-2">Materiais</a>
+    ou os
+    <a href="/study/topics" class="text-primary underline underline-offset-2">Planos</a>.
+  </p>
+</div>
+{% endblock %}

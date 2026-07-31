@@ -414,3 +414,57 @@ def test_retry_after_nao_numerico_cai_no_backoff_exponencial(monkeypatch):
 
     assert exc_info.value.scope == "unknown"
     assert sleeps == [pytest.approx(0.5)]  # exponencial, não o http-date
+
+
+# ---------------------------------------------------------------------------
+# KUBO-139: modelos Claude recusam sampling params (temperature/top_p/top_k) com
+# HTTP 400. O executor omite o kwarg para provider `anthropic/*` e mantém o
+# caminho existente (Groq e afins) intacto.
+# ---------------------------------------------------------------------------
+
+
+def test_modelo_anthropic_nao_recebe_temperature(monkeypatch):
+    """Modelo `anthropic/*` chega a litellm.completion SEM a chave `temperature`.
+
+    Opus 5 / Sonnet 5 removeram os sampling params: enviá-los devolve 400 do provider.
+    A asserção é de AUSÊNCIA da chave — mandar `temperature=None` ainda seria enviá-la.
+    """
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config(model="anthropic/claude-opus-5"))
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert "temperature" not in mock_completion.call_args.kwargs
+    assert mock_completion.call_args.kwargs["model"] == "anthropic/claude-opus-5"
+
+
+def test_modelo_groq_continua_recebendo_temperature(monkeypatch):
+    """Caso de controle: modelo `groq/*` segue recebendo `temperature` da config.
+
+    A omissão do teste acima é dirigida ao provider Anthropic — não pode virar
+    regressão do caminho existente (finder e workers continuam determinísticos).
+    """
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config())
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["temperature"] == pytest.approx(0.0)
+
+
+def test_haiku_45_mantem_temperature(monkeypatch):
+    """Haiku 4.5 é exceção dentro do prefixo `anthropic/`: ainda aceita sampling.
+
+    A remoção veio com a geração 4.7/5. O destilador roda em Haiku e depende de
+    `temperature=0` para extração estável — trocar de provider não pode mudar a
+    amostragem de carona.
+    """
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    executor = ApiExecutor(_config(model="anthropic/claude-haiku-4-5"))
+
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["temperature"] == pytest.approx(0.0)

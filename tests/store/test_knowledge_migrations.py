@@ -106,8 +106,16 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0019_tenant_scoped_domain.surql",
         # 0020 (KUBO-123): contrato de tenancy obrigatória.
         "0020_tenant_contract.surql",
-        # 0021 (KUBO-128): tenant_id em dispatch, run e source.
-        "0021_dispatch_run_source_tenant.surql",
+        # 0021 (KUBO-135, ADR-0043): work_context no user + material/material_chapter.
+        "0021_study_foundation.surql",
+        # 0022 (KUBO-136, ADR-0043): topic/study_plan/plan_entry.
+        "0022_study_plan.surql",
+        # 0023 (KUBO-137, ADR-0043): lesson/study_log.
+        "0023_lesson.surql",
+        # 0024 (KUBO-138, ADR-0043): pausa do plano (paused_at/paused_days).
+        "0024_plan_pause.surql",
+        # 0025 (KUBO-128): tenant_id em dispatch, run e source.
+        "0025_dispatch_run_source_tenant.surql",
     }
 
 
