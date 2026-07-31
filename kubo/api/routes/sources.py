@@ -41,6 +41,7 @@ from kubo.workers.finder import Finder
 _log = structlog.get_logger(__name__)
 _LIST_TEMPLATE = "sources/list.html"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
+_DENIED = "Acesso negado."
 
 _LABEL_FINDER = "IA (finder)"
 _LABEL_DOMAIN_AUTODISCOVERY = "Autodiscovery no domínio chutado"
@@ -252,11 +253,6 @@ def _render_list(
     )
 
 
-def _resolve_or_403(request: Request, db: Any) -> SessionContext | None:
-    """Resolve a sessão; devolve None quando não há (a rota converte em 403)."""
-    return resolve_session(request, db)
-
-
 router = APIRouter()
 
 
@@ -264,9 +260,9 @@ router = APIRouter()
 def list_page(request: Request) -> Response:
     """Lista as fontes com contagem de itens e recência da coleta (E4) + o form de adicionar."""
     with client.connect() as db:
-        ctx = _resolve_or_403(request, db)
+        ctx = resolve_session(request, db)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         return _render_list(request, ctx)
 
 
@@ -291,21 +287,21 @@ def create(
         payload = NewSource(kind=kind, canonical=canonical, title=title)  # type: ignore[arg-type]
     except ValidationError as exc:
         with client.connect() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
     if payload.kind == "rss" and tested != "1":
         with client.connect() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             return _render_list(request, ctx, notice="Teste o feed antes de salvar.", status=400)
     try:
         with client.connect_rw() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 knowledge.create_source(
                     db,
@@ -352,9 +348,9 @@ def edit_page(request: Request, sid: str) -> Response:
     """Form de edição de UMA fonte (#106): title/tags/canonical pré-preenchidos, kind read-only.
     Fonte inexistente ou arquivada (fora do estado editável) volta para a lista."""
     with client.connect() as ro:
-        ctx = _resolve_or_403(request, ro)
+        ctx = resolve_session(request, ro)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         detail = knowledge.get_source(
             ro,
             RecordID("source", sid),
@@ -391,14 +387,14 @@ def edit(
         # para buscar o detalhe, e sem refletir o input submetido (format_validation_error só
         # lê loc+msg, nunca `input`).
         with client.connect() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
     with client.connect() as ro:
-        ctx = _resolve_or_403(request, ro)
+        ctx = resolve_session(request, ro)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         detail = knowledge.get_source(
             ro,
             source_id,
@@ -407,9 +403,9 @@ def edit(
         )
     if detail is None or detail.archived_at is not None:
         with client.connect() as db:
-            ctx2 = _resolve_or_403(request, db)
+            ctx2 = resolve_session(request, db)
             if ctx2 is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             return _render_list(request, ctx2, notice=_STALE_NOTICE, status=409)
     return _apply_edit(request, ctx, source_id, detail, payload)
 
@@ -469,9 +465,9 @@ def _lifecycle_action(
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
     try:
         with client.connect_rw() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 action(ctx, db)
             except StaleSourceError:
@@ -582,9 +578,9 @@ def delete_page(request: Request, sid: str) -> Response:
     inexistente volta para a lista (não 500)."""
     rid = RecordID("source", sid)
     with client.connect() as ro:
-        ctx = _resolve_or_403(request, ro)
+        ctx = resolve_session(request, ro)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         detail = knowledge.get_source(
             ro,
             rid,
@@ -618,9 +614,9 @@ def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
     rid = RecordID("source", sid)
     try:
         with client.connect_rw() as db:
-            ctx = _resolve_or_403(request, db)
+            ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 knowledge.delete_source(
                     db,

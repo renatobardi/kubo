@@ -141,7 +141,7 @@ def settings_page(request: Request) -> Response:
     with client.connect() as ro:
         ctx = resolve_session(request, ro)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         settings = settings_store.get_settings(ro)
         choices = settings_store.default_destination_choices(ro)
         work_context = _session_work_context(request, ro)
@@ -171,7 +171,7 @@ def update_settings(
         with client.connect() as ro:
             ctx = resolve_session(request, ro)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             settings = settings_store.get_settings(ro)
             choices = settings_store.default_destination_choices(ro)
         return _render_page(
@@ -187,7 +187,7 @@ def update_settings(
         with client.connect_rw() as db:
             ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),

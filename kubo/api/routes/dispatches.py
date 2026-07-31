@@ -22,6 +22,8 @@ from kubo.store import client, knowledge
 
 router = APIRouter()
 
+_DENIED = "Acesso negado."
+
 
 @router.get("")
 def list_page(
@@ -40,7 +42,7 @@ def list_page(
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         dispatches = knowledge.list_dispatches(
             db,
             tenant_id=ctx.tenant_id,

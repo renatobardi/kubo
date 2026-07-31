@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.store import client, destinations, migrations
@@ -54,9 +55,15 @@ def _login_csrf(app: Any) -> tuple[TestClient, str]:
 def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /destinations/{id}/welcome envia mensagem de boas-vindas no Telegram."""
     tc, csrf = _login_csrf(app_db)
+    tenant = RecordID("tenant", "breakglass")
     with _real_connect(replace(client.config(), database=_DB)) as root:
         destinations.create_destination(
-            root, name="Renato Bardi", kind="pessoa", channel="telegram", address="123456"
+            root,
+            name="Renato Bardi",
+            kind="pessoa",
+            channel="telegram",
+            address="123456",
+            tenant_id=tenant,
         )
         rows = root.query("SELECT id FROM destination WHERE name = 'Renato Bardi';")
     did = rows[0]["id"].id
@@ -67,7 +74,7 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
         calls.append({"token": token, "chat_id": chat_id, "text": text})
 
     monkeypatch.setattr("kubo.distribution.telegram.send_telegram", fake_send)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setattr("kubo.distribution.telegram.telegram_token", lambda: "bot-token")
 
     resp = tc.post(f"/destinations/{did}/welcome", data={"csrf": csrf}, follow_redirects=False)
     assert resp.status_code == 303
@@ -75,3 +82,4 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
     assert len(calls) == 1
     assert calls[0]["chat_id"] == "123456"
     assert "Obrigado" in calls[0]["text"]
+    assert "Bardi" in calls[0]["text"]

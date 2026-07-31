@@ -41,6 +41,6 @@ def welcome_email(name: str) -> tuple[str, str, str]:
         "de forma mais leve.</p>"
         "<p>Se algo parecer estranho, lento ou confuso, me avisa. "
         "Toda ajuda é bem-vinda para melhorar.</p>"
-        "<p>Com carinho,<br>Renato</p>"
+        "<p>Com carinho,<br>Bardi</p>"
     )
     return subject, text, html_body

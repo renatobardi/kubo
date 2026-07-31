@@ -21,6 +21,8 @@ from kubo.store import client, knowledge
 
 router = APIRouter()
 
+_DENIED = "Acesso negado."
+
 # error.kind que representam esgotamento de quota — badge NEUTRO ("quota"), não
 # vermelho: a run falhou de verdade (status='error' intacto), mas não é falha
 # do worker, é o free-tier acabando (E6). Apresentação, nunca reclassificação.
@@ -44,7 +46,7 @@ def list_page(
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
-            return PlainTextResponse("Acesso negado.", status_code=403)
+            return PlainTextResponse(_DENIED, status_code=403)
         runs = knowledge.list_runs(
             db,
             tenant_id=ctx.tenant_id,

@@ -9,7 +9,6 @@ database (KUBO-48).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +49,7 @@ _DELETE_TEMPLATE = "destinations/delete.html"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 _STALE_NOTICE = "Esse destino não está mais disponível para edição."
 _CSRF_INVALID = "CSRF inválido — recarregue a página."
+_DENIED = "Acesso negado."
 _WRITE_LOG = "destinations.write_unavailable"
 _DESTINATIONS_ROUTE = "/destinations"
 _INVITE_RESEND_NOT_EXPIRED = (
@@ -216,6 +216,9 @@ def create(
         return _render_list(request, notice=format_validation_error(exc), status=400)
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 destination_store.create_destination(
                     db,
@@ -223,6 +226,7 @@ def create(
                     kind=payload.kind,
                     channel=payload.channel,
                     address=payload.address,
+                    tenant_id=ctx.tenant_id,
                 )
             except DuplicateDestinationError:
                 return _render_list(
@@ -426,7 +430,7 @@ def _lifecycle_action(
         with client.connect_rw() as db:
             ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 action(ctx, db)
             except StaleDestinationError:
@@ -464,7 +468,7 @@ def enable(
     rid = RecordID("destination", did)
 
     def _action(ctx: SessionContext, db: Any) -> None:
-        destination = destination_store.get_destination(db, rid)
+        destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
         if destination is None:
             raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.set_destination_enabled(
@@ -484,7 +488,9 @@ def archive(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
     """Archive a destination (soft delete)."""
     rid = RecordID("destination", did)
     return _lifecycle_action(
-        request, csrf, lambda ctx, db: destination_store.archive_destination(db, id=rid)
+        request,
+        csrf,
+        lambda ctx, db: destination_store.archive_destination(db, id=rid, tenant_id=ctx.tenant_id),
     )
 
 
@@ -499,7 +505,7 @@ def restore(
     rid = RecordID("destination", did)
 
     def _action(ctx: SessionContext, db: Any) -> None:
-        destination = destination_store.get_destination(db, rid)
+        destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
         if destination is None:
             raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.restore_destination(
@@ -581,9 +587,9 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
 
 
 def _send_welcome(destination: destination_store.Destination) -> None:
-    """Envia uma mensagem de boas-vindas pelo canal do destination."""
+    """Send a welcome message through the destination's channel."""
     if destination.channel == "telegram":
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        token = telegram_distribution.telegram_token()
         if not token:
             raise ConfigError("TELEGRAM_BOT_TOKEN não está configurado")
         text = welcome_distribution.welcome_telegram_text(destination.name)
@@ -606,7 +612,7 @@ def _send_welcome(destination: destination_store.Destination) -> None:
 
 @router.post("/{did}/welcome")
 def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Response:
-    """Envia uma mensagem de boas-vindas manual ao destination."""
+    """Send a manual welcome message to a destination (tenant-scoped)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     rid = RecordID("destination", did)
@@ -614,12 +620,19 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
         with client.connect_rw() as db:
             ctx = resolve_session(request, db)
             if ctx is None:
-                return PlainTextResponse("Acesso negado.", status_code=403)
-            destination = destination_store.get_destination(db, rid)
-            if destination is None or destination.archived_at is not None:
+                return PlainTextResponse(_DENIED, status_code=403)
+            destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
+            if (
+                destination is None
+                or destination.archived_at is not None
+                or not destination.enabled
+            ):
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
             try:
                 _send_welcome(destination)
+            except ConfigError as exc:
+                _log.warning("welcome_config_failed", destination=str(rid), error=str(exc))
+                return _render_list(request, notice=f"Falha ao enviar: {exc}", status=503, db=db)
             except SenderError as exc:
                 _log.warning("welcome_send_failed", destination=str(rid), error=str(exc))
                 return _render_list(request, notice=f"Falha ao enviar: {exc}", status=502, db=db)

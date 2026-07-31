@@ -87,12 +87,24 @@ def normalize_unpause_mode(raw: str | None) -> str:
     return v if v in _UNPAUSE_MODES else "backlog"
 
 
-def _find_destination_id(db: Any, *, channel: str, address: str) -> RecordID | None:
-    """Resolve a destination id by its natural key (channel, address), or None."""
-    rows = db.query(
-        "SELECT id FROM destination WHERE channel = $channel AND address = $address;",
-        {"channel": channel, "address": address},
-    )
+def _find_destination_id(
+    db: Any, *, channel: str, address: str, tenant_id: RecordID | None = None
+) -> RecordID | None:
+    """Resolve a destination id by its natural key (channel, address), or None.
+
+    When `tenant_id` is provided, scopes the search to the tenant.
+    """
+    if tenant_id is not None:
+        rows = db.query(
+            "SELECT id FROM destination "
+            "WHERE channel = $channel AND address = $address AND tenant_id = $tenant;",
+            {"channel": channel, "address": address, "tenant": tenant_id},
+        )
+    else:
+        rows = db.query(
+            "SELECT id FROM destination WHERE channel = $channel AND address = $address;",
+            {"channel": channel, "address": address},
+        )
     return rows[0]["id"] if rows else None
 
 
@@ -118,15 +130,34 @@ def _destination_from_row(row: dict[str, Any]) -> Destination:
     )
 
 
-def get_destination(db: Any, id: RecordID) -> Destination | None:
-    """Read one destination by id, or None if it does not exist."""
-    rows = db.query("SELECT * FROM $r;", {"r": id})
+def get_destination(
+    db: Any, id: RecordID, *, tenant_id: RecordID | None = None
+) -> Destination | None:
+    """Read one destination by id, or None if it does not exist.
+
+    When `tenant_id` is provided, filters by tenant (row-level isolation).
+    """
+    if tenant_id is not None:
+        rows = db.query(
+            "SELECT * FROM $r WHERE tenant_id = $tenant;",
+            {"r": id, "tenant": tenant_id},
+        )
+    else:
+        rows = db.query("SELECT * FROM $r;", {"r": id})
     if not rows:
         return None
     return _destination_from_row(rows[0])
 
 
-def create_destination(db: Any, *, name: str, kind: str, channel: str, address: str) -> RecordID:
+def create_destination(
+    db: Any,
+    *,
+    name: str,
+    kind: str,
+    channel: str,
+    address: str,
+    tenant_id: RecordID | None = None,
+) -> RecordID:
     """Register a new destination, normalizing the address. If an archived destination
     with the same (channel, address) exists, reactivate it (update name/kind); if it is
     active/paused, raise `DuplicateDestinationError`.
@@ -134,7 +165,7 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
     if channel not in ("telegram", "email"):
         raise StoreError(f"invalid channel: {channel!r}")
     normalized = normalize_address(channel, address)
-    existing = _find_destination_id(db, channel=channel, address=normalized)
+    existing = _find_destination_id(db, channel=channel, address=normalized, tenant_id=tenant_id)
     if existing is not None:
         current = get_destination(db, existing)
         if current is None:
@@ -150,11 +181,25 @@ def create_destination(db: Any, *, name: str, kind: str, channel: str, address: 
             return existing
         raise DuplicateDestinationError(f"destination already registered: channel={channel}")
     rid = _fresh_destination_id()
-    db.query(
-        "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
-        "address = $address, enabled = true, archived_at = NONE;",
-        {"r": rid, "name": name, "kind": kind, "channel": channel, "address": normalized},
-    )
+    if tenant_id is not None:
+        db.query(
+            "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
+            "address = $address, enabled = true, archived_at = NONE, tenant_id = $tenant;",
+            {
+                "r": rid,
+                "name": name,
+                "kind": kind,
+                "channel": channel,
+                "address": normalized,
+                "tenant": tenant_id,
+            },
+        )
+    else:
+        db.query(
+            "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
+            "address = $address, enabled = true, archived_at = NONE;",
+            {"r": rid, "name": name, "kind": kind, "channel": channel, "address": normalized},
+        )
     return rid
 
 
@@ -271,12 +316,22 @@ def set_destination_enabled(
     )
 
 
-def archive_destination(db: Any, *, id: RecordID) -> None:
-    """Archive a destination: `enabled=false` + `archived_at` atomically."""
-    updated = db.query(
-        "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
-        {"r": id},
-    )
+def archive_destination(db: Any, *, id: RecordID, tenant_id: RecordID | None = None) -> None:
+    """Archive a destination: `enabled=false` + `archived_at` atomically.
+
+    When `tenant_id` is provided, scopes the UPDATE to the tenant (row-level isolation).
+    """
+    if tenant_id is not None:
+        updated = db.query(
+            "UPDATE $r SET enabled = false, archived_at = time::now() "
+            "WHERE archived_at IS NONE AND tenant_id = $tenant;",
+            {"r": id, "tenant": tenant_id},
+        )
+    else:
+        updated = db.query(
+            "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
+            {"r": id},
+        )
     if not updated:
         raise StaleDestinationError(
             f"destination not archivable (missing or already archived): {id}"
