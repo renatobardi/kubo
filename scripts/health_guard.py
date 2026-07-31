@@ -168,7 +168,7 @@ def wait_stable(
     except RuntimeError as exc:
         return 1, f"[health-guard] FALHOU: {exc}"
 
-    fmt = "{{.State.Status}} {{.State.RestartCount}}"
+    fmt = "{{.State.Status}} {{.RestartCount}}"
     deadline = _monotonic() + timeout
     running_since: float | None = None
     while True:
