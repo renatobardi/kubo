@@ -82,20 +82,28 @@ def _login_context(
 # without spending scrypt/sleep or holding a thread. Real, proportional rate-limit (ADR-0014).
 _LOGIN_GATE = threading.Semaphore(1)
 
+_SESSAO_EXPIRADA = "Sua sessão expirou — entre novamente."
+
 
 @router.get("/login")
 def login_form(
     request: Request,
     next: Annotated[str, Query()] = "",
     invite: Annotated[str, Query()] = "",
+    expirada: Annotated[str, Query()] = "",
 ) -> Response:
-    """Show the login form. Already authenticated? Go straight to the safe `next`."""
+    """Show the login form. Already authenticated? Go straight to the safe `next`.
+
+    `expirada=1` is set by the stale-session handler (KUBO-140): the user WAS logged
+    in and got sent back here, so the screen says why instead of appearing out of
+    nowhere. The flag is a fixed message, never text taken from the query string."""
     if request.session.get("role") in {"owner", "member", "superadmin"}:
         return RedirectResponse(safe_next(next), status_code=303)
+    aviso = _SESSAO_EXPIRADA if expirada else None
     return templates.TemplateResponse(
         request,
         _LOGIN_TEMPLATE,
-        _login_context(request, next_path=next, invite_token=invite or None),
+        _login_context(request, aviso, next_path=next, invite_token=invite or None),
     )
 
 

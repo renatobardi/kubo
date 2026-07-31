@@ -130,6 +130,14 @@ class MembershipRequiredError(KuboError):
     """Operação tenant-scoped recusada: o usuário não pertence ao tenant ativo."""
 
 
+class StaleSessionError(KuboError):
+    """Cookie de sessão válido apontando para usuário/membership que não existe mais.
+
+    Distinta de `MembershipRequiredError`: ali a identidade é real e o acesso é que
+    foi negado (403 é a resposta certa); aqui a sessão em si perdeu o lastro e a
+    única saída útil é limpá-la e mandar o usuário para o login (KUBO-140)."""
+
+
 class DuplicateOwnerError(KuboError):
     """Tentativa de criar uma segunda membership de owner no mesmo tenant."""
 
