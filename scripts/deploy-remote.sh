@@ -127,6 +127,14 @@ else
   echo "[deploy] verificado: kubo-api e kubo-scheduler rodam o build ${KUBO_BUILD_ID}"
 fi
 
+# Guard de saúde (incidente 2026-07-30): `up -d` retorna antes do serviço estar de
+# pé — um ConfigError de env faltante deixou o kubo-api em crash-loop nos dois
+# ambientes e o CD declarou sucesso. Mesma família do incidente do BUILD_ID (PR #38):
+# o digest-guard prova que a imagem certa subiu; o health-guard prova que ela FICOU
+# de pé. kubo-scheduler não tem healthcheck (decisão do compose), daí o modo stable.
+bash scripts/health-guard.sh kubo-api --mode healthy --timeout 90
+bash scripts/health-guard.sh kubo-scheduler --mode stable --timeout 90
+
 # Poda imagens dangling do projeto buildadas pelo compose. Imagens puxadas por
 # digest do GHCR não são dangling enquanto estão em uso; prune irrestrito evitado
 # para não apagar lixo de outras stacks no oute-server.
