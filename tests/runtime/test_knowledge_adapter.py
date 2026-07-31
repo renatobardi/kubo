@@ -38,7 +38,9 @@ def test_items_to_distill_assigns_sequential_refs_and_resolves(
 ) -> None:
     """2 itens pendentes -> items_to_distill(limit=10) devolve 2 ItemViews com
     refs 0 e 1; gk.resolve(0)/gk.resolve(1) devolvem os RecordIDs corretos."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     item_a = knowledge.upsert_item(
         db, source=source_id, external_id="a", content="conteúdo A", title="Título A"
     )
@@ -83,7 +85,9 @@ def test_refs_are_monotonic_across_two_calls(
     como destilados — como nada muda entre as chamadas, a 2a lê de novo os
     MESMOS 2 itens (ordem determinística por id), só que com refs novos; prova
     que o contador é por-instância e monotônico, não que o lote muda sozinho."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
@@ -110,7 +114,9 @@ def test_items_to_distill_excludes_already_distilled(
 ) -> None:
     """Um item COM destilado não aparece em items_to_distill — o filtro vem de
     items_without_distilled; confirma a integração ponta a ponta."""
-    source_id = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     pending_item = knowledge.upsert_item(
         db, source=source_id, external_id="pending", content="pendente"
     )

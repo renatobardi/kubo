@@ -70,7 +70,9 @@ def test_seed_creates_six_active_rss_feeds_with_tags(
     assert openai.tags == ["ai", "openai", "confiavel"]
 
 
-def test_seed_is_once_per_env_no_op_on_second_run(db: Any) -> None:
+def test_seed_is_once_per_env_no_op_on_second_run(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """O seed roda UMA VEZ por ambiente (marcador): a 2ª chamada devolve 0 e não toca nada —
     6 fontes depois de rodar duas vezes, não 12."""
     assert seed_feed_cadastros(db) == 6
@@ -79,18 +81,25 @@ def test_seed_is_once_per_env_no_op_on_second_run(db: Any) -> None:
     assert _count_source(db) == 6
 
 
-def test_seed_first_run_coalesces_owner_pause_and_title(db: Any) -> None:
+def test_seed_first_run_coalesces_owner_pause_and_title(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """No 1º seed, o coalesce protege estado que o dono já mudou ANTES do bootstrap (ambiente
     legado onde o #106/#107 já rodou): pausa e título editado sobrevivem, e as tags legadas
     (`[]`) são preenchidas — este é o único momento em que `[]` significa 'legado'."""
     rid = knowledge.create_source(
-        db, kind="rss", canonical="https://openai.com/news/rss.xml", title="Meu título"
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical="https://openai.com/news/rss.xml",
+        title="Meu título",
     )
-    knowledge.set_source_enabled(db, id=rid, enabled=False)
+    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
 
     assert seed_feed_cadastros(db) == 6
 
-    got = knowledge.get_source(db, rid)
+    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
     assert got is not None
     assert got.title == "Meu título"  # coalesce title ?? $title → edição do dono sobrevive
     assert got.enabled is False  # coalesce enabled ?? true → pausa do dono sobrevive
@@ -110,7 +119,13 @@ def test_seed_once_per_env_preserves_later_tag_clear(
         for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
     }["https://openai.com/news/rss.xml"]
     knowledge.edit_source(
-        db, id=tgt.id, title="OpenAI News", tags=[], canonical="https://openai.com/news/rss.xml"
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        id=tgt.id,
+        title="OpenAI News",
+        tags=[],
+        canonical="https://openai.com/news/rss.xml",
     )
 
     assert seed_feed_cadastros(db) == 0  # marcador presente → pula
@@ -123,16 +138,16 @@ def test_seed_once_per_env_preserves_later_tag_clear(
     assert again.tags == []  # o 'limpar tudo' do dono sobreviveu ao re-deploy
 
 
-def test_seed_reuses_legacy_sha256_record(db: Any) -> None:
+def test_seed_reuses_legacy_sha256_record(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """No kubo-test as 6 já existem com id sha256(canonical) (legado da coleta) e tags=[]. O
     seed deve REUSAR esse record (backfill das tags), nunca criar um segundo — o lookup-first
-    por (kind, canonical) resolve o id existente qualquer que seja sua forma."""
+    por (tenant, kind, canonical) resolve o id existente qualquer que seja sua forma."""
     canonical = FEED_CADASTROS[0].canonical
     legacy_id = knowledge._rid("source", canonical)
     db.query(
-        "CREATE $r SET kind = 'rss', canonical = $c, title = 'OpenAI News', "
+        "CREATE $r SET tenant_id = $t, kind = 'rss', canonical = $c, title = 'OpenAI News', "
         "enabled = true, tags = [];",
-        {"r": legacy_id, "c": canonical},
+        {"r": legacy_id, "t": tenant_id, "c": canonical},
     )
 
     seed_feed_cadastros(db)
@@ -289,7 +304,7 @@ def test_seed_owner_destination_fails_fast_without_env(db: Any) -> None:
 
 
 def test_main_seeds_settings_owner_destination_and_feeds_idempotently(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """KUBO-45: main() roda settings, destino padrão e feeds sem duplicar."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "12345678")

@@ -272,7 +272,7 @@ def test_set_task_run_links_task_to_run(db: Any, tmp_path: Path) -> None:
         persona=inst.personas["analista"],
         state="created",
     )
-    run = knowledge.start_run(db, worker="analista")
+    run = knowledge.start_run(db, tenant_id=db.tenant_id, user_id=db.user_id, worker="analista")
     set_task_run(db, tenant_id=db.tenant_id, user_id=db.user_id, task=task, run=run)
     assert db.query("SELECT VALUE run FROM $t;", {"t": task})[0] == run
 
@@ -484,7 +484,9 @@ def _seed_distilled(db: Any, title: str) -> Any:
     """Semeia um distilled com um item titulado (via derived_from) — para read_gate_context
     resolver o título da fonte."""
     tenant_id, user_id = _tenant_owner(db)
-    src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+    )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
     )

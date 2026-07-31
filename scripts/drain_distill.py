@@ -127,7 +127,7 @@ def drain(
             tenant_id=tenant_id,
             user_id=user_id,
         )
-        status = knowledge.run_status(db, run_id)
+        status = knowledge.run_status(db, run_id, tenant_id=tenant_id, user_id=user_id)
         after = knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id)
         outcome = evaluate_batch(status, pending, after)
         drained += max(outcome.distilled, 0)

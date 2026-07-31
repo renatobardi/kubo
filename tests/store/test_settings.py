@@ -141,12 +141,14 @@ def test_resolve_default_destination_raises_when_archived(db: Any) -> None:
         settings.resolve_default_destination(db, s)
 
 
-def test_resolve_default_destination_allows_paused_destination(db: Any) -> None:
+def test_resolve_default_destination_allows_paused_destination(
+    db: Any, tenant_id: RecordID
+) -> None:
     """Destino pausado resolve normalmente."""
     rid = destinations.create_destination(
         db, name="Pausado", kind="pessoa", channel="telegram", address="111"
     )
-    destinations.set_destination_enabled(db, id=rid, enabled=False)
+    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid, enabled=False)
     s = settings.Settings(
         id=RecordID("settings", "global"),
         digest_cron="0 9 * * *",
@@ -160,7 +162,7 @@ def test_resolve_default_destination_allows_paused_destination(db: Any) -> None:
     assert resolved.enabled is False
 
 
-def test_default_destination_choices_excludes_archived(db: Any) -> None:
+def test_default_destination_choices_excludes_archived(db: Any, tenant_id: RecordID) -> None:
     """O dropdown da UI mostra ativos e pausados, mas nunca arquivados."""
     active = destinations.create_destination(
         db, name="Ativo", kind="pessoa", channel="telegram", address="1"
@@ -168,7 +170,7 @@ def test_default_destination_choices_excludes_archived(db: Any) -> None:
     paused = destinations.create_destination(
         db, name="Pausado", kind="pessoa", channel="telegram", address="2"
     )
-    destinations.set_destination_enabled(db, id=paused, enabled=False)
+    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=paused, enabled=False)
     archived = destinations.create_destination(
         db, name="Arquivado", kind="sistema", channel="telegram", address="3"
     )

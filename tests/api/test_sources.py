@@ -60,7 +60,7 @@ def test_sources_lists_kind_items_and_recency(
     """A linha mostra nome, kind, itens acumulados e o badge de recência factual (E4)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [
+        lambda db, **kw: [
             _src(
                 canonical="https://y/@canal",
                 kind="youtube",
@@ -83,7 +83,7 @@ def test_sources_badge_sem_coleta_when_never_collected(
     """Fonte sem coleta nenhuma → badge 'sem coleta' (E4: 2º estado)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [_src(last_collected_at=None, items=0)],
+        lambda db, **kw: [_src(last_collected_at=None, items=0)],
     )
     assert "sem coleta" in authed_client.get("/sources").text
 
@@ -215,7 +215,7 @@ def test_sources_has_client_search_and_view_toggle(
     de 3 modos (lista/grid2/squares)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [_src(canonical="https://x/feed", kind="rss", title="Feed X", items=3)],
+        lambda db, **kw: [_src(canonical="https://x/feed", kind="rss", title="Feed X", items=3)],
     )
     html = authed_client.get("/sources").text
     assert "filterList(" in html  # busca client-side ligada
@@ -229,7 +229,7 @@ def test_sources_orders_collected_before_never(
     """Fontes que coletaram vêm antes das que nunca coletaram (eixo de recência)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [
+        lambda db, **kw: [
             _src(canonical="never://src", last_collected_at=None),
             _src(canonical="fresh://src", last_collected_at=_iso_days_ago(1)),
         ],
@@ -373,7 +373,7 @@ def test_list_has_edit_link_per_source(
     """Cada fonte na lista tem um caminho para editar (a tela deixou de ser só-leitura no #106)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [_src(id=RecordID("source", "abc"), canonical="https://x/feed")],
+        lambda db, **kw: [_src(id=RecordID("source", "abc"), canonical="https://x/feed")],
     )
     html = authed_client.get("/sources").text
     assert "/sources/abc/edit" in html
@@ -457,7 +457,7 @@ def test_list_shows_state_badges_and_actions(
     retomar; arquivado → restaurar. Cada estado tem um badge visível (US#16)."""
     monkeypatch.setattr(
         "kubo.api.routes.sources.knowledge.sources_with_stats",
-        lambda db: [
+        lambda db, **kw: [
             _src(id=RecordID("source", "act"), canonical="a://s", enabled=True, archived_at=None),
             _src(id=RecordID("source", "pau"), canonical="p://s", enabled=False, archived_at=None),
             _src(

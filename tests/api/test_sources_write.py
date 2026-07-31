@@ -18,8 +18,11 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.api.routes import sources as sources_route
 from kubo.store import client, migrations
 from kubo.store.client import connect as _real_connect
+from kubo.store.knowledge import get_source as _real_get_source
+from kubo.store.knowledge import source_item_count as _real_source_item_count
 from tests.api.conftest import UI_PASSWORD
 
 pytestmark = pytest.mark.integration
@@ -37,6 +40,11 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     # Restaura a conexão REAL: a conftest stuba client.connect por default (leituras), o que
     # envenenaria também connect_rw (que chama o mesmo `connect` do módulo) — como no flows_write.
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
+    # Restaura as leituras stubadas pela conftest: este teste exerce a rota REAL
+    # (create/edit/delete) e precisa do get_source/source_item_count de verdade.
+    # Capturamos as referências no import do módulo (antes do stub_store rodar).
+    monkeypatch.setattr(sources_route.knowledge, "get_source", _real_get_source)
+    monkeypatch.setattr(sources_route.knowledge, "source_item_count", _real_source_item_count)
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
@@ -45,6 +53,22 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
         # DEFINE USER + try juntos: uma falha não pode pular o finally e vazar kubo_rw no ROOT.
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
         try:
+            # Cria o usuário/tenant breakglass alinhado com KUBO_BREAKGLASS_* do ui_env
+            # (resolve_session verifica membership no DB real).
+            user_id = RecordID("user", "breakglass-owner")
+            tenant_id = RecordID("tenant", "breakglass")
+            root.query(
+                "CREATE $u SET firebase_uid = $uid;",
+                {"u": user_id, "uid": "user:breakglass-owner"},
+            )
+            root.query(
+                "CREATE $t SET name = $name;",
+                {"t": tenant_id, "name": "Breakglass"},
+            )
+            root.query(
+                "RELATE $u->membership->$t SET role = 'owner';",
+                {"u": user_id, "t": tenant_id},
+            )
             yield create_app()
         finally:
             root.query("REMOVE USER IF EXISTS kubo_rw ON ROOT;")

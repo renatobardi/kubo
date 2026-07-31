@@ -106,6 +106,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0019_tenant_scoped_domain.surql",
         # 0020 (KUBO-123): contrato de tenancy obrigatória.
         "0020_tenant_contract.surql",
+        # 0021 (KUBO-128): tenant_id em dispatch, run e source.
+        "0021_dispatch_run_source_tenant.surql",
     }
 
 
@@ -136,9 +138,10 @@ def test_chunk_rejects_wrong_dimension(db: Any) -> None:
 
 def test_flexible_fields_preserve_nested_payload(db: Any) -> None:
     """FLEXIBLE pegou: payload aninhado em run.error/item.metadata não é descartado."""
+    _owner, tenant = _tenant_owner(db, firebase_uid="flex-payload")
     db.query(
-        "CREATE run:r SET worker='feed', status='error', error=$e, stats=$s;",
-        {"e": {"kind": "http", "detail": {"status": 503}}, "s": {"fetched": 10}},
+        "CREATE run:r SET tenant_id=$t, worker='feed', status='error', error=$e, stats=$s;",
+        {"t": tenant.id, "e": {"kind": "http", "detail": {"status": 503}}, "s": {"fetched": 10}},
     )
     got = db.query("SELECT error, stats FROM run:r;")[0]
     assert got["error"]["detail"]["status"] == 503
@@ -168,9 +171,17 @@ def test_relation_edge_allows_valid_endpoints(db: Any) -> None:
 
 def test_created_at_is_readonly_across_upsert(db: Any) -> None:
     """READONLY: re-UPSERT (SET) não reescreve created_at — idempotência do timestamp."""
-    db.query("UPSERT source:s SET kind='rss', canonical='https://x/feed';")
+    _owner, tenant = _tenant_owner(db, firebase_uid="readonly-ts")
+    db.query(
+        "UPSERT source:s SET tenant_id=$t, kind='rss', canonical='https://x/feed';",
+        {"t": tenant.id},
+    )
     first = db.query("SELECT created_at FROM source:s;")[0]["created_at"]
-    db.query("UPSERT source:s SET kind='rss', canonical='https://x/feed', title='changed';")
+    db.query(
+        "UPSERT source:s SET tenant_id=$t, kind='rss', "
+        "canonical='https://x/feed', title='changed';",
+        {"t": tenant.id},
+    )
     second = db.query("SELECT created_at FROM source:s;")[0]["created_at"]
     assert first == second
 
@@ -187,18 +198,38 @@ def test_source_has_cadastro_fields(db: Any) -> None:
 
 
 def test_source_unique_is_composite_kind_canonical(db: Any) -> None:
-    """0009: unicidade passa de UNIQUE(canonical) para UNIQUE(kind, canonical)."""
-    db.query("CREATE source:a SET kind='rss', canonical='https://x/feed';")
-    # mesma canonical, kind diferente: agora é permitido (não era, sob o índice antigo).
-    db.query("CREATE source:b SET kind='github-repo', canonical='https://x/feed';")
-    # mesma canonical E mesmo kind: rejeitado pelo índice composto.
+    """0021: unicidade passa a UNIQUE(tenant_id, kind, canonical) — cross-tenant permitido."""
+    _owner_a, tenant_a = _tenant_owner(db, firebase_uid="uniq-a", name="Team A")
+    _owner_b, tenant_b = _tenant_owner(db, firebase_uid="uniq-b", name="Team B")
+    # mesma canonical, kind diferente, mesmo tenant: permitido.
+    db.query(
+        "CREATE source:a SET tenant_id=$t, kind='rss', canonical='https://x/feed';",
+        {"t": tenant_a.id},
+    )
+    db.query(
+        "CREATE source:b SET tenant_id=$t, kind='github-repo', canonical='https://x/feed';",
+        {"t": tenant_a.id},
+    )
+    # mesma canonical, mesmo kind, mesmo tenant: rejeitado pelo índice composto.
     with pytest.raises(Exception):  # noqa: B017, PT011 (índice UNIQUE do SurrealDB)
-        db.query("CREATE source:c SET kind='rss', canonical='https://x/feed';")
+        db.query(
+            "CREATE source:c SET tenant_id=$t, kind='rss', canonical='https://x/feed';",
+            {"t": tenant_a.id},
+        )
+    # mesma canonical, mesmo kind, tenant DIFERENTE: permitido (KUBO-128).
+    db.query(
+        "CREATE source:d SET tenant_id=$t, kind='rss', canonical='https://x/feed';",
+        {"t": tenant_b.id},
+    )
 
 
 def test_new_source_defaults_active_and_untagged(db: Any) -> None:
     """0009: Cadastro criado sem estado nasce enabled=true, tags=[], archived_at=NONE."""
-    db.query("CREATE source:s SET kind='rss', canonical='https://x/feed';")
+    _owner, tenant = _tenant_owner(db, firebase_uid="defaults-active")
+    db.query(
+        "CREATE source:s SET tenant_id=$t, kind='rss', canonical='https://x/feed';",
+        {"t": tenant.id},
+    )
     got = db.query("SELECT enabled, tags, archived_at FROM source:s;")[0]
     assert got["enabled"] is True
     assert got["tags"] == []

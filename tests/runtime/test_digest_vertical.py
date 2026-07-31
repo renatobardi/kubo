@@ -68,7 +68,13 @@ def _orphan_item(db: Any, tenant_id: RecordID, user_id: RecordID) -> Any:
     """Cria um item mínimo para o distilled derivar (derived_from exige endpoint)."""
     import secrets
 
-    src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{secrets.token_hex(4)}")
+    src = knowledge.upsert_source(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind="rss",
+        canonical=f"src::{secrets.token_hex(4)}",
+    )
     return knowledge.upsert_item(
         db, source=src, external_id=secrets.token_hex(4), content="x", title="T"
     )

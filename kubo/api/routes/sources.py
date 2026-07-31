@@ -22,6 +22,7 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
+from kubo.api.session import SessionContext, resolve_session
 from kubo.errors import (
     ConfigError,
     DuplicateSourceError,
@@ -226,6 +227,7 @@ def _sort_key(s: SourceStat) -> tuple[int, str]:
 
 def _render_list(
     request: Request,
+    ctx: SessionContext,
     *,
     notice: str | None = None,
     status: int = 200,
@@ -233,12 +235,14 @@ def _render_list(
 ) -> Response:
     """Renderiza a lista de Fontes (com o csrf do form e um `notice` opcional). Reusa a
     conexão `db` quando já há uma aberta (re-render pós-escrita); senão abre uma leitura
-    kubo_ro. Único ponto que monta o contexto da tela — GET e re-render pós-POST."""
+    kubo_ro. Único ponto que monta o contexto da tela — GET e re-render pós-POST.
+
+    Filtra pelo tenant ativo da sessão (KUBO-128)."""
     if db is None:
         with client.connect() as ro:
-            sources = knowledge.sources_with_stats(ro)
+            sources = knowledge.sources_with_stats(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     else:
-        sources = knowledge.sources_with_stats(db)
+        sources = knowledge.sources_with_stats(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     sources = sorted(sources, key=_sort_key, reverse=True)
     return templates.TemplateResponse(
         request,
@@ -248,13 +252,22 @@ def _render_list(
     )
 
 
+def _resolve_or_403(request: Request, db: Any) -> SessionContext | None:
+    """Resolve a sessão; devolve None quando não há (a rota converte em 403)."""
+    return resolve_session(request, db)
+
+
 router = APIRouter()
 
 
 @router.get("")
 def list_page(request: Request) -> Response:
     """Lista as fontes com contagem de itens e recência da coleta (E4) + o form de adicionar."""
-    return _render_list(request)
+    with client.connect() as db:
+        ctx = _resolve_or_403(request, db)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        return _render_list(request, ctx)
 
 
 @router.post("")
@@ -277,18 +290,34 @@ def create(
     try:
         payload = NewSource(kind=kind, canonical=canonical, title=title)  # type: ignore[arg-type]
     except ValidationError as exc:
-        return _render_list(request, notice=format_validation_error(exc), status=400)
+        with client.connect() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
+            return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
     if payload.kind == "rss" and tested != "1":
-        return _render_list(request, notice="Teste o feed antes de salvar.", status=400)
+        with client.connect() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
+            return _render_list(request, ctx, notice="Teste o feed antes de salvar.", status=400)
     try:
         with client.connect_rw() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             try:
                 knowledge.create_source(
-                    db, kind=payload.kind, canonical=payload.canonical, title=payload.title
+                    db,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    kind=payload.kind,
+                    canonical=payload.canonical,
+                    title=payload.title,
                 )
             except DuplicateSourceError:
                 return _render_list(
-                    request, notice="Essa fonte já está cadastrada.", status=409, db=db
+                    request, ctx, notice="Essa fonte já está cadastrada.", status=409, db=db
                 )
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
@@ -323,7 +352,15 @@ def edit_page(request: Request, sid: str) -> Response:
     """Form de edição de UMA fonte (#106): title/tags/canonical pré-preenchidos, kind read-only.
     Fonte inexistente ou arquivada (fora do estado editável) volta para a lista."""
     with client.connect() as ro:
-        detail = knowledge.get_source(ro, RecordID("source", sid))
+        ctx = _resolve_or_403(request, ro)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        detail = knowledge.get_source(
+            ro,
+            RecordID("source", sid),
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+        )
     if detail is None or detail.archived_at is not None:
         return RedirectResponse("/sources", status_code=303)
     return _render_edit(request, detail)
@@ -353,16 +390,36 @@ def edit(
         # Erro de forma (raro): volta à lista com o aviso, como o create — sem tocar a store
         # para buscar o detalhe, e sem refletir o input submetido (format_validation_error só
         # lê loc+msg, nunca `input`).
-        return _render_list(request, notice=format_validation_error(exc), status=400)
+        with client.connect() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
+            return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
     with client.connect() as ro:
-        detail = knowledge.get_source(ro, source_id)
+        ctx = _resolve_or_403(request, ro)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        detail = knowledge.get_source(
+            ro,
+            source_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+        )
     if detail is None or detail.archived_at is not None:
-        return _render_list(request, notice=_STALE_NOTICE, status=409)
-    return _apply_edit(request, source_id, detail, payload)
+        with client.connect() as db:
+            ctx2 = _resolve_or_403(request, db)
+            if ctx2 is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
+            return _render_list(request, ctx2, notice=_STALE_NOTICE, status=409)
+    return _apply_edit(request, ctx, source_id, detail, payload)
 
 
 def _apply_edit(
-    request: Request, source_id: RecordID, detail: SourceDetail, payload: EditSource
+    request: Request,
+    ctx: SessionContext,
+    source_id: RecordID,
+    detail: SourceDetail,
+    payload: EditSource,
 ) -> Response:
     """Normaliza a canonical pelo kind do banco e grava (connect_rw). Mapeia cada falha ao seu
     status: normalização inválida (400), duplicata (409 soft), staleness sob corrida (409), sem
@@ -375,14 +432,20 @@ def _apply_edit(
         with client.connect_rw() as db:
             try:
                 knowledge.edit_source(
-                    db, id=source_id, title=payload.title, tags=payload.tags, canonical=canonical
+                    db,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    id=source_id,
+                    title=payload.title,
+                    tags=payload.tags,
+                    canonical=canonical,
                 )
             except DuplicateSourceError:
                 return _render_edit(
                     request, detail, notice="Já existe uma fonte com essa origem.", status=409
                 )
             except StaleSourceError:
-                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+                return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
         _log.warning("sources.write_unavailable")
@@ -394,8 +457,10 @@ def _apply_edit(
 _DELETE_TEMPLATE = "sources/delete.html"
 
 
-def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]) -> Response:
-    """Executa uma ação de ciclo de vida (`action(db)`) no molde ADR-0018 comum a
+def _lifecycle_action(
+    request: Request, csrf: str, action: Callable[[SessionContext, Any], None]
+) -> Response:
+    """Executa uma ação de ciclo de vida (`action(ctx, db)`) no molde ADR-0018 comum a
     pausar/retomar/arquivar/restaurar: CSRF (403) → `connect_rw` (503 sem a credencial) → a
     escrita da store → redirect 303 (PRG). `StaleSourceError` (Cadastro saiu do estado da ação)
     reabre a lista com aviso SOFT (409). Extraído para não repetir o molde por rota (e manter a
@@ -404,10 +469,13 @@ def _lifecycle_action(request: Request, csrf: str, action: Callable[[Any], None]
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
     try:
         with client.connect_rw() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             try:
-                action(db)
+                action(ctx, db)
             except StaleSourceError:
-                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+                return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
         _log.warning("sources.write_unavailable")
@@ -420,7 +488,15 @@ def disable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Re
     arquivar. Reversível por `enable`. Não destrutivo: um POST simples, sem dupla verificação."""
     rid = RecordID("source", sid)
     return _lifecycle_action(
-        request, csrf, lambda db: knowledge.set_source_enabled(db, id=rid, enabled=False)
+        request,
+        csrf,
+        lambda ctx, db: knowledge.set_source_enabled(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            id=rid,
+            enabled=False,
+        ),
     )
 
 
@@ -429,7 +505,15 @@ def enable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
     """Retoma a coleta de uma fonte pausada (`enabled=true`) — volta ao sweep."""
     rid = RecordID("source", sid)
     return _lifecycle_action(
-        request, csrf, lambda db: knowledge.set_source_enabled(db, id=rid, enabled=True)
+        request,
+        csrf,
+        lambda ctx, db: knowledge.set_source_enabled(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            id=rid,
+            enabled=True,
+        ),
     )
 
 
@@ -438,14 +522,32 @@ def archive(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Re
     """Arquiva uma fonte (soft delete, ADR-0025 §8): tira da operação PRESERVANDO o histórico.
     Atômico na store (`enabled=false` + `archived_at`). Reversível por `restore`."""
     rid = RecordID("source", sid)
-    return _lifecycle_action(request, csrf, lambda db: knowledge.archive_source(db, id=rid))
+    return _lifecycle_action(
+        request,
+        csrf,
+        lambda ctx, db: knowledge.archive_source(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            id=rid,
+        ),
+    )
 
 
 @router.post("/{sid}/restore")
 def restore(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Response:
     """Restaura uma fonte arquivada (volta ao estado ATIVO, varrida pelo sweep de novo)."""
     rid = RecordID("source", sid)
-    return _lifecycle_action(request, csrf, lambda db: knowledge.restore_source(db, id=rid))
+    return _lifecycle_action(
+        request,
+        csrf,
+        lambda ctx, db: knowledge.restore_source(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            id=rid,
+        ),
+    )
 
 
 def _render_delete(
@@ -480,8 +582,25 @@ def delete_page(request: Request, sid: str) -> Response:
     inexistente volta para a lista (não 500)."""
     rid = RecordID("source", sid)
     with client.connect() as ro:
-        detail = knowledge.get_source(ro, rid)
-        items = knowledge.source_item_count(ro, rid) if detail is not None else 0
+        ctx = _resolve_or_403(request, ro)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
+        detail = knowledge.get_source(
+            ro,
+            rid,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+        )
+        items = (
+            knowledge.source_item_count(
+                ro,
+                rid,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+            )
+            if detail is not None
+            else 0
+        )
     if detail is None:
         return RedirectResponse("/sources", status_code=303)
     return _render_delete(request, detail, items)
@@ -499,13 +618,31 @@ def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
     rid = RecordID("source", sid)
     try:
         with client.connect_rw() as db:
+            ctx = _resolve_or_403(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             try:
-                knowledge.delete_source(db, id=rid)
+                knowledge.delete_source(
+                    db,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    id=rid,
+                )
             except SourceHasHistoryError:
-                detail = knowledge.get_source(db, rid)
+                detail = knowledge.get_source(
+                    db,
+                    rid,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                )
                 if detail is None:
-                    return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-                items = knowledge.source_item_count(db, rid)
+                    return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
+                items = knowledge.source_item_count(
+                    db,
+                    rid,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                )
                 return _render_delete(
                     request,
                     detail,
@@ -514,7 +651,7 @@ def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
                     status=409,
                 )
             except StaleSourceError:
-                return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
+                return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
             return RedirectResponse("/sources", status_code=303)
     except ConfigError:
         _log.warning("sources.write_unavailable")

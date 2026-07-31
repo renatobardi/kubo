@@ -254,6 +254,13 @@
                    class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-muted hover:text-foreground">
                   <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 </a>
+                <form method="post" action="/destinations/{{ did }}/welcome">
+                  <input type="hidden" name="csrf" value="{{ csrf }}">
+                  <button type="submit" aria-label="Enviar boas-vindas para {{ d.name }}"
+                          class="flex size-8 items-center justify-center rounded-lg text-muted-foreground ring-1 ring-foreground/10 hover:bg-primary/10 hover:text-foreground">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9l20-7z"/></svg>
+                  </button>
+                </form>
                 <form method="post" action="/destinations/{{ did }}/archive">
                   <input type="hidden" name="csrf" value="{{ csrf }}">
                   <button type="submit" aria-label="Arquivar destino {{ d.name }}"

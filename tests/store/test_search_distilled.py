@@ -57,7 +57,9 @@ def _distilled(
     vectors: list[list[float]],
 ) -> RecordID:
     """Cria source+item (com título) e um distilled com um chunk por vetor dado."""
-    src = upsert_source(db, kind="rss", canonical=f"src::{title}")
+    src = upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+    )
     item = upsert_item(db, source=src, external_id=f"ext::{title}", content="x", title=title)
     chunks = [
         Chunk(text=summary, seq=i, embedding=v, model="m", dim=768, task_type="SEMANTIC_SIMILARITY")

@@ -87,7 +87,9 @@ class _FakeSender:
 
 
 def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: str) -> Any:
-    src = knowledge.upsert_source(db, kind="rss", canonical=f"src::{title}")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+    )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
     )
@@ -167,7 +169,10 @@ def test_approve_sends_and_delivers_both_tasks(
     assert gate["decided_at"] is not None
     arts = {r["artifact"] for r in db.query("SELECT artifact FROM dispatch;")}
     assert arts == {"gate", "report"}
-    assert knowledge.last_dispatch_watermark(db, _DEST.id) is None
+    assert (
+        knowledge.last_dispatch_watermark(db, _DEST.id, tenant_id=tenant_id, user_id=user_id)
+        is None
+    )
 
 
 def test_reject_archives_both_tasks_with_reason(

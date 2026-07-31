@@ -20,6 +20,7 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
+from kubo.api.session import resolve_session
 from kubo.errors import ConfigError, format_validation_error
 from kubo.store import client
 from kubo.store import destinations as destination_store
@@ -121,6 +122,9 @@ def _render_page(
 def settings_page(request: Request) -> Response:
     """Tela de Configurações: lê settings + destinos elegíveis."""
     with client.connect() as ro:
+        ctx = resolve_session(request, ro)
+        if ctx is None:
+            return PlainTextResponse("Acesso negado.", status_code=403)
         settings = settings_store.get_settings(ro)
         choices = settings_store.default_destination_choices(ro)
     return _render_page(request, settings, choices)
@@ -147,6 +151,9 @@ def update_settings(
         )
     except ValidationError as exc:
         with client.connect() as ro:
+            ctx = resolve_session(request, ro)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             settings = settings_store.get_settings(ro)
             choices = settings_store.default_destination_choices(ro)
         return _render_page(
@@ -160,6 +167,9 @@ def update_settings(
 
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse("Acesso negado.", status_code=403)
             if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),
@@ -189,6 +199,7 @@ def update_settings(
                 default_destination=form.default_destination,
                 unpause_recent=unpause_recent,
                 destinations=destinations,
+                tenant_id=ctx.tenant_id,
             )
     except ConfigError:
         _log.warning(_WRITE_LOG)

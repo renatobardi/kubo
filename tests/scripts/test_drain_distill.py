@@ -89,7 +89,9 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
     quota paga), drena 2 itens pendentes do banco real via run_worker e reconcilia
     (inicial 2 → final 0, drenados 2, motivo 'done'). Fecha o risco de wiring que só
     apareceria em execução real e gastaria API paga (achado CodeRabbit)."""
-    src = knowledge.upsert_source(db, kind="rss", canonical="https://x/feed")
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A sobre a Anthropic")
     knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B sobre a Anthropic")
 
