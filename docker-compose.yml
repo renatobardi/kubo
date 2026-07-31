@@ -222,6 +222,11 @@ services:
       # fail-fast — o disparo/entrega falha no uso (não derruba a UI). GROQ = modelo da
       # analista; GEMINI (acima) = embedding do retrieval.
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # ANTHROPIC = persona `planner` de Estudos (KUBO-139): "Propor plano" roda AQUI,
+      # na API, não no scheduler. Sem esta linha a key existe no .env, nunca chega ao
+      # container, e a proposta degrada em silêncio para o plano mecânico. SEM fail-fast,
+      # como as demais: ausente, só o planner cai no fallback; o resto da UI segue.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
       KUBO_OWNER_TELEGRAM_CHAT_ID: ${KUBO_OWNER_TELEGRAM_CHAT_ID:-}
