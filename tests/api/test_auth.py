@@ -25,6 +25,17 @@ from tests.api.conftest import UI_PASSWORD
 _WRONG_LOGIN = "nope"
 
 
+@pytest.fixture(autouse=True)
+def stub_writer_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Escrita de auth usa `connect_rw` (ADR-0018); no unit não há KUBO_RW_SURREAL_PASS,
+    então o stub entra ANTES de `rw_config()` explodir — 503 de env ausente é caso do
+    `test_sources.py`, não deste arquivo. O stub NÃO pode viver na conftest: o objeto
+    `client` é o MESMO de todas as rotas e envenenaria os 503 de fontes."""
+    from tests.api.conftest import _fake_connect
+
+    monkeypatch.setattr("kubo.api.routes.auth.client.connect_rw", _fake_connect)
+
+
 def test_login_page_is_public(client: TestClient) -> None:
     """GET /login não exige sessão (200, mostra o form e os botões Firebase)."""
     resp = client.get("/login")
