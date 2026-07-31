@@ -16,6 +16,7 @@ def _dispatch(**kw: object) -> DispatchListItem:
         "channel": "telegram",
         "destination": "owner-telegram",
         "status": "ok",
+        "artifact": "digest",
         "item_count": 3,
         "error_kind": None,
         "error": None,

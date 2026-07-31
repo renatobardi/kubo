@@ -40,6 +40,7 @@ from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import invites as invite_store
 from kubo.store import settings as settings_store
+from kubo.store.knowledge import insert_dispatch
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -650,9 +651,34 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
                     channel=destination.channel,
                     error_kind="SenderError",
                 )
+                insert_dispatch(
+                    db,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    destination=rid,
+                    channel=destination.channel,
+                    status="error",
+                    artifact="welcome",
+                    watermark=None,
+                    item_count=0,
+                    items=[],
+                    error={"kind": "send_failed", "message": "Falha ao enviar boas-vindas"},
+                )
                 return _render_list(
                     request, notice="Falha ao enviar a mensagem de boas-vindas.", status=502, db=db
                 )
+            insert_dispatch(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                destination=rid,
+                channel=destination.channel,
+                status="ok",
+                artifact="welcome",
+                watermark=None,
+                item_count=0,
+                items=[],
+            )
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
         _log.warning(_WRITE_LOG)

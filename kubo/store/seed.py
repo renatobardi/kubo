@@ -99,7 +99,7 @@ def _mark(db: Any, name: str) -> None:
     db.query("CREATE $r SET applied_at = time::now();", {"r": _marker_id(name)})
 
 
-def seed_feed_cadastros(db: Any) -> int:
+def seed_feed_cadastros(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
     """Semeia as `FEED_CADASTROS` como Cadastros rss ativos — bootstrap histórico que roda
     **UMA VEZ por ambiente** (marcador `seed:feed_cadastros`), não a cada deploy. Devolve quantas
     fontes processou (0 se já semeado).
@@ -113,7 +113,6 @@ def seed_feed_cadastros(db: Any) -> int:
     permanece para proteger pausa/título que o dono já tenha mudado ANTES do 1º seed."""
     if _marker_seen(db, "feed_cadastros"):
         return 0
-    tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
     for feed in FEED_CADASTROS:
         upsert_seed_source(
             db,
@@ -157,7 +156,7 @@ def _owner_telegram_chat_id() -> str:
     return value
 
 
-def seed_owner_destination(db: Any) -> bool:
+def seed_owner_destination(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> bool:
     """Semeia o destino Telegram do dono e o define como padrão UMA VEZ por ambiente.
 
     Cria o destino a partir de `KUBO_OWNER_TELEGRAM_CHAT_ID` (nunca literal no código),
@@ -175,6 +174,7 @@ def seed_owner_destination(db: Any) -> bool:
         kind="pessoa",
         channel="telegram",
         address=chat_id,
+        tenant_id=tenant_id,
     )
 
     current = settings_store.get_settings(db)
@@ -198,13 +198,16 @@ def main() -> int:
 
     Ordem (KUBO-45): settings primeiro, depois destino do dono (que escreve o
     ponteiro `default_destination` em settings), depois os feeds legados.
+    O tenant/user é resolvido uma vez aqui e passado para os seeds que precisam
+    (centralização KUBO-128 follow-up).
     Devolve total de feeds processado.
     """
     try:
         with client.connect() as db:
+            tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
             settings_applied = seed_default_settings(db)
-            owner_applied = seed_owner_destination(db)
-            count = seed_feed_cadastros(db)
+            owner_applied = seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
+            count = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga (padrão do migrations-cli)
         _log.exception("seed_failed")
         raise

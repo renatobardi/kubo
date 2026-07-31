@@ -1886,11 +1886,12 @@ class DispatchListItem:
     """Linha da tela de Envios (ADR-0015, 12.7): canal, destino, status e — quando
     falha — o erro estruturado (`error_kind` para o badge, `error` para o painel
     expansível, mesmo padrão de `RunListItem`). `item_count` = destilados no digest.
-    O artefato é sempre o digest nesta fase (a view rotula "Digest")."""
+    `artifact` discrimina o tipo de entrega (`digest`|`welcome`)."""
 
     channel: str
     destination: str
     status: str
+    artifact: str
     item_count: int
     error_kind: str | None
     error: dict[str, Any] | None
@@ -1936,8 +1937,8 @@ def list_dispatches(
         where = " WHERE tenant_id = $tenant"
     params["tenant"] = tenant_id
     q = (
-        "SELECT channel, meta::id(destination) AS destination, status, item_count, error, "  # noqa: S608
-        f"error.kind AS error_kind, sent_at FROM dispatch{where} "
+        "SELECT channel, meta::id(destination) AS destination, status, artifact, "  # noqa: S608
+        f"item_count, error, error.kind AS error_kind, sent_at FROM dispatch{where} "
         f"ORDER BY sent_at DESC LIMIT {limit} START {start};"
     )
     rows = db.query(q, params)
@@ -1946,6 +1947,7 @@ def list_dispatches(
             channel=r["channel"],
             destination=r["destination"],
             status=r["status"],
+            artifact=r.get("artifact", "digest"),
             item_count=int(r["item_count"]),
             error_kind=r.get("error_kind"),
             error=r.get("error"),

@@ -59,7 +59,7 @@ def test_seed_creates_six_active_rss_feeds_with_tags(
 ) -> None:
     """Ambiente limpo: o seed cria as 6 fontes como Cadastros rss ATIVOS, com o title e as tags
     do `schedules.yaml` — é o que o sweep varre e o que reproduz a coleta legada sem regressão."""
-    processed = seed_feed_cadastros(db)
+    processed = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
 
     assert processed == 6
     active = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
@@ -75,8 +75,8 @@ def test_seed_is_once_per_env_no_op_on_second_run(
 ) -> None:
     """O seed roda UMA VEZ por ambiente (marcador): a 2ª chamada devolve 0 e não toca nada —
     6 fontes depois de rodar duas vezes, não 12."""
-    assert seed_feed_cadastros(db) == 6
-    assert seed_feed_cadastros(db) == 0
+    assert seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id) == 6
+    assert seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id) == 0
 
     assert _count_source(db) == 6
 
@@ -97,7 +97,7 @@ def test_seed_first_run_coalesces_owner_pause_and_title(
     )
     knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
 
-    assert seed_feed_cadastros(db) == 6
+    assert seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id) == 6
 
     got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
     assert got is not None
@@ -113,7 +113,7 @@ def test_seed_once_per_env_preserves_later_tag_clear(
     fonte pela UI (`tags=[]` intencional). Um segundo deploy NÃO pode refilar as tags legadas —
     o marcador faz o seed pular, então o `[]` do dono sobrevive. É o caso que o coalesce sozinho
     não cobria (`[]` ambíguo: legado vs limpo-de-propósito), resolvido por rodar só uma vez."""
-    seed_feed_cadastros(db)
+    seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
     tgt = {
         s.canonical: s
         for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
@@ -128,7 +128,8 @@ def test_seed_once_per_env_preserves_later_tag_clear(
         canonical="https://openai.com/news/rss.xml",
     )
 
-    assert seed_feed_cadastros(db) == 0  # marcador presente → pula
+    # marcador presente → pula
+    assert seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id) == 0
 
     (again,) = [
         s
@@ -150,7 +151,7 @@ def test_seed_reuses_legacy_sha256_record(db: Any, tenant_id: RecordID, user_id:
         {"r": legacy_id, "t": tenant_id, "c": canonical},
     )
 
-    seed_feed_cadastros(db)
+    seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
 
     rows = db.query("SELECT id, tags FROM source WHERE canonical = $c;", {"c": canonical})
     assert len(rows) == 1
@@ -190,13 +191,13 @@ def test_seed_default_settings_is_once_per_env(db: Any) -> None:
 
 
 def test_seed_owner_destination_creates_owner_telegram_and_default(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """KUBO-45: ambiente limpo ganha o destino Telegram do dono e ele vira default."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", _OWNER_TELEGRAM)
 
     seed_default_settings(db)
-    applied = seed_owner_destination(db)
+    applied = seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
 
     assert applied is True
     settings_obj = get_settings(db)
@@ -213,23 +214,25 @@ def test_seed_owner_destination_creates_owner_telegram_and_default(
 
 
 def test_seed_owner_destination_requires_preexisting_settings(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """KUBO-45: seed_owner_destination só escreve o ponteiro em settings já existente."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
 
     assert get_settings(db) is None
     with pytest.raises(ConfigError):
-        seed_owner_destination(db)
+        seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
 
 
-def test_seed_owner_destination_is_once_per_env(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_seed_owner_destination_is_once_per_env(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """KUBO-45: o seed do destino do dono roda uma vez; segunda chamada é no-op."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
 
     seed_default_settings(db)
-    assert seed_owner_destination(db) is True
-    assert seed_owner_destination(db) is False
+    assert seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id) is True
+    assert seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id) is False
 
     # Apenas um destino existe (não duplicou).
     rows = db.query("SELECT count() FROM destination WHERE channel = 'telegram' GROUP ALL;")
@@ -237,13 +240,13 @@ def test_seed_owner_destination_is_once_per_env(db: Any, monkeypatch: pytest.Mon
 
 
 def test_seed_owner_destination_preserves_owner_edits(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """KUBO-45: re-rodar o seed não reverte uma edição manual do dono no default."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
 
     seed_default_settings(db)
-    seed_owner_destination(db)
+    seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
     original = get_settings(db)
     assert original is not None
     original_default = original.default_destination
@@ -251,7 +254,12 @@ def test_seed_owner_destination_preserves_owner_edits(
 
     # Dono cria outro destino e muda o default pela UI.
     other = destination_store.create_destination(
-        db, name="Outro", kind="pessoa", channel="telegram", address="999999"
+        db,
+        name="Outro",
+        kind="pessoa",
+        channel="telegram",
+        address="999999",
+        tenant_id=tenant_id,
     )
     settings.put_settings(
         db,
@@ -261,20 +269,20 @@ def test_seed_owner_destination_preserves_owner_edits(
     )
 
     # Re-run do seed não sobrescreve a escolha do dono.
-    assert seed_owner_destination(db) is False
+    assert seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id) is False
     current = get_settings(db)
     assert current is not None
     assert current.default_destination == other
 
 
 def test_seed_owner_destination_preserves_destination_edits(
-    db: Any, monkeypatch: pytest.MonkeyPatch
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """KUBO-45: re-rodar o seed não reverte uma edição do próprio destino do dono."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "123456")
 
     seed_default_settings(db)
-    seed_owner_destination(db)
+    seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
     original = get_settings(db)
     assert original is not None
     assert original.default_destination is not None
@@ -284,19 +292,21 @@ def test_seed_owner_destination_preserves_destination_edits(
         db, id=original.default_destination, name="Renomeado", address="999999"
     )
 
-    assert seed_owner_destination(db) is False
+    assert seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id) is False
     edited = destination_store.get_destination(db, original.default_destination)
     assert edited is not None
     assert edited.name == "Renomeado"
     assert edited.address == "999999"
 
 
-def test_seed_owner_destination_fails_fast_without_env(db: Any) -> None:
+def test_seed_owner_destination_fails_fast_without_env(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
     """KUBO-45: env ausente gera falha clara, sem escrever no banco."""
     assert os.environ.get("KUBO_OWNER_TELEGRAM_CHAT_ID") is None
 
     with pytest.raises(ConfigError):
-        seed_owner_destination(db)
+        seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
 
     # Nenhum destino foi criado e settings continua sem default.
     rows = db.query("SELECT count() FROM destination GROUP ALL;")
