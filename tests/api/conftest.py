@@ -58,6 +58,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "entities",
         "dispatches",
         "destinations",
+        "settings",
         "study",
     ):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)

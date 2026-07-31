@@ -1,7 +1,15 @@
 -- Migration 0025 — tenant_id em dispatch, run, source e destination (KUBO-128).
 -- DDL idempotente via OVERWRITE. tenant_id obrigatório (ASSERT != NONE):
--- dados legados sem tenant_id devem ser backfilled antes do deploy prod, ou
--- o ASSERT rejeita o CREATE/UPDATE (falha alta, nunca lost-write mudo).
+-- dados legados sem tenant_id são backfilled abaixo para o tenant breakglass
+-- antes do ASSERT; se houver múltiplos tenants em prod, rodar backfill manual
+-- antes do deploy (KUBO-128 follow-up).
+
+-- ── Backfill: registros legados sem tenant_id apontam para o tenant breakglass.
+-- Idempotente: só atualiza onde tenant_id IS NONE.
+UPDATE dispatch SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE run SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE source SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
+UPDATE destination SET tenant_id = tenant:breakglass WHERE tenant_id IS NONE;
 
 -- ── dispatch: fato de entrega de digest (ADR-0015) ────────────────────────────
 DEFINE FIELD OVERWRITE tenant_id ON dispatch TYPE record<tenant> ASSERT $value != NONE;

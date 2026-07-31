@@ -283,25 +283,18 @@ def create(
     (409), sem gravar."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
     try:
         payload = NewSource(kind=kind, canonical=canonical, title=title)  # type: ignore[arg-type]
     except ValidationError as exc:
-        with client.connect() as db:
-            ctx = resolve_session(request, db)
-            if ctx is None:
-                return PlainTextResponse(_DENIED, status_code=403)
-            return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
+        return _render_list(request, ctx, notice=format_validation_error(exc), status=400)
     if payload.kind == "rss" and tested != "1":
-        with client.connect() as db:
-            ctx = resolve_session(request, db)
-            if ctx is None:
-                return PlainTextResponse(_DENIED, status_code=403)
-            return _render_list(request, ctx, notice="Teste o feed antes de salvar.", status=400)
+        return _render_list(request, ctx, notice="Teste o feed antes de salvar.", status=400)
     try:
         with client.connect_rw() as db:
-            ctx = resolve_session(request, db)
-            if ctx is None:
-                return PlainTextResponse(_DENIED, status_code=403)
             try:
                 knowledge.create_source(
                     db,

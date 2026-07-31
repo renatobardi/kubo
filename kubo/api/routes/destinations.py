@@ -33,6 +33,7 @@ from kubo.errors import (
     InviteNotResendableError,
     SenderError,
     StaleDestinationError,
+    UnsupportedChannelError,
     format_validation_error,
 )
 from kubo.store import client
@@ -607,7 +608,7 @@ def _send_welcome(destination: destination_store.Destination) -> None:
             smtp_config=smtp_config,
         )
     else:
-        raise SenderError(f"canal {destination.channel!r} não suporta welcome")
+        raise UnsupportedChannelError(f"canal {destination.channel!r} não suporta welcome")
 
 
 @router.post("/{did}/welcome")
@@ -633,9 +634,25 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
             except ConfigError as exc:
                 _log.warning("welcome_config_failed", destination=str(rid), error=str(exc))
                 return _render_list(request, notice=f"Falha ao enviar: {exc}", status=503, db=db)
-            except SenderError as exc:
-                _log.warning("welcome_send_failed", destination=str(rid), error=str(exc))
-                return _render_list(request, notice=f"Falha ao enviar: {exc}", status=502, db=db)
+            except UnsupportedChannelError:
+                _log.warning(
+                    "welcome_unsupported_channel",
+                    destination=str(rid),
+                    channel=destination.channel,
+                )
+                return _render_list(
+                    request, notice="Canal não suporta mensagem de boas-vindas.", status=409, db=db
+                )
+            except SenderError:
+                _log.warning(
+                    "welcome_send_failed",
+                    destination=str(rid),
+                    channel=destination.channel,
+                    error_kind="SenderError",
+                )
+                return _render_list(
+                    request, notice="Falha ao enviar a mensagem de boas-vindas.", status=502, db=db
+                )
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     except ConfigError:
         _log.warning(_WRITE_LOG)

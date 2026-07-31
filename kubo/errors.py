@@ -95,6 +95,13 @@ class DestinationHasHistoryError(KuboError):
     ser preservada, então a UI oferece arquivar. A mensagem carrega só o id."""
 
 
+class UnsupportedChannelError(KuboError):
+    """O canal do destino não suporta a ação solicitada (ex.: welcome em canal desconhecido).
+
+    Distinta de `SenderError` (falha de entrega num canal válido): aqui nenhum envio foi
+    tentado — o estado do destino não permite a ação. A rota traduz em 409, não 502."""
+
+
 class InviteNotResendableError(KuboError):
     """Reenvio de convite recusado porque ainda não expirou ou já foi aceito."""
 

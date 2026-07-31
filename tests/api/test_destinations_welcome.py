@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.distribution.email import SmtpConfig
 from kubo.store import client, destinations, migrations
 from kubo.store.client import connect as _real_connect
 from tests.api.conftest import UI_PASSWORD
@@ -57,7 +58,7 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
     tc, csrf = _login_csrf(app_db)
     tenant = RecordID("tenant", "breakglass")
     with _real_connect(replace(client.config(), database=_DB)) as root:
-        destinations.create_destination(
+        rid = destinations.create_destination(
             root,
             name="Renato Bardi",
             kind="pessoa",
@@ -65,8 +66,7 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
             address="123456",
             tenant_id=tenant,
         )
-        rows = root.query("SELECT id FROM destination WHERE name = 'Renato Bardi';")
-    did = rows[0]["id"].id
+    did = rid.id
 
     calls: list[dict[str, Any]] = []
 
@@ -80,6 +80,58 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
     assert resp.status_code == 303
     assert resp.headers["location"] == "/destinations"
     assert len(calls) == 1
+    assert calls[0]["token"] == "bot-token"
     assert calls[0]["chat_id"] == "123456"
     assert "Obrigado" in calls[0]["text"]
     assert "Bardi" in calls[0]["text"]
+
+
+def test_welcome_sends_email(app_db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /destinations/{id}/welcome envia mensagem de boas-vindas por e-mail."""
+    tc, csrf = _login_csrf(app_db)
+    tenant = RecordID("tenant", "breakglass")
+    with _real_connect(replace(client.config(), database=_DB)) as root:
+        rid = destinations.create_destination(
+            root,
+            name="Claudia",
+            kind="pessoa",
+            channel="email",
+            address="claudia@example.com",
+            tenant_id=tenant,
+        )
+    did = rid.id
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_send_email(
+        *, to: str, subject: str, text_body: str, html_body: str, smtp_config: Any
+    ) -> None:
+        calls.append(
+            {
+                "to": to,
+                "subject": subject,
+                "text_body": text_body,
+                "html_body": html_body,
+            }
+        )
+
+    monkeypatch.setattr("kubo.distribution.email.send_email", fake_send_email)
+    monkeypatch.setattr(
+        "kubo.distribution.email.email_smtp_config",
+        lambda: SmtpConfig(
+            host="smtp.example.com",
+            port=587,
+            user="bot",
+            password="x",
+            from_address="bot@example.com",
+        ),
+    )
+
+    resp = tc.post(f"/destinations/{did}/welcome", data={"csrf": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/destinations"
+    assert len(calls) == 1
+    assert calls[0]["to"] == "claudia@example.com"
+    assert calls[0]["subject"] == "Bem-vindo ao Kubo"
+    assert "Bardi" in calls[0]["text_body"]
+    assert "Bardi" in calls[0]["html_body"]
