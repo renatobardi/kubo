@@ -19,6 +19,7 @@ from starlette.requests import Request
 from kubo.api.nav import (
     GROUP_DISTRIBUTION,
     GROUP_KNOWLEDGE,
+    GROUP_STUDY,
     GROUP_WORK,
     MOBILE_TABS,
     NAV,
@@ -46,6 +47,10 @@ _GROUP_TO_MOBILE_TAB: dict[str, MobileTabKey] = {
     GROUP_KNOWLEDGE: "knowledge",
     GROUP_WORK: "work",
     GROUP_DISTRIBUTION: "distribution",
+    # Estudos não tem aba própria (a bottom bar tem 5 destinos fixos): cai em "Mais",
+    # onde seus itens já aparecem. Mapeamento EXPLÍCITO, e não o fallback do `.get`,
+    # porque o teste de blindagem exige que todo grupo da NAV esteja aqui.
+    GROUP_STUDY: "more",
 }
 
 
