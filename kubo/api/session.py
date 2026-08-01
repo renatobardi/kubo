@@ -12,7 +12,7 @@ from typing import Any
 from starlette.requests import Request
 from surrealdb import RecordID
 
-from kubo.errors import MembershipRequiredError
+from kubo.errors import MembershipRequiredError, StaleSessionError
 from kubo.store import tenancy as tenancy_store
 
 
@@ -47,8 +47,14 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
     re-verificado contra a allowlist de env — o cookie não é fonte de verdade
     para o bypass. `owner`/`member` precisam pertencer ao tenant ativo.
 
-    Retorna None para sessão incompleta, tenant malformado, usuário inexistente
-    ou membership inválida — a rota deve negar o acesso (403).
+    Retorna None quando NÃO há sessão (campos ausentes) — a rota deve negar (403),
+    embora na prática o `RequireLoginMiddleware` já tenha redirecionado antes.
+
+    Levanta `StaleSessionError` quando a sessão EXISTE mas perdeu o lastro: tenant
+    malformado, usuário inexistente ou membership inválida. O caso merece exceção,
+    e não outro `None`, porque a resposta é oposta — devolver 403 aqui tranca o
+    usuário numa página sem login e sem botão de sair (KUBO-140). Quem trata é o
+    handler único registrado em `create_app`.
     """
     uid = request.session.get("uid")
     tenant_id = request.session.get("tenant_id")
@@ -58,11 +64,11 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
 
     tenant = parse_record_id(tenant_id)
     if tenant is None:
-        return None
+        raise StaleSessionError(f"tenant_id de sessão malformado: {tenant_id!r}")
 
     user = tenancy_store.get_user_by_firebase_uid(db, uid)
     if user is None:
-        return None
+        raise StaleSessionError("usuário da sessão não existe mais")
 
     is_superadmin = role == "superadmin" and tenancy_store.is_superadmin(
         uid, request.app.state.superadmin_uids
@@ -74,8 +80,11 @@ def resolve_session(request: Request, db: Any) -> SessionContext | None:
             tenant_id=tenant,
             superadmin=is_superadmin,
         )
-    except MembershipRequiredError:
-        return None
+    except MembershipRequiredError as exc:
+        # A sessão traz o próprio `tenant_id`; uma membership recusada aqui só pode
+        # significar que o vínculo foi revogado enquanto o cookie ainda existe.
+        # Rotas ainda retornam 403 para recurso de outro tenant com sessão válida.
+        raise StaleSessionError("membership da sessão não é mais válida") from exc
     return SessionContext(
         tenant_id=tenant,
         user_id=user.id,

@@ -32,6 +32,7 @@ from kubo.store.study import (
     get_lesson,
     get_lesson_for_day,
     get_log_for_lesson,
+    get_plan_entry,
     list_active_plans,
     list_chapters_by_ids,
     list_lessons,
@@ -40,7 +41,7 @@ from kubo.store.study import (
     save_plan_proposal,
 )
 from kubo.study.parsing import ParsedChapter
-from kubo.study.tutor import LessonOutput, QuizItem
+from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
 
 pytestmark = pytest.mark.integration
 
@@ -73,6 +74,7 @@ def _output(prefix: str = "Aula 1", *, recap: str | None = None) -> LessonOutput
         scenario=f"{prefix}: o cenário.",
         application=f"{prefix}: a aplicação.",
         recap=recap,
+        provenance=[ProvenanceItem(chapter_seq=1, quote=f"{prefix}: trecho de origem.")],
         quiz=[
             QuizItem(
                 question=f"{prefix} Q{i}?",
@@ -221,9 +223,11 @@ def test_create_lesson_persists_the_blocks_and_the_quiz(
     assert lesson.recap == "Você errou filas."
     assert lesson.concept == "Aula 1: o conceito."
     assert [q["question"] for q in lesson.quiz] == ["Aula 1 Q1?", "Aula 1 Q2?"]
+    assert lesson.provenance == [{"chapter_seq": 1, "quote": "Aula 1: trecho de origem."}]
     fetched = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson.id)
     assert fetched is not None
     assert fetched.application == "Aula 1: a aplicação."
+    assert fetched.provenance == [{"chapter_seq": 1, "quote": "Aula 1: trecho de origem."}]
 
 
 def test_get_lesson_for_day_finds_only_that_day(
@@ -504,3 +508,18 @@ def test_lesson_store_requires_membership(db: Any, tenant_id: RecordID, user_id:
         list_active_plans(db, tenant_id=tenant_id, user_id=stranger)
     with pytest.raises(MembershipRequiredError):
         next_unlessoned_entry(db, tenant_id=tenant_id, user_id=stranger, plan_id=plan.id)
+
+
+def test_get_plan_entry_returns_only_within_scope(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """`get_plan_entry` devolve a entrada só para o dono; outro usuário do tenant vê None."""
+    plan = _active_plan(db, tenant_id, user_id)
+    entry = _first_entry(db, tenant_id, user_id, plan.id)
+    other_id = _other_member(db, tenant_id)
+
+    found = get_plan_entry(db, entry_id=entry.id, tenant_id=tenant_id, user_id=user_id)
+    assert found is not None
+    assert found.id == entry.id
+
+    assert get_plan_entry(db, entry_id=entry.id, tenant_id=tenant_id, user_id=other_id) is None

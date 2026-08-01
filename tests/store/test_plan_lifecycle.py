@@ -39,7 +39,7 @@ from kubo.store.study import (
     save_plan_proposal,
 )
 from kubo.study.parsing import ParsedChapter
-from kubo.study.tutor import LessonOutput, QuizItem
+from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
 
 pytestmark = pytest.mark.integration
 
@@ -76,6 +76,7 @@ def _output(prefix: str = "Aula 1") -> LessonOutput:
         scenario=f"{prefix}: o cenário.",
         application=f"{prefix}: a aplicação.",
         recap=None,
+        provenance=[ProvenanceItem(chapter_seq=1, quote=f"{prefix}: trecho de origem.")],
         quiz=[
             QuizItem(
                 question=f"{prefix} Q{i}?",

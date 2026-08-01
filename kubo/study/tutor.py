@@ -43,6 +43,19 @@ class QuizItem(BaseModel):
     answer_index: int = Field(ge=0)
 
 
+class ProvenanceItem(BaseModel):
+    """Referência ao trecho do material que originou o conceito da lição.
+
+    `chapter_seq` é o seq do capítulo (visível para o LLM no conteúdo como `[seq]`),
+    e `quote` é uma citação curta do trecho — localizador, não reprodução.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    chapter_seq: int = Field(ge=1)
+    quote: str = Field(min_length=1, max_length=300)
+
+
 class LessonOutput(BaseModel):
     """Saída estruturada da persona tutor: os blocos da lição + o quiz."""
 
@@ -52,6 +65,7 @@ class LessonOutput(BaseModel):
     scenario: str = Field(min_length=1, max_length=3000)
     application: str = Field(min_length=1, max_length=3000)
     recap: str | None = Field(default=None, max_length=2000)
+    provenance: list[ProvenanceItem] = Field(min_length=1, max_length=5)
     quiz: list[QuizItem] = Field(min_length=2, max_length=3)
 
 
@@ -107,6 +121,11 @@ def _instruction(prompt: str, *, work_context: str, has_misses: bool) -> str:
     parts = [prompt]
     if work_context.strip():
         parts.append(f"Contexto de trabalho do aluno: {work_context}")
+    parts.append(
+        "Cada conceito destilado deve trazer proveniência: indique o número do capítulo "
+        "(visível no conteúdo como [seq]) e uma citação curta (até 300 caracteres) do "
+        "trecho que originou o conceito. A citação é localizador, não reprodução."
+    )
     if has_misses:
         parts.append(
             "O conteúdo abaixo lista questões que o aluno errou recentemente: abra a "
@@ -136,7 +155,7 @@ def _content(
             "Questões que o aluno errou recentemente (para a recapitulação):\n"
             + "\n".join(f"- {miss}" for miss in misses)
         )
-    parts.extend(f"## {chapter.title}\n{chapter.content}" for chapter in chapters)
+    parts.extend(f"## [{chapter.seq}] {chapter.title}\n{chapter.content}" for chapter in chapters)
     full = "\n\n".join(parts)
     if len(full) <= _MAX_PROMPT_TEXT:
         return full

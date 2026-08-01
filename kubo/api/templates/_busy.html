@@ -1,0 +1,69 @@
+{# Indicador de progresso global (KUBO-143) — incluído por base.html e login.html.
+   Parcial única: duplicar o par CSS+JS nos dois deixaria os dois divergirem. #}
+<style>
+    /* Indicador de progresso global [KUBO-143]. CSS puro aqui, e não utilitário
+       Tailwind, porque o app.css é gerado no build da imagem: uma classe nova só
+       existiria depois de rebuildar, e o indicador ficaria invisível em qualquer
+       ambiente rodando um css anterior — falha silenciosa justamente no sinal que
+       existe para acabar com o silêncio. */
+    [data-busy] { position: relative; pointer-events: none; opacity: 0.7; }
+    [data-busy]::after {
+      content: "";
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 1rem; height: 1rem;
+      margin: -0.5rem 0 0 -0.5rem;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 9999px;
+      animation: kubo-spin 0.6s linear infinite;
+    }
+    /* O rótulo some para o spinner não escrever por cima do texto do botão. */
+    [data-busy] > * { visibility: hidden; }
+    @keyframes kubo-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      [data-busy]::after { animation-duration: 2.4s; }
+    }
+</style>
+  <script>
+    // Indicador de progresso global [KUBO-143]: um ouvinte delegado, não uma macro
+    // repetida em cada form. Os 38 botões de escrita da UI têm formatos diferentes
+    // (ícone puro, texto, classes próprias) e o form escrito amanhã por alguém
+    // distraído nasceria sem indicador. Aqui, todo form de escrita — inclusive os
+    // que ainda não existem — já nasce coberto.
+    //
+    // `capture: true` para rodar antes de qualquer handler que chame
+    // stopPropagation, e o listener é passivo quanto ao envio: NÃO chama
+    // preventDefault, então o POST segue normalmente.
+    document.addEventListener("submit", function (ev) {
+      var form = ev.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if ((form.getAttribute("method") || "").toLowerCase() !== "post") return;
+
+      // Segundo clique: o envio já está em curso, engole o evento. Sem isto, um
+      // upload de dezenas de MB ou uma chamada paga ao modelo rodaria duas vezes.
+      if (form.hasAttribute("data-submitting")) {
+        ev.preventDefault();
+        return;
+      }
+      form.setAttribute("data-submitting", "");
+
+      // `ev.submitter` cobre também o botão que vive FORA do form e aponta por
+      // form="<id>" (diálogos de gate). Sem ele, cairíamos no primeiro botão do
+      // form e marcaríamos o controle errado.
+      var target = ev.submitter || form.querySelector("button, input[type=submit]");
+      if (!target) return;
+      // Largura/altura travadas antes de esconder o rótulo: sem isso o botão
+      // encolhe para o tamanho do spinner e a linha inteira dá um pulo.
+      var rect = target.getBoundingClientRect();
+      target.style.minWidth = rect.width + "px";
+      target.style.minHeight = rect.height + "px";
+      target.setAttribute("data-busy", "");
+      target.setAttribute("aria-busy", "true");
+      target.setAttribute("aria-live", "polite");
+      // `disabled` só DEPOIS do envio começar: desabilitar durante o submit faria
+      // o browser omitir o name/value do botão, e as rotas que distinguem a ação
+      // pelo valor do submit perderiam o dado.
+      window.setTimeout(function () { target.disabled = true; }, 0);
+    }, true);
+  </script>

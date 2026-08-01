@@ -23,6 +23,7 @@
     .viewbox { display: flex; flex-direction: column; gap: 0.625rem; }
     .viewbox[data-mode="grid2"] { display: grid; grid-template-columns: repeat(2, 1fr); }
     .viewbox[data-mode="squares"] { display: grid; grid-template-columns: repeat(4, 1fr); }
+
   </style>
   <script>
     // Antes do paint (sem flash): tema salvo + estado recolhido da sidebar.
@@ -37,6 +38,7 @@
     })();
   </script>
   <script src="/static/htmx-2.0.4.min.js" defer></script>
+  {% include "_busy.html" %}
 </head>
 <body class="h-full">
   <div class="flex h-dvh overflow-hidden">
