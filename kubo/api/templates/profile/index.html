@@ -18,6 +18,10 @@
           <p class="text-xs text-muted-foreground">{{ email or "sem e-mail" }}</p>
         </div>
       </div>
+      <p class="mt-2 text-2xs text-muted-foreground">
+        Avatar gerado via <a href="https://www.gravatar.com" target="_blank" rel="noopener" class="underline hover:text-foreground">Gravatar</a>
+        a partir do seu e-mail — para trocar a imagem, cadastre-a no gravatar.com com o mesmo endereço.
+      </p>
     </div>
     <form method="post" action="/profile" class="space-y-3 p-4">
       <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -71,5 +75,38 @@
       </button>
     </form>
   </section>
+
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="p-4">
+      <form method="post" action="/logout">
+        <button type="submit"
+                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted active:translate-y-px">
+          Sair
+        </button>
+      </form>
+    </div>
+  </section>
 </div>
+
+<script>
+  // Sincroniza localStorage com o tema do DB após salvar — evita dessincronia
+  // entre o "Salvar tema" (DB) e o toggle do header (localStorage).
+  (function () {
+    var theme = "{{ theme }}";
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else if (theme === "light") {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    } else {
+      localStorage.removeItem("theme");
+      if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    }
+  })();
+</script>
 {% endblock %}
