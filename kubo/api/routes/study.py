@@ -812,7 +812,7 @@ def _collect_all_chapters(
     all_chapters: list[study_store.MaterialChapter] = []
     global_seq = 0
     for material in materials:
-        chapters = study_store.list_all_chapters(
+        chapters = study_store.list_all_chapters_light(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
         )
         for ch in chapters:
@@ -973,6 +973,8 @@ def _persist_planner_reply(
 
     Usa `replace_plan_entries` (não `save_plan_proposal`) para preservar a cadência
     definida manualmente — o chat incremental não pode descartar weekdays/target_date.
+    Se a persistência da mensagem assistant falhar, o plano NÃO é salvo — o dono vê
+    o texto na tela, mas ao recarregar a conversa e o plano estão consistentes.
     """
     try:
         with client.connect_rw() as db:
@@ -987,6 +989,7 @@ def _persist_planner_reply(
             )
     except (ConfigError, StoreError):
         _log.warning("study.planner_chat.persist_failed", topic=_log_key(key))
+        return False
     if not reply.lessons:
         return False
     seq_to_id = {ch.seq: ch.id for ch in chapters}
@@ -1008,10 +1011,10 @@ def _persist_planner_reply(
         return False
 
 
-def _parse_record_id(raw: str) -> RecordID | None:
-    """Parse 'table:id' → RecordID; devolve None se formato inválido."""
+def _parse_record_id(raw: str, expected_table: str) -> RecordID | None:
+    """Parse 'table:id' → RecordID; devolve None se formato inválido ou tabela inesperada."""
     parts = raw.split(":", 1)
-    if len(parts) != 2 or not parts[0] or not parts[1]:
+    if len(parts) != 2 or parts[0] != expected_table or not parts[1]:
         return None
     return RecordID(parts[0], parts[1])
 
@@ -1089,8 +1092,8 @@ def chat_with_planner(
                 depth=topic.depth,
                 material_summaries=summaries,
             )
-        except Exception:  # noqa: BLE001
-            _log.warning("study.planner_chat.failed", topic=_log_key(key))
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("study.planner_chat.failed", topic=_log_key(key), error=str(exc))
             yield {"event": "error", "data": "Falha ao gerar resposta."}
             return
         if reply is None:
@@ -1181,7 +1184,7 @@ def repropose_plan(
     ]
     try:
         with client.connect_rw() as db:
-            study_store.save_plan_proposal(
+            study_store.replace_plan_entries(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
@@ -1197,11 +1200,14 @@ def repropose_plan(
 def _resolve_move(
     entries: list[study_store.PlanEntry], ekey: str, direction: str
 ) -> tuple[int, int] | None:
-    """Devolve (idx, neighbor_idx) para o swap, ou None se inviável (borda ou não achou)."""
+    """Devolve (idx, neighbor_idx) para o swap, ou None se na borda (no-op).
+
+    Levanta ValueError se a entry não pertence ao plano (caller devolve 400).
+    """
     entry_id = RecordID("plan_entry", ekey)
     idx = next((i for i, e in enumerate(entries) if str(e.id) == str(entry_id)), None)
     if idx is None:
-        return None
+        raise ValueError("Lição não encontrada.")
     if direction == "up" and idx == 0:
         return None
     if direction == "down" and idx == len(entries) - 1:
@@ -1237,7 +1243,10 @@ def move_entry(
         )
     if plan is None or not entries:
         return PlainTextResponse("Plano não encontrado.", status_code=400)
-    pair = _resolve_move(entries, ekey, direction)
+    try:
+        pair = _resolve_move(entries, ekey, direction)
+    except ValueError:
+        return PlainTextResponse("Lição não encontrada.", status_code=400)
     if pair is None:
         return RedirectResponse(_topic_url(topic.id), status_code=303)
     idx, neighbor_idx = pair
@@ -1271,7 +1280,7 @@ def remove_chapter(
     ctx = _session_of(request)
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
-    ch_rid = _parse_record_id(chapter_id)
+    ch_rid = _parse_record_id(chapter_id, "material_chapter")
     if ch_rid is None:
         return PlainTextResponse(_INVALID_ID, status_code=400)
     entry_id = RecordID("plan_entry", ekey)
@@ -1304,7 +1313,7 @@ def remove_chapter(
 def set_cadence(
     request: Request,
     key: str,
-    weekdays: Annotated[list[str], Form()] = None,  # type: ignore[assignment]
+    weekdays: Annotated[list[str] | None, Form()] = None,
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
     """Define a cadência (weekdays) e recalcula a data-alvo."""

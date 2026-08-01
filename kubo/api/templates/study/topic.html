@@ -277,6 +277,7 @@
           }
         }
       } catch (err) {
+        console.error('chat fetch failed:', err);
         assistantP.textContent = 'Erro de conexão.';
       } finally {
         submit.disabled = false;
@@ -340,13 +341,13 @@
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <input type="hidden" name="direction" value="up">
             <button type="submit" class="text-foreground/40 hover:text-foreground disabled:opacity-20"
-                    aria-label="Mover para cima" {% if loop.first %}disabled{% endif %}>↑</button>
+                    aria-label="Mover lição '{{ entry.title }}' para cima" {% if loop.first %}disabled{% endif %}>↑</button>
           </form>
           <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/move" class="inline">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <input type="hidden" name="direction" value="down">
             <button type="submit" class="text-foreground/40 hover:text-foreground disabled:opacity-20"
-                    aria-label="Mover para baixo" {% if loop.last %}disabled{% endif %}>↓</button>
+                    aria-label="Mover lição '{{ entry.title }}' para baixo" {% if loop.last %}disabled{% endif %}>↓</button>
           </form>
         </div>
         <span class="font-semibold text-muted-foreground">{{ entry.seq }}.</span>
@@ -356,11 +357,14 @@
             {% for ch_id in entry.chapters %}
             <span class="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-xs text-muted-foreground">
               {{ chapter_titles.get(ch_id|string, ch_id|string) }}
+              {% if entry.chapters|length > 1 %}
               <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/remove-chapter" class="inline">
                 <input type="hidden" name="csrf" value="{{ csrf }}">
                 <input type="hidden" name="chapter_id" value="{{ ch_id }}">
-                <button type="submit" class="text-foreground/40 hover:text-foreground" aria-label="Remover capítulo">×</button>
+                <button type="submit" class="text-foreground/40 hover:text-foreground"
+                        aria-label="Remover capítulo '{{ chapter_titles.get(ch_id|string, ch_id|string) }}' da lição '{{ entry.title }}'">×</button>
               </form>
+              {% endif %}
             </span>
             {% endfor %}
           </div>
@@ -384,13 +388,14 @@
       {# Formulário de cadência. #}
       <form method="post" action="{{ topic_url }}/plan/cadence" class="mt-2 flex flex-wrap gap-2">
         <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% set _day_labels = {'mon': 'Seg', 'tue': 'Ter', 'wed': 'Qua', 'thu': 'Qui', 'fri': 'Sex', 'sat': 'Sáb', 'sun': 'Dom'} %}
         {% for day in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] %}
         <label class="inline-flex items-center gap-1 text-xs">
           <input type="checkbox" name="weekdays" value="{{ day }}" {% if day in (plan.weekdays or []) %}checked{% endif %}>
-          {{ day }}
+          {{ _day_labels[day] }}
         </label>
         {% endfor %}
-        <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">OK</button>
+        <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">Salvar</button>
       </form>
     </div>
   </section>
@@ -401,7 +406,8 @@
     <p class="mt-1 text-xs text-muted-foreground">Peça ajustes no plano (ex: "junta lição 1 e 2", "foca em X", "cadência 3x semana").</p>
 
     {# Histórico da conversa (persistido, phase=planning). #}
-    <div id="planner-chat-messages" class="mt-3 space-y-3 max-h-96 overflow-y-auto">
+    <div id="planner-chat-messages" role="log" aria-live="polite" aria-atomic="false"
+         class="mt-3 space-y-3 max-h-96 overflow-y-auto">
       {% for msg in planning_chat_messages %}
       <div class="flex {{ 'justify-end' if msg.role == 'user' else 'justify-start' }}">
         <div class="max-w-[80%] rounded-2xl px-4 py-2 text-sm {{ 'bg-primary/10' if msg.role == 'user' else 'bg-input/30' }}">
@@ -413,7 +419,7 @@
     </div>
 
     {# Input do chat. #}
-    <form id="planner-chat-form" class="mt-3 flex gap-2">
+    <form id="planner-chat-form" method="post" action="{{ topic_url }}/planner-chat" class="mt-3 flex gap-2">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label for="planner-chat-input" class="sr-only">Mensagem para o planner</label>
       <textarea id="planner-chat-input" name="message" rows="2" placeholder="Digite sua mensagem..."
@@ -505,6 +511,7 @@
           }
         }
       } catch (err) {
+        console.error('chat fetch failed:', err);
         assistantP.textContent = 'Erro de conexão.';
       } finally {
         submit.disabled = false;

@@ -251,6 +251,33 @@ def list_all_chapters(
     return [_chapter_from_row(row) for row in rows]
 
 
+def list_all_chapters_light(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> list[MaterialChapter]:
+    """Como `list_all_chapters`, mas sem `content` — só estrutura (id, seq, title, part).
+
+    Para rotas que só precisam do mapeamento seq→id ou de títulos (não do texto
+    integral do capítulo). Evita transferir `content` desnecessariamente.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT id, material, seq, title, part FROM material_chapter "  # noqa: S608
+        f"WHERE {_CHAPTER_SCOPE} ORDER BY seq;",
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [
+        MaterialChapter(
+            id=row["id"],
+            material=row["material"],
+            seq=row["seq"],
+            title=row["title"],
+            part=row.get("part"),
+            content="",
+        )
+        for row in rows
+    ]
+
+
 # --- Tema e plano de estudo (KUBO-136) -------------------------------------------------
 #
 # Mesmo contrato do Material acima: keyword-only, `assert_membership` no topo, filtro por
@@ -772,48 +799,50 @@ def replace_plan_entries(
     topic_id: RecordID,
     entries: Sequence[tuple[str, list[RecordID]]],
 ) -> tuple[StudyPlan, list[PlanEntry]]:
-    """Substitui só as entries do plano, preservando weekdays/target_date/status.
+    """Substitui as entries do plano atomicamente, preservando weekdays/status.
 
     Diferente de `save_plan_proposal` (que deleta e recria o `study_plan`), esta
     função mantém o registro do plano intacto — apenas remove as entries antigas
-    e cria as novas. Usada pelo chat incremental do planner (KUBO-165), onde a
-    cadência definida manualmente não pode ser descartada a cada mensagem.
+    e cria as novas numa única transação. `target_date` é recalculado com base no
+    novo número de lições + weekdays existentes (ADR-0043 §cadência). Usada pelo
+    chat incremental do planner (KUBO-165), onde a cadência definida manualmente
+    não pode ser descartada a cada mensagem.
     """
+    from kubo.study.planning import compute_target_date
+
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    # Lê o plano existente (preserva weekdays/target_date/status).
     plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if plan is None:
-        # Sem plano: cria um novo (fallback — não deveria acontecer em planning).
         return save_plan_proposal(
             db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, entries=entries
         )
-    # Deleta só as entries, mantém o study_plan.
-    transaction.run_transaction(
-        db,
-        [
-            f"DELETE FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE};"
-        ],
-        {"plan": plan.id, "tenant": tenant_id, "user": user_id},
+    # Recalcula target_date com base no novo número de lições + weekdays atuais.
+    target = compute_target_date(
+        start=date.today(), weekdays=list(plan.weekdays), lesson_count=len(entries)
     )
-    for seq, (title, chapter_ids) in enumerate(entries, start=1):
+    # Transação única: DELETE + UPDATE target_date + N CREATEs — atômico.
+    stmts = [
+        f"DELETE FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE}",  # noqa: S608
+        f"UPDATE $plan SET target_date = $target WHERE {_MATERIAL_SCOPE}",  # noqa: S608
+    ]
+    params: dict[str, Any] = {
+        "plan": plan.id,
+        "tenant": tenant_id,
+        "user": user_id,
+        "target": datetime(target.year, target.month, target.day),
+    }
+    for i, (title, chapter_ids) in enumerate(entries, start=1):
         entry_id = _fresh("plan_entry")
-        transaction.run_transaction(
-            db,
-            [
-                "CREATE $entry SET study_plan = $plan, tenant_id = $tenant, "
-                "user_id = $user, seq = $seq, title = $title, chapters = $chapters"
-            ],
-            {
-                "entry": entry_id,
-                "plan": plan.id,
-                "tenant": tenant_id,
-                "user": user_id,
-                "seq": seq,
-                "title": title,
-                "chapters": chapter_ids,
-            },
+        stmts.append(
+            f"CREATE $entry_{i} SET study_plan = $plan, tenant_id = $tenant, "
+            f"user_id = $user, seq = $seq_{i}, title = $title_{i}, "
+            f"chapters = $chapters_{i}"
         )
+        params[f"entry_{i}"] = entry_id
+        params[f"seq_{i}"] = i
+        params[f"title_{i}"] = title
+        params[f"chapters_{i}"] = chapter_ids
+    transaction.run_transaction(db, stmts, params)
     _log.info("store.plan.entries_replaced", plan=str(plan.id), entries=len(entries))
     return get_plan_for_topic(  # type: ignore[return-value]
         db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
@@ -879,9 +908,9 @@ def remove_chapter_from_entry(
 ) -> bool:
     """Remove um capítulo de uma lição (edição manual, KUBO-165).
 
-    Usa `array::complement` num único statement transacional (atômico, sem
-    read-modify-write). Devolve True se a entry ainda tem capítulos, False se
-    ficou vazia (caller deve decidir remover a entry ou rejeitar).
+    Rejeita a remoção do último capítulo (devolve False) — não esvazia lições,
+    porque `PlanLesson` exige `min_length=1`. A contagem é lida antes da remoção
+    e o `UPDATE` usa `array::complement` num único statement transacional.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(

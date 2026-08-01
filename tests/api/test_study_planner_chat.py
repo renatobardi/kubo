@@ -167,7 +167,7 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("kubo.study.planner.Planner.propose", _fake_propose)
 
-    # list_all_chapters: devolve capítulos fake.
+    # list_all_chapters_light: devolve capítulos fake (sem content).
     from kubo.store.study import MaterialChapter
 
     def _fake_list_chapters(db: Any, **kw: Any) -> list[MaterialChapter]:
@@ -178,12 +178,14 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
                 seq=i,
                 title=f"Capítulo {i}",
                 part=None,
-                content=f"Conteúdo {i}.",
+                content="",
             )
             for i in range(1, 4)
         ]
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.list_all_chapters", _fake_list_chapters)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_chapters_light", _fake_list_chapters
+    )
 
 
 # --- POST /topics/{key}/planner-chat (SSE) -----------------------------------------------
