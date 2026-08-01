@@ -17,6 +17,7 @@ lixo invisível. O nome do arquivo no volume NUNCA vem do nome enviado pelo dono
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import string
@@ -27,7 +28,8 @@ from typing import Annotated, Any
 import structlog
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.routing import APIRoute
-from starlette.responses import PlainTextResponse, RedirectResponse, Response
+from sse_starlette.sse import EventSourceResponse
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
@@ -36,8 +38,9 @@ from kubo.api.session import SessionContext, resolve_session
 from kubo.errors import ConfigError, MaterialParseError, MembershipRequiredError, StoreError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
-from kubo.store import client
+from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.study.mentor import Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.summarizer import Summarizer
 
@@ -84,6 +87,13 @@ _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
 _TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um estudo em rascunho."
 _OVER_LIMIT = "Limite de materiais por estudo atingido."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
+_TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um estudo em rascunho."
+_TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
+_EMPTY_MESSAGE = "A mensagem não pode ser vazia."
+_INVALID_DEPTH = "Profundidade inválida: use superficial, intermediario ou aprofundado."
+_MENTOR_MAX_TOKENS = 2048
+_MENTOR_TIMEOUT = 60.0
+_VALID_DEPTHS = ("superficial", "intermediario", "aprofundado")
 
 _MAX_LOG_KEY = 64
 
@@ -191,9 +201,9 @@ def _save_upload(directory: Path, ctx: SessionContext, fmt: MaterialFormat, data
 
 
 def _summarizer(ctx: SessionContext) -> Summarizer:
-    """Constrói o sumarizador com a persona `mentor` (modelo vem do catálogo, KUBO-162)."""
+    """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo)."""
     with client.connect() as db:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "mentor")
+        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
     executor = ApiExecutor(
         ApiExecutorConfig(
             model=persona.model or _SUMMARY_MODEL,
@@ -316,6 +326,17 @@ def topic_detail(request: Request, key: str) -> Response:
         materials = study_store.list_materials_by_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
+        chat_messages = (
+            study_store.list_chat_messages(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                phase="draft",
+            )
+            if topic.state == "draft"
+            else []
+        )
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -324,6 +345,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "state_label": _STATE_LABELS.get(topic.state, topic.state),
             "materials": materials,
             "max_materials": _max_materials(),
+            "chat_messages": chat_messages,
             "csrf": csrf_token(request),
         },
     )
@@ -491,4 +513,229 @@ def delete_material(
     except OSError:
         _log.warning("study.material.file_unlink_failed", path=material.file_path)
     _log.info("study.material.deleted", material=_log_key(mkey), topic=_log_key(key))
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+# --- Chat com mentor (KUBO-163, ADR-0047 §6) --------------------------------------------
+
+
+def _mentor(ctx: SessionContext) -> Mentor:
+    """Constrói o mentor com a persona `mentor` (modelo vem do catálogo)."""
+    with client.connect() as db:
+        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "mentor")
+    executor = ApiExecutor(
+        ApiExecutorConfig(
+            model=persona.model or _SUMMARY_MODEL,
+            max_tokens=_MENTOR_MAX_TOKENS,
+            timeout=_MENTOR_TIMEOUT,
+        ),
+        max_attempts=1,
+    )
+    return Mentor(executor=executor, prompt=persona.prompt)
+
+
+def _work_context_of(ctx: SessionContext) -> str:
+    """Lê o work_context do perfil do usuário (consumido automaticamente pelo mentor)."""
+    with client.connect() as db:
+        profile = tenancy.get_user_profile(db, ctx.user_id)
+    return (profile.work_context or "") if profile else ""
+
+
+def _material_summaries_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[str]:
+    """Sumários dos Materiais do Tema (não conteúdo completo — contexto para o mentor)."""
+    materials = study_store.list_materials_by_topic(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
+    )
+    return [m.summary for m in materials if m.summary]
+
+
+def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[tuple[str, str]]:
+    """Histórico da conversa como lista de (role, content) para o mentor."""
+    messages = study_store.list_chat_messages(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
+    )
+    return [(m.role, m.content) for m in messages]
+
+
+def _chat_precheck(
+    request: Request, key: str, ctx: SessionContext
+) -> Response | tuple[study_store.Topic, list[str], list[tuple[str, str]]]:
+    """Valida tema/draft/materiais; devolve Response de erro OU contexto do chat."""
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "draft":
+            return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
+        summaries = _material_summaries_of(db, ctx, topic.id)
+        if not summaries:
+            return PlainTextResponse(_TOPIC_NO_MATERIALS, status_code=400)
+        history = _chat_history_of(db, ctx, topic.id)
+    return topic, summaries, history
+
+
+@router.post("/topics/{key}/chat")
+def chat_with_mentor(
+    request: Request,
+    key: str,
+    message: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Chat SSE com mentor: persiste mensagem do dono, streama resposta, persiste no fim.
+
+    Ordem: CSRF → sessão → tema (404) → draft (400) → ≥1 Material (400).
+    Streaming é síncrono: cada chunk vira um evento SSE `data`.
+    Ao final, envia evento `done` com sugestões extraídas (nome, foco, profundidade).
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    message = message.strip()
+    if not message:
+        return PlainTextResponse(_EMPTY_MESSAGE, status_code=400)
+
+    precheck = _chat_precheck(request, key, ctx)
+    if isinstance(precheck, Response):
+        return precheck
+    topic, summaries, history = precheck
+
+    work_context = _work_context_of(ctx)
+    mentor = _mentor(ctx)
+
+    # Persiste a mensagem do dono antes de streamar.
+    with client.connect_rw() as db:
+        study_store.create_chat_message(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_id=topic.id,
+            phase="draft",
+            role="user",
+            content=message,
+        )
+
+    def _stream() -> Any:
+        """Generator que envia chunks SSE e persiste a resposta ao final."""
+        chunks: list[str] = []
+        try:
+            for chunk in mentor.stream_chat(
+                user_message=message,
+                material_summaries=summaries,
+                history=history,
+                work_context=work_context,
+            ):
+                chunks.append(chunk)
+                yield {"event": "chunk", "data": chunk}
+        except Exception:  # noqa: BLE001
+            _log.warning("study.chat.stream_failed", topic=_log_key(key))
+            yield {"event": "error", "data": "Falha ao gerar resposta."}
+            return
+        full = "".join(chunks)
+        reply = extract_reply(full)
+        # Persiste o texto LIMPO (sem marcações internas do protocolo).
+        _persist_assistant(ctx, topic.id, reply.text, key)
+        yield {"event": "done", "data": json.dumps(_done_data(reply))}
+
+    return EventSourceResponse(_stream())
+
+
+def _persist_assistant(ctx: SessionContext, topic_id: RecordID, content: str, key: str) -> None:
+    """Persiste a resposta do mentor; falha de store é logada, não derruba o stream."""
+    try:
+        with client.connect_rw() as db:
+            study_store.create_chat_message(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic_id,
+                phase="draft",
+                role="assistant",
+                content=content,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.chat.assistant_persist_failed", topic=_log_key(key))
+
+
+def _done_data(reply: MentorReply) -> dict[str, str | None]:
+    """Monta o payload do evento SSE `done` com sugestões extraídas."""
+    data: dict[str, str | None] = {"text": reply.text}
+    if reply.suggested_name:
+        data["suggested_name"] = reply.suggested_name
+    if reply.suggested_focus:
+        data["suggested_focus"] = reply.suggested_focus
+    if reply.suggested_depth:
+        data["suggested_depth"] = reply.suggested_depth
+    return data
+
+
+@router.get("/topics/{key}/chat/history")
+def chat_history(request: Request, key: str) -> Response:
+    """Devolve o histórico da conversa como JSON (para reabrir o Tema)."""
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return PlainTextResponse("Tema não encontrado.", status_code=404)
+        messages = study_store.list_chat_messages(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_id=topic.id,
+            phase="draft",
+        )
+    return JSONResponse(
+        [
+            {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+            for m in messages
+        ]
+    )
+
+
+@router.post("/topics/{key}/fields")
+def set_topic_fields(
+    request: Request,
+    key: str,
+    field: Annotated[str, Form()] = "",
+    value: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Atualiza um campo estruturado do Tema (focus ou depth) inferido pelo mentor.
+
+    Atualização parcial: só o campo indicado por `field` é alterado. O outro
+    campo preserva o valor existente (sentinela `_UNSET` na store).
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    field = field.strip()
+    value = value.strip()
+    if field not in ("focus", "depth"):
+        return PlainTextResponse("Campo inválido.", status_code=400)
+    if field == "depth" and value and value not in _VALID_DEPTHS:
+        return PlainTextResponse(_INVALID_DEPTH, status_code=400)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "draft":
+            return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
+    kwargs: dict[str, str | None] = {field: value or None}
+    try:
+        with client.connect_rw() as db:
+            study_store.set_topic_fields(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                **kwargs,  # type: ignore[arg-type]
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.fields.update_failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)

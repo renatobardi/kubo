@@ -76,6 +76,7 @@ def stub_study_material_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
     )
+    monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
     # Parsing mockado: devolve um ParsedMaterial simples.
     from kubo.study.parsing import ParsedChapter, ParsedMaterial
 

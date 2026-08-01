@@ -126,6 +126,10 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0029_study_topic_container.surql",
         # 0030 (KUBO-162): índice material_topic para list/count por tema.
         "0030_material_topic_index.surql",
+        # 0031 (KUBO-163): conversa persistida + campos estruturados do Tema.
+        "0031_study_chat.surql",
+        # 0032 (KUBO-163): atualiza prompt da persona mentor para chat conversacional.
+        "0032_mentor_persona_prompt.surql",
     }
 
 

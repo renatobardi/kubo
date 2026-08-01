@@ -27,6 +27,10 @@ _log = structlog.get_logger(__name__)
 _MAX_PAGE = 100
 
 _MATERIAL_SCOPE = "tenant_id = $tenant AND user_id = $user"
+
+# Sentinel: caller omitted a field → preserve the existing value.
+# `None` means "clear"; `_UNSET` means "don't touch" (same pattern as tenancy).
+_UNSET: object = object()
 _CHAPTER_SCOPE = f"material = $material AND {_MATERIAL_SCOPE}"
 _ENTRY_SCOPE = f"study_plan = $plan AND {_MATERIAL_SCOPE}"
 # `lesson` também aponta o plano por `study_plan`: mesmo recorte da lição planejada.
@@ -258,6 +262,7 @@ class Topic:
 
     Nasce vazio (`draft`) e o dono adiciona Materiais dentro dele. O nome é
     sugerido por `mentor` e editável inline em todos os estados não-arquivados.
+    `focus` e `depth` são inferidos pelo mentor durante a conversa (KUBO-163).
     """
 
     id: RecordID
@@ -266,6 +271,8 @@ class Topic:
     title: str
     state: str
     created_at: datetime
+    focus: str | None = None
+    depth: str | None = None
 
 
 def _topic_from_row(row: dict[str, Any]) -> Topic:
@@ -277,6 +284,8 @@ def _topic_from_row(row: dict[str, Any]) -> Topic:
         title=row["title"],
         state=row["state"],
         created_at=_as_datetime(row["created_at"]),
+        focus=row.get("focus"),
+        depth=row.get("depth"),
     )
 
 
@@ -415,3 +424,131 @@ def delete_material(
         {"material": material_id, "tenant": tenant_id, "user": user_id},
     )
     _log.info("store.material.deleted", material=str(material_id))
+
+
+# --- Chat com mentor/planner (KUBO-163, ADR-0047 §6) ------------------------------------
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """Uma mensagem da conversa com mentor (Fase 1) ou planner (Fase 2)."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    topic: RecordID
+    phase: str
+    role: str
+    content: str
+    created_at: datetime
+
+
+def _chat_from_row(row: dict[str, Any]) -> ChatMessage:
+    """Constrói um `ChatMessage` a partir de uma linha do banco."""
+    return ChatMessage(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        topic=row["topic"],
+        phase=row["phase"],
+        role=row["role"],
+        content=row["content"],
+        created_at=_as_datetime(row["created_at"]),
+    )
+
+
+_CHAT_SCOPE = f"topic = $topic AND phase = $phase AND {_MATERIAL_SCOPE}"
+
+
+def create_chat_message(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    phase: str,
+    role: str,
+    content: str,
+) -> ChatMessage:
+    """Persiste uma mensagem da conversa e a devolve."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    msg_id = _fresh("study_chat")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $msg SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+            "phase = $phase, role = $role, content = $content"
+        ],
+        {
+            "msg": msg_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "topic": topic_id,
+            "phase": phase,
+            "role": role,
+            "content": content,
+        },
+    )
+    rows = db.query(
+        "SELECT * FROM study_chat WHERE id = $msg LIMIT 1;",
+        {"msg": msg_id},
+    )
+    if not rows:
+        raise StoreError("chat message vanished during creation")
+    _log.info("store.chat.created", msg=str(msg_id), topic=str(topic_id), role=role)
+    return _chat_from_row(rows[0])
+
+
+def list_chat_messages(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    phase: str,
+) -> list[ChatMessage]:
+    """Lista as mensagens da conversa, em ordem cronológica (mais antigas primeiro)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_chat WHERE {_CHAT_SCOPE} ORDER BY created_at ASC;",  # noqa: S608
+        {"topic": topic_id, "phase": phase, "tenant": tenant_id, "user": user_id},
+    )
+    return [_chat_from_row(row) for row in rows]
+
+
+def set_topic_fields(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    focus: str | None | object = _UNSET,
+    depth: str | None | object = _UNSET,
+) -> None:
+    """Atualiza campos estruturados do Tema (focus, depth) inferidos pelo mentor.
+
+    `_UNSET` (default) preserva o valor existente; `None` limpa o campo.
+    Atualização parcial: só o campo presente é alterado.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError("tema não encontrado")
+    if topic.state == "archived":
+        raise StoreError("tema arquivado é só leitura")
+    sets: list[str] = []
+    params: dict[str, Any] = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
+    if focus is not _UNSET:
+        sets.append("focus = $focus")
+        params["focus"] = focus
+    if depth is not _UNSET:
+        sets.append("depth = $depth")
+        params["depth"] = depth
+    if not sets:
+        return  # nada a atualizar
+    set_clause = ", ".join(sets)
+    transaction.run_transaction(
+        db,
+        [f"UPDATE $topic SET {set_clause} WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
+        params,
+    )

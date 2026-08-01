@@ -5,10 +5,14 @@ satisfeito por `ApiExecutor` (kubo/executors/api.py) em produção e por fakes
 em teste. Nenhum worker importa `ApiExecutor` diretamente — dependeria da
 implementação concreta (LiteLLM) em vez do seam, quebrando a troca por fake
 nos testes unitários (CLAUDE.md: "LLMs em testes sempre mockados").
+
+`StreamingExecutor` (KUBO-163) estende o seam para chat conversacional com
+streaming: devolve um iterator de chunks de texto em vez de um objeto tipado.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -27,4 +31,16 @@ class Executor(Protocol):
 
     def complete(self, instruction: str, untrusted_content: str, response_model: type[T]) -> T:
         """Invoca o LLM e devolve a resposta validada contra `response_model`."""
+        ...
+
+
+class StreamingExecutor(Protocol):
+    """Invoca um LLM com streaming: devolve chunks de texto aos poucos (KUBO-163).
+
+    Mesma demarcação de `untrusted_content` do `Executor`, mas sem validação
+    de schema — a saída é texto livre (chat conversacional), não JSON estruturado.
+    """
+
+    def stream(self, instruction: str, untrusted_content: str) -> Iterator[str]:
+        """Invoca o LLM em streaming e devolve um iterator de chunks de texto."""
         ...

@@ -47,6 +47,7 @@ def stub_study_topic_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_materials_by_topic", lambda db, **kw: []
     )
+    monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
 
 
 def _csrf(authed_client: TestClient) -> str:

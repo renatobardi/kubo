@@ -75,6 +75,177 @@
       </div>
     </form>
   </section>
+
+  {# Chat com mentor (KUBO-163): só em draft. Desabilitado até ≥1 Material. #}
+  {% if topic.state == "draft" %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Conversa com o mentor</h2>
+    <p class="mt-1 text-xs text-muted-foreground">Converse para definir o que quer do estudo. O mentor sugere nome, foco e profundidade.</p>
+
+    {% if not materials %}
+    <p class="mt-3 text-sm text-muted-foreground">Adicione pelo menos um material para começar a conversar com o mentor.</p>
+    {% else %}
+
+    {# Histórico da conversa (persistido). #}
+    <div id="chat-messages" class="mt-3 space-y-3 max-h-96 overflow-y-auto">
+      {% for msg in chat_messages %}
+      <div class="flex {{ 'justify-end' if msg.role == 'user' else 'justify-start' }}">
+        <div class="max-w-[80%] rounded-2xl px-4 py-2 text-sm {{ 'bg-primary/10' if msg.role == 'user' else 'bg-input/30' }}">
+          <span class="text-xs text-muted-foreground">{{ 'Você' if msg.role == 'user' else 'Mentor' }}</span>
+          <p class="mt-0.5 whitespace-pre-wrap">{{ msg.content }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Sugestões do mentor (aparecem dinamicamente via JS). #}
+    <div id="chat-suggestions" class="mt-3 hidden space-y-2">
+      <div class="text-xs font-semibold text-muted-foreground">Sugestões do mentor</div>
+      <div id="suggestion-buttons" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    {# Input do chat. #}
+    <form id="chat-form" class="mt-3 flex gap-2">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <textarea id="chat-input" name="message" rows="2" placeholder="Digite sua mensagem..."
+                class="flex-1 rounded-2xl border border-input bg-input/30 px-4 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 resize-none"></textarea>
+      <button type="submit" id="chat-submit"
+              class="h-9 shrink-0 rounded-4xl px-4 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+        Enviar
+      </button>
+    </form>
+  </section>
+
+  <script>
+  (function() {
+    const form = document.getElementById('chat-form');
+    const input = document.getElementById('chat-input');
+    const submit = document.getElementById('chat-submit');
+    const messages = document.getElementById('chat-messages');
+    const suggestions = document.getElementById('chat-suggestions');
+    const suggestionButtons = document.getElementById('suggestion-buttons');
+    const csrf = form.querySelector('input[name="csrf"]').value;
+    const topicUrl = '{{ topic_url }}';
+
+    function addMessage(role, content) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+      const bubble = document.createElement('div');
+      bubble.className = 'max-w-[80%] rounded-2xl px-4 py-2 text-sm ' + (role === 'user' ? 'bg-primary/10' : 'bg-input/30');
+      const label = document.createElement('span');
+      label.className = 'text-xs text-muted-foreground';
+      label.textContent = role === 'user' ? 'Você' : 'Mentor';
+      const p = document.createElement('p');
+      p.className = 'mt-0.5 whitespace-pre-wrap';
+      p.textContent = content;
+      bubble.appendChild(label);
+      bubble.appendChild(p);
+      wrapper.appendChild(bubble);
+      messages.appendChild(wrapper);
+      messages.scrollTop = messages.scrollHeight;
+      return p;
+    }
+
+    function addSuggestion(type, value) {
+      const btn = document.createElement('button');
+      btn.className = 'rounded-4xl bg-primary/10 px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-primary/20';
+      const labels = {name: 'Nome: ', focus: 'Foco: ', depth: 'Profundidade: '};
+      btn.textContent = labels[type] + value;
+      btn.onclick = function() { applySuggestion(type, value); };
+      suggestionButtons.appendChild(btn);
+    }
+
+    function applySuggestion(type, value) {
+      if (type === 'name') {
+        const titleInput = document.querySelector('input[name="title"]');
+        if (titleInput) titleInput.value = value;
+        const renameForm = titleInput ? titleInput.closest('form') : null;
+        if (renameForm) {
+          renameForm.requestSubmit();
+        }
+      } else if (type === 'focus' || type === 'depth') {
+        const fd = new FormData();
+        fd.append('csrf', csrf);
+        fd.append('field', type);
+        fd.append('value', value);
+        fetch(topicUrl + '/fields', {method: 'POST', body: fd}).then(() => location.reload());
+      }
+    }
+
+    form.onsubmit = async function(e) {
+      e.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      submit.disabled = true;
+      addMessage('user', msg);
+
+      const assistantP = addMessage('assistant', '');
+      let fullText = '';
+
+      try {
+        const resp = await fetch(topicUrl + '/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({message: msg, csrf: csrf}),
+        });
+        if (!resp.ok) {
+          assistantP.textContent = 'Erro: ' + resp.status;
+          return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, {stream: true});
+          // SSE: eventos separados por \n\n; linhas dentro de um evento por \n (ou \r\n).
+          const events = buffer.split('\n\n');
+          buffer = events.pop();
+          for (const evtBlock of events) {
+            const lines = evtBlock.split(/\r?\n/);
+            let ev = '';
+            const dataLines = [];
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                ev = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                dataLines.push(line.slice(6));
+              }
+            }
+            const data = dataLines.join('\n');
+            if (ev === 'chunk') {
+              fullText += data;
+              assistantP.textContent = fullText;
+              messages.scrollTop = messages.scrollHeight;
+            } else if (ev === 'error') {
+              assistantP.textContent = data || 'Erro ao gerar resposta.';
+            } else if (ev === 'done') {
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.text !== undefined) fullText = parsed.text;
+                assistantP.textContent = fullText;
+                if (parsed.suggested_name) addSuggestion('name', parsed.suggested_name);
+                if (parsed.suggested_focus) addSuggestion('focus', parsed.suggested_focus);
+                if (parsed.suggested_depth) addSuggestion('depth', parsed.suggested_depth);
+                if (parsed.suggested_name || parsed.suggested_focus || parsed.suggested_depth) {
+                  suggestions.classList.remove('hidden');
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {
+        assistantP.textContent = 'Erro de conexão.';
+      } finally {
+        submit.disabled = false;
+      }
+    };
+  })();
+  </script>
+  {% endif %}
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}
