@@ -140,21 +140,40 @@
         }
       }
 
-      async function signIn(provider) {
+      function setBusy(btn) {
+        var rect = btn.getBoundingClientRect();
+        btn.style.minWidth = rect.width + "px";
+        btn.style.minHeight = rect.height + "px";
+        btn.setAttribute("data-busy", "");
+        btn.setAttribute("aria-busy", "true");
+        btn.setAttribute("aria-live", "polite");
+        btn.disabled = true;
+      }
+      function clearBusy(btn) {
+        btn.removeAttribute("data-busy");
+        btn.removeAttribute("aria-busy");
+        btn.removeAttribute("aria-live");
+        btn.style.minWidth = "";
+        btn.style.minHeight = "";
+        btn.disabled = false;
+      }
+      async function signIn(btn, provider) {
+        setBusy(btn);
         try {
           const result = await auth.signInWithPopup(provider);
           const idToken = await result.user.getIdToken();
           await sendIdToken(idToken);
         } catch (e) {
           showError();
+          clearBusy(btn);
         }
       }
 
       document.getElementById("btn-login-google").addEventListener("click", function () {
-        signIn(new firebase.auth.GoogleAuthProvider());
+        signIn(this, new firebase.auth.GoogleAuthProvider());
       });
       document.getElementById("btn-login-github").addEventListener("click", function () {
-        signIn(new firebase.auth.GithubAuthProvider());
+        signIn(this, new firebase.auth.GithubAuthProvider());
       });
     })();
   </script>

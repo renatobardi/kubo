@@ -100,5 +100,25 @@ def test_login_also_has_indicator(client: TestClient) -> None:
     assert "data-busy" in html
 
 
+def test_htmx_buttons_are_covered_by_busy_indicator(client: TestClient) -> None:
+    """Botões soltos com `hx-post` (ex.: testar feed, gerar convite) não disparam
+    `submit` de form. O listener global precisa escutar os eventos deles."""
+    html = client.get("/login").text
+
+    assert "htmx:beforeRequest" in html, "requisições HTMX não têm listener de início"
+    assert "htmx:afterRequest" in html, "requisições HTMX não têm listener de fim"
+
+
+def test_firebase_login_buttons_have_busy_state(client: TestClient) -> None:
+    """Login Google/GitHub é `fetch` manual e pode levar. Os botões devem marcar
+    e desmarcar `data-busy` durante a chamada."""
+    html = client.get("/login").text
+
+    assert "btn-login-google" in html, "o botão do Google precisa existir no teste"
+    assert "btn-login-github" in html, "o botão do GitHub precisa existir no teste"
+    assert "setBusy" in html, "os botões sociais precisam de setBusy"
+    assert "clearBusy" in html, "os botões sociais precisam de clearBusy"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

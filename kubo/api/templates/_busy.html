@@ -66,4 +66,44 @@
       // pelo valor do submit perderiam o dado.
       window.setTimeout(function () { target.disabled = true; }, 0);
     }, true);
+
+    // Indicador para botões HTMX soltos (`hx-post` fora de `form`).
+    // `htmx:beforeRequest` dispara no elemento `hx-post`; o listener de `submit`
+    // acima já cobre forms `method="post"` reais, então aqui cobrimos só controles.
+    function _kuboApplyBusy(target) {
+      var rect = target.getBoundingClientRect();
+      target.style.minWidth = rect.width + "px";
+      target.style.minHeight = rect.height + "px";
+      target.setAttribute("data-busy", "");
+      target.setAttribute("aria-busy", "true");
+      target.setAttribute("aria-live", "polite");
+      window.setTimeout(function () { target.disabled = true; }, 0);
+    }
+    function _kuboClearBusy(target) {
+      if (!target) return;
+      target.removeAttribute("data-busy");
+      target.removeAttribute("aria-busy");
+      target.removeAttribute("aria-live");
+      target.removeAttribute("data-submitting");
+      target.style.minWidth = "";
+      target.style.minHeight = "";
+      target.disabled = false;
+    }
+    document.addEventListener("htmx:beforeRequest", function (ev) {
+      var target = ev.detail.elt;
+      if (!(target instanceof HTMLButtonElement)) return;
+      if (target.hasAttribute("data-busy")) {
+        ev.preventDefault();
+        return;
+      }
+      target.setAttribute("data-submitting", "");
+      _kuboApplyBusy(target);
+    }, true);
+    ["htmx:afterRequest", "htmx:sendError"].forEach(function (name) {
+      document.addEventListener(name, function (ev) {
+        var target = ev.detail.elt;
+        if (!(target instanceof HTMLButtonElement)) return;
+        _kuboClearBusy(target);
+      }, true);
+    });
   </script>
