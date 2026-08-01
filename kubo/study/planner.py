@@ -59,7 +59,7 @@ class PlannerChatUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(min_length=0)
+    text: str
     lessons: list[PlanLesson] | None = Field(default=None, max_length=200)
 
 
@@ -86,6 +86,7 @@ class Planner:
         depth: str | None = None,
         mentor_transcript: str = "",
         material_summaries: Sequence[str] = (),
+        planning_history: Sequence[tuple[str, str]] = (),
     ) -> PlanProposal | None:
         """Proposta validada, ou None se o LLM falhar OU devolver plano incoerente.
 
@@ -96,6 +97,8 @@ class Planner:
         KUBO-164: recebe também campos estruturados (focus, depth), o transcript da
         conversa com `mentor` e os sumários dos materiais — o planner agrupa com base
         na estrutura + contexto, não no conteúdo completo dos capítulos.
+        KUBO-165: `planning_history` (conversa da Fase 2) permite repropor com base
+        nos ajustes pedidos pelo dono durante o planning.
         """
         try:
             proposal = self._executor.complete(
@@ -106,6 +109,7 @@ class Planner:
                     depth=depth,
                     mentor_transcript=mentor_transcript,
                     material_summaries=material_summaries,
+                    planning_history=planning_history,
                 ),
                 PlanProposal,
             )
@@ -196,12 +200,14 @@ def _build_prompt_content(
     depth: str | None,
     mentor_transcript: str,
     material_summaries: Sequence[str],
+    planning_history: Sequence[tuple[str, str]] = (),
 ) -> str:
     """Monta o conteúdo NÃO-CONFIÁVEL do prompt do planner (ADR-0047 §2).
 
     Inclui: campos estruturados (focus, depth), transcript da conversa com `mentor`,
-    sumários dos materiais e estrutura de capítulos (seq, parte, título). O conteúdo
-    completo dos capítulos NÃO vai ao prompt — o agrupamento é sobre a estrutura.
+    conversa da Fase 2 com `planner` (KUBO-165), sumários dos materiais e estrutura de
+    capítulos (seq, parte, título). O conteúdo completo dos capítulos NÃO vai ao prompt
+    — o agrupamento é sobre a estrutura. O bloco de capítulos nunca é truncado (AC8).
     """
     parts: list[str] = []
     if focus:
@@ -210,14 +216,28 @@ def _build_prompt_content(
         parts.append(f"Profundidade: {depth}")
     if mentor_transcript.strip():
         parts.append(f"Conversa com o mentor:\n{mentor_transcript.strip()}")
+    if planning_history:
+        history_text = "\n".join(
+            f"{'Dono' if role == 'user' else 'Planner'}: {content}"
+            for role, content in planning_history
+        )
+        parts.append(f"Conversa da Fase 2:\n{history_text}")
     if material_summaries:
         parts.append("Sumários dos materiais:\n" + "\n".join(material_summaries))
-    parts.append(_chapter_summary(chapters))
+    # Bloco de capítulos sempre por último e nunca truncado.
+    chapter_block = _chapter_summary(chapters)
+    parts.append(chapter_block)
     full = "\n\n".join(parts)
     if len(full) <= _MAX_SUMMARY_TEXT:
         return full
-    _log.warning("study.planner.prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
-    return full[:_MAX_SUMMARY_TEXT]
+    # Trunca o prefixo, preservando o bloco de capítulos integral.
+    budget = _MAX_SUMMARY_TEXT - len(chapter_block) - 4
+    prefix = "\n\n".join(parts[:-1])
+    if budget > 0:
+        _log.warning("study.planner.prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
+        return prefix[:budget] + "\n\n" + chapter_block
+    _log.warning("study.planner.prompt_chapters_only", chars=len(chapter_block))
+    return chapter_block
 
 
 def _chapter_summary(chapters: Sequence[MaterialChapter]) -> str:
@@ -268,12 +288,19 @@ def _build_chat_content(
         parts.append(f"Profundidade: {depth}")
     if material_summaries:
         parts.append("Sumários dos materiais:\n" + "\n".join(material_summaries))
-    parts.append(_chapter_summary(chapters))
+    # Bloco de capítulos sempre por último e nunca truncado (AC8).
+    chapter_block = _chapter_summary(chapters)
+    parts.append(chapter_block)
     full = "\n\n".join(parts)
     if len(full) <= _MAX_SUMMARY_TEXT:
         return full
-    _log.warning("study.planner.chat_prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
-    return full[:_MAX_SUMMARY_TEXT]
+    budget = _MAX_SUMMARY_TEXT - len(chapter_block) - 4
+    prefix = "\n\n".join(parts[:-1])
+    if budget > 0:
+        _log.warning("study.planner.chat_prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
+        return prefix[:budget] + "\n\n" + chapter_block
+    _log.warning("study.planner.chat_prompt_chapters_only", chars=len(chapter_block))
+    return chapter_block
 
 
 def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:

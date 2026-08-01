@@ -131,14 +131,18 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda db, **kw: (_plan(), _entries()),
     )
     monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.replace_plan_entries",
+        lambda db, **kw: (_plan(), _entries()),
+    )
+    monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_plan_for_topic",
         lambda db, **kw: (_plan(), _entries()),
     )
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.reorder_plan_entries", lambda db, **kw: None
+        "kubo.api.routes.study.study_store.swap_plan_entries", lambda db, **kw: None
     )
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.remove_chapter_from_entry", lambda db, **kw: None
+        "kubo.api.routes.study.study_store.remove_chapter_from_entry", lambda db, **kw: True
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_plan_cadence", lambda db, **kw: None)
     monkeypatch.setattr(
@@ -336,27 +340,59 @@ def test_repropose_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-# --- POST /topics/{key}/plan/reorder -----------------------------------------------------
+# --- POST /topics/{key}/plan/entries/{ekey}/move -----------------------------------------
 
 
-def test_reorder_plan_redirects(authed_client: TestClient) -> None:
-    """POST /plan/reorder reordena lições e redireciona."""
+def test_move_entry_up_redirects(authed_client: TestClient) -> None:
+    """POST /plan/entries/{ekey}/move direction=up troca com vizinho de cima."""
     resp = authed_client.post(
-        "/study/topics/abc123/plan/reorder",
-        data={
-            "csrf": _csrf(authed_client),
-            "entry_ids": ["plan_entry:e2", "plan_entry:e1"],
-        },
+        "/study/topics/abc123/plan/entries/e2/move",
+        data={"csrf": _csrf(authed_client), "direction": "up"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
 
 
-def test_reorder_plan_requires_csrf(authed_client: TestClient) -> None:
+def test_move_entry_down_redirects(authed_client: TestClient) -> None:
+    """POST /plan/entries/{ekey}/move direction=down troca com vizinho de baixo."""
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": _csrf(authed_client), "direction": "down"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
+def test_move_entry_invalid_direction_returns_400(authed_client: TestClient) -> None:
+    """Direção inválida devolve 400."""
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": _csrf(authed_client), "direction": "sideways"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_move_entry_not_planning_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Move fora de planning devolve 400."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="running")
+    )
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": _csrf(authed_client), "direction": "down"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_move_entry_requires_csrf(authed_client: TestClient) -> None:
     """CSRF inválido devolve 403."""
     resp = authed_client.post(
-        "/study/topics/abc123/plan/reorder",
-        data={"csrf": "invalid", "entry_ids": ["plan_entry:e1"]},
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": "invalid", "direction": "down"},
         follow_redirects=False,
     )
     assert resp.status_code == 403
@@ -373,6 +409,31 @@ def test_remove_chapter_redirects(authed_client: TestClient) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 303
+
+
+def test_remove_chapter_invalid_id_returns_400(authed_client: TestClient) -> None:
+    """chapter_id malformado devolve 400 (não 500)."""
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e2/remove-chapter",
+        data={"csrf": _csrf(authed_client), "chapter_id": "no-colon"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_remove_chapter_not_planning_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remove chapter fora de planning devolve 400."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="running")
+    )
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e2/remove-chapter",
+        data={"csrf": _csrf(authed_client), "chapter_id": "material_chapter:c3"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
 
 def test_remove_chapter_requires_csrf(authed_client: TestClient) -> None:
@@ -396,6 +457,21 @@ def test_set_cadence_redirects(authed_client: TestClient) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 303
+
+
+def test_set_cadence_not_planning_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Set cadence fora de planning devolve 400."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="running")
+    )
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/cadence",
+        data={"csrf": _csrf(authed_client), "weekdays": ["mon"]},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
 
 def test_set_cadence_requires_csrf(authed_client: TestClient) -> None:

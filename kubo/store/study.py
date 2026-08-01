@@ -764,56 +764,109 @@ def set_plan_cadence(
     _log.info("store.plan.cadence_set", plan=str(plan_id), lessons=lesson_count)
 
 
-def reorder_plan_entries(
+def replace_plan_entries(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    entries: Sequence[tuple[str, list[RecordID]]],
+) -> tuple[StudyPlan, list[PlanEntry]]:
+    """Substitui só as entries do plano, preservando weekdays/target_date/status.
+
+    Diferente de `save_plan_proposal` (que deleta e recria o `study_plan`), esta
+    função mantém o registro do plano intacto — apenas remove as entries antigas
+    e cria as novas. Usada pelo chat incremental do planner (KUBO-165), onde a
+    cadência definida manualmente não pode ser descartada a cada mensagem.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Lê o plano existente (preserva weekdays/target_date/status).
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        # Sem plano: cria um novo (fallback — não deveria acontecer em planning).
+        return save_plan_proposal(
+            db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, entries=entries
+        )
+    # Deleta só as entries, mantém o study_plan.
+    transaction.run_transaction(
+        db,
+        [
+            f"DELETE FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};"
+        ],
+        {"plan": plan.id, "tenant": tenant_id, "user": user_id},
+    )
+    for seq, (title, chapter_ids) in enumerate(entries, start=1):
+        entry_id = _fresh("plan_entry")
+        transaction.run_transaction(
+            db,
+            [
+                "CREATE $entry SET study_plan = $plan, tenant_id = $tenant, "
+                "user_id = $user, seq = $seq, title = $title, chapters = $chapters"
+            ],
+            {
+                "entry": entry_id,
+                "plan": plan.id,
+                "tenant": tenant_id,
+                "user": user_id,
+                "seq": seq,
+                "title": title,
+                "chapters": chapter_ids,
+            },
+        )
+    _log.info("store.plan.entries_replaced", plan=str(plan.id), entries=len(entries))
+    return get_plan_for_topic(  # type: ignore[return-value]
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+    )
+
+
+def swap_plan_entries(
     db: Any,
     *,
     tenant_id: RecordID,
     user_id: RecordID,
     plan_id: RecordID,
-    entry_ids: Sequence[RecordID],
+    entry_a: RecordID,
+    entry_b: RecordID,
 ) -> None:
-    """Reordena as lições do plano: `entry_ids` na nova ordem → seq 1, 2, 3...
+    """Troca os seqs de duas entries num único transaction (atômico).
 
-    A lista deve conter todas as entries do plano (validação de ownership via scope).
-    Usa offset temporário (seq + 1000) para evitar conflito com o índice UNIQUE
-    `(study_plan, seq)` durante a reordenação — atualizar in-place entraria em colisão.
+    Usa offset temporário (seq + 1000) para evitar colisão com o índice UNIQUE
+    `(study_plan, seq)` — atualizar in-place entraria em conflito.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    # Verifica ownership do plano (user_id no scope garante isolamento).
-    plan_rows = db.query(
-        f"SELECT id FROM study_plan WHERE id = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
-        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    # Lê os seqs atuais (valida ownership via scope).
+    rows = db.query(
+        f"SELECT id, seq FROM plan_entry WHERE (id = $a OR id = $b) "  # noqa: S608
+        f"AND study_plan = $plan AND {_MATERIAL_SCOPE};",
+        {"a": entry_a, "b": entry_b, "plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
-    if not plan_rows:
+    if len(rows) != 2:
         raise StoreError(_TOPIC_NOT_FOUND_MSG)
-    # Fase 1: move todas para seq temporário (fora do range normal).
-    temp_stmts = [
-        f"UPDATE $entry SET seq = seq + 1000 WHERE study_plan = $plan "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE}"
-    ]
-    for entry_id in entry_ids:
-        transaction.run_transaction(
-            db,
-            temp_stmts,
-            {"entry": entry_id, "plan": plan_id, "tenant": tenant_id, "user": user_id},
-        )
-    # Fase 2: aplica a nova ordem.
-    for seq, entry_id in enumerate(entry_ids, start=1):
-        transaction.run_transaction(
-            db,
-            [
-                f"UPDATE $entry SET seq = $seq WHERE study_plan = $plan "  # noqa: S608
-                f"AND {_MATERIAL_SCOPE}"
-            ],
-            {
-                "entry": entry_id,
-                "plan": plan_id,
-                "tenant": tenant_id,
-                "user": user_id,
-                "seq": seq,
-            },
-        )
-    _log.info("store.plan.reordered", plan=str(plan_id), entries=len(entry_ids))
+    seqs = {str(r["id"]): r["seq"] for r in rows}
+    seq_a, seq_b = seqs[str(entry_a)], seqs[str(entry_b)]
+    # Swap atômico: A→temp, B→seq_a, A→seq_b.
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $a SET seq = seq + 1000 WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+            f"UPDATE $b SET seq = $seq_a WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+            f"UPDATE $a SET seq = $seq_b WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+        ],
+        {
+            "a": entry_a,
+            "b": entry_b,
+            "plan": plan_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "seq_a": seq_a,
+            "seq_b": seq_b,
+        },
+    )
+    _log.info("store.plan.swapped", plan=str(plan_id), a=str(entry_a), b=str(entry_b))
 
 
 def remove_chapter_from_entry(
@@ -823,27 +876,32 @@ def remove_chapter_from_entry(
     user_id: RecordID,
     entry_id: RecordID,
     chapter_id: RecordID,
-) -> None:
-    """Remove um capítulo de uma lição (edição manual do plano, KUBO-165)."""
+) -> bool:
+    """Remove um capítulo de uma lição (edição manual, KUBO-165).
+
+    Usa `array::complement` num único statement transacional (atômico, sem
+    read-modify-write). Devolve True se a entry ainda tem capítulos, False se
+    ficou vazia (caller deve decidir remover a entry ou rejeitar).
+    """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT chapters FROM plan_entry WHERE id = $entry AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT array::len(chapters) AS n FROM plan_entry WHERE id = $entry "  # noqa: S608
+        f"AND {_MATERIAL_SCOPE};",
         {"entry": entry_id, "tenant": tenant_id, "user": user_id},
     )
     if not rows:
         raise StoreError(_TOPIC_NOT_FOUND_MSG)
-    raw_chapters: list[RecordID] = list(rows[0].get("chapters") or [])
-    chapters = [c for c in raw_chapters if c != chapter_id]
+    count = rows[0].get("n", 0)
+    if count <= 1:
+        # Último capítulo: não esvazia a lição.
+        return False
     transaction.run_transaction(
         db,
         [
-            f"UPDATE $entry SET chapters = $chapters WHERE {_MATERIAL_SCOPE}"  # noqa: S608
+            f"UPDATE $entry SET chapters = array::complement(chapters, [$ch]) "  # noqa: S608
+            f"WHERE {_MATERIAL_SCOPE};"
         ],
-        {
-            "entry": entry_id,
-            "tenant": tenant_id,
-            "user": user_id,
-            "chapters": chapters,
-        },
+        {"entry": entry_id, "ch": chapter_id, "tenant": tenant_id, "user": user_id},
     )
     _log.info("store.plan.chapter_removed", entry=str(entry_id), chapter=str(chapter_id))
+    return True

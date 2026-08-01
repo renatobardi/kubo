@@ -164,11 +164,12 @@ def test_mechanical_proposal_respects_chapter_seq_not_list_position() -> None:
 
 
 def test_summary_is_capped_before_reaching_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """O sumário enviado respeita `_MAX_SUMMARY_TEXT`, com o corte NO FIM.
+    """O prefixo (focus/depth/transcript) é truncado, mas o bloco de capítulos NUNCA.
 
     Os títulos vêm do arquivo que o dono enviou e nada os limita antes daqui: sem o teto,
-    um epub com milhares de "capítulos" (ou um título com o livro dentro) faria o custo
-    da proposta refém do upload. O teto é lido do módulo a cada chamada.
+    um epub com milhares de "capítulos" faria o custo da proposta refém do upload. O teto
+    truncava o prompt inteiro; KUBO-165 mudou para truncar só o prefixo, preservando o
+    bloco de capítulos (AC8 — sem ele o planner não tem o que agrupar).
     """
     cap = 100
     monkeypatch.setattr("kubo.study.planner._MAX_SUMMARY_TEXT", cap)
@@ -177,8 +178,10 @@ def test_summary_is_capped_before_reaching_the_provider(monkeypatch: pytest.Monk
     Planner(executor=executor, prompt=_PROMPT).propose(_chapters(80))
 
     content = executor.received_content[0]
-    assert len(content) <= cap
-    assert "80. Capítulo 80" not in content
+    # O bloco de capítulos é preservado integralmente (pode exceder o cap).
+    assert "80. Capítulo 80" in content
+    # Mas o prefixo (focus/depth/transcript) foi truncado — só há capítulos.
+    assert "Foco" not in content
 
 
 def test_a_short_summary_is_not_truncated() -> None:
@@ -244,6 +247,25 @@ def test_propose_includes_material_summaries_in_prompt() -> None:
     content = executor.received_content[0]
     assert "Um guia sobre agentes." in content
     assert "Livro avançado de LLMs." in content
+
+
+def test_propose_includes_planning_history_in_prompt() -> None:
+    """KUBO-165: a conversa da Fase 2 chega ao prompt do planner no repropose."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.propose(
+        _chapters(),
+        focus=None,
+        depth=None,
+        mentor_transcript="",
+        material_summaries=[],
+        planning_history=[("user", "junta tudo numa lição"), ("assistant", "ok, juntei")],
+    )
+
+    content = executor.received_content[0]
+    assert "junta tudo numa lição" in content
+    assert "Conversa da Fase 2" in content
 
 
 def test_propose_without_optional_fields_still_works() -> None:

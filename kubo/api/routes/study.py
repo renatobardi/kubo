@@ -42,7 +42,7 @@ from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
-from kubo.study.planner import Planner
+from kubo.study.planner import Planner, PlannerChatReply, mechanical_proposal
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -364,6 +364,11 @@ def topic_detail(request: Request, key: str) -> Response:
             if topic.state == "planning"
             else (None, [])
         )
+        # Mapa chapter_id → título para exibir nomes legíveis no plano (KUBO-165).
+        chapter_titles: dict[str, str] = {}
+        if topic.state == "planning":
+            for ch in _collect_all_chapters(db, ctx, topic.id):
+                chapter_titles[str(ch.id)] = f"{ch.seq}. {ch.title}"
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -378,6 +383,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "csrf": csrf_token(request),
             "plan": plan,
             "plan_entries": plan_entries,
+            "chapter_titles": chapter_titles,
         },
     )
 
@@ -913,17 +919,21 @@ def close_topic(
 # --- Fase 2: chat com planner + edição incremental (KUBO-165, ADR-0047 §2) ---------------
 
 
-_TOPIC_NOT_PLANNING = "Só é possível conversar com o planner em um estudo em planejamento."
+_TOPIC_NOT_PLANNING = "Só é possível operar um estudo em planejamento."
+_INVALID_ID = "Identificador inválido."
+_PLANNER_HISTORY_WINDOW = 10
 
 
 def _planning_chat_history_of(
     db: Any, ctx: SessionContext, topic_id: RecordID
 ) -> list[tuple[str, str]]:
-    """Histórico da conversa com planner (phase=planning)."""
+    """Histórico da conversa com planner (phase=planning), janela deslizante pela cauda."""
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
-    return [(m.role, m.content) for m in messages]
+    # Janela deslizante: últimos N turnos (padrão do mentor, ADR-0047 emenda 4).
+    recent = messages[-_PLANNER_HISTORY_WINDOW * 2 :] if messages else []
+    return [(m.role, m.content) for m in recent]
 
 
 def _current_plan_as_tuples(
@@ -938,15 +948,32 @@ def _current_plan_as_tuples(
     # Mapeia chapter RecordID → seq global.
     chapters = _collect_all_chapters(db, ctx, topic_id)
     id_to_seq = {str(ch.id): ch.seq for ch in chapters}
-    return [
-        (e.title, [id_to_seq[str(c)] for c in e.chapters if str(c) in id_to_seq]) for e in entries
-    ]
+    result: list[tuple[str, list[int]]] = []
+    for e in entries:
+        seqs = [id_to_seq[str(c)] for c in e.chapters if str(c) in id_to_seq]
+        if len(seqs) != len(e.chapters):
+            _log.warning(
+                "study.plan.dropped_chapters",
+                topic=str(topic_id),
+                entry=str(e.id),
+                dropped=len(e.chapters) - len(seqs),
+            )
+        result.append((e.title, seqs))
+    return result
 
 
 def _persist_planner_reply(
-    ctx: SessionContext, topic_id: RecordID, reply: Any, chapters: Any, key: str
+    ctx: SessionContext,
+    topic_id: RecordID,
+    reply: PlannerChatReply,
+    chapters: list[study_store.MaterialChapter],
+    key: str,
 ) -> bool:
-    """Persiste a resposta do planner (texto + plano se atualizado). Devolve plan_updated."""
+    """Persiste a resposta do planner (texto + plano se atualizado). Devolve plan_updated.
+
+    Usa `replace_plan_entries` (não `save_plan_proposal`) para preservar a cadência
+    definida manualmente — o chat incremental não pode descartar weekdays/target_date.
+    """
     try:
         with client.connect_rw() as db:
             study_store.create_chat_message(
@@ -968,7 +995,7 @@ def _persist_planner_reply(
     ]
     try:
         with client.connect_rw() as db:
-            study_store.save_plan_proposal(
+            study_store.replace_plan_entries(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
@@ -979,6 +1006,24 @@ def _persist_planner_reply(
     except (ConfigError, StoreError):
         _log.warning("study.planner_chat.plan_save_failed", topic=_log_key(key))
         return False
+
+
+def _parse_record_id(raw: str) -> RecordID | None:
+    """Parse 'table:id' → RecordID; devolve None se formato inválido."""
+    parts = raw.split(":", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return RecordID(parts[0], parts[1])
+
+
+def _entry_belongs_to_plan(
+    db: Any, ctx: SessionContext, topic_id: RecordID, entry_id: RecordID
+) -> bool:
+    """Verifica que a entry pertence ao plano do tópico da URL (não de outro tema)."""
+    _, entries = study_store.get_plan_for_topic(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
+    )
+    return any(str(e.id) == str(entry_id) for e in entries)
 
 
 @router.post("/topics/{key}/planner-chat")
@@ -1015,16 +1060,20 @@ def chat_with_planner(
         summaries = _material_summaries_of(db, ctx, topic.id)
 
     # Persiste a mensagem do dono antes de chamar o planner.
-    with client.connect_rw() as db:
-        study_store.create_chat_message(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            topic_id=topic.id,
-            phase="planning",
-            role="user",
-            content=message,
-        )
+    try:
+        with client.connect_rw() as db:
+            study_store.create_chat_message(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                phase="planning",
+                role="user",
+                content=message,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.planner_chat.user_persist_failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
     planner = _planner(ctx)
 
@@ -1110,8 +1159,7 @@ def repropose_plan(
         chapters = _collect_all_chapters(db, ctx, topic.id)
         transcript = _mentor_transcript_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
-
-    from kubo.study.planner import mechanical_proposal
+        planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
     planner = _planner(ctx)
     proposal = planner.propose(
@@ -1120,6 +1168,7 @@ def repropose_plan(
         depth=topic.depth,
         mentor_transcript=transcript,
         material_summaries=summaries,
+        planning_history=planning_history,
     )
     if proposal is None:
         proposal = mechanical_proposal(chapters)
@@ -1145,39 +1194,65 @@ def repropose_plan(
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
-@router.post("/topics/{key}/plan/reorder")
-def reorder_plan(
+def _resolve_move(
+    entries: list[study_store.PlanEntry], ekey: str, direction: str
+) -> tuple[int, int] | None:
+    """Devolve (idx, neighbor_idx) para o swap, ou None se inviável (borda ou não achou)."""
+    entry_id = RecordID("plan_entry", ekey)
+    idx = next((i for i, e in enumerate(entries) if str(e.id) == str(entry_id)), None)
+    if idx is None:
+        return None
+    if direction == "up" and idx == 0:
+        return None
+    if direction == "down" and idx == len(entries) - 1:
+        return None
+    neighbor_idx = idx - 1 if direction == "up" else idx + 1
+    return idx, neighbor_idx
+
+
+@router.post("/topics/{key}/plan/entries/{ekey}/move")
+def move_entry(
     request: Request,
     key: str,
-    entry_ids: Annotated[list[str], Form()] = None,  # type: ignore[assignment]
+    ekey: str,
+    direction: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Reordena as lições do plano (edição manual, KUBO-165)."""
+    """Move uma lição para cima ou para baixo (edição manual, KUBO-165)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     ctx = _session_of(request)
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
+    if direction not in ("up", "down"):
+        return PlainTextResponse("Direção inválida.", status_code=400)
     with client.connect() as db:
         topic = _topic_of(db, key, ctx)
         if topic is None:
             return _topic_missing(request, key)
-        plan, _ = study_store.get_plan_for_topic(
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
+        plan, entries = study_store.get_plan_for_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-    if plan is None or not entry_ids:
+    if plan is None or not entries:
         return PlainTextResponse("Plano não encontrado.", status_code=400)
+    pair = _resolve_move(entries, ekey, direction)
+    if pair is None:
+        return RedirectResponse(_topic_url(topic.id), status_code=303)
+    idx, neighbor_idx = pair
     try:
         with client.connect_rw() as db:
-            study_store.reorder_plan_entries(
+            study_store.swap_plan_entries(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 plan_id=plan.id,
-                entry_ids=[RecordID(*eid.split(":", 1)) for eid in entry_ids],
+                entry_a=entries[idx].id,
+                entry_b=entries[neighbor_idx].id,
             )
     except (ConfigError, StoreError):
-        _log.warning("study.reorder.failed", topic=_log_key(key))
+        _log.warning("study.move.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
@@ -1196,19 +1271,21 @@ def remove_chapter(
     ctx = _session_of(request)
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
+    ch_rid = _parse_record_id(chapter_id)
+    if ch_rid is None:
+        return PlainTextResponse(_INVALID_ID, status_code=400)
+    entry_id = RecordID("plan_entry", ekey)
     with client.connect() as db:
         topic = _topic_of(db, key, ctx)
         if topic is None:
             return _topic_missing(request, key)
-    entry_id = RecordID("plan_entry", ekey)
-    ch_parts = chapter_id.split(":", 1)
-    if len(ch_parts) == 2:
-        ch_rid = RecordID(ch_parts[0], ch_parts[1])
-    else:
-        ch_rid = RecordID("material_chapter", chapter_id)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
+        if not _entry_belongs_to_plan(db, ctx, topic.id, entry_id):
+            return PlainTextResponse("Lição não encontrada.", status_code=400)
     try:
         with client.connect_rw() as db:
-            study_store.remove_chapter_from_entry(
+            ok = study_store.remove_chapter_from_entry(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
@@ -1218,6 +1295,8 @@ def remove_chapter(
     except (ConfigError, StoreError):
         _log.warning("study.remove_chapter.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    if not ok:
+        return PlainTextResponse("Não é possível remover o último capítulo.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -1238,6 +1317,8 @@ def set_cadence(
         topic = _topic_of(db, key, ctx)
         if topic is None:
             return _topic_missing(request, key)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
         plan, _ = study_store.get_plan_for_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
