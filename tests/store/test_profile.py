@@ -124,6 +124,34 @@ def test_update_user_profile_rejects_missing_user(db: Any) -> None:
         )
 
 
+def test_update_user_profile_rejects_invalid_language(db: Any) -> None:
+    """Language outside BCP 47 format is rejected."""
+    user = tenancy.create_user(db, firebase_uid="uid-lang", email="lang@example.com")
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=user.id,
+            display_name="Renato",
+            language="not_a_tag!",
+            timezone="America/Sao_Paulo",
+        )
+
+
+def test_update_user_profile_rejects_invalid_timezone(db: Any) -> None:
+    """Timezone outside the IANA database is rejected."""
+    user = tenancy.create_user(db, firebase_uid="uid-tz", email="tz@example.com")
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=user.id,
+            display_name="Renato",
+            language="pt-BR",
+            timezone="Not/AZone",
+        )
+
+
 def test_membership_theme_defaults_to_system(db: Any) -> None:
     """Membership nova já carrega o tema 'system' por padrão."""
     user = tenancy.create_user(db, firebase_uid="uid-theme", email="theme@example.com")

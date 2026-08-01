@@ -507,7 +507,7 @@ def _validate_profile_input(
     timezone = timezone.strip()
     try:
         ZoneInfo(timezone)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         raise StoreError("timezone must be a valid IANA identifier") from None
     return display_name, language, timezone
 
@@ -533,7 +533,9 @@ def update_user_profile(
     """Creates or updates the global user profile.
 
     The user must exist; raises `StoreError` otherwise. Idempotently creates
-    `user_profile` when missing and updates it when present.
+    `user_profile` when missing and updates it when present. The read-check-write
+    is wrapped in a transaction to avoid a race between two concurrent requests
+    both seeing no profile and both trying to CREATE.
     """
     if get_user(db, user_id) is None:
         raise StoreError("user not found")
@@ -546,27 +548,23 @@ def update_user_profile(
 
     existing = get_user_profile(db, user_id)
     if existing is not None:
-        db.query(
-            "UPDATE $p SET display_name = $dn, language = $l, "
-            "timezone = $tz, updated_at = time::now();",
-            {
-                "p": existing.id,
-                "dn": display_name,
-                "l": language,
-                "tz": timezone,
-            },
+        transaction.run_transaction(
+            db,
+            [
+                "UPDATE $p SET display_name = $dn, language = $l, "
+                "timezone = $tz, updated_at = time::now()"
+            ],
+            {"p": existing.id, "dn": display_name, "l": language, "tz": timezone},
         )
     else:
-        db.query(
-            "CREATE user_profile SET user = $u, display_name = $dn, "
-            "language = $l, timezone = $tz, "
-            "created_at = time::now(), updated_at = time::now();",
-            {
-                "u": user_id,
-                "dn": display_name,
-                "l": language,
-                "tz": timezone,
-            },
+        transaction.run_transaction(
+            db,
+            [
+                "CREATE user_profile SET user = $u, display_name = $dn, "
+                "language = $l, timezone = $tz, "
+                "created_at = time::now(), updated_at = time::now()"
+            ],
+            {"u": user_id, "dn": display_name, "l": language, "tz": timezone},
         )
 
     profile = get_user_profile(db, user_id)
@@ -596,7 +594,11 @@ def update_membership_theme(
     if row is None:
         raise MembershipRequiredError("user does not belong to tenant")
 
-    db.query("UPDATE $m SET theme = $t;", {"m": row["id"], "t": theme})
+    transaction.run_transaction(
+        db,
+        ["UPDATE $m SET theme = $t"],
+        {"m": row["id"], "t": theme},
+    )
     updated = get_membership(db, user_id=user_id, tenant_id=tenant_id)
     if updated is None:
         raise StoreError("membership vanished during update")

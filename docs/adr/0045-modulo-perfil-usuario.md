@@ -28,7 +28,8 @@ Nova entidade ligada 1:1 a `user`, global por pessoa. Campos:
 - `user`: referência a `user`.
 
 `avatar` não é armazenado no banco. O frontend computa
-`https://www.gravatar.com/avatar/<md5(email)>?d=identicon` a partir do `email` do `user`.
+`https://www.gravatar.com/avatar/<sha256(email)>?d=identicon` a partir do `email` do `user`
+(SHA256 conforme a API atual do Gravatar; MD5 foi descontinuado).
 
 ### III. Aparência (`theme`) fica no `membership`
 

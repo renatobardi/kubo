@@ -41,11 +41,9 @@ _MEMBERSHIP = SimpleNamespace(
 def _update_profile(
     db: object, *, user_id: object, display_name: str, language: str, timezone: str
 ) -> SimpleNamespace:
-    _tenancy._validate_profile_input(
-        display_name=display_name,
-        language=language,
-        timezone=timezone,
-    )
+    text = display_name.strip()
+    if not text or len(text) > 64:
+        raise _tenancy.StoreError("display_name must be 1-64 characters")
     _PROFILE.display_name = display_name
     _PROFILE.language = language
     _PROFILE.timezone = timezone
@@ -54,7 +52,7 @@ def _update_profile(
 
 def _update_theme(db: object, *, user_id: object, tenant_id: object, theme: str) -> SimpleNamespace:
     if theme not in {"light", "dark", "system"}:
-        raise _tenancy.StoreError("tema deve ser 'light', 'dark' ou 'system'")
+        raise _tenancy.StoreError("theme must be 'light', 'dark' or 'system'")
     _MEMBERSHIP.theme = theme
     return _MEMBERSHIP
 
@@ -192,7 +190,7 @@ def test_get_profile_avatar_with_missing_email(
 
     import hashlib
 
-    expected_digest = hashlib.md5(b"").hexdigest()  # noqa: S324 (test fixture)
+    expected_digest = hashlib.sha256(b"").hexdigest()
     resp = authed_client.get("/profile")
 
     assert resp.status_code == 200
