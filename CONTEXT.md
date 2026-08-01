@@ -41,18 +41,44 @@ Domínio de 1ª classe do estudo pessoal do dono: o Kubo cura material em plano,
 contextualizadas e acompanha o progresso. Código: `study`.
 
 **Material**:
-Um documento que o dono sobe (epub/PDF) para servir de lastro a um [[Tema]]. A ingestão
-extrai capítulos/seções como dados; toda [[Lição]] tem proveniência num trecho do material.
-Código: `material`. _Evite_: "livro", "arquivo".
+Um documento que o dono sobe (epub/PDF) dentro de um [[Tema]]. A ingestão extrai
+capítulos/seções como dados e gera um sumário (consumido por [[mentor]] e [[Plano de estudo|planner]]);
+toda [[Lição]] tem proveniência num trecho do material. **Exclusivo a um Tema** (N:1) — não há
+biblioteca global de Materiais. Código: `material`. _Evite_: "livro", "arquivo", "fonte"
+(fonte é da coleta).
 
 **Tema**:
-A unidade de estudo que o dono seleciona. Nasce de um [[Material]] — sem material, sem tema.
-Código: `topic`. _Evite_: "curso", "trilha".
+O **container** do estudo: nasce vazio (`draft`) e o dono adiciona N [[Material|Materiais]]
+dentro dele. O nome é sugerido por [[mentor]] e editável inline em todos os estados
+não-arquivados. Tem ciclo de estados explícito (ver [[Estado de Tema]]). Código: `topic`.
+_Evite_: "curso", "trilha", "notebook".
+
+**Estado de Tema**:
+O ciclo de vida de um [[Tema]]: `draft` → `planning` → `scheduled` → `running` → `archived`.
+`draft` = adicionando Materiais e conversando com [[mentor]] (Fase 1); `planning` = [[Plano de
+estudo|planner]] propôs, dono revisa/conversa (Fase 2); `scheduled` = Plano ativado, 1ª lição
+ainda não gerada (reversível a `planning`); `running` = 1ª lição gerada, **congelado**
+(invariante 4 — Materiais imutáveis, Plano é snapshot); `archived` = pausado, scheduler não
+gera lições (desarquivar retoma). Reversível até `running`; `running` é irreversível.
+
+**Conversa de estudo**:
+Chat síncrono (streaming) persistido, associado a um [[Tema]] (Fase 1, com [[mentor]]) ou ao
+seu [[Plano de estudo]] (Fase 2, com [[Plano de estudo|planner]]). Janela deslizante com resumo
+dos turnos anteriores. Reabrir uma fase continua a conversa — não recomeça. Código: `study_chat`.
+_Evite_: "thread", "diálogo".
+
+**mentor**:
+Persona que conduz a Fase 1 do [[Tema]]: entende a intenção do dono, sugere o nome do Tema e
+refina foco/expectativas. Recebe metadados + sumários dos [[Material|Materiais]] (não conteúdo
+completo). Semeada por default no catálogo do tenant junto com `planner` (ADR-0042). Código:
+`mentor`. _Evite_: "tutor", "librarian".
 
 **Plano de estudo**:
-A timeline de um [[Tema]]: sequência de lições, cadência e data-alvo. Proposto por persona a
-partir da estrutura do material, revisado e ativado pelo dono. A meta é derivada dele
-(progresso vs. esperado, streak, atraso) — não existe entidade de meta separada.
+A timeline de um [[Tema]]: sequência de lições, cadência e data-alvo. Proposto pela persona
+`planner` a partir de **sumários + estrutura de capítulos** dos [[Material|Materiais]] + campos
+estruturados + resumo da conversa com [[mentor]], revisado e ativado pelo dono. Na Fase 2
+(`planning`), chat com `planner` e edição manual coexistem incrementalmente. A meta é derivada
+dele (progresso vs. esperado, streak, atraso) — não existe entidade de meta separada.
 Código: `study_plan`. _Evite_: "cronograma", "meta" como entidade.
 
 **Lição**:
