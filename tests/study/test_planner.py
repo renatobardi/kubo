@@ -178,3 +178,70 @@ def test_a_short_summary_is_not_truncated() -> None:
     Planner(executor=executor, prompt=_PROMPT).propose(_chapters(4))
 
     assert "4. Capítulo 4" in executor.received_content[0]
+
+
+# --- KUBO-164: novo input (campos + resumo do mentor + sumários) -------------------------
+
+
+def test_propose_includes_focus_and_depth_in_prompt() -> None:
+    """Focus e depth do Tema chegam ao prompt do planner (ADR-0047 §2)."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.propose(
+        _chapters(),
+        focus="sistemas agênticos",
+        depth="aprofundado",
+        mentor_transcript="",
+        material_summaries=[],
+    )
+
+    content = executor.received_content[0]
+    assert "sistemas agênticos" in content
+    assert "aprofundado" in content
+
+
+def test_propose_includes_mentor_transcript_in_prompt() -> None:
+    """O transcript da conversa com mentor chega ao prompt do planner."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.propose(
+        _chapters(),
+        focus=None,
+        depth=None,
+        mentor_transcript="Dono: Quero focar em agentes. Mentor: Vou sugerir um plano prático.",
+        material_summaries=[],
+    )
+
+    content = executor.received_content[0]
+    assert "Quero focar em agentes" in content
+
+
+def test_propose_includes_material_summaries_in_prompt() -> None:
+    """Os sumários dos materiais chegam ao prompt do planner."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.propose(
+        _chapters(),
+        focus=None,
+        depth=None,
+        mentor_transcript="",
+        material_summaries=["Um guia sobre agentes.", "Livro avançado de LLMs."],
+    )
+
+    content = executor.received_content[0]
+    assert "Um guia sobre agentes." in content
+    assert "Livro avançado de LLMs." in content
+
+
+def test_propose_without_optional_fields_still_works() -> None:
+    """Propose sem os novos campos opcionais continua funcionando (compatibilidade)."""
+    executor = _FakeExecutor(output=_proposal(("Fundamentos", [1, 2])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    proposal = planner.propose(_chapters())
+
+    assert proposal is not None
+    assert "Capítulo 1" in executor.received_content[0]

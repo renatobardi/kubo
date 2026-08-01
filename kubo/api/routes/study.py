@@ -42,6 +42,7 @@ from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
+from kubo.study.planner import Planner
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -95,6 +96,8 @@ _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
 _INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
 _MENTOR_MAX_TOKENS = 2048
 _MENTOR_TIMEOUT = 60.0
+_PLANNER_MAX_TOKENS = 4096
+_PLANNER_TIMEOUT = 120.0
 
 _MAX_LOG_KEY = 64
 
@@ -343,6 +346,13 @@ def topic_detail(request: Request, key: str) -> Response:
             if topic.state == "draft"
             else []
         )
+        plan, plan_entries = (
+            study_store.get_plan_for_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+            if topic.state == "planning"
+            else (None, [])
+        )
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -354,6 +364,8 @@ def topic_detail(request: Request, key: str) -> Response:
             "chat_messages": chat_messages,
             "valid_depths": VALID_DEPTHS,
             "csrf": csrf_token(request),
+            "plan": plan,
+            "plan_entries": plan_entries,
         },
     )
 
@@ -742,5 +754,145 @@ def set_topic_fields(
             )
     except (ConfigError, StoreError):
         _log.warning("study.fields.update_failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+# --- Fechar Tema + planner propõe Plano (KUBO-164, ADR-0047 §2) -------------------------
+
+
+_TOPIC_NOT_DRAFT_CLOSE = "Só é possível fechar um estudo em rascunho."
+_TOPIC_EMPTY_CLOSE = "Adicione pelo menos um material antes de fechar o estudo."
+
+
+def _planner(ctx: SessionContext) -> Planner:
+    """Constrói o planner com a persona `planner` (modelo vem do catálogo)."""
+    with client.connect() as db:
+        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "planner")
+    executor = ApiExecutor(
+        ApiExecutorConfig(
+            model=persona.model or _DEFAULT_MODEL,
+            max_tokens=_PLANNER_MAX_TOKENS,
+            timeout=_PLANNER_TIMEOUT,
+        ),
+    )
+    return Planner(executor=executor, prompt=persona.prompt)
+
+
+def _collect_all_chapters(
+    db: Any, ctx: SessionContext, topic_id: RecordID
+) -> list[study_store.MaterialChapter]:
+    """Coleta todos os capítulos de todos os materiais do Tema, com seq GLOBAL.
+
+    O planner precisa de seqs únicos globais (capítulos de materiais diferentes
+    podem ter o mesmo seq local). A renumeração é 1-based na ordem de leitura:
+    material por material (ordem de criação), seq crescente dentro de cada.
+    """
+    materials = study_store.list_materials_by_topic(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
+    )
+    all_chapters: list[study_store.MaterialChapter] = []
+    global_seq = 0
+    for material in materials:
+        chapters = study_store.list_all_chapters(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
+        )
+        for ch in chapters:
+            global_seq += 1
+            all_chapters.append(
+                study_store.MaterialChapter(
+                    id=ch.id,
+                    material=ch.material,
+                    seq=global_seq,
+                    title=ch.title,
+                    part=ch.part,
+                    content=ch.content,
+                )
+            )
+    return all_chapters
+
+
+def _mentor_transcript_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
+    """Transcript cru da conversa com mentor (KUBO-164: transcript cru, resumo fica p/ KUBO-168)."""
+    messages = study_store.list_chat_messages(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
+    )
+    lines = [f"{'Dono' if m.role == 'user' else 'Mentor'}: {m.content}" for m in messages]
+    return "\n".join(lines)
+
+
+@router.post("/topics/{key}/close")
+def close_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Fecha o Tema: draft → planning + planner propõe Plano automaticamente.
+
+    Exige ≥1 Material. O planner recebe campos estruturados + transcript do
+    mentor + sumários + estrutura de capítulos. Falha do LLM cai no
+    `mechanical_proposal` (determinístico) — não trava a tela.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "draft":
+            return PlainTextResponse(_TOPIC_NOT_DRAFT_CLOSE, status_code=400)
+        count = study_store.count_materials_by_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        if count == 0:
+            return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
+        # Coleta input do planner.
+        chapters = _collect_all_chapters(db, ctx, topic.id)
+        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        summaries = _material_summaries_of(db, ctx, topic.id)
+
+    # Propõe o plano (LLM ou fallback mecânico).
+    from kubo.study.planner import mechanical_proposal
+
+    planner = _planner(ctx)
+    proposal = planner.propose(
+        chapters,
+        focus=topic.focus,
+        depth=topic.depth,
+        mentor_transcript=transcript,
+        material_summaries=summaries,
+    )
+    if proposal is None:
+        proposal = mechanical_proposal(chapters)
+        _log.info("study.close.mechanical_fallback", topic=_log_key(key))
+
+    # Resolve chapter_seqs globais → RecordIDs.
+    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    entries = [
+        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs])
+        for lesson in proposal.lessons
+    ]
+
+    try:
+        with client.connect_rw() as db:
+            study_store.save_plan_proposal(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                entries=entries,
+            )
+            study_store.set_topic_state(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                state="planning",
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.close.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
