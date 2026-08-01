@@ -120,6 +120,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0026_lesson_provenance.surql",
         # 0027 (KUBO-147): perfil do usuário + theme no membership.
         "0027_user_profile_membership_theme.surql",
+        # 0028 (KUBO-152): move work_context de user para user_profile.
+        "0028_work_context_user_profile.surql",
     }
 
 
@@ -427,3 +429,50 @@ def test_0010_sql_is_self_idempotent(pre_0010_db: Any) -> None:
 
     assert db.query("SELECT kind FROM source:s1;")[0]["kind"] == "github-repo"
     assert db.query("SELECT id FROM source:only;") != []  # Cadastro legítimo intacto
+
+
+# ── 0028: move work_context de user para user_profile (KUBO-152, ADR-0046) ────
+
+
+def test_0028_discards_legacy_user_work_context_and_defines_user_profile_field(
+    tmp_path: Path,
+) -> None:
+    """Cria um user com work_context legado (schema até 0027), aplica a 0028 e valida:
+    o campo é removido de `user` (dado legado descartado) e `user_profile.work_context`
+    está disponível para gravação futura."""
+    pre = tmp_path / "pre"
+    pre.mkdir()
+    for f in sorted(migrations.MIGRATIONS_DIR.glob("*.surql")):
+        if f.name < "0028_work_context_user_profile.surql":
+            shutil.copy(f, pre / f.name)
+    cfg = replace(client.config(), database="test_migr_0028")
+    with client.connect(cfg) as conn:
+        conn.query("REMOVE DATABASE IF EXISTS test_migr_0028;")
+        try:
+            conn.use(cfg.namespace, cfg.database)
+            migrations.apply_migrations(conn, pre)
+            # Cria user legado com work_context (campo existia até 0027).
+            conn.query(
+                "CREATE user:legacy SET firebase_uid='uid-legacy', "
+                "work_context='Arquiteto de plataforma.';"
+            )
+            # Sanity: o campo existe antes da migration.
+            assert conn.query("SELECT work_context FROM user:legacy;")[0]["work_context"] == (
+                "Arquiteto de plataforma."
+            )
+
+            migrations.apply_migrations(conn)  # aplica a 0028 pendente
+
+            # Dado legado descartado: campo removido de user.
+            user_row = conn.query("SELECT * FROM user:legacy;")[0]
+            assert "work_context" not in user_row or user_row.get("work_context") is None
+            # Campo disponível em user_profile (SCHEMAFULL exige a declaração).
+            conn.query(
+                "CREATE user_profile:p SET user=user:legacy, "
+                "display_name='Legacy', language='pt-BR', "
+                "timezone='America/Sao_Paulo', work_context='Novo contexto.';"
+            )
+            profile = conn.query("SELECT work_context FROM user_profile:p;")[0]
+            assert profile["work_context"] == "Novo contexto."
+        finally:
+            conn.query("REMOVE DATABASE IF EXISTS test_migr_0028;")

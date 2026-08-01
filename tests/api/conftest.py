@@ -72,7 +72,6 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         id=RecordID("user", "breakglass-owner"),
         firebase_uid="user:breakglass-owner",
         email=None,
-        work_context=None,
     )
     _breakglass_tenant = SimpleNamespace(
         id=RecordID("tenant", "breakglass"),

@@ -53,21 +53,22 @@ class Tenant:
 class User:
     """Identidade humana (Firebase), distinta de `persona` (papel de agente).
 
-    `email` é PII/sensível — `repr=False` impede vazamento em logs. `work_context`
-    (texto livre do dono que entra em prompts de persona, ADR-0043) segue a mesma
-    disciplina: nunca aparece num log por acidente.
+    `email` é PII/sensível — `repr=False` impede vazamento em logs.
     """
 
     id: RecordID
     firebase_uid: str
     email: str | None = field(repr=False)
     created_at: datetime
-    work_context: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
 class UserProfile:
-    """Preferências globais e identidade visível de uma Conta."""
+    """Preferências globais, identidade visível e contexto de trabalho de uma Conta.
+
+    `work_context` (texto livre do dono que entra em prompts de persona, ADR-0046)
+    é PII/sensível — `repr=False` impede vazamento em logs.
+    """
 
     id: RecordID
     user: RecordID
@@ -76,6 +77,7 @@ class UserProfile:
     timezone: str
     created_at: datetime
     updated_at: datetime
+    work_context: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,6 @@ def _user_from_row(row: dict[str, Any]) -> User:
         firebase_uid=row["firebase_uid"],
         email=row.get("email"),
         created_at=_as_datetime(row["created_at"]),
-        work_context=row.get("work_context"),
     )
 
 
@@ -186,25 +187,6 @@ def get_user(db: Any, user_id: RecordID) -> User | None:
     """Lê um user pelo id."""
     rows = db.query("SELECT * FROM $u;", {"u": user_id})
     return _user_from_row(rows[0]) if rows else None
-
-
-def update_user_work_context(db: Any, *, user_id: RecordID, work_context: str) -> User:
-    """Grava o contexto de trabalho do usuário e devolve o user atualizado.
-
-    Dado do USUÁRIO, não do tenant — por isso não exige `assert_membership`. String
-    vazia limpa o campo (grava None). Levanta `StoreError` se o user não existe.
-    """
-    if get_user(db, user_id) is None:
-        raise StoreError("user not found")
-    text = work_context.strip()
-    db.query(
-        "UPDATE $u SET work_context = $ctx;",
-        {"u": user_id, "ctx": text or None},
-    )
-    user = get_user(db, user_id)
-    if user is None:
-        raise StoreError("user vanished during update")
-    return user
 
 
 def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
@@ -467,7 +449,12 @@ def get_or_create_user_and_tenant(
 
 
 _VALID_THEMES: set[str] = {"light", "dark", "system"}
+MAX_WORK_CONTEXT_LENGTH = 4000
 _BCP47_RE = re.compile(r"^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$")
+
+# Sentinel: caller omitted `work_context` → preserve the existing value.
+# `None` (from `""`) means "clear"; `_UNSET` means "don't touch".
+_UNSET: object = object()
 
 
 def _profile_from_row(row: dict[str, Any]) -> UserProfile:
@@ -480,6 +467,7 @@ def _profile_from_row(row: dict[str, Any]) -> UserProfile:
         timezone=row["timezone"],
         created_at=_as_datetime(row["created_at"]),
         updated_at=_as_datetime(row["updated_at"]),
+        work_context=row.get("work_context"),
     )
 
 
@@ -496,10 +484,24 @@ def _validate_display_name(value: str) -> str:
     return text
 
 
+def _validate_work_context(value: str) -> str | None:
+    """Normaliza e valida o contexto de trabalho; vazio vira None."""
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > MAX_WORK_CONTEXT_LENGTH:
+        raise StoreError("work_context must be at most 4000 characters")
+    return text
+
+
 def _validate_profile_input(
-    *, display_name: str, language: str, timezone: str
-) -> tuple[str, str, str]:
-    """Sanitizes and validates BCP 47 language and IANA timezone."""
+    *, display_name: str, language: str, timezone: str, work_context: str | None | object
+) -> tuple[str, str, str, str | None | object]:
+    """Sanitizes and validates BCP 47 language, IANA timezone and work context.
+
+    `work_context=_UNSET` means "preserve existing" and is returned as-is; a string
+    is validated and normalized (`""` clears, text up to 4000 chars persists).
+    """
     display_name = _validate_display_name(display_name)
     language = language.strip()
     if not _is_bcp47(language):
@@ -509,14 +511,18 @@ def _validate_profile_input(
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError):
         raise StoreError("timezone must be a valid IANA identifier") from None
-    return display_name, language, timezone
+    if work_context is _UNSET:
+        validated_work_context: str | None | object = _UNSET
+    else:
+        validated_work_context = _validate_work_context(work_context)  # type: ignore[arg-type]
+    return display_name, language, timezone, validated_work_context
 
 
 def get_user_profile(db: Any, user_id: RecordID) -> UserProfile | None:
     """Reads the global user profile, or None if it does not exist yet."""
     rows = db.query(
-        "SELECT id, user, display_name, language, timezone, created_at, updated_at "
-        "FROM user_profile WHERE user = $u;",
+        "SELECT id, user, display_name, language, timezone, created_at, updated_at, "
+        "work_context FROM user_profile WHERE user = $u;",
         {"u": user_id},
     )
     return _profile_from_row(rows[0]) if rows else None
@@ -529,6 +535,7 @@ def update_user_profile(
     display_name: str,
     language: str,
     timezone: str,
+    work_context: str | None | object = _UNSET,
 ) -> UserProfile:
     """Creates or updates the global user profile.
 
@@ -536,35 +543,63 @@ def update_user_profile(
     `user_profile` when missing and updates it when present. The read-check-write
     is wrapped in a transaction to avoid a race between two concurrent requests
     both seeing no profile and both trying to CREATE.
+
+    `work_context`: `_UNSET` (default) preserves the existing value (or starts as
+    `None` on create); a string is validated and normalized (`""` clears, text up
+    to 4000 chars persists). This prevents accidental erasure by callers that
+    omit the argument.
     """
     if get_user(db, user_id) is None:
         raise StoreError("user not found")
 
-    display_name, language, timezone = _validate_profile_input(
+    display_name, language, timezone, validated_work_context = _validate_profile_input(
         display_name=display_name,
         language=language,
         timezone=timezone,
+        work_context=work_context,
     )
 
     existing = get_user_profile(db, user_id)
     if existing is not None:
-        transaction.run_transaction(
-            db,
-            [
-                "UPDATE $p SET display_name = $dn, language = $l, "
-                "timezone = $tz, updated_at = time::now()"
-            ],
-            {"p": existing.id, "dn": display_name, "l": language, "tz": timezone},
-        )
+        if validated_work_context is _UNSET:
+            transaction.run_transaction(
+                db,
+                [
+                    "UPDATE $p SET display_name = $dn, language = $l, "
+                    "timezone = $tz, updated_at = time::now()"
+                ],
+                {"p": existing.id, "dn": display_name, "l": language, "tz": timezone},
+            )
+        else:
+            transaction.run_transaction(
+                db,
+                [
+                    "UPDATE $p SET display_name = $dn, language = $l, "
+                    "timezone = $tz, work_context = $wc, updated_at = time::now()"
+                ],
+                {
+                    "p": existing.id,
+                    "dn": display_name,
+                    "l": language,
+                    "tz": timezone,
+                    "wc": validated_work_context,
+                },
+            )
     else:
         transaction.run_transaction(
             db,
             [
                 "CREATE user_profile SET user = $u, display_name = $dn, "
-                "language = $l, timezone = $tz, "
+                "language = $l, timezone = $tz, work_context = $wc, "
                 "created_at = time::now(), updated_at = time::now()"
             ],
-            {"u": user_id, "dn": display_name, "l": language, "tz": timezone},
+            {
+                "u": user_id,
+                "dn": display_name,
+                "l": language,
+                "tz": timezone,
+                "wc": None if validated_work_context is _UNSET else validated_work_context,
+            },
         )
 
     profile = get_user_profile(db, user_id)

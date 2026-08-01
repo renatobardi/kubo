@@ -53,3 +53,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0043](0043-modulo-estudos-dominio-primeira-classe.md) | Módulo Estudos como domínio de 1ª classe | aceito |
 | [0044](0044-tenant-obrigatorio-source-run-dispatch.md) | `tenant_id` obrigatório em `source`, `run` e `dispatch`; unicidade por tenant | proposto |
 | [0045](0045-modulo-perfil-usuario.md) | Módulo de perfil de usuário: `user_profile` e aparência por `membership` | proposto |
+| [0046](0046-work-context-user-profile.md) | `work_context` vive em `user_profile` e é editado em `/profile` | proposto |

@@ -164,8 +164,8 @@ def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
     for name, spy in spies.items():
         monkeypatch.setattr(f"kubo.store.study.{name}", spy)
     monkeypatch.setattr(
-        "kubo.store.tenancy.get_user",
-        lambda db, user_id: type("U", (), {"id": user_id, "work_context": _WORK_CONTEXT})(),
+        "kubo.store.tenancy.get_user_profile",
+        lambda db, user_id: type("P", (), {"work_context": _WORK_CONTEXT})(),
     )
     return spies
 
@@ -306,6 +306,24 @@ def test_tutor_receives_the_entry_title_the_owner_context_and_recent_misses(
     assert call["work_context"] == _WORK_CONTEXT
     assert list(call["misses"]) == ["O que é backpressure?"]
     assert store["recent_misses"].calls[0]["plan_id"] == plan.id
+
+
+def test_missing_profile_uses_empty_work_context(
+    store: dict[str, _Spy],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sem user_profile, o scheduler passa work_context vazio para o tutor."""
+    monkeypatch.setattr("kubo.store.tenancy.get_user_profile", lambda db, user_id: None)
+    plan = _plan()
+    entry = _entry(plan, seq=3)
+    store["list_active_plans"].result = [plan]
+    store["next_unlessoned_entry"].result = entry
+    store["create_lesson"].result = _lesson(plan, entry, _NEXT_DAY)
+    tutor = _FakeTutor(_output())
+
+    _run(tutor)
+
+    assert tutor.calls[0]["work_context"] == ""
 
 
 def test_a_plan_with_broken_cadence_does_not_block_the_others(store: dict[str, _Spy]) -> None:
