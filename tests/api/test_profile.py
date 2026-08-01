@@ -228,3 +228,35 @@ def test_sidebar_footer_shows_display_name_after_profile_update(authed_client: T
     resp = authed_client.get("/distilled")
     assert resp.status_code == 200
     assert "Bardi Test" in resp.text
+
+
+def test_profile_page_has_logout_button(authed_client: TestClient) -> None:
+    """A página de perfil tem um botão de logout (POST /logout)."""
+    resp = authed_client.get("/profile")
+    assert resp.status_code == 200
+    assert 'action="/logout"' in resp.text
+    assert "Sair" in resp.text
+
+
+def test_profile_page_has_gravatar_link(authed_client: TestClient) -> None:
+    """A página de perfil explica que o avatar vem do Gravatar com link."""
+    resp = authed_client.get("/profile")
+    assert resp.status_code == 200
+    assert "gravatar.com" in resp.text
+    assert "Gravatar" in resp.text
+
+
+def test_update_theme_caches_in_session(authed_client: TestClient) -> None:
+    """Salvar tema atualiza a sessão e reflete na próxima renderização."""
+    authed_client.post(
+        "/membership/preferences",
+        data={
+            "csrf": _csrf(authed_client),
+            "theme": "dark",
+        },
+        follow_redirects=False,
+    )
+    # Após salvar dark, a página de perfil deve mostrar dark selecionado
+    resp = authed_client.get("/profile")
+    assert resp.status_code == 200
+    assert 'value="dark" selected' in resp.text

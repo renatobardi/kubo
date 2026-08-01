@@ -69,9 +69,10 @@ def _current_mobile_tab_key(crumb: NavItem | None) -> MobileTabKey:
 def _nav_context(request: Request) -> dict[str, Any]:
     """Injeta `nav` (menu), `current_path` (item ativo), `crumb` (breadcrumb da barra
     de topo: grupo › rótulo da tela atual) e `mobile_tabs`/`mobile_tab` (bottom tab bar,
-    sessão 0019) em todo template. Também injeta `nav_display_name` e `nav_email` (lidos
-    da sessão) para o footer da sidebar — o avatar Gravatar é derivado do email no
-    template via o filtro `gravatar_url`."""
+    sessão 0019) em todo template. Também injeta `nav_display_name`, `nav_email` (lidos
+    da sessão) para o footer da sidebar, e `nav_theme` (tema do workspace ativo) para o
+    pre-paint script — o avatar Gravatar é derivado do email no template via o filtro
+    `gravatar_url`."""
     crumb = _current_nav_item(request.url.path)
     return {
         "nav": NAV,
@@ -81,6 +82,7 @@ def _nav_context(request: Request) -> dict[str, Any]:
         "mobile_tab": _current_mobile_tab_key(crumb),
         "nav_display_name": request.session.get("display_name") or "",
         "nav_email": request.session.get("email") or "",
+        "nav_theme": request.session.get("theme") or "system",
     }
 
 

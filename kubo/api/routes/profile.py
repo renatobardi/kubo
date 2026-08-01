@@ -161,4 +161,5 @@ def update_theme(
         return _render_page(request, notice=str(exc), status=400)
 
     _log.info("membership.theme.updated", user=str(ctx.user_id), theme=form.theme)
+    request.session["theme"] = form.theme
     return RedirectResponse(_PROFILE_ROUTE, status_code=303)

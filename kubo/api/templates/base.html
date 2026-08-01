@@ -27,11 +27,12 @@
   </style>
   <script>
     // Antes do paint (sem flash): tema salvo + estado recolhido da sidebar.
+    // Prioridade: localStorage (toggle do header) > nav_theme (sessão/DB) > matchMedia.
     (function () {
       var t = localStorage.getItem("theme");
-      if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
-        document.documentElement.classList.add("dark");
-      }
+      if (!t) { t = "{{ nav_theme }}"; }
+      var dark = t === "dark" || (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) { document.documentElement.classList.add("dark"); }
       if (localStorage.getItem("navCollapsed") === "1") {
         document.documentElement.classList.add("nav-collapsed");
       }
