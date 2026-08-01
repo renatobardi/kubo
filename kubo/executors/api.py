@@ -39,6 +39,8 @@ _TRANSIENT = (
 # do LLM nem o input do ValidationError (§VIII). Constante única (os 3 caminhos de
 # malformado usam a mesma, sem vazar qual falhou).
 _MALFORMED_MSG = "saída do LLM não valida contra o schema esperado"
+_PROVIDER_ERROR = "falha do provider de LLM"
+_PROVIDER_ERROR_STREAMING = "falha do provider de LLM durante streaming"
 
 _FENCE = "```"
 
@@ -234,7 +236,7 @@ class ApiExecutor:
                 **sampling,
             )
         except Exception:  # noqa: BLE001
-            raise ExecutorError("falha do provider de LLM") from None
+            raise ExecutorError(_PROVIDER_ERROR) from None
         try:
             for chunk in response:
                 try:
@@ -244,7 +246,7 @@ class ApiExecutor:
                 if delta:
                     yield delta
         except Exception:  # noqa: BLE001
-            raise ExecutorError("falha do provider de LLM durante streaming") from None
+            raise ExecutorError(_PROVIDER_ERROR_STREAMING) from None
 
     def _build_messages(
         self, instruction: str, untrusted_content: str, response_model: type[T]
@@ -313,8 +315,8 @@ class ApiExecutor:
                 # o corpo cru da resposta (com conteúdo/segredo) escapar (§VIII, achado
                 # de security-review). QUALQUER erro do provider vira ExecutorError
                 # genérico, `from None` (sem encadear o corpo), sem retry.
-                raise ExecutorError("falha do provider de LLM") from None
-        raise ExecutorError("falha do provider de LLM")  # pragma: no cover — inalcançável
+                raise ExecutorError(_PROVIDER_ERROR) from None
+        raise ExecutorError(_PROVIDER_ERROR)  # pragma: no cover — inalcançável
 
     def _next_backoff(self, exc: Exception, attempt: int) -> float:
         """Segundos a dormir antes de retentar um erro transiente — ou levanta

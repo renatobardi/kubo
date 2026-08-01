@@ -81,6 +81,10 @@ def stub_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.api.routes.study.study_store.list_materials_by_topic",
         lambda db, **kw: [_material()],
     )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.count_materials_by_topic",
+        lambda db, **kw: 1,
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.create_chat_message",
@@ -183,7 +187,7 @@ def test_chat_requires_at_least_one_material(
 ) -> None:
     """Chat sem materiais no Tema devolve 400 (chat desabilitado até ≥1 Material)."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_materials_by_topic", lambda db, **kw: []
+        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
     )
     resp = authed_client.post(
         "/study/topics/abc123/chat",
@@ -227,45 +231,6 @@ def test_chat_sends_suggestion_events(
     assert "Agentes em Python" in body
     assert "Sistemas ag" in body  # focus (JSON-escaped)
     assert "aprofundado" in body
-
-
-# --- GET /topics/{key}/chat/history -----------------------------------------------------
-
-
-def test_chat_history_returns_json(authed_client: TestClient) -> None:
-    """GET /chat/history devolve o histórico da conversa como JSON (lista vazia por padrão)."""
-    resp = authed_client.get("/study/topics/abc123/chat/history")
-    assert resp.status_code == 200
-    assert "application/json" in resp.headers.get("content-type", "")
-    assert resp.json() == []
-
-
-def test_chat_history_shows_messages(
-    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """GET /chat/history lista as mensagens persistidas."""
-    monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_chat_messages",
-        lambda db, **kw: [
-            _chat_msg("user", "Quero estudar agentes.", "m1"),
-            _chat_msg("assistant", "Ótimo! Qual seu foco?", "m2"),
-        ],
-    )
-
-    resp = authed_client.get("/study/topics/abc123/chat/history")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body) == 2
-    assert body[0]["role"] == "user"
-    assert body[0]["content"] == "Quero estudar agentes."
-    assert body[1]["role"] == "assistant"
-
-
-def test_chat_history_empty_returns_empty_list(authed_client: TestClient) -> None:
-    """GET /chat/history sem mensagens devolve lista vazia."""
-    resp = authed_client.get("/study/topics/abc123/chat/history")
-    assert resp.status_code == 200
-    assert resp.json() == []
 
 
 # --- POST /topics/{key}/fields (apply focus/depth) --------------------------------------

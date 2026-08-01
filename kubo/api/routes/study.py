@@ -29,7 +29,7 @@ import structlog
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.routing import APIRoute
 from sse_starlette.sse import EventSourceResponse
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
@@ -40,7 +40,7 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
-from kubo.study.mentor import Mentor, MentorReply, extract_reply
+from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.summarizer import Summarizer
 
@@ -86,14 +86,15 @@ _EMPTY_TITLE = "O nome do estudo não pode ser vazio."
 _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
 _TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um estudo em rascunho."
 _OVER_LIMIT = "Limite de materiais por estudo atingido."
+_OVERSIZE = "Arquivo muito grande."
+_PARSE_FAILED = "Não foi possível ler o arquivo: epub/PDF inválido ou corrompido."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
 _TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um estudo em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
 _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
-_INVALID_DEPTH = "Profundidade inválida: use superficial, intermediario ou aprofundado."
+_INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
 _MENTOR_MAX_TOKENS = 2048
 _MENTOR_TIMEOUT = 60.0
-_VALID_DEPTHS = ("superficial", "intermediario", "aprofundado")
 
 _MAX_LOG_KEY = 64
 
@@ -102,7 +103,7 @@ _FORMATS: dict[str, MaterialFormat] = {".epub": "epub", ".pdf": "pdf"}
 _DEFAULT_MAX_MB = 50
 _DEFAULT_MAX_MATERIALS = 5
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
-_SUMMARY_MODEL = "anthropic/claude-haiku-4-5"
+_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 _SUMMARY_MAX_TOKENS = 1024
 
 # Rótulos de estado do Tema (ADR-0047 §3) — a lista e o detalhe usam os mesmos.
@@ -206,7 +207,7 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
     executor = ApiExecutor(
         ApiExecutorConfig(
-            model=persona.model or _SUMMARY_MODEL,
+            model=persona.model or _DEFAULT_MODEL,
             max_tokens=_SUMMARY_MAX_TOKENS,
             timeout=30.0,
         ),
@@ -215,21 +216,29 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
+class _UploadRejection(Exception):
+    """Motivo tipado de rejeição de upload (formato/tamanho/parse)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 def _validated_upload(
     file: UploadFile | None,
-) -> tuple[MaterialFormat, bytes, ParsedMaterial] | None:
-    """Valida extensão → tamanho → parse; devolve None se recusado (caller devolve 400)."""
+) -> tuple[MaterialFormat, bytes, ParsedMaterial]:
+    """Valida extensão → tamanho → parse; levanta `_UploadRejection` se recusado."""
     fmt = _format_of(file)
     if file is None or fmt is None:
-        return None
+        raise _UploadRejection(_BAD_FORMAT)
     limit = _max_bytes()
     data = file.file.read(limit + 1)
     if len(data) > limit:
-        return None
+        raise _UploadRejection(_OVERSIZE)
     try:
         parsed = parse_material(data, fmt)
-    except MaterialParseError:
-        return None
+    except MaterialParseError as exc:
+        raise _UploadRejection(_PARSE_FAILED) from exc
     return fmt, data, parsed
 
 
@@ -241,12 +250,9 @@ def _persist_material(
     parsed: ParsedMaterial,
     summary: str | None,
     original: str,
-) -> study_store.Material | None:
-    """Grava arquivo + persiste material; None se a store falhar (arquivo é limpo)."""
-    try:
-        directory = _materials_dir()
-    except ConfigError:
-        return None
+) -> study_store.Material:
+    """Grava arquivo + persiste material; levanta ConfigError/StoreError se falhar."""
+    directory = _materials_dir()  # levanta ConfigError se faltar config
     path = _save_upload(directory, ctx, fmt, data)
     try:
         with client.connect_rw() as db:
@@ -265,7 +271,7 @@ def _persist_material(
             )
     except (ConfigError, StoreError):
         path.unlink(missing_ok=True)
-        return None
+        raise
     except Exception:
         path.unlink(missing_ok=True)
         raise
@@ -346,6 +352,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "materials": materials,
             "max_materials": _max_materials(),
             "chat_messages": chat_messages,
+            "valid_depths": VALID_DEPTHS,
             "csrf": csrf_token(request),
         },
     )
@@ -383,8 +390,9 @@ def rename_topic(
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     except StoreError:
-        _log.warning("study.topic.rename_failed", topic=_log_key(key))
-        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+        # StoreError aqui = tema arquivado (regra de negócio, não config).
+        _log.warning("study.topic.rename_rejected", topic=_log_key(key))
+        return PlainTextResponse("Não é possível renomear um estudo arquivado.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -397,30 +405,34 @@ def _process_uploads(
     uploads: list[UploadFile],
     limit: int,
     existing: int,
-) -> int:
-    """Processa cada arquivo do lote; devolve quantos Materiais foram criados.
+) -> tuple[int, list[str]]:
+    """Processa cada arquivo do lote; devolve (criados, rejeições).
 
-    Arquivo inválido (formato/tamanho/parse) é pulado, não aborta o lote.
+    Arquivo inválido (formato/tamanho/parse) é pulado com motivo, não aborta o lote.
     Respeita o limite: para de criar quando atinge `limit - existing`.
     """
     summarizer = _summarizer(ctx)
     created = 0
+    rejections: list[str] = []
     for upload in uploads:
         if existing + created >= limit:
+            rejections.append(_OVER_LIMIT)
             break
-        validated = _validated_upload(upload)
-        if validated is None:
+        try:
+            fmt, data, parsed = _validated_upload(upload)
+        except _UploadRejection as exc:
+            rejections.append(exc.message)
             continue
-        fmt, data, parsed = validated
         summary = summarizer.generate(parsed)
         original = Path(upload.filename or "").name if upload is not None else ""
-        material = _persist_material(ctx, topic, fmt, data, parsed, summary, original)
-        if material is None:
-            _log.warning("study.material.store_failed", fmt=fmt)
+        try:
+            material = _persist_material(ctx, topic, fmt, data, parsed, summary, original)
+        except (ConfigError, StoreError):
+            rejections.append(_STORE_FAILED)
             continue
         _log.info("study.material.uploaded", material=str(material.id))
         created += 1
-    return created
+    return created, rejections
 
 
 @router.post("/topics/{key}/materials")
@@ -463,9 +475,18 @@ def upload_material(
     if not uploads:
         return PlainTextResponse(_BAD_FORMAT, status_code=400)
 
-    created = _process_uploads(ctx, topic, uploads, limit, count)
+    created, rejections = _process_uploads(ctx, topic, uploads, limit, count)
     if created == 0:
-        return PlainTextResponse(_BAD_FORMAT, status_code=400)
+        # Todos falharam — mostra o primeiro motivo.
+        msg = rejections[0] if rejections else _BAD_FORMAT
+        return PlainTextResponse(msg, status_code=400)
+    if rejections:
+        _log.info(
+            "study.material.batch_partial",
+            created=created,
+            rejected=len(rejections),
+            topic=_log_key(key),
+        )
     _log.info("study.material.batch_uploaded", count=created, topic=_log_key(key))
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
@@ -497,6 +518,9 @@ def delete_material(
             )
         if material is None:
             return PlainTextResponse("Material não encontrado.", status_code=404)
+        # Valida que o material pertence ao Tema da URL (não a outro Tema).
+        if material.topic != topic.id:
+            return PlainTextResponse("Material não encontrado.", status_code=404)
         with client.connect_rw() as db:
             study_store.delete_material(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
@@ -525,11 +549,10 @@ def _mentor(ctx: SessionContext) -> Mentor:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "mentor")
     executor = ApiExecutor(
         ApiExecutorConfig(
-            model=persona.model or _SUMMARY_MODEL,
+            model=persona.model or _DEFAULT_MODEL,
             max_tokens=_MENTOR_MAX_TOKENS,
             timeout=_MENTOR_TIMEOUT,
         ),
-        max_attempts=1,
     )
     return Mentor(executor=executor, prompt=persona.prompt)
 
@@ -560,16 +583,23 @@ def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[t
 def _chat_precheck(
     request: Request, key: str, ctx: SessionContext
 ) -> Response | tuple[study_store.Topic, list[str], list[tuple[str, str]]]:
-    """Valida tema/draft/materiais; devolve Response de erro OU contexto do chat."""
+    """Valida tema/draft/materiais; devolve Response de erro OU contexto do chat.
+
+    Gate é ≥1 Material (não ≥1 sumário): Material com sumário falho ainda
+    libera o chat (ADR-0047 §5).
+    """
     with client.connect() as db:
         topic = _topic_of(db, key, ctx)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
-        summaries = _material_summaries_of(db, ctx, topic.id)
-        if not summaries:
+        count = study_store.count_materials_by_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        if count == 0:
             return PlainTextResponse(_TOPIC_NO_MATERIALS, status_code=400)
+        summaries = _material_summaries_of(db, ctx, topic.id)
         history = _chat_history_of(db, ctx, topic.id)
     return topic, summaries, history
 
@@ -670,31 +700,6 @@ def _done_data(reply: MentorReply) -> dict[str, str | None]:
     return data
 
 
-@router.get("/topics/{key}/chat/history")
-def chat_history(request: Request, key: str) -> Response:
-    """Devolve o histórico da conversa como JSON (para reabrir o Tema)."""
-    ctx = _session_of(request)
-    if ctx is None:
-        return PlainTextResponse(_DENIED, status_code=403)
-    with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
-        if topic is None:
-            return PlainTextResponse("Tema não encontrado.", status_code=404)
-        messages = study_store.list_chat_messages(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            topic_id=topic.id,
-            phase="draft",
-        )
-    return JSONResponse(
-        [
-            {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
-            for m in messages
-        ]
-    )
-
-
 @router.post("/topics/{key}/fields")
 def set_topic_fields(
     request: Request,
@@ -717,7 +722,7 @@ def set_topic_fields(
     value = value.strip()
     if field not in ("focus", "depth"):
         return PlainTextResponse("Campo inválido.", status_code=400)
-    if field == "depth" and value and value not in _VALID_DEPTHS:
+    if field == "depth" and value and value not in VALID_DEPTHS:
         return PlainTextResponse(_INVALID_DEPTH, status_code=400)
     with client.connect() as db:
         topic = _topic_of(db, key, ctx)

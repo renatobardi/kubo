@@ -86,3 +86,21 @@ Os Temas/Materiais/lições/conversas existentes (1:1 do ADR-0043) são **descar
 - **Edição manual do Plano sem chat:** ignora o caso relatado ("pedir pra arrumar"). Chat + edição manual coexistem.
 - **`planner` lê conteúdo completo dos capítulos:** 5 PDFs × 20 capítulos = 100 capítulos no prompt — estoura contexto ou custa muito. Sumários + estrutura são suficientes pra planejamento; conteúdo completo é pra geração de Lição.
 - **Migração automática dos Temas existentes (1:1 → N:1):** descartar e recriar é mais simples e o impacto é só do dono (uso pessoal, usuário único).
+
+## Emendas
+
+### Emenda 1 — Persona `summarizer` (KUBO-162, 2026-08-01)
+
+O §6 previa apenas a persona `mentor`. A fatia KUBO-162 (sumário de Material no upload) introduziu a persona `summarizer` como split do `mentor`: `summarizer` faz sumarização de Material (síncrono, JSON estruturado); `mentor` faz conversa na Fase 1 (streaming, texto livre). O split mantém o princípio de persona = papel específico e evita sobrecarregar `mentor` com dois modos de operação. `summarizer` é default em código (`catalog_defaults.py`), mesma regra do `mentor` (ADR-0042).
+
+### Emenda 2 — Scheduler de lições adiada para KUBO-168 (2026-08-01)
+
+O §1 afirma "sem cap, o scheduler gera lições para todos os Temas `running`". A implementação do scheduler de lições (sino diário, geração de lição, progresso) existia no ADR-0043 e foi **temporariamente removida** no PR do epic KUBO-160 para simplificar o recomeço limpo do schema. A restauração é rastreada em **KUBO-168** — o scheduler será reescrito sobre o schema novo (Tema container, estados explícitos) quando a Fase 2 (Plano) for implementada. Sem Temas `running` ainda (Fase 2 não implementada), a remoção não causa regressão funcional.
+
+### Emenda 3 — Exceção: JS artesanal para SSE no chat (KUBO-163, 2026-08-01)
+
+A invariante 7 ("sem UI rica na fase 1") e a stack HTMX não cobrem streaming SSE com múltiplos eventos (chunk/done/error). O HTMX SSE extension (`hx-sse`) não suporta parsing de JSON no evento `done` nem evento `error`. Exceção registrada: o chat do mentor usa ~120 linhas de JS artesanal (parser SSE manual, `fetch`+`location.reload()` para aplicar sugestões). Demais interações do módulo Estudos continuam em HTMX.
+
+### Emenda 4 — Janela deslizante sem resumo (KUBO-163, 2026-08-01)
+
+O §2 prevê "janela deslizante com resumo dos turnos anteriores (padrão `distilled`)". A implementação atual trunca por `_MAX_HISTORY_CHARS` (descarta turnos antigos sem resumir). O resumo dos turnos antigos fica para KUBO-168 (junto com a Fase 2, que também precisa de resumo da conversa com `mentor`). A truncagem é aceitável na Fase 1 porque a conversa é curta (definição de Tema, não revisão de Plano).

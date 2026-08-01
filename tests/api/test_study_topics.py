@@ -181,7 +181,7 @@ def test_rename_topic_empty_title_rejected(
 def test_rename_archived_topic_rejected(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tema arquivado é só leitura — rename devolve 503 (StoreError traduzido)."""
+    """Tema arquivado é só leitura — rename devolve 400 (StoreError = regra de negócio)."""
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_topic",
         lambda db, **kw: _topic(state="archived"),
@@ -197,4 +197,4 @@ def test_rename_archived_topic_rejected(
         data={"csrf": csrf, "title": "Novo nome"},
         follow_redirects=False,
     )
-    assert resp.status_code == 503
+    assert resp.status_code == 400

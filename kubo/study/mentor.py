@@ -30,18 +30,20 @@ from kubo.executors.base import StreamingExecutor
 _log = structlog.get_logger(__name__)
 
 # Valores válidos de profundidade (espelha o ASSERT da migration 0031).
-_VALID_DEPTH = ("superficial", "intermediario", "aprofundado")
+# Única fonte de verdade — rota e mentor importam daqui.
+VALID_DEPTHS = ("superficial", "intermediario", "aprofundado")
 
 # Teto de caracteres do histórico que vai ao prompt (janela deslizante).
 # Os turnos mais antigos são truncados primeiro — os recentes ficam inteiros.
 _MAX_HISTORY_CHARS = 20_000
 
 # Padrões de extração das marcações de sugestão.
-_NAME_RE = re.compile(r"\[Sugestão:\s*(.+?)\]")
-_FOCUS_RE = re.compile(r"\[Foco:\s*(.+?)\]")
-_DEPTH_RE = re.compile(r"\[Profundidade:\s*(.+?)\]")
+# `[^\]]+` em vez de `.+?` evita backtracking super-linear (Sonar S8786/S5857).
+_NAME_RE = re.compile(r"\[Sugestão:\s*([^\]]+)\]")
+_FOCUS_RE = re.compile(r"\[Foco:\s*([^\]]+)\]")
+_DEPTH_RE = re.compile(r"\[Profundidade:\s*([^\]]+)\]")
 # Padrão para limpar TODAS as marcações do texto exibido ao dono.
-_ALL_SUGGESTION_RE = re.compile(r"\[(?:Sugestão|Foco|Profundidade):\s*.+?\]")
+_ALL_SUGGESTION_RE = re.compile(r"\[(?:Sugestão|Foco|Profundidade):\s*[^\]]+\]")
 
 
 @dataclass(frozen=True)
@@ -131,7 +133,7 @@ def extract_reply(text: str) -> MentorReply:
     name = _extract_first(_NAME_RE, text)
     focus = _extract_first(_FOCUS_RE, text)
     depth_raw = _extract_first(_DEPTH_RE, text)
-    depth = depth_raw if depth_raw and depth_raw in _VALID_DEPTH else None
+    depth = depth_raw if depth_raw and depth_raw in VALID_DEPTHS else None
     clean = _ALL_SUGGESTION_RE.sub("", text).strip()
     return MentorReply(
         text=clean,

@@ -1,4 +1,4 @@
-"""Persistência do módulo Estudos (ADR-0043): Material e seus capítulos.
+"""Persistência do módulo Estudos (ADR-0047): Tema container de N Materiais.
 
 Material é dado PESSOAL — escopo `user` DENTRO do tenant (não só tenant): toda
 leitura filtra por `tenant_id` E `user_id`, então um material de outro membro do
@@ -32,21 +32,6 @@ _MATERIAL_SCOPE = "tenant_id = $tenant AND user_id = $user"
 # `None` means "clear"; `_UNSET` means "don't touch" (same pattern as tenancy).
 _UNSET: object = object()
 _CHAPTER_SCOPE = f"material = $material AND {_MATERIAL_SCOPE}"
-_ENTRY_SCOPE = f"study_plan = $plan AND {_MATERIAL_SCOPE}"
-# `lesson` também aponta o plano por `study_plan`: mesmo recorte da lição planejada.
-_LESSON_SCOPE = _ENTRY_SCOPE
-
-# Único estado editável do plano (ADR-0043): ativar congela a meta.
-_PROPOSED = "proposed"
-# Único estado que produz lição (KUBO-137): o job da véspera só olha para estes.
-_ACTIVE = "active"
-# Estados do ciclo de vida (KUBO-138): pausado congela a régua, completo fecha o plano.
-_PAUSED = "paused"
-_COMPLETED = "completed"
-# `seq` fora da faixa válida (1..N), usado como estacionamento nas trocas de posição:
-# o índice `plan_entry_seq` é UNIQUE e não tolera duas lições no mesmo lugar nem por
-# um passo intermediário.
-_TEMP_SEQ = -1
 
 
 @dataclass(frozen=True)

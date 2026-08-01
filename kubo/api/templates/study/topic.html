@@ -18,7 +18,8 @@
     <h2 class="text-sm font-medium">Nome do estudo</h2>
     <form method="post" action="{{ topic_url }}/rename" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="text" name="title" value="{{ topic.title }}" required
+      <label for="topic-title" class="sr-only">Nome do estudo</label>
+      <input id="topic-title" type="text" name="title" value="{{ topic.title }}" required
              class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
       <button type="submit"
               class="h-9 rounded-4xl px-3 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted sm:w-auto">
@@ -63,12 +64,15 @@
           enctype="multipart/form-data" class="mt-3">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div id="dropzone" class="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-input p-8 text-center transition-colors hover:border-primary hover:bg-primary/5 cursor-pointer"
+           role="button" tabindex="0"
            onclick="document.getElementById('file-input').click()"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click()}"
            ondragover="event.preventDefault(); this.classList.add('border-primary','bg-primary/5')"
            ondragleave="this.classList.remove('border-primary','bg-primary/5')"
            ondrop="event.preventDefault(); this.classList.remove('border-primary','bg-primary/5'); const f=document.getElementById('file-input'); f.files=event.dataTransfer.files; f.form.requestSubmit();">
         <p class="text-sm text-muted-foreground">Arraste arquivos aqui ou clique para selecionar</p>
         <p class="text-xs text-muted-foreground">epub ou PDF · até {{ max_materials }} materiais</p>
+        <label for="file-input" class="sr-only">Selecionar arquivos epub ou PDF</label>
         <input id="file-input" type="file" name="file" accept=".epub,.pdf" multiple class="hidden"
                onchange="this.form.requestSubmit()">
         <button type="submit" class="hidden">Enviar</button>
@@ -104,9 +108,41 @@
       <div id="suggestion-buttons" class="flex flex-wrap gap-2"></div>
     </div>
 
+    {# Campos estruturados (focus/depth) — editáveis inline (AC KUBO-163). #}
+    <div class="mt-3 grid gap-3 sm:grid-cols-2">
+      <form method="post" action="{{ topic_url }}/fields" class="flex flex-col gap-1">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="field" value="focus">
+        <label for="topic-focus" class="text-xs font-semibold text-muted-foreground">Foco</label>
+        <div class="flex gap-2">
+          <input id="topic-focus" type="text" name="value" value="{{ topic.focus or '' }}"
+                 placeholder="Ex: sistemas agênticos"
+                 class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <button type="submit" class="h-9 shrink-0 rounded-4xl px-3 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">OK</button>
+        </div>
+      </form>
+      <form method="post" action="{{ topic_url }}/fields" class="flex flex-col gap-1">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="field" value="depth">
+        <label for="topic-depth" class="text-xs font-semibold text-muted-foreground">Profundidade</label>
+        <div class="flex gap-2">
+          <select id="topic-depth" name="value"
+                  class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  onchange="this.form.requestSubmit()">
+            <option value="" {% if not topic.depth %}selected{% endif %}>—</option>
+            {% for d in valid_depths %}
+            <option value="{{ d }}" {% if topic.depth == d %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="h-9 shrink-0 rounded-4xl px-3 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">OK</button>
+        </div>
+      </form>
+    </div>
+
     {# Input do chat. #}
     <form id="chat-form" class="mt-3 flex gap-2">
       <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="chat-input" class="sr-only">Mensagem para o mentor</label>
       <textarea id="chat-input" name="message" rows="2" placeholder="Digite sua mensagem..."
                 class="flex-1 rounded-2xl border border-input bg-input/30 px-4 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 resize-none"></textarea>
       <button type="submit" id="chat-submit"
@@ -172,6 +208,30 @@
       }
     }
 
+    function handleSSEEvent(ev, data, assistantP, fullTextRef) {
+      if (ev === 'chunk') {
+        fullTextRef.text += data;
+        assistantP.textContent = fullTextRef.text;
+        messages.scrollTop = messages.scrollHeight;
+      } else if (ev === 'error') {
+        assistantP.textContent = data || 'Erro ao gerar resposta.';
+      } else if (ev === 'done') {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.text !== undefined) fullTextRef.text = parsed.text;
+          assistantP.textContent = fullTextRef.text;
+          if (parsed.suggested_name) addSuggestion('name', parsed.suggested_name);
+          if (parsed.suggested_focus) addSuggestion('focus', parsed.suggested_focus);
+          if (parsed.suggested_depth) addSuggestion('depth', parsed.suggested_depth);
+          if (parsed.suggested_name || parsed.suggested_focus || parsed.suggested_depth) {
+            suggestions.classList.remove('hidden');
+          }
+        } catch (e) {
+          console.error('SSE done parse failed:', e);
+        }
+      }
+    }
+
     form.onsubmit = async function(e) {
       e.preventDefault();
       const msg = input.value.trim();
@@ -181,7 +241,7 @@
       addMessage('user', msg);
 
       const assistantP = addMessage('assistant', '');
-      let fullText = '';
+      const fullTextRef = {text: ''};
 
       try {
         const resp = await fetch(topicUrl + '/chat', {
@@ -200,7 +260,6 @@
           const {done, value} = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, {stream: true});
-          // SSE: eventos separados por \n\n; linhas dentro de um evento por \n (ou \r\n).
           const events = buffer.split('\n\n');
           buffer = events.pop();
           for (const evtBlock of events) {
@@ -214,26 +273,7 @@
                 dataLines.push(line.slice(6));
               }
             }
-            const data = dataLines.join('\n');
-            if (ev === 'chunk') {
-              fullText += data;
-              assistantP.textContent = fullText;
-              messages.scrollTop = messages.scrollHeight;
-            } else if (ev === 'error') {
-              assistantP.textContent = data || 'Erro ao gerar resposta.';
-            } else if (ev === 'done') {
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.text !== undefined) fullText = parsed.text;
-                assistantP.textContent = fullText;
-                if (parsed.suggested_name) addSuggestion('name', parsed.suggested_name);
-                if (parsed.suggested_focus) addSuggestion('focus', parsed.suggested_focus);
-                if (parsed.suggested_depth) addSuggestion('depth', parsed.suggested_depth);
-                if (parsed.suggested_name || parsed.suggested_focus || parsed.suggested_depth) {
-                  suggestions.classList.remove('hidden');
-                }
-              } catch (e) {}
-            }
+            handleSSEEvent(ev, dataLines.join('\n'), assistantP, fullTextRef);
           }
         }
       } catch (err) {

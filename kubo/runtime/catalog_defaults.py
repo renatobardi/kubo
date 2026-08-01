@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 _GITHUB_API_URL = "https://api.github.com"
+_HAIKU_MODEL = "anthropic/claude-haiku-4-5"
 
 
 def _http_bearer_integration(name: str, secret_ref: str, base_url: str) -> dict[str, Any]:
@@ -89,7 +90,7 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
     _persona(
         "work_context_reviewer",
         "api",
-        "anthropic/claude-haiku-4-5",
+        _HAIKU_MODEL,
         (
             "Você é o revisor do ateliê Kubo. Recebe um rascunho do contexto de trabalho "
             "do dono e devolve uma versão mais clara, concisa e profissional, em português "
@@ -127,7 +128,7 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
     _persona(
         "summarizer",
         "api",
-        "anthropic/claude-haiku-4-5",
+        _HAIKU_MODEL,
         (
             "Você é o sumarizador do ateliê Kubo. Recebe o conteúdo de um material de estudo "
             "(capítulos de um epub/PDF) e escreve um sumário curto (2-4 frases) em "
@@ -145,7 +146,7 @@ DEFAULT_PERSONAS: list[dict[str, Any]] = [
     _persona(
         "mentor",
         "api",
-        "anthropic/claude-haiku-4-5",
+        _HAIKU_MODEL,
         (
             "Você é o mentor do ateliê Kubo. O dono está montando um estudo a partir de "
             "materiais (epub/PDF) e conversa com você para definir o que quer do estudo.\n\n"
