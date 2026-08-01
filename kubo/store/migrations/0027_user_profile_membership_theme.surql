@@ -19,3 +19,7 @@ DEFINE INDEX OVERWRITE user_profile_user ON user_profile FIELDS user UNIQUE;
 -- ── Aparência por workspace (membership = relação user -> tenant) ───────────────
 DEFINE FIELD OVERWRITE theme ON membership TYPE string DEFAULT 'system'
   ASSERT $value IN ['light', 'dark', 'system'];
+
+-- Backfill: memberships criadas antes desta migração não têm `theme` preenchido.
+-- DEFAULT só aplica em CREATE, então atualizamos as existentes explicitamente.
+UPDATE membership SET theme = 'system' WHERE theme IS NONE;

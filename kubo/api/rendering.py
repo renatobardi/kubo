@@ -131,10 +131,10 @@ def days_since(iso: str | None) -> int | None:
 
 
 def gravatar_url(seed: str | None) -> str:
-    """Gravatar identicon URL from an e-mail (or any deterministic seed)."""
+    """Gravatar identicon URL from an e-mail (empty string when missing)."""
     source = (seed or "").strip().lower()
     digest = hashlib.md5(source.encode("utf-8")).hexdigest()  # noqa: S303,S324 (gravatar)
-    return f"https://www.gravatar.com/avatar/{digest}?d=identicon&s=200"
+    return f"https://www.gravatar.com/avatar/{digest}?d=identicon"
 
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR), context_processors=[_nav_context])

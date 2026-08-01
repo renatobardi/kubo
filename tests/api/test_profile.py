@@ -121,7 +121,7 @@ def test_post_profile_rejects_empty_display_name(authed_client: TestClient) -> N
     )
 
     assert resp.status_code == 400
-    assert "nome" in resp.text.lower()
+    assert "display_name" in resp.text.lower()
 
 
 def test_post_membership_preferences_updates_theme(authed_client: TestClient) -> None:
@@ -164,3 +164,25 @@ def test_post_profile_requires_csrf(authed_client: TestClient) -> None:
     )
 
     assert resp.status_code == 403
+
+
+def test_get_profile_avatar_with_missing_email(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the user has no email, the avatar is computed from an empty string (md5 of "")."""
+    no_email_user = SimpleNamespace(
+        id=_PROFILE_USER.id,
+        firebase_uid=_PROFILE_USER.firebase_uid,
+        email=None,
+        work_context=None,
+    )
+    monkeypatch.setattr("kubo.store.tenancy.get_user", lambda db, user_id: no_email_user)
+
+    import hashlib
+
+    expected_digest = hashlib.md5(b"").hexdigest()  # noqa: S324 (test fixture)
+    resp = authed_client.get("/profile")
+
+    assert resp.status_code == 200
+    assert expected_digest in resp.text
+    assert "gravatar.com" in resp.text

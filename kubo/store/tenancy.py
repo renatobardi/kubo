@@ -492,7 +492,7 @@ def _validate_display_name(value: str) -> str:
     """Normalizes and validates the display name."""
     text = value.strip()
     if not text or len(text) > 64:
-        raise StoreError("nome deve ter 1-64 caracteres")
+        raise StoreError("display_name must be 1-64 characters")
     return text
 
 
@@ -503,12 +503,12 @@ def _validate_profile_input(
     display_name = _validate_display_name(display_name)
     language = language.strip()
     if not _is_bcp47(language):
-        raise StoreError("idioma inválido (BCP 47)")
+        raise StoreError("language must be a valid BCP 47 tag")
     timezone = timezone.strip()
     try:
         ZoneInfo(timezone)
     except ZoneInfoNotFoundError:
-        raise StoreError("timezone inválido (IANA)") from None
+        raise StoreError("timezone must be a valid IANA identifier") from None
     return display_name, language, timezone
 
 
@@ -590,7 +590,7 @@ def update_membership_theme(
 ) -> Membership:
     """Updates the active membership theme after verifying the user belongs to the tenant."""
     if theme not in _VALID_THEMES:
-        raise StoreError("tema deve ser 'light', 'dark' ou 'system'")
+        raise StoreError("theme must be 'light', 'dark' or 'system'")
 
     row = _find_existing_membership(db, user_id, tenant_id)
     if row is None:

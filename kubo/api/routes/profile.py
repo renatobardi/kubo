@@ -57,11 +57,11 @@ def _profile_context(db: Any, ctx: Any) -> dict[str, Any]:
 
     return {
         "email": user.email,
-        "display_name": profile.display_name if profile else user.firebase_uid,
+        "display_name": profile.display_name if profile else "",
         "language": profile.language if profile else "pt-BR",
         "timezone": profile.timezone if profile else "America/Sao_Paulo",
         "theme": theme,
-        "avatar_seed": (user.email or user.firebase_uid),
+        "avatar_seed": user.email or "",
     }
 
 
