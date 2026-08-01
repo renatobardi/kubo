@@ -32,6 +32,7 @@ from kubo.store.study import (
     get_lesson,
     get_lesson_for_day,
     get_log_for_lesson,
+    get_plan_entry,
     list_active_plans,
     list_chapters_by_ids,
     list_lessons,
@@ -507,3 +508,18 @@ def test_lesson_store_requires_membership(db: Any, tenant_id: RecordID, user_id:
         list_active_plans(db, tenant_id=tenant_id, user_id=stranger)
     with pytest.raises(MembershipRequiredError):
         next_unlessoned_entry(db, tenant_id=tenant_id, user_id=stranger, plan_id=plan.id)
+
+
+def test_get_plan_entry_returns_only_within_scope(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """`get_plan_entry` devolve a entrada só para o dono; outro usuário do tenant vê None."""
+    plan = _active_plan(db, tenant_id, user_id)
+    entry = _first_entry(db, tenant_id, user_id, plan.id)
+    other_id = _other_member(db, tenant_id)
+
+    found = get_plan_entry(db, entry_id=entry.id, tenant_id=tenant_id, user_id=user_id)
+    assert found is not None
+    assert found.id == entry.id
+
+    assert get_plan_entry(db, entry_id=entry.id, tenant_id=tenant_id, user_id=other_id) is None

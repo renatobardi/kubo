@@ -511,7 +511,7 @@ def get_plan_entry(
     """Lê uma lição do plano por id; None se não existe ou é de outro usuário."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM plan_entry WHERE id = $entry AND {_ENTRY_SCOPE} LIMIT 1;",  # noqa: S608
+        f"SELECT * FROM plan_entry WHERE id = $entry AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
         {"entry": entry_id, "tenant": tenant_id, "user": user_id},
     )
     return _entry_from_row(rows[0]) if rows else None

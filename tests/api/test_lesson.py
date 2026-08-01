@@ -20,7 +20,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.errors import StoreError
-from kubo.store.study import Lesson, StudyLog
+from kubo.store.study import Lesson, MaterialChapter, PlanEntry, StudyLog
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
@@ -52,7 +52,11 @@ def _quiz() -> list[dict[str, Any]]:
     ]
 
 
-def _lesson(*, recap: str | None = None) -> Lesson:
+def _lesson(
+    *,
+    recap: str | None = None,
+    provenance: list[dict[str, Any]] | None = None,
+) -> Lesson:
     return Lesson(
         id=_LESSON_ID,
         tenant_id=_TENANT,
@@ -66,6 +70,7 @@ def _lesson(*, recap: str | None = None) -> Lesson:
         recap=recap,
         quiz=_quiz(),
         created_at=datetime(2026, 8, 5, 21, 0, tzinfo=timezone.utc),
+        provenance=provenance if provenance is not None else [],
     )
 
 
@@ -189,6 +194,66 @@ def test_unknown_lesson_is_404(authed_client: TestClient, monkeypatch: pytest.Mo
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_lesson", lambda db, **kw: None)
 
     assert authed_client.get("/study/lessons/nao-existe").status_code == 404
+
+
+def test_lesson_page_shows_provenance_with_chapter_title_and_quote(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proveniência renderiza o título do capítulo e a citação do trecho de origem."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_lesson",
+        lambda db, **kw: _lesson(
+            provenance=[{"chapter_seq": 1, "quote": "Filas desacoplam produtor e consumidor."}]
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_entry",
+        lambda db, **kw: PlanEntry(
+            id=_ENTRY_ID, study_plan=_PLAN_ID, seq=1, title="Aula 1", chapters=[]
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_chapters_by_ids",
+        lambda db, **kw: [
+            MaterialChapter(
+                id=RecordID("material_chapter", "c1"),
+                material=RecordID("material", "m1"),
+                seq=1,
+                title="Capítulo 1 — Filas",
+                part=None,
+                content="",
+            )
+        ],
+    )
+
+    html = authed_client.get(_LESSON_URL).text
+
+    assert "Proveniência" in html
+    assert "Capítulo 1 — Filas" in html
+    assert "Filas desacoplam produtor e consumidor." in html
+
+
+def test_lesson_page_shows_provenance_without_chapter_title_when_entry_is_missing(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sem a entrada do plano, a citação aparece mesmo sem o título do capítulo."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_lesson",
+        lambda db, **kw: _lesson(provenance=[{"chapter_seq": 1, "quote": "Trecho órfão."}]),
+    )
+    monkeypatch.setattr("kubo.api.routes.study.study_store.get_plan_entry", lambda db, **kw: None)
+
+    html = authed_client.get(_LESSON_URL).text
+
+    assert "Proveniência" in html
+    assert "Trecho órfão." in html
+
+
+def test_lesson_page_hides_provenance_when_empty(authed_client: TestClient) -> None:
+    """Lição sem proveniência não mostra a seção — não há trecho a localizar."""
+    html = authed_client.get(_LESSON_URL).text
+
+    assert "Proveniência" not in html
 
 
 def test_lesson_page_requires_auth(client: TestClient) -> None:
