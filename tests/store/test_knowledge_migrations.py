@@ -122,6 +122,12 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0027_user_profile_membership_theme.surql",
         # 0028 (KUBO-152): move work_context de user para user_profile.
         "0028_work_context_user_profile.surql",
+        # 0029 (KUBO-161, ADR-0047): Tema container de N Materiais + estados explícitos.
+        "0029_study_topic_container.surql",
+        # 0030 (KUBO-162): índice material_topic para list/count por tema.
+        "0030_material_topic_index.surql",
+        # 0031 (KUBO-163): conversa persistida + campos estruturados do Tema.
+        "0031_study_chat.surql",
     }
 
 

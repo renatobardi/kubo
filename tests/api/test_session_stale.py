@@ -23,7 +23,7 @@ from starlette.testclient import TestClient
 # Páginas tenant-scoped de módulos diferentes: o comportamento é do resolvedor de
 # sessão, não de uma rota específica. Se alguém "consertar" só a que apareceu no
 # incidente, as outras aqui denunciam.
-_PAGES = ("/distilled", "/study/materials", "/sources")
+_PAGES = ("/distilled", "/study/topics", "/sources")
 
 
 @pytest.fixture

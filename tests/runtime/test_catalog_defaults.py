@@ -33,3 +33,13 @@ def test_tutor_usa_claude_sonnet() -> None:
 def test_finder_permanece_no_groq() -> None:
     """Caso de controle: a descoberta de RSS (`finder`) NÃO muda de modelo."""
     assert _persona("finder")["model"] == "groq/llama-3.3-70b-versatile"
+
+
+def test_mentor_usa_claude_haiku() -> None:
+    """A persona `mentor` (chat na Fase 1, KUBO-163) nasce no Haiku 4.5."""
+    assert _persona("mentor")["model"] == "anthropic/claude-haiku-4-5"
+
+
+def test_summarizer_usa_claude_haiku() -> None:
+    """A persona `summarizer` (sumário de Material no upload, KUBO-162) nasce no Haiku 4.5."""
+    assert _persona("summarizer")["model"] == "anthropic/claude-haiku-4-5"

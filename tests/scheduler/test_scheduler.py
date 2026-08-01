@@ -175,20 +175,19 @@ def test_unknown_timezone_is_rejected() -> None:
 
 def test_load_schedules_reads_real_repo_config() -> None:
     """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108), migração
-    do GitHub pro sweep (#110), KUBO-44 (digest sai do YAML), KUBO-137 (véspera de Estudos) e
-    KUBO-138 (sino de Estudos): 1 `sweep: rss` + 1 `sweep: github-repo` (ADR-0025 §4/§5) + 1
-    destilador diário ATIVO (ADR-0013 §VIII) + 2 jobs de Estudos (ADR-0043) — 5 entries,
-    timezone explícita, ZERO
-    worker `feed` estático, ZERO flow agendado (FlowEntry aposentado, #110) e ZERO digest
-    no YAML."""
-    from kubo.scheduler import JobEntry, SweepEntry, WorkerEntry, load_schedules
+    do GitHub pro sweep (#110), KUBO-44 (digest sai do YAML) e KUBO-161 (jobs de Estudos
+    desregistrados, ADR-0047): 1 `sweep: rss` + 1 `sweep: github-repo` (ADR-0025 §4/§5) + 1
+    destilador diário ATIVO (ADR-0013 §VIII) — 3 entries, timezone explícita, ZERO
+    worker `feed` estático, ZERO flow agendado (FlowEntry aposentado, #110), ZERO digest
+    no YAML e ZERO jobs de Estudos (desregistrados em KUBO-161)."""
+    from kubo.scheduler import SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
     worker_entries = [e for e in schedules.schedules if isinstance(e, WorkerEntry)]
     sweep_entries = [e for e in schedules.schedules if isinstance(e, SweepEntry)]
 
     assert schedules.timezone == "America/Sao_Paulo"
-    assert len(schedules.schedules) == 5
+    assert len(schedules.schedules) == 3
     # A coleta de feeds virou um sweep dirigido por Cadastro; nenhum worker `feed` estático.
     assert not any(e.worker == "feed" for e in worker_entries)
     assert {e.sweep for e in sweep_entries} == {"rss", "github-repo"}
@@ -210,12 +209,6 @@ def test_load_schedules_reads_real_repo_config() -> None:
     github = next(e for e in sweep_entries if e.sweep == "github-repo")
     assert github.cron == "0 7 * * *"
 
-    # A véspera de Estudos (KUBO-137): job interno, várias janelas de RETRY na mesma noite
-    # (a geração é idempotente por (plano, dia)).
-    eve = [e for e in schedules.schedules if isinstance(e, JobEntry)]
-    assert [e.job for e in eve] == ["study-eve", "study-bell"]
-    assert eve[0].cron == "0 18-22 * * *"
-
 
 def test_distiller_entry_config_validates() -> None:
     """O entry ATIVO do destilador (`max_items: 50`, D56) valida contra o schema do
@@ -236,14 +229,15 @@ def test_distiller_entry_config_validates() -> None:
 
 
 def test_build_scheduler_creates_yaml_digest_and_poll_jobs() -> None:
-    """Com settings, o scheduler monta: 5 jobs do YAML (2 sweeps + distiller + véspera e sino
-    de Estudos) + digest + poll = 7. Não inicia o scheduler (`.start()` bloquearia)."""
+    """Com settings, o scheduler monta: 3 jobs do YAML (2 sweeps + distiller) + digest +
+    poll = 5. Jobs de Estudos foram desregistrados em KUBO-161 (ADR-0047). Não inicia o
+    scheduler (`.start()` bloquearia)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules(), _scheduler_settings())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 7
+    assert len(scheduler.get_jobs()) == 5
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:
@@ -923,14 +917,13 @@ def test_distiller_usa_claude_haiku() -> None:
     assert _DISTILLER_MODEL == "anthropic/claude-haiku-4-5"
 
 
-def test_distiller_e_tutor_tem_folga_de_max_tokens_para_thinking() -> None:
-    """Os tetos de tokens do destilador e do tutor comportam thinking + JSON (KUBO-139).
+def test_distiller_tem_folga_de_max_tokens_para_thinking() -> None:
+    """O teto de tokens do destilador comporta thinking + JSON (KUBO-139).
 
     Nos modelos Claude atuais o thinking adaptativo é ligado por padrão e consome do
-    MESMO `max_tokens` da resposta: os tetos antigos truncariam o JSON no meio e o item
+    MESMO `max_tokens` da resposta: o teto antigo truncaria o JSON no meio e o item
     voltaria como saída malformada — falha silenciosa, indistinguível de LLM ruim.
     """
-    from kubo.scheduler import _DISTILLER_MAX_TOKENS, _TUTOR_MAX_TOKENS
+    from kubo.scheduler import _DISTILLER_MAX_TOKENS
 
     assert _DISTILLER_MAX_TOKENS >= 8192
-    assert _TUTOR_MAX_TOKENS >= 8192
