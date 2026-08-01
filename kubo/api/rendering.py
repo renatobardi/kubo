@@ -7,6 +7,7 @@ template por context processor — nenhuma rota precisa lembrar de passá-los.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,7 +130,15 @@ def days_since(iso: str | None) -> int | None:
     return max(0, (now - dt).days)
 
 
+def gravatar_url(seed: str | None) -> str:
+    """Gravatar identicon URL from an e-mail (empty string when missing)."""
+    source = (seed or "").strip().lower()
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return f"https://www.gravatar.com/avatar/{digest}?d=identicon"
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR), context_processors=[_nav_context])
 templates.env.filters["short_datetime"] = short_datetime
 templates.env.filters["duration"] = duration
 templates.env.filters["days_since"] = days_since
+templates.env.filters["gravatar_url"] = gravatar_url

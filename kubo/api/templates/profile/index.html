@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Perfil · Kubo{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-xl space-y-4">
+  {{ macros.page_header("Perfil", "Sua identidade e preferências.") }}
+
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <div class="flex items-center gap-3">
+        <img src="{{ avatar_seed | gravatar_url }}" alt="" class="size-10 rounded-full bg-muted">
+        <div>
+          <h2 class="text-sm font-medium">{{ display_name }}</h2>
+          <p class="text-xs text-muted-foreground">{{ email or "sem e-mail" }}</p>
+        </div>
+      </div>
+    </div>
+    <form method="post" action="/profile" class="space-y-3 p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <div>
+        <label for="display_name" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Nome de exibição</label>
+        <input id="display_name" name="display_name" value="{{ display_name }}" required
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+
+      <div>
+        <label for="language" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Idioma</label>
+        <input id="language" name="language" value="{{ language }}" required
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+
+      <div>
+        <label for="timezone" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Timezone</label>
+        <input id="timezone" name="timezone" value="{{ timezone }}" required
+               class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      </div>
+
+      <button type="submit"
+              class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
+        Salvar perfil
+      </button>
+    </form>
+  </section>
+
+  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+    <div class="border-b border-border p-4">
+      <h2 class="text-sm font-medium">Aparência deste workspace</h2>
+      <p class="mt-0.5 text-xs text-muted-foreground">Tema por tenant.</p>
+    </div>
+    <form method="post" action="/membership/preferences" class="space-y-3 p-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <div>
+        <label for="theme" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Tema</label>
+        <select id="theme" name="theme"
+                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <option value="system" {% if theme == "system" %}selected{% endif %}>Sistema</option>
+          <option value="light" {% if theme == "light" %}selected{% endif %}>Claro</option>
+          <option value="dark" {% if theme == "dark" %}selected{% endif %}>Escuro</option>
+        </select>
+      </div>
+
+      <button type="submit"
+              class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
+        Salvar tema
+      </button>
+    </form>
+  </section>
+</div>
+{% endblock %}
