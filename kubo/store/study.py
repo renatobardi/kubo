@@ -27,6 +27,7 @@ _log = structlog.get_logger(__name__)
 _MAX_PAGE = 100
 
 _MATERIAL_SCOPE = "tenant_id = $tenant AND user_id = $user"
+_TOPIC_NOT_FOUND_MSG = "tema não encontrado"
 
 # Sentinel: caller omitted a field → preserve the existing value.
 # `None` means "clear"; `_UNSET` means "don't touch" (same pattern as tenancy).
@@ -331,7 +332,7 @@ def set_topic_name(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if topic is None:
-        raise StoreError("tema não encontrado")
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
     if topic.state == "archived":
         raise StoreError("tema arquivado não pode ser renomeado")
     transaction.run_transaction(
@@ -533,7 +534,7 @@ def set_topic_fields(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if topic is None:
-        raise StoreError("tema não encontrado")
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
     if topic.state == "archived":
         raise StoreError("tema arquivado é só leitura")
     sets: list[str] = []
@@ -573,7 +574,7 @@ def set_topic_state(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if topic is None:
-        raise StoreError("tema não encontrado")
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
     transaction.run_transaction(
         db,
         [f"UPDATE $topic SET state = $state WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
