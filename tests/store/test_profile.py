@@ -113,10 +113,11 @@ def test_update_user_profile_rejects_missing_user(db: Any) -> None:
     """Tentar atualizar perfil de um user que não existe recusa."""
     from surrealdb import RecordID
 
+    missing_user_id = RecordID("user", "não-existe")
     with pytest.raises(StoreError):
         tenancy.update_user_profile(
             db,
-            user_id=RecordID("user", "não-existe"),
+            user_id=missing_user_id,
             display_name="Renato",
             language="pt-BR",
             timezone="America/Sao_Paulo",
