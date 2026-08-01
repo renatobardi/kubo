@@ -48,10 +48,11 @@ def test_topbar_search_links_to_distilled(authed_client: TestClient) -> None:
 
 
 def test_sidebar_footer_shows_identity(authed_client: TestClient) -> None:
-    """O rodapé da sidebar traz avatar + nome + e-mail (paridade do mockup)."""
+    """O rodapé da sidebar traz avatar Gravatar + nome + e-mail dinâmicos da sessão."""
     html = authed_client.get("/").text
-    assert "Renato Bardi" in html
-    assert "renato@kubo.studio" in html
+    assert "gravatar.com" in html
+    assert "Perfil" in html  # fallback quando display_name está vazio
+    assert 'href="/profile"' in html
 
 
 def test_theme_toggle_present(authed_client: TestClient) -> None:

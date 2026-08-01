@@ -228,6 +228,32 @@ def test_firebase_login_success(
     assert session["tenant_id"] == "tenant:tenantownergoogleuid"
 
 
+def test_firebase_login_loads_display_name_from_profile(
+    respx_mock: respx.MockRouter,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Login Firebase com perfil existente carrega display_name na sessão (footer)."""
+    clear_jwks_cache()
+    private_pem, jwk = rsa_keypair()
+    respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
+    token = _firebase_token(private_pem=private_pem, uid=_FIREBASE_OWNER_UID)
+
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.tenancy_store.get_or_create_user_and_tenant",
+        lambda db, *, firebase_uid, email=None: _fake_user_and_tenant(firebase_uid),
+    )
+    _profile = SimpleNamespace(display_name="Bardi Firebase")
+    monkeypatch.setattr("kubo.store.tenancy.get_user_profile", lambda db, user_id: _profile)
+
+    resp = client.post("/auth/firebase", json={"id_token": token}, follow_redirects=False)
+    assert resp.status_code == 303
+
+    session = _decode_session_cookie(resp.headers["set-cookie"])
+    assert session["display_name"] == "Bardi Firebase"
+    assert session["email"] == f"{_FIREBASE_OWNER_UID}@example.com"
+
+
 def test_firebase_login_allows_unknown_uid_and_creates_tenant(
     respx_mock: respx.MockRouter,
     client: TestClient,
