@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import structlog
@@ -25,7 +26,7 @@ from kubo.api.firebase_tokens import verify_id_token
 from kubo.api.rendering import templates
 from kubo.api.session import parse_record_id as _parse_record_id
 from kubo.api.urls import safe_next
-from kubo.errors import ConfigError, FirebaseTokenError, TeamInviteError
+from kubo.errors import ConfigError, FirebaseTokenError, StoreError, TeamInviteError
 from kubo.store import client
 from kubo.store import team_invites as team_invites_store
 from kubo.store import tenancy as tenancy_store
@@ -45,27 +46,51 @@ _WRITE_LOG = "auth.write_unavailable"
 _SCRYPT_OWNER_UID = "scrypt:owner"
 
 
+@dataclass(frozen=True)
+class SessionIdentity:
+    """Email + display_name cached in the session for the sidebar footer.
+
+    Email comes from the identity provider token (Firebase) when available; for
+    break-glass (scrypt, no provider) it's read from the DB. `display_name` always
+    comes from `user_profile` in the DB."""
+
+    email: str
+    display_name: str
+
+
+def _identity_for_user(db: Any, user: Any, *, email_override: str | None = None) -> SessionIdentity:
+    """Builds SessionIdentity from a loaded user + their profile.
+
+    `email_override` is used when the caller already has the email from a fresher
+    source (e.g. the Firebase ID token); otherwise the DB `user.email` is used."""
+    email = email_override if email_override is not None else (user.email or "")
+    profile = tenancy_store.get_user_profile(db, user.id)
+    display = profile.display_name if profile else ""
+    return SessionIdentity(email=email, display_name=display)
+
+
 def _open_session(
     request: Request,
     *,
     uid: str,
     tenant_id: str,
     role: str,
-    email: str | None = None,
-    display_name: str = "",
+    identity: SessionIdentity | None = None,
 ) -> None:
     """Regenerate the session (fixation) and write role + uid + tenant_id + auth timestamp.
 
-    `email` and `display_name` are cached for the sidebar footer (nav context) so
-    it doesn't need a db call per page render. `display_name` is refreshed when
-    the profile is updated (routes.profile.update_profile)."""
+    `identity` (email + display_name) is cached for the sidebar footer (nav context)
+    so it doesn't need a db call per page render. `display_name` is refreshed in the
+    current session when the profile is updated (routes.profile.update_profile); other
+    sessions/devices show the stale value until next login — accepted trade-off for a
+    single-user tool (avoids a db read on every page render)."""
     request.session.clear()
     request.session["role"] = role
     request.session["uid"] = uid
     request.session["tenant_id"] = tenant_id
     request.session["auth_at"] = int(time.time())
-    request.session["email"] = email or ""
-    request.session["display_name"] = display_name
+    request.session["email"] = identity.email if identity else ""
+    request.session["display_name"] = identity.display_name if identity else ""
 
 
 class FirebaseLoginBody(BaseModel):
@@ -146,14 +171,12 @@ def login_submit(
     try:
         if verify_password(password, request.app.state.password_hash):
             bg_uid = request.app.state.breakglass_user_id or _SCRYPT_OWNER_UID
-            bg_email, bg_display = _fetch_breakglass_identity(bg_uid)
             _open_session(
                 request,
                 uid=bg_uid,
                 tenant_id=request.app.state.breakglass_tenant_id,
                 role="owner",
-                email=bg_email,
-                display_name=bg_display,
+                identity=_fetch_breakglass_identity(bg_uid),
             )
             return RedirectResponse(next_path, status_code=303)
         time.sleep(_FAIL_DELAY_SECONDS)
@@ -169,20 +192,19 @@ def login_submit(
         _LOGIN_GATE.release()
 
 
-def _fetch_breakglass_identity(uid: str) -> tuple[str, str]:
-    """Reads break-glass user email + display_name for the session. Returns ("", "") on
-    any failure — the sidebar footer falls back to 'Perfil' / 'sem e-mail'."""
+def _fetch_breakglass_identity(uid: str) -> SessionIdentity:
+    """Reads break-glass user identity for the session. Returns empty identity on
+    ConfigError/StoreError (db unavailable) — the sidebar footer falls back to
+    'Perfil' / 'sem e-mail'. Unexpected errors propagate (no bare except)."""
     try:
         with client.connect() as ro:
             user = tenancy_store.get_user_by_firebase_uid(ro, uid)
             if user is None:
-                return "", ""
-            email = user.email or ""
-            profile = tenancy_store.get_user_profile(ro, user.id)
-            display = profile.display_name if profile else ""
-            return email, display
-    except Exception:
-        return "", ""
+                return SessionIdentity(email="", display_name="")
+            return _identity_for_user(ro, user)
+    except (ConfigError, StoreError) as exc:
+        _log.warning("auth.breakglass.identity_unavailable", error=str(exc))
+        return SessionIdentity(email="", display_name="")
 
 
 def _superadmin_login(
@@ -192,27 +214,22 @@ def _superadmin_login(
     next_path: str,
 ) -> Response:
     """Superadmin path: ensure user exists, open session with email + display_name."""
+    fb_email = token_user.get("email") or ""
     with client.connect_rw() as db:
         user = tenancy_store.get_user_by_firebase_uid(db, uid)
         if user is None:
-            tenancy_store.create_user(
+            user = tenancy_store.create_user(
                 db,
                 firebase_uid=uid,
                 email=token_user.get("email") or None,
             )
-        fb_email = token_user.get("email") or ""
-        fb_display = ""
-        if user:
-            fb_profile = tenancy_store.get_user_profile(db, user.id)
-            if fb_profile:
-                fb_display = fb_profile.display_name
+        identity = _identity_for_user(db, user, email_override=fb_email)
     _open_session(
         request,
         uid=uid,
         tenant_id=request.app.state.breakglass_tenant_id,
         role="superadmin",
-        email=fb_email,
-        display_name=fb_display,
+        identity=identity,
     )
     return RedirectResponse(next_path, status_code=303)
 
@@ -272,11 +289,11 @@ def _invite_denied(request: Request, message: str, *, next_path: str, invite: st
 
 def _accept_invite(
     request: Request, *, uid: str, email: str | None, invite: str, next_path: str
-) -> tuple[Any, str] | Response:
+) -> tuple[Any, Any, str] | Response:
     """Aceita um convite de equipe: cria o user (se novo) e a membership no tenant do convite.
 
     ESCRITA — abre `connect_rw` (kubo_rw EDITOR, ADR-0018); `ConfigError` sobe para o
-    handler traduzir em 503. Devolve `(tenant, role)` ou a resposta 401 do convite inválido.
+    handler traduzir em 503. Devolve `(user, tenant, role)` ou a resposta 401 do convite inválido.
     """
     with client.connect_rw() as db:
         tenant_user = tenancy_store.get_user_by_firebase_uid(db, uid)
@@ -297,7 +314,7 @@ def _accept_invite(
         tenant = tenancy_store.get_tenant(db, accepted.tenant_id)
         if tenant is None:
             return _invite_denied(request, "Convite inválido.", next_path=next_path, invite=invite)
-        return tenant, accepted.role
+        return tenant_user, tenant, accepted.role
 
 
 @router.post("/auth/firebase")
@@ -348,6 +365,7 @@ def firebase_login(
         )
 
     uid = token_user["uid"]
+    fb_email = token_user.get("email") or ""
     # Todo bloco abaixo GRAVA (user, tenant, membership) — precisa do kubo_rw EDITOR.
     # Com o kubo_ro (VIEWER) do servidor o SurrealDB engole o CREATE em silêncio e o
     # signup morre em `user vanished during creation`. Molde ADR-0018: connect_rw
@@ -366,14 +384,17 @@ def firebase_login(
             )
             if isinstance(outcome, Response):
                 return outcome
-            tenant, role = outcome
+            user, tenant, role = outcome
+            with client.connect() as ro:
+                identity = _identity_for_user(ro, user, email_override=fb_email)
         else:
             with client.connect_rw() as db:
-                _, tenant = tenancy_store.get_or_create_user_and_tenant(
+                user, tenant = tenancy_store.get_or_create_user_and_tenant(
                     db,
                     firebase_uid=uid,
                     email=token_user.get("email") or None,
                 )
+                identity = _identity_for_user(db, user, email_override=fb_email)
             role = "owner"
     except ConfigError:
         _log.warning(_WRITE_LOG, route="auth.firebase")
@@ -391,7 +412,7 @@ def firebase_login(
         uid=uid,
         tenant_id=_canonical_record_id(tenant.id),
         role=role,
-        email=token_user.get("email") or "",
+        identity=identity,
     )
     return RedirectResponse(next_path, status_code=303)
 

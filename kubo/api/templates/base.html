@@ -72,7 +72,7 @@
 
       <div class="nav-footer border-t border-border/60 px-4 py-3">
         <a href="/profile" class="flex items-center gap-2.5 rounded-lg transition-colors hover:bg-sidebar-accent/60 -mx-2 px-2 py-1.5">
-          <img src="{{ nav_avatar_seed | gravatar_url }}" alt="" class="size-8 shrink-0 rounded-full bg-muted">
+          <img src="{{ nav_email | gravatar_url }}" alt="" class="size-8 shrink-0 rounded-full bg-muted">
           <div class="nav-collapsible min-w-0 leading-tight">
             <div class="truncate text-sm font-medium text-sidebar-foreground">{{ nav_display_name or "Perfil" }}</div>
             <div class="truncate text-2xs text-muted-foreground">{{ nav_email or "sem e-mail" }}</div>
