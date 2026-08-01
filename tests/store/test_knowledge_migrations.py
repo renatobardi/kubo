@@ -116,6 +116,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0024_plan_pause.surql",
         # 0025 (KUBO-128): tenant_id em dispatch, run e source.
         "0025_dispatch_run_source_tenant.surql",
+        # 0026 (KUBO-133): proveniência do conceito na lição.
+        "0026_lesson_provenance.surql",
     }
 
 

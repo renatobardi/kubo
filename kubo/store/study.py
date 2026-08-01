@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -505,6 +505,18 @@ def list_plan_entries(
     return [_entry_from_row(row) for row in rows]
 
 
+def get_plan_entry(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, entry_id: RecordID
+) -> PlanEntry | None:
+    """Lê uma lição do plano por id; None se não existe ou é de outro usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM plan_entry WHERE id = $entry AND {_ENTRY_SCOPE} LIMIT 1;",  # noqa: S608
+        {"entry": entry_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _entry_from_row(rows[0]) if rows else None
+
+
 def _editable_plan(
     db: Any, *, tenant_id: RecordID, user_id: RecordID, plan_id: RecordID
 ) -> StudyPlan:
@@ -704,7 +716,7 @@ class Lesson:
     recap: str | None
     quiz: list[dict[str, Any]]
     created_at: datetime
-    provenance: list[RecordID] | None = None
+    provenance: list[dict[str, Any]] = field(default_factory=lambda: list[dict[str, Any]]())
 
 
 @dataclass(frozen=True)
@@ -733,7 +745,7 @@ def _lesson_from_row(row: dict[str, Any]) -> Lesson:
         application=row["application"],
         recap=row.get("recap"),
         quiz=_quiz_of(row),
-        provenance=list(row.get("provenance") or []),
+        provenance=_provenance_of(row),
         created_at=_as_datetime(row["created_at"]),
     )
 
@@ -741,6 +753,12 @@ def _lesson_from_row(row: dict[str, Any]) -> Lesson:
 def _quiz_of(row: dict[str, Any]) -> list[dict[str, Any]]:
     """Quiz congelado da lição (campo FLEXIBLE) como lista de dicts."""
     raw: list[dict[str, Any]] = list(row.get("quiz") or [])
+    return [dict(item) for item in raw]
+
+
+def _provenance_of(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Proveniência congelada da lição (campo FLEXIBLE) como lista de dicts."""
+    raw: list[dict[str, Any]] = list(row.get("provenance") or [])
     return [dict(item) for item in raw]
 
 
@@ -804,16 +822,12 @@ def create_lesson(
     entry_id: RecordID,
     scheduled_for: datetime,
     output: LessonOutput,
-    provenance: Sequence[RecordID] | None = None,
 ) -> Lesson:
     """Persiste a lição de um dia do plano e devolve o registro criado.
 
     (plano, dia) é UNIQUE: uma segunda geração para o mesmo dia é StoreError legível.
     É o que torna o job da véspera idempotente — várias janelas de retry no mesmo dia
     não podem render duas lições para o mesmo dia de estudo.
-
-    `provenance` são os capítulos do material que originaram o conteúdo da lição.
-    Quando omitido, o banco preenche com o default vazio para lições antigas.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     lesson_id = _fresh("lesson")
@@ -836,7 +850,7 @@ def create_lesson(
             "scenario": output.scenario,
             "application": output.application,
             "recap": output.recap,
-            "provenance": list(provenance) if provenance is not None else [],
+            "provenance": [item.model_dump() for item in output.provenance],
             "quiz": [item.model_dump() for item in output.quiz],
         },
     )

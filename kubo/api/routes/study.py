@@ -1021,6 +1021,37 @@ def _questions(
     return questions
 
 
+def _provenance_items(
+    db: Any, *, lesson: study_store.Lesson, ctx: SessionContext
+) -> list[dict[str, Any]]:
+    """Hidrata a proveniência da lição com o título do capítulo a que cada trecho pertence.
+
+    A provenância vem do tutor (congelada na lição como lista de dicts com `chapter_seq`
+    e `quote`). O `chapter_seq` referencia o seq do capítulo DENTRO da entrada do plano —
+    o seq é o que o LLM viu no conteúdo. A entrada do plano tem os ids dos capítulos;
+    carregados, dão o título real para renderizar ao lado da citação.
+    """
+    raw: list[dict[str, Any]] = list(lesson.provenance or [])
+    if not raw:
+        return []
+    entry = study_store.get_plan_entry(
+        db, entry_id=lesson.plan_entry, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+    )
+    if entry is None:
+        return [{"chapter_title": "", "quote": str(item.get("quote", ""))} for item in raw]
+    chapters = study_store.list_chapters_by_ids(
+        db, chapter_ids=entry.chapters, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+    )
+    seq_to_title = {ch.seq: ch.title for ch in chapters}
+    return [
+        {
+            "chapter_title": seq_to_title.get(int(item.get("chapter_seq", 0)), ""),
+            "quote": str(item.get("quote", "")),
+        }
+        for item in raw
+    ]
+
+
 @router.get("/lessons/{key}")
 def lesson_detail(request: Request, key: str) -> Response:
     """A lição do dia: recapitulação, conceito, cenário, aplicação e o quiz.
@@ -1038,16 +1069,14 @@ def lesson_detail(request: Request, key: str) -> Response:
         log = study_store.get_log_for_lesson(
             db, lesson_id=lesson.id, tenant_id=ctx.tenant_id, user_id=ctx.user_id
         )
-        provenance = study_store.list_chapters_by_ids(
-            db, chapter_ids=lesson.provenance or [], tenant_id=ctx.tenant_id, user_id=ctx.user_id
-        )
+        provenance_items = _provenance_items(db, lesson=lesson, ctx=ctx)
     return templates.TemplateResponse(
         request,
         _LESSON_TEMPLATE,
         {
             "lesson": lesson,
             "log": log,
-            "provenance_chapters": provenance,
+            "provenance_items": provenance_items,
             "blocks": {
                 "recap": _paragraphs(lesson.recap),
                 "concept": _paragraphs(lesson.concept),

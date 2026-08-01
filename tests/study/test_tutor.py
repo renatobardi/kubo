@@ -21,7 +21,7 @@ from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
 from kubo.store.study import MaterialChapter
-from kubo.study.tutor import LessonOutput, QuizItem, Tutor
+from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem, Tutor
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -77,12 +77,20 @@ def _quiz(*, answer_index: int = 0, options: int = 3) -> list[QuizItem]:
     ]
 
 
+def _provenance(count: int = 1) -> list[ProvenanceItem]:
+    return [
+        ProvenanceItem(chapter_seq=i, quote=f"Trecho que originou o conceito {i}.")
+        for i in range(1, count + 1)
+    ]
+
+
 def _lesson(*, recap: str | None = None, quiz: list[QuizItem] | None = None) -> LessonOutput:
     return LessonOutput(
         concept="O conceito destilado.",
         scenario="Um cenário concreto.",
         application="Como aplicar amanhã.",
         recap=recap,
+        provenance=_provenance(),
         quiz=_quiz() if quiz is None else quiz,
     )
 
@@ -111,6 +119,7 @@ def test_lesson_output_rejects_unknown_fields() -> None:
                 "concept": "c",
                 "scenario": "s",
                 "application": "a",
+                "provenance": [p.model_dump() for p in _provenance()],
                 "quiz": [q.model_dump() for q in _quiz()],
                 "notes": "oi",
             }
@@ -125,6 +134,7 @@ def test_lesson_output_requires_at_least_two_questions() -> None:
                 "concept": "c",
                 "scenario": "s",
                 "application": "a",
+                "provenance": [p.model_dump() for p in _provenance()],
                 "quiz": [_quiz()[0].model_dump()],
             }
         )
@@ -139,6 +149,43 @@ def test_quiz_item_requires_at_least_two_options() -> None:
 def test_recap_is_optional() -> None:
     """Lição sem erro recente nasce sem recapitulação — `recap` ausente é válido."""
     assert _lesson().recap is None
+
+
+def test_lesson_output_requires_provenance() -> None:
+    """Sem provenância não há como confiar no conceito — o modelo recusa."""
+    with pytest.raises(ValidationError):
+        LessonOutput.model_validate(
+            {
+                "concept": "c",
+                "scenario": "s",
+                "application": "a",
+                "quiz": [q.model_dump() for q in _quiz()],
+            }
+        )
+
+
+def test_provenance_item_requires_chapter_seq_and_quote() -> None:
+    """Provenância sem capítulo ou sem citação não localiza o trecho — incompleta."""
+    with pytest.raises(ValidationError):
+        ProvenanceItem(chapter_seq=0, quote="trecho")
+    with pytest.raises(ValidationError):
+        ProvenanceItem(chapter_seq=1, quote="")
+
+
+def test_provenance_quote_is_capped_to_prevent_reproduction() -> None:
+    """A citação é localizador, não reprodução — acima de 300 chars o modelo recusa."""
+    with pytest.raises(ValidationError):
+        ProvenanceItem(chapter_seq=1, quote="x" * 301)
+
+
+def test_chapter_seq_travels_in_the_content_for_the_tutor_to_reference() -> None:
+    """O seq do capítulo vai no conteúdo (cercado) para o LLM referenciar na provenância."""
+    executor = _FakeExecutor(output=_lesson())
+
+    _generate(_tutor(executor))
+
+    assert "[1]" in executor.received_content[0]
+    assert "[2]" in executor.received_content[0]
 
 
 # --- Geração ---------------------------------------------------------------------------

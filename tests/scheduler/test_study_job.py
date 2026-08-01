@@ -24,7 +24,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store.study import Lesson, MaterialChapter, PlanEntry, StudyPlan
-from kubo.study.tutor import LessonOutput, QuizItem
+from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
 
 _TENANT = RecordID("tenant", "t1")
 _USER = RecordID("user", "u1")
@@ -83,6 +83,7 @@ def _output() -> LessonOutput:
         scenario="O cenário.",
         application="A aplicação.",
         recap=None,
+        provenance=[ProvenanceItem(chapter_seq=1, quote="Trecho que originou o conceito.")],
         quiz=[
             QuizItem(
                 question=f"Q{i}?",
@@ -109,6 +110,7 @@ def _lesson(plan: StudyPlan, entry: PlanEntry, day: datetime) -> Lesson:
         recap=None,
         quiz=[],
         created_at=_NOW,
+        provenance=[{"chapter_seq": 1, "quote": "Trecho que originou o conceito."}],
     )
 
 
@@ -203,7 +205,6 @@ def test_generates_the_lesson_for_the_next_study_day(store: dict[str, _Spy]) -> 
     call = store["create_lesson"].calls[0]
     assert call["plan_id"] == plan.id
     assert call["entry_id"] == entry.id
-    assert call["provenance"] == entry.chapters
     assert call["scheduled_for"] == _NEXT_DAY
     assert call["tenant_id"] == _TENANT
     assert call["user_id"] == _USER

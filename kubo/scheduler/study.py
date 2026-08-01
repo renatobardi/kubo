@@ -147,7 +147,6 @@ def _lesson_for_plan(
         entry_id=entry.id,
         scheduled_for=day,
         output=output,
-        provenance=entry.chapters,
         **scope,
     )
     return lesson.id

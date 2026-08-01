@@ -41,12 +41,15 @@
   </section>
   {% endfor %}
 
-  {% if provenance_chapters %}
+  {% if provenance_items %}
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <h2 class="text-sm font-medium">Proveniência</h2>
-    <ul class="mt-2 space-y-1 text-sm text-muted-foreground">
-      {% for chapter in provenance_chapters %}
-      <li>{{ chapter.title }}</li>
+    <ul class="mt-2 space-y-2 text-sm text-muted-foreground">
+      {% for item in provenance_items %}
+      <li>
+        {% if item.chapter_title %}<span class="font-medium text-foreground">{{ item.chapter_title }}</span>: {% endif %}
+        <span class="italic">{{ item.quote }}</span>
+      </li>
       {% endfor %}
     </ul>
   </section>
