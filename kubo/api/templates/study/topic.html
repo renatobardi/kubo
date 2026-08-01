@@ -27,12 +27,53 @@
     </form>
   </section>
 
-  {# Estado vazio guiado: o Tema está em draft sem Materiais. #}
+  {# Materiais do Tema (KUBO-162). #}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Materiais</h2>
+
+    {# Lista de Materiais adicionados. #}
+    {% if materials %}
+    <ul class="mt-3 space-y-2">
+      {% for m in materials %}
+      <li class="flex items-center justify-between gap-3 rounded-2xl bg-input/30 px-4 py-2 text-sm">
+        <div class="min-w-0 flex-1">
+          <span class="font-medium">{{ m.title }}</span>
+          <span class="ml-2 text-xs text-muted-foreground">{{ m.fmt|upper }} · {{ m.size_bytes|filesizeformat }}</span>
+        </div>
+        {% if topic.state == "draft" %}
+        <form method="post" action="{{ topic_url }}/materials/{{ m.id.id }}/delete" class="shrink-0"
+              onsubmit="return confirm('Remover {{ m.title }}?')">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="text-xs text-destructive hover:underline">Remover</button>
+        </form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="mt-3 text-sm text-muted-foreground">Nenhum material adicionado ainda.</p>
+    {% endif %}
+  </section>
+
+  {# Dropzone: só em draft (ADR-0047 §3 — Materiais imutáveis fora de draft). #}
   {% if topic.state == "draft" %}
-  <section class="rounded-xl bg-card p-6 text-center ring-1 ring-foreground/10">
-    <p class="text-sm text-muted-foreground">
-      Adicione materiais (epub/PDF) a este estudo para começar.
-    </p>
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Adicionar material</h2>
+    <form id="dropzone-form" method="post" action="{{ topic_url }}/materials"
+          enctype="multipart/form-data" class="mt-3">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div id="dropzone" class="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-input p-8 text-center transition-colors hover:border-primary hover:bg-primary/5 cursor-pointer"
+           onclick="document.getElementById('file-input').click()"
+           ondragover="event.preventDefault(); this.classList.add('border-primary','bg-primary/5')"
+           ondragleave="this.classList.remove('border-primary','bg-primary/5')"
+           ondrop="event.preventDefault(); this.classList.remove('border-primary','bg-primary/5'); const f=document.getElementById('file-input'); f.files=event.dataTransfer.files; f.form.requestSubmit();">
+        <p class="text-sm text-muted-foreground">Arraste arquivos aqui ou clique para selecionar</p>
+        <p class="text-xs text-muted-foreground">epub ou PDF · até {{ max_materials }} materiais</p>
+        <input id="file-input" type="file" name="file" accept=".epub,.pdf" multiple class="hidden"
+               onchange="this.form.requestSubmit()">
+        <button type="submit" class="hidden">Enviar</button>
+      </div>
+    </form>
   </section>
   {% endif %}
 </div>

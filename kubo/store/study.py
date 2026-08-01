@@ -47,17 +47,23 @@ _TEMP_SEQ = -1
 
 @dataclass(frozen=True)
 class Material:
-    """Material de estudo ingerido pelo dono (epub/PDF), com o arquivo original no volume."""
+    """Material de estudo ingerido pelo dono (epub/PDF), com o arquivo original no volume.
+
+    Exclusivo a um Tema (N:1, ADR-0047): `topic` aponta para o Tema que o contém.
+    `summary` é gerado síncrono no upload (consumido por `mentor` e `planner`).
+    """
 
     id: RecordID
     tenant_id: RecordID
     user_id: RecordID
+    topic: RecordID | None
     title: str
     fmt: str
     original_filename: str
     file_path: str
     size_bytes: int
     chapter_count: int
+    summary: str | None
     created_at: datetime
 
 
@@ -93,12 +99,14 @@ def _material_from_row(row: dict[str, Any]) -> Material:
         id=row["id"],
         tenant_id=row["tenant_id"],
         user_id=row["user_id"],
+        topic=row.get("topic"),
         title=row["title"],
         fmt=row["fmt"],
         original_filename=row["original_filename"],
         file_path=row["file_path"],
         size_bytes=int(row["size_bytes"]),
         chapter_count=int(row["chapter_count"]),
+        summary=row.get("summary"),
         created_at=_as_datetime(row["created_at"]),
     )
 
@@ -120,36 +128,39 @@ def create_material(
     *,
     tenant_id: RecordID,
     user_id: RecordID,
+    topic_id: RecordID,
     title: str,
     fmt: str,
     original_filename: str,
     file_path: str,
     size_bytes: int,
     chapters: Sequence[ParsedChapter],
+    summary: str | None,
 ) -> Material:
     """Persiste material + capítulos atomicamente e devolve o material criado.
 
-    Tudo numa transação: um `seq` repetido viola o índice UNIQUE e reverte também o
-    material — a alternativa deixaria um material fantasma sem capítulos, apontando
-    para um arquivo que o dono acha que foi ingerido.
+    Exclusivo a um Tema (N:1, ADR-0047): `topic_id` é obrigatório. `summary` é
+    gerado síncrono no upload (consumido por `mentor` e `planner`).
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     material_id = _fresh("material")
     statements = [
-        "CREATE $material SET tenant_id = $tenant, user_id = $user, title = $title, "
-        "fmt = $fmt, original_filename = $filename, file_path = $path, "
-        "size_bytes = $size, chapter_count = $count"
+        "CREATE $material SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+        "title = $title, fmt = $fmt, original_filename = $filename, file_path = $path, "
+        "size_bytes = $size, chapter_count = $count, summary = $summary"
     ]
     params: dict[str, Any] = {
         "material": material_id,
         "tenant": tenant_id,
         "user": user_id,
+        "topic": topic_id,
         "title": title,
         "fmt": fmt,
         "filename": original_filename,
         "path": file_path,
         "size": size_bytes,
         "count": len(chapters),
+        "summary": summary,
     }
     for i, chapter in enumerate(chapters):
         statements.append(
@@ -342,3 +353,65 @@ def list_topics(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Topi
         {"tenant": tenant_id, "user": user_id},
     )
     return [_topic_from_row(row) for row in rows]
+
+
+# --- Materiais dentro de um Tema (KUBO-162) ---------------------------------------------
+
+
+def list_materials_by_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> list[Material]:
+    """Lista os materiais de um Tema, mais recentes primeiro."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "ORDER BY created_at DESC;",
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [_material_from_row(row) for row in rows]
+
+
+def count_materials_by_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> int:
+    """Total de materiais de um Tema (para validação de limite)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT count() FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
+def delete_material(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+) -> None:
+    """Remove um material e seus capítulos do banco (o arquivo no volume é removido pela rota).
+
+    StoreError se o material não existe ou é de outro usuário — não silêncio.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material não encontrado")
+    transaction.run_transaction(
+        db,
+        [
+            f"DELETE FROM material_chapter WHERE {_CHAPTER_SCOPE}",  # noqa: S608
+            f"DELETE FROM material WHERE id = $material AND {_MATERIAL_SCOPE}",  # noqa: S608
+        ],
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    _log.info("store.material.deleted", material=str(material_id))

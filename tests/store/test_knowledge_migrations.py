@@ -124,6 +124,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0028_work_context_user_profile.surql",
         # 0029 (KUBO-161, ADR-0047): Tema container de N Materiais + estados explícitos.
         "0029_study_topic_container.surql",
+        # 0030 (KUBO-162): índice material_topic para list/count por tema.
+        "0030_material_topic_index.surql",
     }
 
 
