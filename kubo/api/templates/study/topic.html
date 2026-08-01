@@ -1,189 +1,39 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
 {% set topic_url = "/study/topics/" ~ (topic.id.id | urlencode) %}
-{% set editable = plan and plan.status == "proposed" %}
-{% set weekday_labels = {"mon": "seg", "tue": "ter", "wed": "qua", "thu": "qui", "fri": "sex", "sat": "sáb", "sun": "dom"} %}
-{% set mobile_back_href = "/study/materials/" ~ (topic.material.id | urlencode) %}
+{% set mobile_back_href = "/study/topics" %}
 {% set mobile_title = topic.title %}
 {% block title %}{{ topic.title }} · Estudos · Kubo{% endblock %}
 {% block content %}
 <div class="space-y-4">
-  {{ macros.page_header(topic.title, "O plano agrupa os capítulos em lições diárias. Você revisa e ativa — nada acontece antes disso.") }}
-
-  {% if mechanical %}
-  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-    Esta é uma proposta mecânica (um capítulo por lição): a persona não respondeu. Revise e ajuste antes de ativar.
-  </output>
-  {% endif %}
-  {% if activated %}
-  <output class="block rounded-lg bg-primary/10 px-3 py-2 text-sm">Plano ativado. A data-alvo está congelada.</output>
-  {% endif %}
-
-  <section class="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10 sm:grid-cols-3">
-    <div>
-      <div class="text-xs font-semibold text-muted-foreground">Material</div>
-      <a href="/study/materials/{{ topic.material.id | urlencode }}" class="mt-0.5 block truncate text-sm underline underline-offset-2">{{ topic.title }}</a>
-    </div>
-    <div>
-      <div class="text-xs font-semibold text-muted-foreground">Situação</div>
-      <div class="mt-0.5 text-sm">
-        {% if not plan %}Sem plano{% elif plan.status == "proposed" %}Proposta em revisão{% elif plan.status == "active" %}Plano ativo{% elif plan.status == "paused" %}<span class="rounded-4xl bg-muted px-2 py-0.5 text-xs">Pausado</span>{% elif plan.status == "completed" %}<span class="rounded-4xl bg-primary/10 px-2 py-0.5 text-xs text-primary">Concluído</span>{% else %}{{ plan.status }}{% endif %}
-      </div>
-    </div>
-    <div>
-      <div class="text-xs font-semibold text-muted-foreground">Data-alvo</div>
-      <div class="mt-0.5 text-sm">
-        {% if plan and plan.target_date %}{{ plan.target_date.isoformat() | short_datetime }}{% else %}—{% endif %}
-      </div>
-    </div>
-  </section>
-
-  {% if not plan %}
-  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <p class="text-sm text-muted-foreground">Ainda não há plano para este tema. A persona agrupa os capítulos em lições e você revisa antes de ativar.</p>
-    <form method="post" action="{{ topic_url }}/plan/propose" class="mt-3">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit" class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">Propor plano</button>
-    </form>
-  </section>
-  {% else %}
-
-  {% if progress %}
-  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <div class="flex flex-wrap items-baseline justify-between gap-2">
-      <h2 class="text-sm font-medium">Progresso</h2>
-      <span class="text-sm text-muted-foreground">{{ progress.done }} de {{ progress.total }} lições</span>
-    </div>
-    <div class="mt-2 h-2 w-full overflow-hidden rounded-4xl bg-muted">
-      <div class="h-full bg-primary" style="width: {{ (100 * progress.done / progress.total) | round(1) }}%"></div>
-    </div>
-    <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <div>
-        <p class="text-xs font-semibold text-muted-foreground">Esperado</p>
-        <p class="mt-0.5 text-sm">{{ progress.expected }}</p>
-      </div>
-      <div>
-        <p class="text-xs font-semibold text-muted-foreground">Atraso</p>
-        <p class="mt-0.5 text-sm {% if progress.behind %}text-destructive{% endif %}">{{ progress.behind }}</p>
-      </div>
-      <div>
-        <p class="text-xs font-semibold text-muted-foreground">Sequência</p>
-        <p class="mt-0.5 text-sm">{{ progress.streak }} dia{% if progress.streak != 1 %}s{% endif %}</p>
-      </div>
-      <div>
-        <p class="text-xs font-semibold text-muted-foreground">Alvo projetado</p>
-        <p class="mt-0.5 text-sm">{% if progress.projected_target %}{{ progress.projected_target.strftime("%d/%m/%Y") }}{% else %}—{% endif %}</p>
-      </div>
-    </div>
-    {% if progress.projected_target and plan.target_date %}
-    <p class="mt-3 text-xs text-muted-foreground">A data-alvo congelada na ativação é {{ plan.target_date.isoformat() | short_datetime }}; a projetada segue o ritmo real.</p>
-    {% endif %}
-    {% if plan.status == "paused" %}
-    <p class="mt-3 text-xs text-muted-foreground">Plano pausado: nada é gerado nem avisado, e os dias parados não viram atraso.</p>
-    <form method="post" action="{{ topic_url }}/plan/resume" class="mt-3">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit" class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">Retomar plano</button>
-    </form>
-    {% elif plan.status == "active" %}
-    <form method="post" action="{{ topic_url }}/plan/pause" class="mt-3">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit" class="h-9 w-full rounded-4xl px-3 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted md:w-auto">Pausar plano</button>
-    </form>
-    {% endif %}
-  </section>
-  {% endif %}
+  {{ macros.page_header(topic.title, "Adicione materiais para começar. O nome do estudo pode ser ajustado quando quiser.") }}
 
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <h2 class="text-sm font-medium">Cadência</h2>
-    {% if editable %}
-    <form method="post" action="{{ topic_url }}/plan/cadence" class="mt-3 space-y-3">
+    <div class="text-xs font-semibold text-muted-foreground">Situação</div>
+    <div class="mt-0.5 text-sm">{{ state_label }}</div>
+  </section>
+
+  {# Nome editável inline — disponível em todos os estados não-arquivados (ADR-0047 §3). #}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Nome do estudo</h2>
+    <form method="post" action="{{ topic_url }}/rename" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <div class="flex flex-wrap gap-2">
-        {% for day in weekday_values %}
-        <label class="flex h-9 cursor-pointer items-center gap-2 rounded-4xl px-3 text-sm ring-1 ring-foreground/10 hover:bg-muted">
-          <input type="checkbox" name="weekdays" value="{{ day }}" {% if day in plan.weekdays %}checked{% endif %} class="size-3.5 accent-primary">
-          {{ weekday_labels[day] }}
-        </label>
-        {% endfor %}
-      </div>
-      <button type="submit" class="h-9 w-full rounded-4xl px-3 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted md:w-auto">Salvar cadência</button>
+      <input type="text" name="title" value="{{ topic.title }}" required
+             class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      <button type="submit"
+              class="h-9 rounded-4xl px-3 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted sm:w-auto">
+        Salvar nome
+      </button>
     </form>
-    {% else %}
-    <p class="mt-1 text-sm text-muted-foreground">
-      {% for day in plan.weekdays %}{{ weekday_labels[day] or day }}{% if not loop.last %}, {% endif %}{% endfor %}
+  </section>
+
+  {# Estado vazio guiado: o Tema está em draft sem Materiais. #}
+  {% if topic.state == "draft" %}
+  <section class="rounded-xl bg-card p-6 text-center ring-1 ring-foreground/10">
+    <p class="text-sm text-muted-foreground">
+      Adicione materiais (epub/PDF) a este estudo para começar.
     </p>
-    {% endif %}
   </section>
-
-  {% if plan.status == "active" %}
-  {% set current = today_lesson or next_lesson %}
-  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <h2 class="text-sm font-medium">{% if today_lesson %}Lição de hoje{% else %}Próxima lição{% endif %}</h2>
-    {% if current %}
-    <p class="mt-1 text-sm text-muted-foreground">{{ current.scheduled_for.isoformat() | short_datetime }}</p>
-    <a href="/study/lessons/{{ current.id.id | urlencode }}" class="mt-3 inline-flex h-9 items-center rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80">Abrir a lição</a>
-    {% else %}
-    <p class="mt-1 text-sm text-muted-foreground">A lição do próximo dia de estudo é preparada na véspera, à noite.</p>
-    {% endif %}
-  </section>
-
-  <section class="space-y-2">
-    <h2 class="text-sm font-medium">Histórico de lições <span class="text-xs font-normal text-muted-foreground">({{ total }})</span></h2>
-    {% if not lessons %}
-      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">Nenhuma lição gerada ainda.</div>
-    {% endif %}
-    {% for lesson in lessons %}
-    <a href="/study/lessons/{{ lesson.id.id | urlencode }}" class="flex items-baseline gap-2 rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:bg-muted">
-      <span class="shrink-0 text-xs text-muted-foreground">{{ lesson.scheduled_for.isoformat() | short_datetime }}</span>
-      <span class="min-w-0 flex-1 truncate text-sm">{{ lesson.concept }}</span>
-      <span class="shrink-0 text-xs {% if (lesson.id | string) in completed %}text-primary{% else %}text-muted-foreground{% endif %}">{% if (lesson.id | string) in completed %}concluída{% else %}pendente{% endif %}</span>
-    </a>
-    {% endfor %}
-    {% if total > 0 %}{{ macros.pagination(topic_url, start, size, total) }}{% endif %}
-  </section>
-  {% endif %}
-
-  <section class="space-y-2">
-    <h2 class="text-sm font-medium">Lições do plano <span class="text-xs font-normal text-muted-foreground">({{ entries | length }})</span></h2>
-    {% if not entries %}
-      <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">Nenhuma lição neste plano.</div>
-    {% endif %}
-    {% for entry in entries %}
-    <article class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-      <div class="flex items-baseline gap-2">
-        <span class="shrink-0 text-xs text-muted-foreground">{{ entry.seq }}</span>
-        <h3 class="min-w-0 flex-1 truncate text-sm font-medium">{{ entry.title }}</h3>
-        <span class="shrink-0 text-xs text-muted-foreground">{{ entry.chapters | length }} cap.</span>
-      </div>
-      {% if editable %}
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.seq }}/move">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input type="hidden" name="direction" value="up">
-          <button type="submit" aria-label="Mover para cima" class="h-8 rounded-4xl px-3 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">↑</button>
-        </form>
-        <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.seq }}/move">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input type="hidden" name="direction" value="down">
-          <button type="submit" aria-label="Mover para baixo" class="h-8 rounded-4xl px-3 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">↓</button>
-        </form>
-        <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.seq }}/remove">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <button type="submit" class="h-8 rounded-4xl px-3 text-xs text-destructive ring-1 ring-destructive/30 transition-colors hover:bg-destructive/10">Remover</button>
-        </form>
-      </div>
-      {% endif %}
-    </article>
-    {% endfor %}
-  </section>
-
-  {% if editable %}
-  <form method="post" action="{{ topic_url }}/plan/activate" class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <p class="text-xs text-muted-foreground">Ativar congela a data-alvo. A partir daí o plano deixa de ser editável.</p>
-    <button type="submit" class="mt-3 h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">Ativar plano</button>
-  </form>
-  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

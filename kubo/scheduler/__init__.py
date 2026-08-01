@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
@@ -24,21 +23,16 @@ from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from kubo.distribution.config import resolve_base_url
-from kubo.distribution.telegram import send_telegram
 from kubo.embedding import Embedder, GeminiEmbedder
-from kubo.errors import ConfigError, SenderError, format_validation_error
+from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
-from kubo.runtime.integrations import load_integrations, resolve_integrations
-from kubo.runtime.personas import resolve_persona
 from kubo.runtime.runner import run_worker
-from kubo.scheduler.study import generate_upcoming_lessons, send_daily_study_bell
 from kubo.scheduler.sweep import DEST_DISPATCH, SWEEP_DISPATCH
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import active_sources
-from kubo.study.tutor import Tutor
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
@@ -63,13 +57,6 @@ _DISTILLER_MODEL = "anthropic/claude-haiku-4-5"
 # daí a folga sobre os 4096 que já bastavam para o JSON sozinho.
 _DISTILLER_MAX_TOKENS = 16384
 
-# Persona da lição da véspera (KUBO-137). O JSON de uma lição com quiz não cabe no
-# default de 1024 tokens — truncaria no meio e voltaria como saída malformada. Mesma
-# folga do destilador: o thinking sai do orçamento da resposta.
-_TUTOR_PERSONA = "tutor"
-_TUTOR_MAX_TOKENS = 16384
-_TUTOR_TIMEOUT = 60.0
-
 
 class WorkerEntry(BaseModel):
     """Uma entrada agendada de WORKER: worker + cron + config pública (ADR-0010 item II)."""
@@ -92,22 +79,6 @@ class SweepEntry(BaseModel):
     cron: str
 
 
-class JobEntry(BaseModel):
-    """Uma entrada de JOB interno (KUBO-137): trabalho agendado que NÃO é worker sob
-    contrato nem sweep de coleta. `job` é o nome fixo do job (`Literal`, validado na
-    borda): `study-eve` gera a lição da véspera e `study-bell` toca o sino da manhã
-    (KUBO-138).
-
-    Job interno não vira `WorkerEntry` de propósito: não tem manifest, não produz
-    `RunResult` e não abre um `run` (invariante 6 vale para worker, e forçá-lo aqui
-    encheria o histórico de runs com trabalho que não é coleta). Campo obrigatório
-    disjunto (`job`) desambigua a união, como `worker` e `sweep`."""
-
-    model_config = ConfigDict(extra="forbid")
-    job: Literal["study-eve", "study-bell"]
-    cron: str
-
-
 class Schedules(BaseModel):
     """Config validada de `schedules.yaml`: timezone obrigatória + lista de entries — cada
     entry é `WorkerEntry` OU `SweepEntry` (união em modo smart do Pydantic v2: os campos
@@ -117,11 +88,15 @@ class Schedules(BaseModel):
     Agendamento de FLOW (`FlowEntry`, ADR-0022) foi APOSENTADO no #110: o único flow `scheduled`
     era o `pipeline`, cuja coleta migrou pro sweep `github-repo`. A capacidade foi removida, não
     proibida — reintroduzir exige só reanimar `FlowEntry`+`_add_flow_job` do histórico (nota de
-    supersede no ADR-0022)."""
+    supersede no ADR-0022).
+
+    Jobs internos de Estudos (`JobEntry`, KUBO-137/138) foram desregistrados em KUBO-161
+    (ADR-0047): as rotas de plano/lição foram removidas e não há planos ativos. KUBO-166
+    traz os jobs de volta quando o ciclo de ativação estiver implementado."""
 
     model_config = ConfigDict(extra="forbid")
     timezone: str
-    schedules: list[WorkerEntry | SweepEntry | JobEntry]
+    schedules: list[WorkerEntry | SweepEntry]
 
     @field_validator("timezone")
     @classmethod
@@ -296,126 +271,6 @@ def execute_digest_sweep_job() -> None:
         raise
 
 
-def _build_tutor(db: Any, tenant_id: Any, user_id: Any) -> Tutor:
-    """Monta o `Tutor` com a persona `tutor` do catálogo do tenant (ADR-0042).
-
-    Mesma resolução catálogo→default das rotas de Estudos (`resolve_persona`): a lição
-    gerada pelo cron e a proposta feita na tela precisam seguir o mesmo catálogo.
-    """
-    persona = resolve_persona(db, tenant_id, user_id, _TUTOR_PERSONA)
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DISTILLER_MODEL,
-            max_tokens=_TUTOR_MAX_TOKENS,
-            timeout=_TUTOR_TIMEOUT,
-        ),
-        max_attempts=1,
-    )
-    return Tutor(executor=executor, prompt=persona.prompt)
-
-
-def execute_study_eve_job() -> None:
-    """Executa a véspera de Estudos (KUBO-137): a lição do próximo dia de cada plano ativo.
-
-    Conexão POR execução como os demais jobs (ADR-0010). O relógio é lido AQUI, na
-    borda, e entra por parâmetro na função de domínio — que nunca consulta o relógio.
-    Idempotente: rodar de novo na mesma véspera não gera lição repetida.
-    """
-    try:
-        with client.connect(client.config()) as db:
-            tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-            generate_upcoming_lessons(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                now=datetime.now(timezone.utc),
-                tutor_factory=lambda: _build_tutor(db, tenant_id, user_id),
-            )
-    except Exception:  # noqa: BLE001 — loga estruturado e repropaga (molde de execute_job)
-        _log.exception("scheduler_job_failed", job="study-eve")
-        raise
-
-
-def _bell_notifier(db: Any, tenant_id: Any, user_id: Any) -> Callable[[str], None]:
-    """Costura de envio do sino (KUBO-138): manda o texto ao destino PADRÃO do settings.
-
-    UM destino, não difusão. O que o dono estuda é dado pessoal, e um endereço cadastrado
-    para receber o digest não consentiu em receber isso — varrer `active_destinations`
-    entregaria o estado de estudo a todo destino Telegram da casa. O padrão é o único
-    endereço que o dono elegeu explicitamente como "o meu", pelo mesmo helper do digest
-    (`resolve_default_destination`).
-
-    O token vem da integração `telegram` resolvida pelo runtime (env ou credencial de
-    tenant), NUNCA de `os.environ` daqui. `parse_mode=None` (texto puro) porque a mensagem
-    carrega o título do material do dono — marcá-la como HTML faria um título com `<`
-    derrubar o envio.
-
-    A resolução é feita DENTRO do envio (e não na montagem): destino ausente, de outro
-    canal ou integração sem segredo viram `SenderError`, que o sino registra por plano e
-    segue — em vez de derrubar o job antes do primeiro plano.
-    """
-
-    def _send(text: str) -> None:
-        settings = settings_store.get_settings(db)
-        if settings is None:
-            raise SenderError("settings não encontrado — sino sem destino padrão")
-        try:
-            destination = settings_store.resolve_default_destination(db, settings)
-        except ConfigError as exc:
-            raise SenderError(f"sino sem destino padrão utilizável: {exc}") from exc
-        if destination.channel != "telegram":
-            raise SenderError(f"destino padrão é do canal {destination.channel!r}, não telegram")
-        catalog = load_integrations(db, tenant_id, user_id)
-        resolved = resolve_integrations(["telegram"], catalog, db=db, tenant_id=tenant_id)
-        token = resolved["telegram"].secret
-        if not token:
-            raise SenderError("integração 'telegram' sem segredo resolvido")
-        send_telegram(token=token, chat_id=destination.address, text=text, parse_mode=None)
-
-    return _send
-
-
-def execute_study_bell_job() -> None:
-    """Executa o sino de Estudos (KUBO-138): o aviso da manhã de cada plano ativo.
-
-    Conexão POR execução como os demais jobs (ADR-0010), relógio lido AQUI e passado por
-    parâmetro. O cron de 1x/dia É a cerca anti-spam: no máximo uma mensagem por plano
-    por dia, sem nenhuma tabela de "notificação enviada".
-
-    `distribution_paused` cala o sino ANTES de qualquer varredura (mesma postura e mesma
-    ordem do sweep do digest): pausar a distribuição é o interruptor geral do dono, e um
-    canal que o ignorasse transformaria "pausado" em "pausado, menos aquilo".
-    """
-    try:
-        with client.connect(client.config()) as db:
-            settings = settings_store.get_settings(db)
-            if settings is None or settings.distribution_paused:
-                _log.info(
-                    "study.bell.skipped",
-                    reason="paused" if settings is not None else "no_settings",
-                )
-                return
-            tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-            send_daily_study_bell(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                now=datetime.now(timezone.utc),
-                notifier=_bell_notifier(db, tenant_id, user_id),
-            )
-    except Exception:  # noqa: BLE001 — loga estruturado e repropaga (molde de execute_job)
-        _log.exception("scheduler_job_failed", job="study-bell")
-        raise
-
-
-# Cada job interno do YAML tem uma função fixa em código (nunca um nome vindo de dado):
-# o `Literal` de `JobEntry` e este mapa são as duas metades da mesma cerca.
-_JOB_DISPATCH: dict[str, Callable[[], None]] = {
-    "study-eve": execute_study_eve_job,
-    "study-bell": execute_study_bell_job,
-}
-
-
 def _cron_trigger(cron: str, tz: ZoneInfo, *, label: str) -> CronTrigger:
     """Parseia `cron` em `CronTrigger`, com `ConfigError` legível (padrão de domínio do
     módulo) no lugar da `ValueError` crua da lib — `label` identifica a entry no erro."""
@@ -458,16 +313,6 @@ def _add_sweep_job(scheduler: BlockingScheduler, entry: SweepEntry, tz: ZoneInfo
         )
     trigger = _cron_trigger(entry.cron, tz, label=f"sweep '{entry.sweep}'")
     scheduler.add_job(execute_sweep_job, trigger=trigger, kwargs={"kind": entry.sweep})
-
-
-def _add_study_job(scheduler: BlockingScheduler, entry: JobEntry, tz: ZoneInfo) -> None:
-    """Valida e registra o job de uma `JobEntry`: cron parseável, `ConfigError` EAGER.
-
-    O nome do job já é `Literal` no modelo (falha na carga do YAML), então aqui sobra
-    o cron — mesma postura de `_add_sweep_job`: nada de erro descoberto no 1º disparo.
-    """
-    trigger = _cron_trigger(entry.cron, tz, label=f"job '{entry.job}'")
-    scheduler.add_job(_JOB_DISPATCH[entry.job], trigger=trigger, id=entry.job)
 
 
 def _digest_trigger(cron: str, tz: ZoneInfo) -> CronTrigger:
@@ -576,8 +421,6 @@ def build_scheduler(
             _add_worker_job(scheduler, entry, tz)
         elif isinstance(entry, SweepEntry):
             _add_sweep_job(scheduler, entry, tz)
-        else:
-            _add_study_job(scheduler, entry, tz)
     if settings is not None:
         _add_digest_job(scheduler, settings, tz)
         _add_digest_poll_job(scheduler, settings, tz)
