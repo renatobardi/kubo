@@ -1,0 +1,167 @@
+"""Contrato da store de perfil do usuário (ADR-0045, KUBO-148).
+
+Integração (SurrealDB real): user_profile e theme no membership.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import replace
+from typing import Any
+
+import pytest
+
+from kubo.errors import MembershipRequiredError, StoreError
+from kubo.store import client, migrations, tenancy
+
+pytestmark = pytest.mark.integration
+
+
+_PROFILE_DB = "test_profile"
+
+
+@pytest.fixture
+def db() -> Iterator[Any]:
+    """Database próprio do teste, migrado do zero e limpo depois."""
+    cfg = replace(client.config(), database=_PROFILE_DB)
+    with client.connect(cfg) as conn:
+        conn.query(f"REMOVE DATABASE IF EXISTS {_PROFILE_DB};")
+        conn.use(cfg.namespace, cfg.database)
+        migrations.apply_migrations(conn)
+        yield conn
+        conn.query(f"REMOVE DATABASE IF EXISTS {_PROFILE_DB};")
+
+
+def test_user_profile_is_created_on_first_update(db: Any) -> None:
+    """update_user_profile cria o perfil se ele ainda não existe."""
+    user = tenancy.create_user(db, firebase_uid="uid-1", email="a@example.com")
+
+    profile = tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+    )
+
+    assert profile.display_name == "Renato"
+    assert profile.language == "pt-BR"
+    assert profile.timezone == "America/Sao_Paulo"
+    assert profile.user == user.id
+
+
+def test_user_profile_is_updated_on_second_call(db: Any) -> None:
+    """update_user_profile atualiza o perfil existente."""
+    user = tenancy.create_user(db, firebase_uid="uid-2", email="b@example.com")
+    tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+    )
+
+    profile = tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Bardi",
+        language="en-US",
+        timezone="UTC",
+    )
+
+    assert profile.display_name == "Bardi"
+    assert profile.language == "en-US"
+    assert profile.timezone == "UTC"
+    assert tenancy.get_user_profile(db, user.id) == profile
+
+
+def test_get_user_profile_missing_returns_none(db: Any) -> None:
+    """Perfil inexistente retorna None."""
+    user = tenancy.create_user(db, firebase_uid="uid-none", email="none@example.com")
+    assert tenancy.get_user_profile(db, user.id) is None
+
+
+def test_update_user_profile_rejects_empty_display_name(db: Any) -> None:
+    """Nome vazio ou só espaços é recusado."""
+    user = tenancy.create_user(db, firebase_uid="uid-empty", email="empty@example.com")
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=user.id,
+            display_name="   ",
+            language="pt-BR",
+            timezone="America/Sao_Paulo",
+        )
+
+
+def test_update_user_profile_rejects_long_display_name(db: Any) -> None:
+    """Nome acima de 64 caracteres é recusado."""
+    user = tenancy.create_user(db, firebase_uid="uid-long", email="long@example.com")
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=user.id,
+            display_name="x" * 65,
+            language="pt-BR",
+            timezone="America/Sao_Paulo",
+        )
+
+
+def test_update_user_profile_rejects_missing_user(db: Any) -> None:
+    """Tentar atualizar perfil de um user que não existe recusa."""
+    from surrealdb import RecordID
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=RecordID("user", "não-existe"),
+            display_name="Renato",
+            language="pt-BR",
+            timezone="America/Sao_Paulo",
+        )
+
+
+def test_membership_theme_defaults_to_system(db: Any) -> None:
+    """Membership nova já carrega o tema 'system' por padrão."""
+    user = tenancy.create_user(db, firebase_uid="uid-theme", email="theme@example.com")
+    tenant = tenancy.create_tenant(db, name="Tema", owner_user_id=user.id)
+
+    membership = tenancy.get_membership(db, user_id=user.id, tenant_id=tenant.id)
+    assert membership is not None
+    assert membership.theme == "system"
+
+
+def test_update_membership_theme(db: Any) -> None:
+    """O dono pode alterar o tema da própria membership."""
+    user = tenancy.create_user(db, firebase_uid="uid-owner-theme", email="ot@example.com")
+    tenant = tenancy.create_tenant(db, name="Tenant T", owner_user_id=user.id)
+
+    updated = tenancy.update_membership_theme(
+        db, user_id=user.id, tenant_id=tenant.id, theme="dark"
+    )
+    assert updated.theme == "dark"
+
+    loaded = tenancy.get_membership(db, user_id=user.id, tenant_id=tenant.id)
+    assert loaded is not None
+    assert loaded.theme == "dark"
+
+
+def test_update_membership_theme_rejects_invalid(db: Any) -> None:
+    """Valores fora de light/dark/system são recusados."""
+    user = tenancy.create_user(db, firebase_uid="uid-bad-theme", email="bad@example.com")
+    tenant = tenancy.create_tenant(db, name="Tenant B", owner_user_id=user.id)
+
+    with pytest.raises(StoreError):
+        tenancy.update_membership_theme(db, user_id=user.id, tenant_id=tenant.id, theme="blue")
+
+
+def test_update_membership_theme_rejects_non_member(db: Any) -> None:
+    """Um user que não pertence ao tenant não pode alterar tema lá."""
+    user = tenancy.create_user(db, firebase_uid="uid-out-theme", email="out@example.com")
+    other = tenancy.create_user(db, firebase_uid="uid-owner-2", email="owner2@example.com")
+    tenant = tenancy.create_tenant(db, name="Tenant C", owner_user_id=other.id)
+
+    with pytest.raises(MembershipRequiredError):
+        tenancy.update_membership_theme(db, user_id=user.id, tenant_id=tenant.id, theme="dark")

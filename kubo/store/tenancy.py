@@ -12,10 +12,12 @@ por constraint de banco (suporte não confirmado na v3.1.5 pinada pelo ADR-0005)
 
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from surrealdb import RecordID
 from surrealdb.errors import InternalError
@@ -64,6 +66,19 @@ class User:
 
 
 @dataclass(frozen=True)
+class UserProfile:
+    """Preferências globais e identidade visível de uma Conta."""
+
+    id: RecordID
+    user: RecordID
+    display_name: str
+    language: str
+    timezone: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class Membership:
     """Relação N:N entre `user` e `tenant`, com papel `owner` ou `member`."""
 
@@ -71,6 +86,7 @@ class Membership:
     user: RecordID
     tenant: RecordID
     role: str
+    theme: str
     created_at: datetime
 
 
@@ -115,6 +131,7 @@ def _membership_from_row(row: dict[str, Any]) -> Membership:
         user=row["in"],
         tenant=row["out"],
         role=row["role"],
+        theme=row.get("theme", "system"),
         created_at=_as_datetime(row["created_at"]),
     )
 
@@ -447,3 +464,140 @@ def get_or_create_user_and_tenant(
     tenant_name = (email or firebase_uid or str(user.id)).strip()
     tenant = create_tenant(db, name=tenant_name, owner_user_id=user.id)
     return user, tenant
+
+
+_VALID_THEMES: set[str] = {"light", "dark", "system"}
+_BCP47_RE = re.compile(r"^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$")
+
+
+def _profile_from_row(row: dict[str, Any]) -> UserProfile:
+    """Builds a `UserProfile` from a database row."""
+    return UserProfile(
+        id=row["id"],
+        user=row["user"],
+        display_name=row["display_name"],
+        language=row["language"],
+        timezone=row["timezone"],
+        created_at=_as_datetime(row["created_at"]),
+        updated_at=_as_datetime(row["updated_at"]),
+    )
+
+
+def _is_bcp47(value: str) -> bool:
+    """True for a BCP 47 language tag (e.g. pt-BR, en-US)."""
+    return bool(_BCP47_RE.match(value))
+
+
+def _validate_display_name(value: str) -> str:
+    """Normalizes and validates the display name."""
+    text = value.strip()
+    if not text or len(text) > 64:
+        raise StoreError("nome deve ter 1-64 caracteres")
+    return text
+
+
+def _validate_profile_input(
+    *, display_name: str, language: str, timezone: str
+) -> tuple[str, str, str]:
+    """Sanitizes and validates BCP 47 language and IANA timezone."""
+    display_name = _validate_display_name(display_name)
+    language = language.strip()
+    if not _is_bcp47(language):
+        raise StoreError("idioma inválido (BCP 47)")
+    timezone = timezone.strip()
+    try:
+        ZoneInfo(timezone)
+    except ZoneInfoNotFoundError:
+        raise StoreError("timezone inválido (IANA)") from None
+    return display_name, language, timezone
+
+
+def get_user_profile(db: Any, user_id: RecordID) -> UserProfile | None:
+    """Reads the global user profile, or None if it does not exist yet."""
+    rows = db.query(
+        "SELECT id, user, display_name, language, timezone, created_at, updated_at "
+        "FROM user_profile WHERE user = $u;",
+        {"u": user_id},
+    )
+    return _profile_from_row(rows[0]) if rows else None
+
+
+def update_user_profile(
+    db: Any,
+    *,
+    user_id: RecordID,
+    display_name: str,
+    language: str,
+    timezone: str,
+) -> UserProfile:
+    """Creates or updates the global user profile.
+
+    The user must exist; raises `StoreError` otherwise. Idempotently creates
+    `user_profile` when missing and updates it when present.
+    """
+    if get_user(db, user_id) is None:
+        raise StoreError("user not found")
+
+    display_name, language, timezone = _validate_profile_input(
+        display_name=display_name,
+        language=language,
+        timezone=timezone,
+    )
+
+    existing = get_user_profile(db, user_id)
+    if existing is not None:
+        db.query(
+            "UPDATE $p SET display_name = $dn, language = $l, "
+            "timezone = $tz, updated_at = time::now();",
+            {
+                "p": existing.id,
+                "dn": display_name,
+                "l": language,
+                "tz": timezone,
+            },
+        )
+    else:
+        db.query(
+            "CREATE user_profile SET user = $u, display_name = $dn, "
+            "language = $l, timezone = $tz, "
+            "created_at = time::now(), updated_at = time::now();",
+            {
+                "u": user_id,
+                "dn": display_name,
+                "l": language,
+                "tz": timezone,
+            },
+        )
+
+    profile = get_user_profile(db, user_id)
+    if profile is None:
+        raise StoreError("user_profile vanished during update")
+    return profile
+
+
+def get_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Membership | None:
+    """Reads a user's membership in a tenant, or None if it does not exist."""
+    row = _find_existing_membership(db, user_id, tenant_id)
+    return _membership_from_row(row) if row else None
+
+
+def update_membership_theme(
+    db: Any,
+    *,
+    user_id: RecordID,
+    tenant_id: RecordID,
+    theme: str,
+) -> Membership:
+    """Updates the active membership theme after verifying the user belongs to the tenant."""
+    if theme not in _VALID_THEMES:
+        raise StoreError("tema deve ser 'light', 'dark' ou 'system'")
+
+    row = _find_existing_membership(db, user_id, tenant_id)
+    if row is None:
+        raise MembershipRequiredError("user does not belong to tenant")
+
+    db.query("UPDATE $m SET theme = $t;", {"m": row["id"], "t": theme})
+    updated = get_membership(db, user_id=user_id, tenant_id=tenant_id)
+    if updated is None:
+        raise StoreError("membership vanished during update")
+    return updated

@@ -75,3 +75,26 @@ Texto curto no cadastro do usuário descrevendo seu mundo profissional. Transver
 qualquer persona pode consumi-lo para contextualizar output; Estudos é o primeiro cliente.
 Entra em prompts — nunca contém segredos. Código: `work_context`. _Evite_: "bio", "perfil"
 solto.
+
+## Identidade e preferências
+
+**Conta**:
+A identidade humana que se autentica no Kubo. Vive fora de qualquer tenant; pode pertencer a
+vários tenants por meio de `membership`. Carrega `firebase_uid`, `email`, provedores vinculados e
+meios de autenticação (Firebase, scrypt). Código: `user`. _Evite_: "Account" solto quando o
+código já fala `user`.
+
+**Perfil do usuário**:
+Identidade visível e preferências globais de uma [[Conta]]. Ligado 1:1 a `user`: nome de exibição,
+avatar, idioma e timezone. Não confundir com [[Perfil de contexto de trabalho]], que é sobre
+o mundo profissional. Código: `user_profile`. _Evite_: "perfil" solto, "profile" sem prefixo.
+
+**Tema da interface**:
+Aparência da UI (`light`, `dark`, `system`) de um [[Membro]] dentro de um tenant. Vinculado
+à relação `membership`, porque um mesmo `user` pode querer aparências diferentes em tenants
+diferentes. Código: `theme` no `membership`. _Evite_: guardar `theme` em `user_profile` como se
+fosse global.
+
+**Membro**:
+Relação `user -> tenant`, com papel e preferências locais do workspace. Código: `membership`.
+_Evite_: "membro" solto sem o contexto da relação.

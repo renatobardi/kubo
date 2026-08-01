@@ -53,6 +53,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "dashboard",
         "distilled",
         "flows",
+        "profile",
         "runs",
         "sources",
         "entities",
@@ -62,6 +63,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "study",
     ):
         monkeypatch.setattr(f"kubo.api.routes.{mod}.client.connect", _fake_connect)
+    monkeypatch.setattr("kubo.api.routes.profile.client.connect_rw", _fake_connect)
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.knowledge.dashboard_counts",
         lambda db, **kw: DashboardCounts(distilled=0, items=0, sources=0, entities=0),
@@ -71,6 +73,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         id=RecordID("user", "breakglass-owner"),
         firebase_uid="user:breakglass-owner",
         email=None,
+        work_context=None,
     )
     _breakglass_tenant = SimpleNamespace(
         id=RecordID("tenant", "breakglass"),
@@ -80,6 +83,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     _breakglass_membership = SimpleNamespace(
         tenant=RecordID("tenant", "breakglass"),
         role="owner",
+        theme="system",
     )
     monkeypatch.setattr(
         "kubo.store.tenancy.get_user_by_firebase_uid", lambda db, firebase_uid: _breakglass_user
@@ -124,6 +128,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "settings",
         "destinations",
         "study",
+        "profile",
     ):
         monkeypatch.setattr(
             f"kubo.api.routes.{_mod}.resolve_session",

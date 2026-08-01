@@ -118,6 +118,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0025_dispatch_run_source_tenant.surql",
         # 0026 (KUBO-133): proveniência do conceito na lição.
         "0026_lesson_provenance.surql",
+        # 0027 (KUBO-147): perfil do usuário + theme no membership.
+        "0027_user_profile_membership_theme.surql",
     }
 
 
