@@ -19,7 +19,13 @@ from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
 from kubo.store.study import MaterialChapter
-from kubo.study.planner import PlanLesson, Planner, PlanProposal, mechanical_proposal
+from kubo.study.planner import (
+    PlanLesson,
+    Planner,
+    PlannerChatReply,
+    PlanProposal,
+    mechanical_proposal,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -30,7 +36,11 @@ class _FakeExecutor:
     """Fake de `Executor`: devolve `output` ou levanta `error` na chamada, e registra o
     `untrusted_content` recebido — usado para provar que o sumário chega ao LLM."""
 
-    def __init__(self, output: PlanProposal | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        output: PlanProposal | PlannerChatReply | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self._output = output
         self._error = error
         self.received_content: list[str] = []
@@ -245,3 +255,114 @@ def test_propose_without_optional_fields_still_works() -> None:
 
     assert proposal is not None
     assert "Capítulo 1" in executor.received_content[0]
+
+
+# --- KUBO-165: chat com planner (Fase 2 — ajuste incremental) ---------------------------
+
+
+def _chat_reply(text: str, *lessons: tuple[str, list[int]]) -> PlannerChatReply:
+    return PlannerChatReply(
+        text=text,
+        lessons=[PlanLesson(title=t, chapter_seqs=s) for t, s in lessons] or None,
+    )
+
+
+def test_chat_returns_text_and_updated_plan() -> None:
+    """Chat com planner devolve texto + plano atualizado coerente."""
+    executor = _FakeExecutor(
+        output=_chat_reply("Juntei as lições 1 e 2.", ("Fundamentos", [1, 2, 3, 4]))
+    )
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    reply = planner.chat(
+        user_message="junta lição 1 e 2",
+        chapters=_chapters(),
+        current_plan=[("Fundamentos", [1, 2]), ("Prática", [3, 4])],
+    )
+
+    assert reply is not None
+    assert reply.text == "Juntei as lições 1 e 2."
+    assert reply.lessons is not None
+    assert len(reply.lessons) == 1
+    assert reply.lessons[0].chapter_seqs == [1, 2, 3, 4]
+
+
+def test_chat_without_plan_update_returns_text_only() -> None:
+    """Mensagem que não toca o plano devolve texto sem lessons."""
+    executor = _FakeExecutor(output=_chat_reply("Entendi, vou manter o plano."))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    reply = planner.chat(
+        user_message="o que acha do plano?",
+        chapters=_chapters(),
+        current_plan=[("Fundamentos", [1, 2])],
+    )
+
+    assert reply is not None
+    assert reply.text == "Entendi, vou manter o plano."
+    assert reply.lessons is None
+
+
+def test_chat_includes_current_plan_in_prompt() -> None:
+    """O plano atual chega ao prompt para ajuste incremental."""
+    executor = _FakeExecutor(output=_chat_reply("Ok."))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.chat(
+        user_message="ajusta",
+        chapters=_chapters(),
+        current_plan=[("Fundamentos", [1, 2]), ("Prática", [3, 4])],
+    )
+
+    content = executor.received_content[0]
+    assert "Fundamentos" in content
+    assert "Prática" in content
+
+
+def test_chat_includes_planning_history_in_prompt() -> None:
+    """O histórico da conversa com planner chega ao prompt."""
+    executor = _FakeExecutor(output=_chat_reply("Ok."))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    planner.chat(
+        user_message="muda de novo",
+        chapters=_chapters(),
+        current_plan=[("L1", [1])],
+        planning_history=[("user", "junta tudo"), ("assistant", "ok, juntei")],
+    )
+
+    content = executor.received_content[0]
+    assert "junta tudo" in content
+
+
+def test_chat_rejects_incoherent_plan_update() -> None:
+    """Plano atualizado com seq inexistente é descartado — lessons vira None."""
+    executor = _FakeExecutor(output=_chat_reply("Aqui está.", ("Fantasma", [99])))
+    planner = Planner(executor=executor, prompt=_PROMPT)
+
+    reply = planner.chat(
+        user_message="adiciona capítulo 99",
+        chapters=_chapters(),
+        current_plan=[("L1", [1])],
+    )
+
+    assert reply is not None
+    assert reply.text == "Aqui está."
+    assert reply.lessons is None  # plano incoerente descartado, texto preservado
+
+
+def test_chat_returns_none_on_executor_failure() -> None:
+    """Falha de LLM vira None — quem chama decide o que fazer."""
+    planner = Planner(
+        executor=_FakeExecutor(error=ExecutorError("provider fora")),
+        prompt=_PROMPT,
+    )
+
+    assert (
+        planner.chat(
+            user_message="ajusta",
+            chapters=_chapters(),
+            current_plan=[("L1", [1])],
+        )
+        is None
+    )

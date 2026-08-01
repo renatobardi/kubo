@@ -10,6 +10,7 @@ propõe, o sistema confere. Falha de LLM não trava a tela — a rota cai no
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -47,6 +48,27 @@ class PlanProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lessons: list[PlanLesson] = Field(min_length=1, max_length=200)
+
+
+class PlannerChatUpdate(BaseModel):
+    """Saída estruturada do chat com planner: texto + plano opcionalmente atualizado.
+
+    `lessons` é None quando a mensagem não toca o plano (só conversa). Quando presente,
+    é a nova proposta INTEIRA — o planner regenera, não patcha.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=0)
+    lessons: list[PlanLesson] | None = Field(default=None, max_length=200)
+
+
+@dataclass(frozen=True)
+class PlannerChatReply:
+    """Resposta do planner no chat: texto + plano atualizado (ou None se não tocou)."""
+
+    text: str
+    lessons: list[PlanLesson] | None = None
 
 
 class Planner:
@@ -94,6 +116,49 @@ class Planner:
             _log.info("study.planner.incoherent", chapters=len(chapters))
             return None
         return proposal
+
+    def chat(
+        self,
+        *,
+        user_message: str,
+        chapters: Sequence[MaterialChapter],
+        current_plan: Sequence[tuple[str, list[int]]],
+        planning_history: Sequence[tuple[str, str]] = (),
+        focus: str | None = None,
+        depth: str | None = None,
+        material_summaries: Sequence[str] = (),
+    ) -> PlannerChatReply | None:
+        """Chat incremental com planner (Fase 2, KUBO-165).
+
+        Devolve texto + plano atualizado (ou None se o LLM falhar). O plano atual chega
+        ao prompt para ajuste incremental — o planner regenera, não patcha. Se o LLM
+        devolver plano incoerente, o texto é preservado e `lessons` vira None: o dono
+        não perde a resposta só porque o plano veio ruim.
+        """
+        try:
+            update = self._executor.complete(
+                self._prompt,
+                _build_chat_content(
+                    chapters,
+                    user_message=user_message,
+                    current_plan=current_plan,
+                    planning_history=planning_history,
+                    focus=focus,
+                    depth=depth,
+                    material_summaries=material_summaries,
+                ),
+                PlannerChatUpdate,
+            )
+        except (ExecutorError, ValidationError):
+            _log.info("study.planner.chat_failed", chapters=len(chapters))
+            return None
+        lessons: list[PlanLesson] | None = update.lessons
+        if lessons is not None:
+            proposal = PlanProposal(lessons=lessons)
+            if not _is_coherent(proposal, {chapter.seq for chapter in chapters}):
+                _log.info("study.planner.chat_incoherent", chapters=len(chapters))
+                lessons = None
+        return PlannerChatReply(text=update.text, lessons=lessons)
 
 
 def mechanical_proposal(chapters: Sequence[MaterialChapter]) -> PlanProposal:
@@ -161,6 +226,54 @@ def _chapter_summary(chapters: Sequence[MaterialChapter]) -> str:
         f"{chapter.seq}. {chapter.title}" + (f" [{chapter.part}]" if chapter.part else "")
         for chapter in _in_reading_order(chapters)
     )
+
+
+def _plan_summary(current_plan: Sequence[tuple[str, list[int]]]) -> str:
+    """Plano atual como texto legível para o prompt do planner."""
+    lines = [
+        f"{i + 1}. {title} (capítulos: {', '.join(map(str, seqs))})"
+        for i, (title, seqs) in enumerate(current_plan)
+    ]
+    return "Plano atual:\n" + "\n".join(lines)
+
+
+def _build_chat_content(
+    chapters: Sequence[MaterialChapter],
+    *,
+    user_message: str,
+    current_plan: Sequence[tuple[str, list[int]]],
+    planning_history: Sequence[tuple[str, str]],
+    focus: str | None,
+    depth: str | None,
+    material_summaries: Sequence[str],
+) -> str:
+    """Conteúdo NÃO-CONFIÁVEL do prompt de chat com planner (KUBO-165).
+
+    Inclui: mensagem do dono, plano atual, histórico da conversa, campos estruturados,
+    sumários e estrutura de capítulos. O planner ajusta incrementalmente com base no
+    plano atual — regenera a proposta inteira, não patcha.
+    """
+    parts: list[str] = [f"Mensagem do dono: {user_message}"]
+    if current_plan:
+        parts.append(_plan_summary(current_plan))
+    if planning_history:
+        history_text = "\n".join(
+            f"{'Dono' if role == 'user' else 'Planner'}: {content}"
+            for role, content in planning_history
+        )
+        parts.append(f"Conversa anterior:\n{history_text}")
+    if focus:
+        parts.append(f"Foco do estudo: {focus}")
+    if depth:
+        parts.append(f"Profundidade: {depth}")
+    if material_summaries:
+        parts.append("Sumários dos materiais:\n" + "\n".join(material_summaries))
+    parts.append(_chapter_summary(chapters))
+    full = "\n\n".join(parts)
+    if len(full) <= _MAX_SUMMARY_TEXT:
+        return full
+    _log.warning("study.planner.chat_prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
+    return full[:_MAX_SUMMARY_TEXT]
 
 
 def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:

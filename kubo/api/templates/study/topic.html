@@ -304,18 +304,53 @@
   {% endif %}
   {% endif %}
 
-  {# Visualização do plano (KUBO-164): só em planning. #}
+  {# Fase 2 — Planning: plano + chat com planner + edição (KUBO-165). #}
   {% if topic.state == "planning" and plan %}
-  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-    <h2 class="text-sm font-medium">Plano de estudo</h2>
-    <p class="mt-1 text-xs text-muted-foreground">O planner agrupou os capítulos em {{ plan_entries|length }} lições. Defina a cadência para calcular a data-alvo.</p>
 
-    {# Lista de lições. #}
+  {# Plano de estudo com edição manual. #}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-medium">Plano de estudo</h2>
+      <div class="flex gap-2">
+        {# Botão Voltar (planning → draft). #}
+        <form method="post" action="{{ topic_url }}/back-to-draft" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+            Voltar
+          </button>
+        </form>
+        {# Botão Repropor tudo. #}
+        <form method="post" action="{{ topic_url }}/repropose" class="inline"
+              onsubmit="return confirm('Repropor o plano do zero? Suas edições manuais serão perdidas.')">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+            Repropor tudo
+          </button>
+        </form>
+      </div>
+    </div>
+    <p class="mt-1 text-xs text-muted-foreground">O planner agrupou os capítulos em {{ plan_entries|length }} lições. Converse com o planner para ajustar ou edite manualmente.</p>
+
+    {# Lista de lições com botão de remover capítulo. #}
     <ol class="mt-3 space-y-2">
       {% for entry in plan_entries %}
       <li class="flex items-start gap-3 rounded-2xl bg-input/30 px-4 py-2 text-sm">
         <span class="font-semibold text-muted-foreground">{{ entry.seq }}.</span>
-        <span class="flex-1">{{ entry.title }}</span>
+        <div class="flex-1">
+          <span>{{ entry.title }}</span>
+          <div class="mt-1 flex flex-wrap gap-1">
+            {% for ch_id in entry.chapters %}
+            <span class="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-xs text-muted-foreground">
+              {{ ch_id }}
+              <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/remove-chapter" class="inline">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="chapter_id" value="{{ ch_id }}">
+                <button type="submit" class="text-foreground/40 hover:text-foreground" aria-label="Remover capítulo">×</button>
+              </form>
+            </span>
+            {% endfor %}
+          </div>
+        </div>
         <span class="text-xs text-muted-foreground">{{ entry.chapters|length }} capítulo(s)</span>
       </li>
       {% endfor %}
@@ -332,8 +367,137 @@
       {% if plan.weekdays %}
       <p class="mt-1 text-xs text-muted-foreground">Dias: {{ plan.weekdays|join(', ') }}</p>
       {% endif %}
+      {# Formulário de cadência. #}
+      <form method="post" action="{{ topic_url }}/plan/cadence" class="mt-2 flex flex-wrap gap-2">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% for day in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] %}
+        <label class="inline-flex items-center gap-1 text-xs">
+          <input type="checkbox" name="weekdays" value="{{ day }}" {% if day in (plan.weekdays or []) %}checked{% endif %}>
+          {{ day }}
+        </label>
+        {% endfor %}
+        <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">OK</button>
+      </form>
     </div>
   </section>
+
+  {# Chat com planner (KUBO-165). #}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Conversa com o planner</h2>
+    <p class="mt-1 text-xs text-muted-foreground">Peça ajustes no plano (ex: "junta lição 1 e 2", "foca em X", "cadência 3x semana").</p>
+
+    {# Histórico da conversa (persistido, phase=planning). #}
+    <div id="planner-chat-messages" class="mt-3 space-y-3 max-h-96 overflow-y-auto">
+      {% for msg in planning_chat_messages %}
+      <div class="flex {{ 'justify-end' if msg.role == 'user' else 'justify-start' }}">
+        <div class="max-w-[80%] rounded-2xl px-4 py-2 text-sm {{ 'bg-primary/10' if msg.role == 'user' else 'bg-input/30' }}">
+          <span class="text-xs text-muted-foreground">{{ 'Você' if msg.role == 'user' else 'Planner' }}</span>
+          <p class="mt-0.5 whitespace-pre-wrap">{{ msg.content }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {# Input do chat. #}
+    <form id="planner-chat-form" class="mt-3 flex gap-2">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="planner-chat-input" class="sr-only">Mensagem para o planner</label>
+      <textarea id="planner-chat-input" name="message" rows="2" placeholder="Digite sua mensagem..."
+                class="flex-1 rounded-2xl border border-input bg-input/30 px-4 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 resize-none"></textarea>
+      <button type="submit" id="planner-chat-submit"
+              class="h-9 shrink-0 rounded-4xl px-4 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+        Enviar
+      </button>
+    </form>
+  </section>
+
+  <script>
+  (function() {
+    const form = document.getElementById('planner-chat-form');
+    if (!form) return;
+    const input = document.getElementById('planner-chat-input');
+    const submit = document.getElementById('planner-chat-submit');
+    const messages = document.getElementById('planner-chat-messages');
+    const csrf = form.querySelector('input[name="csrf"]').value;
+    const topicUrl = '{{ topic_url }}';
+
+    function addMessage(role, content) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+      const bubble = document.createElement('div');
+      bubble.className = 'max-w-[80%] rounded-2xl px-4 py-2 text-sm ' + (role === 'user' ? 'bg-primary/10' : 'bg-input/30');
+      const label = document.createElement('span');
+      label.className = 'text-xs text-muted-foreground';
+      label.textContent = role === 'user' ? 'Você' : 'Planner';
+      const p = document.createElement('p');
+      p.className = 'mt-0.5 whitespace-pre-wrap';
+      p.textContent = content;
+      bubble.appendChild(label);
+      bubble.appendChild(p);
+      wrapper.appendChild(bubble);
+      messages.appendChild(wrapper);
+      messages.scrollTop = messages.scrollHeight;
+      return p;
+    }
+
+    form.onsubmit = async function(e) {
+      e.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      submit.disabled = true;
+      addMessage('user', msg);
+      const assistantP = addMessage('assistant', '...');
+
+      try {
+        const resp = await fetch(topicUrl + '/planner-chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({message: msg, csrf: csrf}),
+        });
+        if (!resp.ok) {
+          assistantP.textContent = 'Erro: ' + resp.status;
+          return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, {stream: true});
+          const events = buffer.split('\n\n');
+          buffer = events.pop();
+          for (const evtBlock of events) {
+            const lines = evtBlock.split(/\r?\n/);
+            let ev = '';
+            const dataLines = [];
+            for (const line of lines) {
+              if (line.startsWith('event: ')) ev = line.slice(7).trim();
+              else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+            }
+            const data = dataLines.join('\n');
+            if (ev === 'error') {
+              assistantP.textContent = data || 'Erro ao gerar resposta.';
+            } else if (ev === 'done') {
+              try {
+                const parsed = JSON.parse(data);
+                assistantP.textContent = parsed.text || '';
+                if (parsed.plan_updated) location.reload();
+              } catch (err) {
+                console.error('SSE done parse failed:', err);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        assistantP.textContent = 'Erro de conexão.';
+      } finally {
+        submit.disabled = false;
+      }
+    };
+  })();
+  </script>
   {% endif %}
 </div>
 {% endblock %}

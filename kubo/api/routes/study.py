@@ -346,6 +346,17 @@ def topic_detail(request: Request, key: str) -> Response:
             if topic.state == "draft"
             else []
         )
+        planning_chat_messages = (
+            study_store.list_chat_messages(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                phase="planning",
+            )
+            if topic.state == "planning"
+            else []
+        )
         plan, plan_entries = (
             study_store.get_plan_for_topic(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
@@ -362,6 +373,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "materials": materials,
             "max_materials": _max_materials(),
             "chat_messages": chat_messages,
+            "planning_chat_messages": planning_chat_messages,
             "valid_depths": VALID_DEPTHS,
             "csrf": csrf_token(request),
             "plan": plan,
@@ -895,4 +907,354 @@ def close_topic(
     except (ConfigError, StoreError):
         _log.warning("study.close.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+# --- Fase 2: chat com planner + edição incremental (KUBO-165, ADR-0047 §2) ---------------
+
+
+_TOPIC_NOT_PLANNING = "Só é possível conversar com o planner em um estudo em planejamento."
+
+
+def _planning_chat_history_of(
+    db: Any, ctx: SessionContext, topic_id: RecordID
+) -> list[tuple[str, str]]:
+    """Histórico da conversa com planner (phase=planning)."""
+    messages = study_store.list_chat_messages(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
+    )
+    return [(m.role, m.content) for m in messages]
+
+
+def _current_plan_as_tuples(
+    db: Any, ctx: SessionContext, topic_id: RecordID
+) -> list[tuple[str, list[int]]]:
+    """Plano atual como lista de (title, chapter_seqs globais) para o planner."""
+    plan, entries = study_store.get_plan_for_topic(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
+    )
+    if plan is None:
+        return []
+    # Mapeia chapter RecordID → seq global.
+    chapters = _collect_all_chapters(db, ctx, topic_id)
+    id_to_seq = {str(ch.id): ch.seq for ch in chapters}
+    return [
+        (e.title, [id_to_seq[str(c)] for c in e.chapters if str(c) in id_to_seq]) for e in entries
+    ]
+
+
+def _persist_planner_reply(
+    ctx: SessionContext, topic_id: RecordID, reply: Any, chapters: Any, key: str
+) -> bool:
+    """Persiste a resposta do planner (texto + plano se atualizado). Devolve plan_updated."""
+    try:
+        with client.connect_rw() as db:
+            study_store.create_chat_message(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic_id,
+                phase="planning",
+                role="assistant",
+                content=reply.text,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.planner_chat.persist_failed", topic=_log_key(key))
+    if not reply.lessons:
+        return False
+    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    entries = [
+        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs]) for lesson in reply.lessons
+    ]
+    try:
+        with client.connect_rw() as db:
+            study_store.save_plan_proposal(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic_id,
+                entries=entries,
+            )
+        return True
+    except (ConfigError, StoreError):
+        _log.warning("study.planner_chat.plan_save_failed", topic=_log_key(key))
+        return False
+
+
+@router.post("/topics/{key}/planner-chat")
+def chat_with_planner(
+    request: Request,
+    key: str,
+    message: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Chat SSE com planner (Fase 2, planning): ajuste incremental do plano.
+
+    O planner recebe o plano atual + histórico da conversa + contexto. Se a
+    resposta incluir um plano atualizado coerente, o evento `done` carrega as
+    lições novas (UI re-renderiza). Caso contrário, só texto.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    message = message.strip()
+    if not message:
+        return PlainTextResponse(_EMPTY_MESSAGE, status_code=400)
+
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
+        chapters = _collect_all_chapters(db, ctx, topic.id)
+        current_plan = _current_plan_as_tuples(db, ctx, topic.id)
+        history = _planning_chat_history_of(db, ctx, topic.id)
+        summaries = _material_summaries_of(db, ctx, topic.id)
+
+    # Persiste a mensagem do dono antes de chamar o planner.
+    with client.connect_rw() as db:
+        study_store.create_chat_message(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_id=topic.id,
+            phase="planning",
+            role="user",
+            content=message,
+        )
+
+    planner = _planner(ctx)
+
+    def _stream() -> Any:
+        """Chama o planner (síncrono, não-streaming) e envia resultado via SSE."""
+        try:
+            reply = planner.chat(
+                user_message=message,
+                chapters=chapters,
+                current_plan=current_plan,
+                planning_history=history,
+                focus=topic.focus,
+                depth=topic.depth,
+                material_summaries=summaries,
+            )
+        except Exception:  # noqa: BLE001
+            _log.warning("study.planner_chat.failed", topic=_log_key(key))
+            yield {"event": "error", "data": "Falha ao gerar resposta."}
+            return
+        if reply is None:
+            yield {"event": "error", "data": "Falha ao gerar resposta."}
+            return
+        plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
+        yield {
+            "event": "done",
+            "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
+        }
+
+    return EventSourceResponse(_stream())
+
+
+@router.post("/topics/{key}/back-to-draft")
+def back_to_draft(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Volta de planning → draft (preserva Materiais e conversa com mentor)."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.set_topic_state(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                state="draft",
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.back_to_draft.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/repropose")
+def repropose_plan(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Repropõe o Plano do zero usando input inicial + conversa da Fase 2."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
+        chapters = _collect_all_chapters(db, ctx, topic.id)
+        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        summaries = _material_summaries_of(db, ctx, topic.id)
+
+    from kubo.study.planner import mechanical_proposal
+
+    planner = _planner(ctx)
+    proposal = planner.propose(
+        chapters,
+        focus=topic.focus,
+        depth=topic.depth,
+        mentor_transcript=transcript,
+        material_summaries=summaries,
+    )
+    if proposal is None:
+        proposal = mechanical_proposal(chapters)
+        _log.info("study.repropose.mechanical_fallback", topic=_log_key(key))
+
+    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    entries = [
+        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs])
+        for lesson in proposal.lessons
+    ]
+    try:
+        with client.connect_rw() as db:
+            study_store.save_plan_proposal(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                entries=entries,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.repropose.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/plan/reorder")
+def reorder_plan(
+    request: Request,
+    key: str,
+    entry_ids: Annotated[list[str], Form()] = None,  # type: ignore[assignment]
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Reordena as lições do plano (edição manual, KUBO-165)."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        plan, _ = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    if plan is None or not entry_ids:
+        return PlainTextResponse("Plano não encontrado.", status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.reorder_plan_entries(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                entry_ids=[RecordID(*eid.split(":", 1)) for eid in entry_ids],
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.reorder.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/plan/entries/{ekey}/remove-chapter")
+def remove_chapter(
+    request: Request,
+    key: str,
+    ekey: str,
+    chapter_id: Annotated[str, Form()] = "",
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Remove um capítulo de uma lição (edição manual, KUBO-165)."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+    entry_id = RecordID("plan_entry", ekey)
+    ch_parts = chapter_id.split(":", 1)
+    if len(ch_parts) == 2:
+        ch_rid = RecordID(ch_parts[0], ch_parts[1])
+    else:
+        ch_rid = RecordID("material_chapter", chapter_id)
+    try:
+        with client.connect_rw() as db:
+            study_store.remove_chapter_from_entry(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                entry_id=entry_id,
+                chapter_id=ch_rid,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.remove_chapter.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/plan/cadence")
+def set_cadence(
+    request: Request,
+    key: str,
+    weekdays: Annotated[list[str], Form()] = None,  # type: ignore[assignment]
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Define a cadência (weekdays) e recalcula a data-alvo."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        plan, _ = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    if plan is None:
+        return PlainTextResponse("Plano não encontrado.", status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.set_plan_cadence(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                weekdays=weekdays or [],
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.cadence.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ValueError:
+        return PlainTextResponse("Dia da semana inválido.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)

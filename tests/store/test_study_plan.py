@@ -21,6 +21,8 @@ from kubo.store.study import (
     create_topic,
     get_plan_for_topic,
     get_topic,
+    remove_chapter_from_entry,
+    reorder_plan_entries,
     save_plan_proposal,
     set_plan_cadence,
     set_topic_state,
@@ -270,4 +272,136 @@ def test_set_plan_cadence_rejects_invalid_weekday(
             user_id=user_id,
             plan_id=plan.id,
             weekdays=["funday"],
+        )
+
+
+# --- KUBO-165: edição manual do plano (reorder, remove chapter) -------------------------
+
+
+def test_reorder_plan_entries_changes_seq(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """Reordenar lições atualiza os seqs na ordem nova."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]]), ("L3", [chapter_ids[2]])],
+    )
+
+    # Reordena: L3, L1, L2
+    new_order = [entries[2].id, entries[0].id, entries[1].id]
+    reorder_plan_entries(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan.id,
+        entry_ids=new_order,
+    )
+
+    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert len(updated) == 3
+    assert updated[0].seq == 1
+    assert updated[0].title == "L3"
+    assert updated[1].seq == 2
+    assert updated[1].title == "L1"
+    assert updated[2].seq == 3
+    assert updated[2].title == "L2"
+
+
+def test_reorder_plan_entries_scoped_to_owner(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Outro membro não pode reordenar plano alheio."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+    )
+    other = tenancy.create_user(db, firebase_uid="other-reorder-uid")
+    tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
+
+    with pytest.raises(StoreError):
+        reorder_plan_entries(
+            db,
+            tenant_id=tenant_id,
+            user_id=other.id,
+            plan_id=plan.id,
+            entry_ids=[entries[1].id, entries[0].id],
+        )
+
+
+def test_remove_chapter_from_entry_updates_chapters(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Remover capítulo de uma lição atualiza a lista de chapters."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0], chapter_ids[1]]), ("L2", [chapter_ids[2]])],
+    )
+
+    remove_chapter_from_entry(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        entry_id=entries[0].id,
+        chapter_id=chapter_ids[1],
+    )
+
+    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert updated[0].chapters == [chapter_ids[0]]
+    assert updated[1].chapters == [chapter_ids[2]]
+
+
+def test_remove_chapter_from_entry_scoped_to_owner(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Outro membro não pode remover capítulo de plano alheio."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0], chapter_ids[1]])],
+    )
+    other = tenancy.create_user(db, firebase_uid="other-rm-ch-uid")
+    tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
+
+    with pytest.raises(StoreError):
+        remove_chapter_from_entry(
+            db,
+            tenant_id=tenant_id,
+            user_id=other.id,
+            entry_id=entries[0].id,
+            chapter_id=chapter_ids[0],
         )

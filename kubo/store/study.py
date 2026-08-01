@@ -762,3 +762,88 @@ def set_plan_cadence(
         },
     )
     _log.info("store.plan.cadence_set", plan=str(plan_id), lessons=lesson_count)
+
+
+def reorder_plan_entries(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    entry_ids: Sequence[RecordID],
+) -> None:
+    """Reordena as lições do plano: `entry_ids` na nova ordem → seq 1, 2, 3...
+
+    A lista deve conter todas as entries do plano (validação de ownership via scope).
+    Usa offset temporário (seq + 1000) para evitar conflito com o índice UNIQUE
+    `(study_plan, seq)` durante a reordenação — atualizar in-place entraria em colisão.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Verifica ownership do plano (user_id no scope garante isolamento).
+    plan_rows = db.query(
+        f"SELECT id FROM study_plan WHERE id = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not plan_rows:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    # Fase 1: move todas para seq temporário (fora do range normal).
+    temp_stmts = [
+        f"UPDATE $entry SET seq = seq + 1000 WHERE study_plan = $plan "  # noqa: S608
+        f"AND {_MATERIAL_SCOPE}"
+    ]
+    for entry_id in entry_ids:
+        transaction.run_transaction(
+            db,
+            temp_stmts,
+            {"entry": entry_id, "plan": plan_id, "tenant": tenant_id, "user": user_id},
+        )
+    # Fase 2: aplica a nova ordem.
+    for seq, entry_id in enumerate(entry_ids, start=1):
+        transaction.run_transaction(
+            db,
+            [
+                f"UPDATE $entry SET seq = $seq WHERE study_plan = $plan "  # noqa: S608
+                f"AND {_MATERIAL_SCOPE}"
+            ],
+            {
+                "entry": entry_id,
+                "plan": plan_id,
+                "tenant": tenant_id,
+                "user": user_id,
+                "seq": seq,
+            },
+        )
+    _log.info("store.plan.reordered", plan=str(plan_id), entries=len(entry_ids))
+
+
+def remove_chapter_from_entry(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    entry_id: RecordID,
+    chapter_id: RecordID,
+) -> None:
+    """Remove um capítulo de uma lição (edição manual do plano, KUBO-165)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT chapters FROM plan_entry WHERE id = $entry AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"entry": entry_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not rows:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    raw_chapters: list[RecordID] = list(rows[0].get("chapters") or [])
+    chapters = [c for c in raw_chapters if c != chapter_id]
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $entry SET chapters = $chapters WHERE {_MATERIAL_SCOPE}"  # noqa: S608
+        ],
+        {
+            "entry": entry_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "chapters": chapters,
+        },
+    )
+    _log.info("store.plan.chapter_removed", entry=str(entry_id), chapter=str(chapter_id))
