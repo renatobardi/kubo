@@ -56,15 +56,37 @@ class Planner:
         self._executor = executor
         self._prompt = prompt
 
-    def propose(self, chapters: Sequence[MaterialChapter]) -> PlanProposal | None:
+    def propose(
+        self,
+        chapters: Sequence[MaterialChapter],
+        *,
+        focus: str | None = None,
+        depth: str | None = None,
+        mentor_transcript: str = "",
+        material_summaries: Sequence[str] = (),
+    ) -> PlanProposal | None:
         """Proposta validada, ou None se o LLM falhar OU devolver plano incoerente.
 
         Incoerente = `seq` que não existe no material, `seq` repetido entre lições ou
         ordem interna não crescente. A postura é a do Finder: erro vira None e quem
         chama decide o fallback — nunca gravar um plano que não bate com o material.
+
+        KUBO-164: recebe também campos estruturados (focus, depth), o transcript da
+        conversa com `mentor` e os sumários dos materiais — o planner agrupa com base
+        na estrutura + contexto, não no conteúdo completo dos capítulos.
         """
         try:
-            proposal = self._executor.complete(self._prompt, _summary(chapters), PlanProposal)
+            proposal = self._executor.complete(
+                self._prompt,
+                _build_prompt_content(
+                    chapters,
+                    focus=focus,
+                    depth=depth,
+                    mentor_transcript=mentor_transcript,
+                    material_summaries=material_summaries,
+                ),
+                PlanProposal,
+            )
         except (ExecutorError, ValidationError):
             _log.info("study.planner.failed", chapters=len(chapters))
             return None
@@ -102,26 +124,43 @@ def _lesson_title(chapter: MaterialChapter) -> str:
     return chapter.title.strip()[:_MAX_TITLE] or f"Capítulo {chapter.seq}"
 
 
-def _summary(chapters: Sequence[MaterialChapter]) -> str:
-    """Sumário do material (seq, parte, título) — o conteúdo NÃO-CONFIÁVEL do prompt.
+def _build_prompt_content(
+    chapters: Sequence[MaterialChapter],
+    *,
+    focus: str | None,
+    depth: str | None,
+    mentor_transcript: str,
+    material_summaries: Sequence[str],
+) -> str:
+    """Monta o conteúdo NÃO-CONFIÁVEL do prompt do planner (ADR-0047 §2).
 
-    Só o sumário: o texto dos capítulos não cabe no orçamento de tokens e não é
-    necessário para agrupar — o agrupamento é sobre a estrutura, não sobre o conteúdo.
-
-    Com teto de volume (`_MAX_SUMMARY_TEXT`, lido do módulo a cada chamada): títulos vêm
-    do arquivo enviado e nada limita o tamanho deles antes daqui. Truncar degrada a
-    proposta (o dono edita, e o fallback mecânico continua de pé); não truncar deixaria
-    o custo do prompt nas mãos de quem monta o epub.
+    Inclui: campos estruturados (focus, depth), transcript da conversa com `mentor`,
+    sumários dos materiais e estrutura de capítulos (seq, parte, título). O conteúdo
+    completo dos capítulos NÃO vai ao prompt — o agrupamento é sobre a estrutura.
     """
-    full = "\n".join(
+    parts: list[str] = []
+    if focus:
+        parts.append(f"Foco do estudo: {focus}")
+    if depth:
+        parts.append(f"Profundidade: {depth}")
+    if mentor_transcript.strip():
+        parts.append(f"Conversa com o mentor:\n{mentor_transcript.strip()}")
+    if material_summaries:
+        parts.append("Sumários dos materiais:\n" + "\n".join(material_summaries))
+    parts.append(_chapter_summary(chapters))
+    full = "\n\n".join(parts)
+    if len(full) <= _MAX_SUMMARY_TEXT:
+        return full
+    _log.warning("study.planner.prompt_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
+    return full[:_MAX_SUMMARY_TEXT]
+
+
+def _chapter_summary(chapters: Sequence[MaterialChapter]) -> str:
+    """Sumário da estrutura de capítulos (seq, parte, título)."""
+    return "\n".join(
         f"{chapter.seq}. {chapter.title}" + (f" [{chapter.part}]" if chapter.part else "")
         for chapter in _in_reading_order(chapters)
     )
-    if len(full) <= _MAX_SUMMARY_TEXT:
-        return full
-    # Só o tamanho vai ao log: títulos são conteúdo do material pessoal (CLAUDE.md §Logs).
-    _log.warning("study.planner.summary_truncated", chars=len(full), cap=_MAX_SUMMARY_TEXT)
-    return full[:_MAX_SUMMARY_TEXT]
 
 
 def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:

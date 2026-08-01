@@ -128,6 +128,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0030_material_topic_index.surql",
         # 0031 (KUBO-163): conversa persistida + campos estruturados do Tema.
         "0031_study_chat.surql",
+        # 0033 (KUBO-164): atualiza prompt do planner no catálogo.
+        "0033_planner_prompt_update.surql",
     }
 
 

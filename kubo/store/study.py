@@ -11,7 +11,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import structlog
@@ -233,6 +233,21 @@ def count_chapters(
         {"material": material_id, "tenant": tenant_id, "user": user_id},
     )
     return int(rows[0]["count"]) if rows else 0
+
+
+def list_all_chapters(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> list[MaterialChapter]:
+    """Todos os capítulos de um material, ordenados por `seq` (sem paginação).
+
+    Usado pelo planner (KUBO-164) que precisa da estrutura completa para agrupar.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM material_chapter WHERE {_CHAPTER_SCOPE} ORDER BY seq;",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [_chapter_from_row(row) for row in rows]
 
 
 # --- Tema e plano de estudo (KUBO-136) -------------------------------------------------
@@ -537,3 +552,212 @@ def set_topic_fields(
         [f"UPDATE $topic SET {set_clause} WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
         params,
     )
+
+
+# --- Plano: transição de estado, proposta, cadência (KUBO-164) --------------------------
+
+
+def set_topic_state(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    state: str,
+) -> None:
+    """Transiciona o estado do tema (draft → planning → scheduled → ...).
+
+    Não valida a legalidade da transição aqui — a rota decide quais transições
+    são permitidas. A store só persiste.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError("tema não encontrado")
+    transaction.run_transaction(
+        db,
+        [f"UPDATE $topic SET state = $state WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id, "state": state},
+    )
+    _log.info("store.topic.state_changed", topic=str(topic_id), state=state)
+
+
+@dataclass(frozen=True)
+class StudyPlan:
+    """Plano de estudo proposto pelo `planner` para um Tema (ADR-0047 §2)."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    topic: RecordID
+    status: str
+    weekdays: list[str]
+    target_date: datetime | None
+    activated_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PlanEntry:
+    """Uma lição do plano: título + capítulos (RecordIDs de material_chapter)."""
+
+    id: RecordID
+    study_plan: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    seq: int
+    title: str
+    chapters: list[RecordID]
+    created_at: datetime
+
+
+def _plan_from_row(row: dict[str, Any]) -> StudyPlan:
+    return StudyPlan(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        topic=row["topic"],
+        status=row["status"],
+        weekdays=list(row.get("weekdays") or []),
+        target_date=_as_datetime(row["target_date"]) if row.get("target_date") else None,
+        activated_at=_as_datetime(row["activated_at"]) if row.get("activated_at") else None,
+        created_at=_as_datetime(row["created_at"]),
+    )
+
+
+def _entry_from_row(row: dict[str, Any]) -> PlanEntry:
+    return PlanEntry(
+        id=row["id"],
+        study_plan=row["study_plan"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        seq=row["seq"],
+        title=row["title"],
+        chapters=list(row.get("chapters") or []),
+        created_at=_as_datetime(row["created_at"]),
+    )
+
+
+_PLAN_SCOPE = f"topic = $topic AND {_MATERIAL_SCOPE}"
+
+
+def save_plan_proposal(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    entries: Sequence[tuple[str, list[RecordID]]],
+) -> tuple[StudyPlan, list[PlanEntry]]:
+    """Persiste uma proposta de plano: 1 study_plan (proposed) + N plan_entries.
+
+    Substitui o plano anterior se existir (1 plano por tema, índice UNIQUE).
+    `entries` é uma lista de (title, chapter_record_ids) na ordem de estudo.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Remove plano anterior + entries (replace, não append).
+    transaction.run_transaction(
+        db,
+        [
+            f"DELETE FROM plan_entry WHERE study_plan IN "  # noqa: S608
+            f"(SELECT id FROM study_plan WHERE {_PLAN_SCOPE});",
+            f"DELETE FROM study_plan WHERE {_PLAN_SCOPE};",  # noqa: S608
+        ],
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    plan_id = _fresh("study_plan")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $plan SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+            "status = 'proposed', weekdays = []"
+        ],
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id, "topic": topic_id},
+    )
+    for seq, (title, chapter_ids) in enumerate(entries, start=1):
+        entry_id = _fresh("plan_entry")
+        transaction.run_transaction(
+            db,
+            [
+                "CREATE $entry SET study_plan = $plan, tenant_id = $tenant, "
+                "user_id = $user, seq = $seq, title = $title, chapters = $chapters"
+            ],
+            {
+                "entry": entry_id,
+                "plan": plan_id,
+                "tenant": tenant_id,
+                "user": user_id,
+                "seq": seq,
+                "title": title,
+                "chapters": chapter_ids,
+            },
+        )
+    # Lê tudo de volta (garante ordem e tipos).
+    return get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)  # type: ignore[return-value]
+
+
+def get_plan_for_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> tuple[StudyPlan | None, list[PlanEntry]]:
+    """Lê o plano e as lições de um Tema; (None, []) se não há plano."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    plan_rows = db.query(
+        f"SELECT * FROM study_plan WHERE {_PLAN_SCOPE} LIMIT 1;",  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not plan_rows:
+        return None, []
+    plan = _plan_from_row(plan_rows[0])
+    entry_rows = db.query(
+        "SELECT * FROM plan_entry WHERE study_plan = $plan ORDER BY seq ASC;",  # noqa: S608
+        {"plan": plan.id},
+    )
+    entries = [_entry_from_row(row) for row in entry_rows]
+    return plan, entries
+
+
+def set_plan_cadence(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    weekdays: Sequence[str],
+) -> None:
+    """Define a cadência (weekdays) e recalcula a data-alvo.
+
+    A data-alvo é derivada (cadência + número de lições), nunca digitada:
+    mudar a cadência recalcula o alvo pelo mesmo caminho (ADR-0043 §cadência).
+    """
+    from kubo.study.planning import compute_target_date
+
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Valida dias e calcula data-alvo a partir de hoje.
+    entry_rows = db.query(
+        f"SELECT count() FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "GROUP ALL;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    lesson_count = int(entry_rows[0]["count"]) if entry_rows else 0
+    target = compute_target_date(
+        start=date.today(), weekdays=list(weekdays), lesson_count=lesson_count
+    )
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $plan SET weekdays = $weekdays, target_date = $target "  # noqa: S608
+            f"WHERE {_MATERIAL_SCOPE}"
+        ],
+        {
+            "plan": plan_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "weekdays": list(weekdays),
+            "target": datetime(target.year, target.month, target.day),
+        },
+    )
+    _log.info("store.plan.cadence_set", plan=str(plan_id), lessons=lesson_count)
