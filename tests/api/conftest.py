@@ -87,6 +87,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.store.tenancy.get_user_by_firebase_uid", lambda db, firebase_uid: _breakglass_user
     )
+    monkeypatch.setattr("kubo.store.tenancy.get_user_profile", lambda db, user_id: None)
     monkeypatch.setattr(
         "kubo.api.routes.auth.tenancy_store.create_user",
         lambda db, *, firebase_uid, email=None: _breakglass_user,

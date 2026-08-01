@@ -196,3 +196,35 @@ def test_get_profile_avatar_with_missing_email(
     assert resp.status_code == 200
     assert expected_digest in resp.text
     assert "gravatar.com" in resp.text
+
+
+def test_sidebar_footer_links_to_profile(authed_client: TestClient) -> None:
+    """O footer da sidebar tem um link para /profile."""
+    resp = authed_client.get("/distilled")
+    assert resp.status_code == 200
+    assert 'href="/profile"' in resp.text
+
+
+def test_sidebar_footer_shows_gravatar_avatar(authed_client: TestClient) -> None:
+    """O footer da sidebar mostra o avatar Gravatar (não a letra hardcoded)."""
+    resp = authed_client.get("/distilled")
+    assert resp.status_code == 200
+    assert "gravatar.com" in resp.text
+    assert ">R<" not in resp.text  # o "R" hardcoded foi removido
+
+
+def test_sidebar_footer_shows_display_name_after_profile_update(authed_client: TestClient) -> None:
+    """Após atualizar o perfil, o nome aparece no footer da sidebar em outras páginas."""
+    authed_client.post(
+        "/profile",
+        data={
+            "csrf": _csrf(authed_client),
+            "display_name": "Bardi Test",
+            "language": "en-US",
+            "timezone": "UTC",
+        },
+        follow_redirects=False,
+    )
+    resp = authed_client.get("/distilled")
+    assert resp.status_code == 200
+    assert "Bardi Test" in resp.text

@@ -125,6 +125,7 @@ def update_profile(
     except StoreError as exc:
         return _render_page(request, notice=str(exc), status=400)
 
+    request.session["display_name"] = form.display_name.strip()
     _log.info("profile.updated", user=str(ctx.user_id))
     return RedirectResponse(_PROFILE_ROUTE, status_code=303)
 

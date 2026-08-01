@@ -45,13 +45,27 @@ _WRITE_LOG = "auth.write_unavailable"
 _SCRYPT_OWNER_UID = "scrypt:owner"
 
 
-def _open_session(request: Request, *, uid: str, tenant_id: str, role: str) -> None:
-    """Regenerate the session (fixation) and write role + uid + tenant_id + auth timestamp."""
+def _open_session(
+    request: Request,
+    *,
+    uid: str,
+    tenant_id: str,
+    role: str,
+    email: str | None = None,
+    display_name: str = "",
+) -> None:
+    """Regenerate the session (fixation) and write role + uid + tenant_id + auth timestamp.
+
+    `email` and `display_name` are cached for the sidebar footer (nav context) so
+    it doesn't need a db call per page render. `display_name` is refreshed when
+    the profile is updated (routes.profile.update_profile)."""
     request.session.clear()
     request.session["role"] = role
     request.session["uid"] = uid
     request.session["tenant_id"] = tenant_id
     request.session["auth_at"] = int(time.time())
+    request.session["email"] = email or ""
+    request.session["display_name"] = display_name
 
 
 class FirebaseLoginBody(BaseModel):
@@ -131,11 +145,15 @@ def login_submit(
         )
     try:
         if verify_password(password, request.app.state.password_hash):
+            bg_uid = request.app.state.breakglass_user_id or _SCRYPT_OWNER_UID
+            bg_email, bg_display = _fetch_breakglass_identity(bg_uid)
             _open_session(
                 request,
-                uid=request.app.state.breakglass_user_id or _SCRYPT_OWNER_UID,
+                uid=bg_uid,
                 tenant_id=request.app.state.breakglass_tenant_id,
                 role="owner",
+                email=bg_email,
+                display_name=bg_display,
             )
             return RedirectResponse(next_path, status_code=303)
         time.sleep(_FAIL_DELAY_SECONDS)
@@ -149,6 +167,54 @@ def login_submit(
         )
     finally:
         _LOGIN_GATE.release()
+
+
+def _fetch_breakglass_identity(uid: str) -> tuple[str, str]:
+    """Reads break-glass user email + display_name for the session. Returns ("", "") on
+    any failure — the sidebar footer falls back to 'Perfil' / 'sem e-mail'."""
+    try:
+        with client.connect() as ro:
+            user = tenancy_store.get_user_by_firebase_uid(ro, uid)
+            if user is None:
+                return "", ""
+            email = user.email or ""
+            profile = tenancy_store.get_user_profile(ro, user.id)
+            display = profile.display_name if profile else ""
+            return email, display
+    except Exception:
+        return "", ""
+
+
+def _superadmin_login(
+    request: Request,
+    uid: str,
+    token_user: dict[str, Any],
+    next_path: str,
+) -> Response:
+    """Superadmin path: ensure user exists, open session with email + display_name."""
+    with client.connect_rw() as db:
+        user = tenancy_store.get_user_by_firebase_uid(db, uid)
+        if user is None:
+            tenancy_store.create_user(
+                db,
+                firebase_uid=uid,
+                email=token_user.get("email") or None,
+            )
+        fb_email = token_user.get("email") or ""
+        fb_display = ""
+        if user:
+            fb_profile = tenancy_store.get_user_profile(db, user.id)
+            if fb_profile:
+                fb_display = fb_profile.display_name
+    _open_session(
+        request,
+        uid=uid,
+        tenant_id=request.app.state.breakglass_tenant_id,
+        role="superadmin",
+        email=fb_email,
+        display_name=fb_display,
+    )
+    return RedirectResponse(next_path, status_code=303)
 
 
 @router.post("/logout")
@@ -288,21 +354,7 @@ def firebase_login(
     # por-request, ConfigError (credencial ausente) → 503.
     try:
         if tenancy_store.is_superadmin(uid, request.app.state.superadmin_uids):
-            with client.connect_rw() as db:
-                user = tenancy_store.get_user_by_firebase_uid(db, uid)
-                if user is None:
-                    tenancy_store.create_user(
-                        db,
-                        firebase_uid=uid,
-                        email=token_user.get("email") or None,
-                    )
-            _open_session(
-                request,
-                uid=uid,
-                tenant_id=request.app.state.breakglass_tenant_id,
-                role="superadmin",
-            )
-            return RedirectResponse(next_path, status_code=303)
+            return _superadmin_login(request, uid, token_user, next_path)
 
         if invite:
             outcome = _accept_invite(
@@ -339,6 +391,7 @@ def firebase_login(
         uid=uid,
         tenant_id=_canonical_record_id(tenant.id),
         role=role,
+        email=token_user.get("email") or "",
     )
     return RedirectResponse(next_path, status_code=303)
 
