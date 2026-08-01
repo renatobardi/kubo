@@ -27,6 +27,7 @@ O campo passa a ser `work_context` na tabela `user_profile`, com cardinalidade 1
 A tela de perfil ganha um botão "Revisar com IA" ao lado do campo `work_context`. O botão chama `POST /profile/work-context/review` (síncrono), que usa uma persona `work_context_reviewer` do catálogo default (`anthropic/claude-haiku-4-5`) para revisar o rascunho e devolver JSON `{"work_context": "..."}`. A rota:
 - aplica o mesmo teto de 4000 caracteres antes de chamar o LLM;
 - carrega a persona direto de `DEFAULT_PERSONAS`, sem passar pelo `resolve_persona` do tenant, para garantir que o dono não a edite ou substitua;
+- **não semeia** a persona no catálogo do tenant (`_NON_SEEDED_PERSONAS` em `store/catalog.py`): se fosse semeada, apareceria editável na UI mas edições não teriam efeito, contradizendo o bypass acima;
 - falhas do executor viram resposta 503 (padrão herdado da ADR-0032 para LLM síncrono em rota).
 
 ## Consequências

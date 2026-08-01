@@ -126,6 +126,31 @@ def test_update_user_profile_clears_empty_work_context(db: Any) -> None:
     assert profile.work_context is None
 
 
+def test_update_user_profile_preserves_work_context_when_omitted(db: Any) -> None:
+    """Omitir work_context (default _UNSET) preserva o valor existente — não apaga."""
+    user = tenancy.create_user(db, firebase_uid="uid-keep", email="keep@example.com")
+    tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="Arquiteto de plataforma.",
+    )
+
+    profile = tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato Bardi",
+        language="en-US",
+        timezone="UTC",
+        # work_context omitido intencionalmente
+    )
+
+    assert profile.display_name == "Renato Bardi"
+    assert profile.work_context == "Arquiteto de plataforma."
+
+
 def test_update_user_profile_rejects_long_work_context(db: Any) -> None:
     """work_context acima de 4000 caracteres é recusado."""
     user = tenancy.create_user(db, firebase_uid="uid-long-ctx", email="long-ctx@example.com")

@@ -452,6 +452,10 @@ _VALID_THEMES: set[str] = {"light", "dark", "system"}
 MAX_WORK_CONTEXT_LENGTH = 4000
 _BCP47_RE = re.compile(r"^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$")
 
+# Sentinel: caller omitted `work_context` → preserve the existing value.
+# `None` (from `""`) means "clear"; `_UNSET` means "don't touch".
+_UNSET: object = object()
+
 
 def _profile_from_row(row: dict[str, Any]) -> UserProfile:
     """Builds a `UserProfile` from a database row."""
@@ -491,9 +495,13 @@ def _validate_work_context(value: str) -> str | None:
 
 
 def _validate_profile_input(
-    *, display_name: str, language: str, timezone: str, work_context: str
-) -> tuple[str, str, str, str | None]:
-    """Sanitizes and validates BCP 47 language, IANA timezone and work context."""
+    *, display_name: str, language: str, timezone: str, work_context: str | None | object
+) -> tuple[str, str, str, str | None | object]:
+    """Sanitizes and validates BCP 47 language, IANA timezone and work context.
+
+    `work_context=_UNSET` means "preserve existing" and is returned as-is; a string
+    is validated and normalized (`""` clears, text up to 4000 chars persists).
+    """
     display_name = _validate_display_name(display_name)
     language = language.strip()
     if not _is_bcp47(language):
@@ -503,7 +511,10 @@ def _validate_profile_input(
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError):
         raise StoreError("timezone must be a valid IANA identifier") from None
-    validated_work_context = _validate_work_context(work_context)
+    if work_context is _UNSET:
+        validated_work_context: str | None | object = _UNSET
+    else:
+        validated_work_context = _validate_work_context(work_context)  # type: ignore[arg-type]
     return display_name, language, timezone, validated_work_context
 
 
@@ -524,7 +535,7 @@ def update_user_profile(
     display_name: str,
     language: str,
     timezone: str,
-    work_context: str = "",
+    work_context: str | None | object = _UNSET,
 ) -> UserProfile:
     """Creates or updates the global user profile.
 
@@ -532,6 +543,11 @@ def update_user_profile(
     `user_profile` when missing and updates it when present. The read-check-write
     is wrapped in a transaction to avoid a race between two concurrent requests
     both seeing no profile and both trying to CREATE.
+
+    `work_context`: `_UNSET` (default) preserves the existing value (or starts as
+    `None` on create); a string is validated and normalized (`""` clears, text up
+    to 4000 chars persists). This prevents accidental erasure by callers that
+    omit the argument.
     """
     if get_user(db, user_id) is None:
         raise StoreError("user not found")
@@ -545,20 +561,30 @@ def update_user_profile(
 
     existing = get_user_profile(db, user_id)
     if existing is not None:
-        transaction.run_transaction(
-            db,
-            [
-                "UPDATE $p SET display_name = $dn, language = $l, "
-                "timezone = $tz, work_context = $wc, updated_at = time::now()"
-            ],
-            {
-                "p": existing.id,
-                "dn": display_name,
-                "l": language,
-                "tz": timezone,
-                "wc": validated_work_context,
-            },
-        )
+        if validated_work_context is _UNSET:
+            transaction.run_transaction(
+                db,
+                [
+                    "UPDATE $p SET display_name = $dn, language = $l, "
+                    "timezone = $tz, updated_at = time::now()"
+                ],
+                {"p": existing.id, "dn": display_name, "l": language, "tz": timezone},
+            )
+        else:
+            transaction.run_transaction(
+                db,
+                [
+                    "UPDATE $p SET display_name = $dn, language = $l, "
+                    "timezone = $tz, work_context = $wc, updated_at = time::now()"
+                ],
+                {
+                    "p": existing.id,
+                    "dn": display_name,
+                    "l": language,
+                    "tz": timezone,
+                    "wc": validated_work_context,
+                },
+            )
     else:
         transaction.run_transaction(
             db,
@@ -572,7 +598,7 @@ def update_user_profile(
                 "dn": display_name,
                 "l": language,
                 "tz": timezone,
-                "wc": validated_work_context,
+                "wc": None if validated_work_context is _UNSET else validated_work_context,
             },
         )
 

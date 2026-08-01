@@ -21,7 +21,6 @@ from kubo.api.session import resolve_session
 from kubo.errors import (
     ConfigError,
     ExecutorError,
-    MalformedOutputError,
     StoreError,
     format_validation_error,
 )
@@ -40,10 +39,18 @@ _PROFILE_ROUTE = "/profile"
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
 _WRITE_LOG = "profile.write_unavailable"
 _DENIED = "Acesso negado."
+_CSRF_INVALID = "CSRF inválido — recarregue a página."
+
+
+def _cap_work_context(v: str) -> str:
+    """Rejects work_context drafts exceeding the store ceiling."""
+    if len(v.strip()) > MAX_WORK_CONTEXT_LENGTH:
+        raise ValueError("contexto de trabalho passa de 4000 caracteres")
+    return v
 
 
 class ProfileForm(BaseModel):
-    """Global profile form fields (borda faz sanity, validação forte fica na store)."""
+    """Global profile form fields (edge sanity; strong validation lives in the store)."""
 
     display_name: str
     language: str
@@ -53,24 +60,18 @@ class ProfileForm(BaseModel):
     @field_validator("work_context", mode="after")
     @classmethod
     def _cap_length(cls, v: str) -> str:
-        """Não deixa rascunho estourar o teto aplicado pela store."""
-        if len(v.strip()) > MAX_WORK_CONTEXT_LENGTH:
-            raise ValueError("contexto de trabalho passa de 4000 caracteres")
-        return v
+        return _cap_work_context(v)
 
 
 class ReviewForm(BaseModel):
-    """Entrada validada da revisão de contexto de trabalho."""
+    """Validated input for the AI work-context review."""
 
     work_context: str
 
     @field_validator("work_context", mode="after")
     @classmethod
     def _cap_length(cls, v: str) -> str:
-        """Não envia rascunhos ilimitados para o LLM."""
-        if len(v.strip()) > MAX_WORK_CONTEXT_LENGTH:
-            raise ValueError("contexto de trabalho passa de 4000 caracteres")
-        return v
+        return _cap_work_context(v)
 
 
 class ThemeForm(BaseModel):
@@ -134,7 +135,7 @@ def update_profile(
 ) -> Response:
     """Persists the global profile after CSRF."""
     if not verify_csrf(request, csrf):
-        return _render_page(request, notice="CSRF inválido — recarregue a página.", status=403)
+        return _render_page(request, notice=_CSRF_INVALID, status=403)
     try:
         form = ProfileForm(
             display_name=display_name,
@@ -200,7 +201,7 @@ def review_work_context(
     O texto retornado preenche o textarea; o dono ainda precisa salvar para persistir.
     """
     if not verify_csrf(request, csrf):
-        return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
     try:
         form = ReviewForm(work_context=work_context)
     except ValidationError as exc:
@@ -216,7 +217,7 @@ def review_work_context(
     except ConfigError:
         _log.warning(_WRITE_LOG, route="profile.work_context_review")
         return JSONResponse({"error": _WRITE_UNAVAILABLE}, status_code=503)
-    except (ExecutorError, MalformedOutputError) as exc:
+    except ExecutorError as exc:
         _log.warning("profile.work_context_review_failed", user=str(ctx.user_id), reason=str(exc))
         return JSONResponse({"error": _WRITE_UNAVAILABLE}, status_code=503)
 
@@ -231,7 +232,7 @@ def update_theme(
 ) -> Response:
     """Persists the active workspace theme after CSRF."""
     if not verify_csrf(request, csrf):
-        return _render_page(request, notice="CSRF inválido — recarregue a página.", status=403)
+        return _render_page(request, notice=_CSRF_INVALID, status=403)
     form = ThemeForm(theme=theme)
 
     with client.connect() as ro:

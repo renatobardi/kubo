@@ -28,6 +28,11 @@ from kubo.store import transaction
 _SELECT_BY_ID = "SELECT * FROM $r;"
 _DELETE_BY_ID = "DELETE $r;"
 
+# Personas que bypassam `resolve_persona` (lidas direto de DEFAULT_PERSONAS pela
+# rota) não são semeadas no catálogo do tenant — apareceriam editáveis mas edições
+# não teriam efeito (ADR-0046 §IV).
+_NON_SEEDED_PERSONAS: frozenset[str] = frozenset({"work_context_reviewer"})
+
 
 def _list_catalog_items(
     db: Any,
@@ -266,7 +271,11 @@ def seed_catalog(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> None:
         sets.append("updated_at = updated_at ?? time::now()")
         statements.append(f"UPSERT ${p_rid} SET {', '.join(sets)}")
 
-    for i, persona in enumerate(DEFAULT_PERSONAS):
+    # Personas that bypass `resolve_persona` (read directly from DEFAULT_PERSONAS)
+    # are not seeded into the tenant catalog — they'd appear editable but edits
+    # would have no effect (ADR-0046 §IV).
+    _seeded_personas = [p for p in DEFAULT_PERSONAS if p["name"] not in _NON_SEEDED_PERSONAS]
+    for i, persona in enumerate(_seeded_personas):
         _add(f"p{i}_", "catalog_persona", persona, ("executor", "model", "prompt", "permissions"))
     for i, integration in enumerate(DEFAULT_INTEGRATIONS):
         _add(

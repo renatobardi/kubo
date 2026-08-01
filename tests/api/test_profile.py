@@ -14,6 +14,7 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.errors import ConfigError, ExecutorError, MalformedOutputError
 from kubo.store import tenancy as _tenancy
 
 _CSRF_RE = re.compile(r'name="csrf" value="([^"]+)"')
@@ -45,17 +46,18 @@ def _update_profile(
     display_name: str,
     language: str,
     timezone: str,
-    work_context: str = "",
+    work_context: str | None = None,
 ) -> SimpleNamespace:
     text = display_name.strip()
     if not text or len(text) > 64:
         raise _tenancy.StoreError("display_name must be 1-64 characters")
-    if len(work_context.strip()) > _tenancy.MAX_WORK_CONTEXT_LENGTH:
+    if work_context is not None and len(work_context.strip()) > _tenancy.MAX_WORK_CONTEXT_LENGTH:
         raise _tenancy.StoreError("work_context must be at most 4000 characters")
     _PROFILE.display_name = display_name
     _PROFILE.language = language
     _PROFILE.timezone = timezone
-    _PROFILE.work_context = work_context.strip() or None
+    if work_context is not None:
+        _PROFILE.work_context = work_context.strip() or None
     return _PROFILE
 
 
@@ -350,3 +352,29 @@ def test_review_work_context_rejects_oversized_input(authed_client: TestClient) 
     )
 
     assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ExecutorError("boom"),
+        MalformedOutputError("bad json"),
+        ConfigError("work_context_reviewer persona not found"),
+    ],
+)
+def test_review_work_context_returns_503_on_executor_failure(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    """Falhas do executor/config viram 503 com corpo JSON `{"error": ...}` (ADR-0046 §IV)."""
+    _set_reviewer(monkeypatch, exc)
+
+    resp = authed_client.post(
+        "/profile/work-context/review",
+        data={
+            "csrf": _csrf(authed_client),
+            "work_context": "arquiteto dados",
+        },
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "Escrita indisponível por erro de configuração."

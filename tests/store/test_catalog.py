@@ -49,12 +49,19 @@ def _tenant_owner(db: Any) -> tuple[Any, Any]:
 
 
 def test_create_tenant_seeds_default_catalog(db: Any) -> None:
-    """Criar tenant semeia personas, integrações e flow_templates default."""
+    """Criar tenant semeia personas, integrações e flow_templates default.
+
+    Personas que bypassam `resolve_persona` (lidas direto de DEFAULT_PERSONAS pela
+    rota) não são semeadas — apareceriam editáveis mas edições não teriam efeito
+    (ADR-0046 §IV)."""
     user, tenant = _tenant_owner(db)
 
     personas = catalog.list_personas(db, tenant_id=tenant.id, user_id=user.id)
     names = {p["name"] for p in personas}
-    assert names == {p["name"] for p in DEFAULT_PERSONAS}
+    expected = {
+        p["name"] for p in DEFAULT_PERSONAS if p["name"] not in catalog._NON_SEEDED_PERSONAS
+    }
+    assert names == expected
 
     integrations = catalog.list_integrations(db, tenant_id=tenant.id, user_id=user.id)
     integ_names = {i["name"] for i in integrations}
