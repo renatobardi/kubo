@@ -6,7 +6,9 @@ Testes unitários com stubs de store/conexão, usando o conftest da UI.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -59,7 +61,17 @@ def _update_theme(db: object, *, user_id: object, tenant_id: object, theme: str)
 
 @pytest.fixture(autouse=True)
 def _profile_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stubs das funções de store que a rota de perfil chama."""
+    """Stubs das funções de store e connect_rw que a rota de perfil chama.
+
+    `connect_rw` é stubada localmente aqui (não no conftest autouse) para não
+    vazar para outras rotas — `kubo.store.client` é módulo compartilhado.
+    """
+
+    @contextmanager
+    def _fake_rw(_cfg: Any = None) -> Any:
+        yield object()
+
+    monkeypatch.setattr("kubo.api.routes.profile.client.connect_rw", _fake_rw)
     monkeypatch.setattr("kubo.store.tenancy.get_user", lambda db, user_id: _PROFILE_USER)
     monkeypatch.setattr("kubo.store.tenancy.get_user_profile", lambda db, user_id: _PROFILE)
     monkeypatch.setattr(
