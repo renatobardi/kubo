@@ -28,68 +28,72 @@ _FORM_RE = re.compile(r"<form\b([^>]*method=\"post\"[^>]*)>(.*?)</form>", re.DOT
 _ID_RE = re.compile(r"id=\"([^\"]+)\"")
 
 
-def _forms_de_escrita() -> list[tuple[str, str, str, str]]:
-    """(arquivo, atributos, corpo, texto completo do arquivo) de cada form method=post."""
-    achados: list[tuple[str, str, str, str]] = []
+def _writing_forms() -> list[tuple[str, str, str, str]]:
+    """(file, attrs, body, whole) de cada form method=post."""
+    found: list[tuple[str, str, str, str]] = []
     for path in sorted(_TEMPLATES.rglob("*.html")):
-        texto = path.read_text(encoding="utf-8")
-        for attrs, corpo in _FORM_RE.findall(texto):
-            achados.append((str(path.relative_to(_TEMPLATES)), attrs, corpo, texto))
-    return achados
+        whole = path.read_text(encoding="utf-8")
+        for attrs, body in _FORM_RE.findall(whole):
+            found.append((str(path.relative_to(_TEMPLATES)), attrs, body, whole))
+    return found
 
 
-def _tem_submit(attrs: str, corpo: str, arquivo_inteiro: str) -> bool:
+def _has_submit(attrs: str, body: str, whole: str) -> bool:
     """O form dispara `submit` por um controle de verdade?
 
     Duas formas legítimas no Kubo hoje: um `<button>` dentro do form (submit é o
     default do elemento, com ou sem `type`) ou um botão FORA dele apontando por
     `form="<id>"` — usado nos diálogos de gate, onde o botão fica na barra de ação.
     Ambas disparam o evento `submit`, que é onde o indicador global se prende."""
-    if "<button" in corpo:
+    if "<button" in body:
         return True
     ident = _ID_RE.search(attrs)
-    return bool(ident) and f'form="{ident.group(1)}"' in arquivo_inteiro
+    return bool(ident) and f'form="{ident.group(1)}"' in whole
 
 
-def test_existem_forms_de_escrita_para_proteger() -> None:
+def test_writing_forms_exist_to_protect() -> None:
     """Sanidade do próprio varredor: se ele parar de achar forms, os testes abaixo
     passariam vazios e o gate viraria enfeite."""
-    assert len(_forms_de_escrita()) >= 30
+    assert len(_writing_forms()) >= 30
 
 
-def test_todo_form_de_escrita_tem_um_submit_de_verdade() -> None:
+def test_writing_forms_have_a_real_submit() -> None:
     """Cada form de escrita dispara `submit` por um controle de verdade.
 
     Um form cuja ação sai por link ou por JS avulso escaparia do indicador em
     silêncio: a tela voltaria a ficar parada e muda exatamente no caso que este
     ticket existe para corrigir. Este é o teste que faz a correção durar."""
-    sem_submit = [
-        arquivo
-        for arquivo, attrs, corpo, inteiro in _forms_de_escrita()
-        if not _tem_submit(attrs, corpo, inteiro)
+    without_submit = [
+        file for file, attrs, body, whole in _writing_forms() if not _has_submit(attrs, body, whole)
     ]
 
-    assert not sem_submit, f"forms de escrita sem submit (ficam sem indicador): {sem_submit}"
+    assert not without_submit, (
+        f"forms de escrita sem submit (ficam sem indicador): {without_submit}"
+    )
 
 
-def test_base_carrega_o_indicador_global(authed_client: TestClient) -> None:
+def test_base_includes_global_indicator(authed_client: TestClient) -> None:
     """Qualquer página autenticada traz o indicador — ele vive no `base.html`."""
     html = authed_client.get("/sources").text
 
     assert "data-busy" in html, "o marcador do indicador global não chegou na página"
+    assert "aria-busy" in html, "o indicador precisa expor aria-busy"
+    assert "aria-live" in html, "o indicador precisa expor aria-live"
 
 
-def test_indicador_desabilita_o_botao_para_impedir_envio_duplo(authed_client: TestClient) -> None:
-    """O script precisa desabilitar o controle após o envio.
+def test_script_guards_against_double_submit(client: TestClient) -> None:
+    """O script evita o segundo envio enquanto o primeiro está em curso.
 
     Sem isso o dono clica de novo achando que não pegou — e o Kubo processa um segundo
     upload de 39 MB, ou uma segunda chamada paga ao Opus 5."""
-    html = authed_client.get("/sources").text
+    html = client.get("/login").text
 
-    assert "disabled" in html and "submit" in html
+    assert "data-submitting" in html, "o form precisa marcar que já foi enviado"
+    assert "ev.preventDefault()" in html, "o segundo submit precisa ser cancelado"
+    assert "target.disabled = true" in html, "o controle desabilita após o submit"
 
 
-def test_login_tambem_tem_indicador(client: TestClient) -> None:
+def test_login_also_has_indicator(client: TestClient) -> None:
     """A tela de login não é autenticada, mas o scrypt leva ~1s e o form é POST."""
     html = client.get("/login").text
 
