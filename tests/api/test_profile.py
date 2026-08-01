@@ -22,13 +22,13 @@ _PROFILE_USER = SimpleNamespace(
     id=RecordID("user", "breakglass-owner"),
     firebase_uid="user:breakglass-owner",
     email="renato@example.com",
-    work_context=None,
 )
 
 _PROFILE = SimpleNamespace(
     display_name="Renato",
     language="pt-BR",
     timezone="America/Sao_Paulo",
+    work_context="Arquiteto de plataforma.",
 )
 
 _MEMBERSHIP = SimpleNamespace(
@@ -39,14 +39,23 @@ _MEMBERSHIP = SimpleNamespace(
 
 
 def _update_profile(
-    db: object, *, user_id: object, display_name: str, language: str, timezone: str
+    db: object,
+    *,
+    user_id: object,
+    display_name: str,
+    language: str,
+    timezone: str,
+    work_context: str = "",
 ) -> SimpleNamespace:
     text = display_name.strip()
     if not text or len(text) > 64:
         raise _tenancy.StoreError("display_name must be 1-64 characters")
+    if len(work_context.strip()) > _tenancy.MAX_WORK_CONTEXT_LENGTH:
+        raise _tenancy.StoreError("work_context must be at most 4000 characters")
     _PROFILE.display_name = display_name
     _PROFILE.language = language
     _PROFILE.timezone = timezone
+    _PROFILE.work_context = work_context.strip() or None
     return _PROFILE
 
 
@@ -90,19 +99,21 @@ def _csrf(client: TestClient) -> str:
 
 
 def test_get_profile_renders(authed_client: TestClient) -> None:
-    """A tela de perfil mostra nome, idioma, timezone, tema e avatar."""
+    """A tela de perfil mostra nome, idioma, timezone, contexto de trabalho, tema e avatar."""
     resp = authed_client.get("/profile")
 
     assert resp.status_code == 200
     assert "Renato" in resp.text
     assert "pt-BR" in resp.text
     assert "America/Sao_Paulo" in resp.text
+    assert "Arquiteto de plataforma." in resp.text
+    assert 'name="work_context"' in resp.text
     assert 'value="system"' in resp.text
     assert "gravatar.com" in resp.text
 
 
 def test_post_profile_updates_and_redirects(authed_client: TestClient) -> None:
-    """POST /profile salva e redireciona de volta."""
+    """POST /profile salva nome, idioma, timezone e contexto de trabalho."""
     resp = authed_client.post(
         "/profile",
         data={
@@ -110,12 +121,14 @@ def test_post_profile_updates_and_redirects(authed_client: TestClient) -> None:
             "display_name": "Bardi",
             "language": "en-US",
             "timezone": "UTC",
+            "work_context": "Engenheiro de dados.",
         },
         follow_redirects=False,
     )
 
     assert resp.status_code == 303
     assert resp.headers["location"] == "/profile"
+    assert _PROFILE.work_context == "Engenheiro de dados."
 
 
 def test_post_profile_rejects_empty_display_name(authed_client: TestClient) -> None:
@@ -184,7 +197,6 @@ def test_get_profile_avatar_with_missing_email(
         id=_PROFILE_USER.id,
         firebase_uid=_PROFILE_USER.firebase_uid,
         email=None,
-        work_context=None,
     )
     monkeypatch.setattr("kubo.store.tenancy.get_user", lambda db, user_id: no_email_user)
 
@@ -260,3 +272,81 @@ def test_update_theme_caches_in_session(authed_client: TestClient) -> None:
     resp = authed_client.get("/profile")
     assert resp.status_code == 200
     assert 'value="dark" selected' in resp.text
+
+
+def test_post_profile_rejects_oversized_work_context(authed_client: TestClient) -> None:
+    """Contexto de trabalho acima de 4000 caracteres volta 400 e não persiste."""
+    resp = authed_client.post(
+        "/profile",
+        data={
+            "csrf": _csrf(authed_client),
+            "display_name": "Renato",
+            "language": "pt-BR",
+            "timezone": "America/Sao_Paulo",
+            "work_context": "x" * (_tenancy.MAX_WORK_CONTEXT_LENGTH + 1),
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+class _FakeReviewer:
+    """Fake do reviser de contexto de trabalho."""
+
+    def __init__(self, result: str | Exception) -> None:
+        self._result = result
+        self.calls: list[str] = []
+
+    def review(self, draft: str) -> str:
+        self.calls.append(draft)
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+def _set_reviewer(monkeypatch: pytest.MonkeyPatch, result: str | Exception) -> _FakeReviewer:
+    fake = _FakeReviewer(result)
+    monkeypatch.setattr("kubo.api.routes.profile._get_reviewer", lambda: fake)
+    return fake
+
+
+def test_review_work_context_returns_json(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /profile/work-context/review retorna JSON com o texto revisado."""
+    fake = _set_reviewer(monkeypatch, "Arquiteto de dados em escala.")
+
+    resp = authed_client.post(
+        "/profile/work-context/review",
+        data={
+            "csrf": _csrf(authed_client),
+            "work_context": "  arquiteto dados  ",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"work_context": "Arquiteto de dados em escala."}
+    assert fake.calls == ["  arquiteto dados  "]
+
+
+def test_review_work_context_requires_csrf(authed_client: TestClient) -> None:
+    """POST /profile/work-context/review sem CSRF é recusado."""
+    resp = authed_client.post(
+        "/profile/work-context/review",
+        data={"work_context": "x"},
+    )
+
+    assert resp.status_code == 403
+
+
+def test_review_work_context_rejects_oversized_input(authed_client: TestClient) -> None:
+    """Texto acima de 4000 caracteres é recusado antes de chamar o LLM."""
+    resp = authed_client.post(
+        "/profile/work-context/review",
+        data={
+            "csrf": _csrf(authed_client),
+            "work_context": "x" * (_tenancy.MAX_WORK_CONTEXT_LENGTH + 1),
+        },
+    )
+
+    assert resp.status_code == 400

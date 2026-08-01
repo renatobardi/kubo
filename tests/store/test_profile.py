@@ -67,11 +67,13 @@ def test_user_profile_is_updated_on_second_call(db: Any) -> None:
         display_name="Bardi",
         language="en-US",
         timezone="UTC",
+        work_context="Arquiteto de plataforma.",
     )
 
     assert profile.display_name == "Bardi"
     assert profile.language == "en-US"
     assert profile.timezone == "UTC"
+    assert profile.work_context == "Arquiteto de plataforma."
     assert tenancy.get_user_profile(db, user.id) == profile
 
 
@@ -79,6 +81,64 @@ def test_get_user_profile_missing_returns_none(db: Any) -> None:
     """Perfil inexistente retorna None."""
     user = tenancy.create_user(db, firebase_uid="uid-none", email="none@example.com")
     assert tenancy.get_user_profile(db, user.id) is None
+
+
+def test_update_user_profile_persists_work_context(db: Any) -> None:
+    """work_context é parte do user_profile e volta em get_user_profile."""
+    user = tenancy.create_user(db, firebase_uid="uid-ctx", email="ctx@example.com")
+
+    profile = tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="  Arquiteto de plataforma.  ",
+    )
+
+    assert profile.work_context == "Arquiteto de plataforma."
+    loaded = tenancy.get_user_profile(db, user.id)
+    assert loaded is not None
+    assert loaded.work_context == "Arquiteto de plataforma."
+
+
+def test_update_user_profile_clears_empty_work_context(db: Any) -> None:
+    """Enviar work_context vazio apaga o campo."""
+    user = tenancy.create_user(db, firebase_uid="uid-clear", email="clear@example.com")
+    tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="Contexto antigo.",
+    )
+
+    profile = tenancy.update_user_profile(
+        db,
+        user_id=user.id,
+        display_name="Renato",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="",
+    )
+
+    assert profile.work_context is None
+
+
+def test_update_user_profile_rejects_long_work_context(db: Any) -> None:
+    """work_context acima de 4000 caracteres é recusado."""
+    user = tenancy.create_user(db, firebase_uid="uid-long-ctx", email="long-ctx@example.com")
+
+    with pytest.raises(StoreError):
+        tenancy.update_user_profile(
+            db,
+            user_id=user.id,
+            display_name="Renato",
+            language="pt-BR",
+            timezone="America/Sao_Paulo",
+            work_context="x" * (tenancy.MAX_WORK_CONTEXT_LENGTH + 1),
+        )
 
 
 def test_update_user_profile_rejects_empty_display_name(db: Any) -> None:

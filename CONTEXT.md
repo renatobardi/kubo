@@ -71,10 +71,10 @@ O rastro de uma [[Lição]] estudada: conclusão, respostas do quiz e reação o
 _Evite_: "progresso" para o registro individual (progresso é o agregado derivado).
 
 **Perfil de contexto de trabalho**:
-Texto curto no cadastro do usuário descrevendo seu mundo profissional. Transversal ao Kubo:
-qualquer persona pode consumi-lo para contextualizar output; Estudos é o primeiro cliente.
-Entra em prompts — nunca contém segredos. Código: `work_context`. _Evite_: "bio", "perfil"
-solto.
+Texto curto no perfil do usuário (`user_profile`) descrevendo seu mundo profissional.
+Transversal ao Kubo: qualquer persona pode consumi-lo para contextualizar output; Estudos é
+o primeiro cliente. Entra em prompts — nunca contém segredos. Código: `work_context`.
+_Evite_: "bio", "perfil" solto.
 
 ## Identidade e preferências
 
@@ -86,8 +86,8 @@ código já fala `user`.
 
 **Perfil do usuário**:
 Identidade visível e preferências globais de uma [[Conta]]. Ligado 1:1 a `user`: nome de exibição,
-avatar, idioma e timezone. Não confundir com [[Perfil de contexto de trabalho]], que é sobre
-o mundo profissional. Código: `user_profile`. _Evite_: "perfil" solto, "profile" sem prefixo.
+avatar, idioma, timezone e o [[Perfil de contexto de trabalho|contexto de trabalho]].
+Código: `user_profile`. _Evite_: "perfil" solto, "profile" sem prefixo.
 
 **Tema da interface**:
 Aparência da UI (`light`, `dark`, `system`) de um [[Membro]] dentro de um tenant. Vinculado

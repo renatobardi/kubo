@@ -120,6 +120,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0026_lesson_provenance.surql",
         # 0027 (KUBO-147): perfil do usuário + theme no membership.
         "0027_user_profile_membership_theme.surql",
+        # 0028 (KUBO-152): move work_context de user para user_profile.
+        "0028_work_context_user_profile.surql",
     }
 
 

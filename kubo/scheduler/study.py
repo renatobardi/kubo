@@ -83,8 +83,8 @@ def generate_upcoming_lessons(
         _log.info("study.eve.no_active_plans")
         return []
     scope = {"tenant_id": tenant_id, "user_id": user_id}
-    user = tenancy.get_user(db, user_id)
-    work_context = (user.work_context if user is not None else None) or ""
+    profile = tenancy.get_user_profile(db, user_id)
+    work_context = (profile.work_context if profile is not None else None) or ""
     tutor = tutor_factory()
 
     created: list[RecordID] = []

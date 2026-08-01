@@ -60,28 +60,5 @@
     </form>
   </section>
 
-  <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
-    <div class="border-b border-border p-4">
-      <h2 class="text-sm font-medium">Perfil — contexto de trabalho</h2>
-      <p class="mt-0.5 text-xs text-muted-foreground">O que você faz hoje. As personas leem isto para calibrar o que te entregam.</p>
-    </div>
-    <form method="post" action="/settings/profile" class="space-y-4 p-4">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-
-      <div>
-        <label for="work_context" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Contexto de trabalho</label>
-        <textarea id="work_context" name="work_context" rows="5" maxlength="4000"
-                  class="w-full rounded-xl border border-input bg-input/30 px-4 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                  placeholder="ex.: Arquiteto de plataforma; trabalho com dados em escala e times pequenos.">{{ work_context }}</textarea>
-        <p class="mt-1 text-2xs text-destructive">Este texto entra em prompts de personas. Nunca inclua segredos, chaves ou dados sensíveis.</p>
-        <p class="mt-1 text-2xs text-muted-foreground">Deixe em branco e salve para apagar o contexto.</p>
-      </div>
-
-      <button type="submit"
-              class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
-        Salvar perfil
-      </button>
-    </form>
-  </section>
 </div>
 {% endblock %}
