@@ -42,11 +42,11 @@
 
       // Segundo clique: o envio já está em curso, engole o evento. Sem isto, um
       // upload de dezenas de MB ou uma chamada paga ao modelo rodaria duas vezes.
-      if (form.hasAttribute("data-submitting")) {
+      if (form.dataset.submitting !== undefined) {
         ev.preventDefault();
         return;
       }
-      form.setAttribute("data-submitting", "");
+      form.dataset.submitting = "";
 
       // `ev.submitter` cobre também o botão que vive FORA do form e aponta por
       // form="<id>" (diálogos de gate). Sem ele, cairíamos no primeiro botão do
@@ -58,7 +58,7 @@
       var rect = target.getBoundingClientRect();
       target.style.minWidth = rect.width + "px";
       target.style.minHeight = rect.height + "px";
-      target.setAttribute("data-busy", "");
+      target.dataset.busy = "";
       target.setAttribute("aria-busy", "true");
       target.setAttribute("aria-live", "polite");
       // `disabled` só DEPOIS do envio começar: desabilitar durante o submit faria
@@ -70,33 +70,41 @@
     // Indicador para botões HTMX soltos (`hx-post` fora de `form`).
     // `htmx:beforeRequest` dispara no elemento `hx-post`; o listener de `submit`
     // acima já cobre forms `method="post"` reais, então aqui cobrimos só controles.
+    // Estado original (disabled, minWidth, minHeight) é salvo em dataset para ser
+    // restaurado ao limpar — o botão pode já vir desabilitado ou com estilo próprio.
     function _kuboApplyBusy(target) {
+      target.dataset.kuboPrevDisabled = String(target.disabled);
+      target.dataset.kuboPrevMinW = target.style.minWidth;
+      target.dataset.kuboPrevMinH = target.style.minHeight;
       var rect = target.getBoundingClientRect();
       target.style.minWidth = rect.width + "px";
       target.style.minHeight = rect.height + "px";
-      target.setAttribute("data-busy", "");
+      target.dataset.busy = "";
       target.setAttribute("aria-busy", "true");
       target.setAttribute("aria-live", "polite");
       window.setTimeout(function () { target.disabled = true; }, 0);
     }
     function _kuboClearBusy(target) {
       if (!target) return;
-      target.removeAttribute("data-busy");
+      delete target.dataset.busy;
       target.removeAttribute("aria-busy");
       target.removeAttribute("aria-live");
-      target.removeAttribute("data-submitting");
-      target.style.minWidth = "";
-      target.style.minHeight = "";
-      target.disabled = false;
+      delete target.dataset.submitting;
+      target.style.minWidth = target.dataset.kuboPrevMinW || "";
+      target.style.minHeight = target.dataset.kuboPrevMinH || "";
+      target.disabled = target.dataset.kuboPrevDisabled === "true";
+      delete target.dataset.kuboPrevDisabled;
+      delete target.dataset.kuboPrevMinW;
+      delete target.dataset.kuboPrevMinH;
     }
     document.addEventListener("htmx:beforeRequest", function (ev) {
       var target = ev.detail.elt;
       if (!(target instanceof HTMLButtonElement)) return;
-      if (target.hasAttribute("data-busy")) {
+      if (target.dataset.busy !== undefined) {
         ev.preventDefault();
         return;
       }
-      target.setAttribute("data-submitting", "");
+      target.dataset.submitting = "";
       _kuboApplyBusy(target);
     }, true);
     ["htmx:afterRequest", "htmx:sendError"].forEach(function (name) {

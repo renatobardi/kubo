@@ -44,14 +44,14 @@
           type="button"
           class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px"
         >
-          Entrar com Google
+          <span>Entrar com Google</span>
         </button>
         <button
           id="btn-login-github"
           type="button"
           class="h-9 w-full rounded-4xl bg-card px-3 text-sm font-medium text-foreground ring-1 ring-foreground/10 transition-colors hover:bg-muted active:translate-y-px"
         >
-          Entrar com GitHub
+          <span>Entrar com GitHub</span>
         </button>
       </div>
 
@@ -116,46 +116,49 @@
       }
 
       async function sendIdToken(idToken) {
-        try {
-          const next = window.__KUBO_NEXT || "/";
-          const invite = window.__KUBO_INVITE;
-          let url = "/auth/firebase?next=" + encodeURIComponent(next);
-          if (invite) {
-            url += "&invite=" + encodeURIComponent(invite);
-          }
-          const resp = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id_token: idToken }),
-            credentials: "same-origin",
-            redirect: "follow",
-          });
-          if (resp.ok) {
-            window.location.href = window.__KUBO_NEXT || "/";
-          } else {
-            showError();
-          }
-        } catch (e) {
-          showError();
+        const next = window.__KUBO_NEXT || "/";
+        const invite = window.__KUBO_INVITE;
+        let url = "/auth/firebase?next=" + encodeURIComponent(next);
+        if (invite) {
+          url += "&invite=" + encodeURIComponent(invite);
+        }
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id_token: idToken }),
+          credentials: "same-origin",
+          redirect: "follow",
+        });
+        if (resp.ok) {
+          window.location.href = window.__KUBO_NEXT || "/";
+        } else {
+          // Falha HTTP (401/503): propaga para o catch de signIn limpar o busy.
+          throw new Error("auth failed: " + resp.status);
         }
       }
 
       function setBusy(btn) {
+        btn.dataset.kuboPrevDisabled = String(btn.disabled);
+        btn.dataset.kuboPrevMinW = btn.style.minWidth;
+        btn.dataset.kuboPrevMinH = btn.style.minHeight;
         var rect = btn.getBoundingClientRect();
         btn.style.minWidth = rect.width + "px";
         btn.style.minHeight = rect.height + "px";
-        btn.setAttribute("data-busy", "");
+        btn.dataset.busy = "";
         btn.setAttribute("aria-busy", "true");
         btn.setAttribute("aria-live", "polite");
         btn.disabled = true;
       }
       function clearBusy(btn) {
-        btn.removeAttribute("data-busy");
+        delete btn.dataset.busy;
         btn.removeAttribute("aria-busy");
         btn.removeAttribute("aria-live");
-        btn.style.minWidth = "";
-        btn.style.minHeight = "";
-        btn.disabled = false;
+        btn.style.minWidth = btn.dataset.kuboPrevMinW || "";
+        btn.style.minHeight = btn.dataset.kuboPrevMinH || "";
+        btn.disabled = btn.dataset.kuboPrevDisabled === "true";
+        delete btn.dataset.kuboPrevDisabled;
+        delete btn.dataset.kuboPrevMinW;
+        delete btn.dataset.kuboPrevMinH;
       }
       async function signIn(btn, provider) {
         setBusy(btn);

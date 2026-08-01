@@ -88,7 +88,7 @@ def test_script_guards_against_double_submit(client: TestClient) -> None:
     upload de 39 MB, ou uma segunda chamada paga ao Opus 5."""
     html = client.get("/login").text
 
-    assert "data-submitting" in html, "o form precisa marcar que já foi enviado"
+    assert "dataset.submitting" in html, "o form precisa marcar que já foi enviado"
     assert "ev.preventDefault()" in html, "o segundo submit precisa ser cancelado"
     assert "target.disabled = true" in html, "o controle desabilita após o submit"
 
@@ -102,22 +102,40 @@ def test_login_also_has_indicator(client: TestClient) -> None:
 
 def test_htmx_buttons_are_covered_by_busy_indicator(client: TestClient) -> None:
     """Botões soltos com `hx-post` (ex.: testar feed, gerar convite) não disparam
-    `submit` de form. O listener global precisa escutar os eventos deles."""
+    `submit` de form. O listener global precisa escutar os eventos deles e encadear
+    para os helpers de aplicar/limpar o busy state."""
     html = client.get("/login").text
 
+    # Listeners HTMX existem e encadeiam para os helpers — não basta o nome do
+    # evento estar no HTML, ele precisa chamar quem aplica/limpa o estado.
     assert "htmx:beforeRequest" in html, "requisições HTMX não têm listener de início"
     assert "htmx:afterRequest" in html, "requisições HTMX não têm listener de fim"
+    assert "htmx:sendError" in html, "erro de envio HTMX precisa limpar o busy"
+    assert "_kuboApplyBusy" in html, "beforeRequest precisa chamar _kuboApplyBusy"
+    assert "_kuboClearBusy" in html, "afterRequest/sendError precisa chamar _kuboClearBusy"
+    # Anti-duplo-envio: beforeRequest cancela se já está busy.
+    assert re.search(
+        r"htmx:beforeRequest.*?\.dataset\.busy.*?ev\.preventDefault", html, re.DOTALL
+    ), "beforeRequest precisa cancelar requisição se o botão já está busy"
 
 
 def test_firebase_login_buttons_have_busy_state(client: TestClient) -> None:
     """Login Google/GitHub é `fetch` manual e pode levar. Os botões devem marcar
-    e desmarcar `data-busy` durante a chamada."""
+    e desmarcar `data-busy` durante a chamada, inclusive em falha HTTP."""
     html = client.get("/login").text
 
     assert "btn-login-google" in html, "o botão do Google precisa existir no teste"
     assert "btn-login-github" in html, "o botão do GitHub precisa existir no teste"
-    assert "setBusy" in html, "os botões sociais precisam de setBusy"
-    assert "clearBusy" in html, "os botões sociais precisam de clearBusy"
+    # Rótulos wrapped em <span> para o CSS [data-busy] > * esconder o texto.
+    assert "<span>Entrar com Google</span>" in html, "rótulo do Google precisa estar em <span>"
+    assert "<span>Entrar com GitHub</span>" in html, "rótulo do GitHub precisa estar em <span>"
+    # setBusy é chamado antes do try; clearBusy no catch (cobre popup, fetch e HTTP).
+    assert "setBusy(btn)" in html, "signIn precisa chamar setBusy antes da chamada"
+    assert "clearBusy(btn)" in html, "signIn precisa chamar clearBusy no catch"
+    # Falha HTTP (resp.ok false) precisa propagar para o catch limpar o busy.
+    assert re.search(r"resp\.ok.*?throw", html, re.DOTALL), (
+        "sendIdToken precisa lançar em !resp.ok para o catch de signIn limpar o busy"
+    )
 
 
 if __name__ == "__main__":
