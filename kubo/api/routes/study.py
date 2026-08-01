@@ -1038,12 +1038,16 @@ def lesson_detail(request: Request, key: str) -> Response:
         log = study_store.get_log_for_lesson(
             db, lesson_id=lesson.id, tenant_id=ctx.tenant_id, user_id=ctx.user_id
         )
+        provenance = study_store.list_chapters_by_ids(
+            db, chapter_ids=lesson.provenance or [], tenant_id=ctx.tenant_id, user_id=ctx.user_id
+        )
     return templates.TemplateResponse(
         request,
         _LESSON_TEMPLATE,
         {
             "lesson": lesson,
             "log": log,
+            "provenance_chapters": provenance,
             "blocks": {
                 "recap": _paragraphs(lesson.recap),
                 "concept": _paragraphs(lesson.concept),

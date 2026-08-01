@@ -142,7 +142,13 @@ def _lesson_for_plan(
         _log.warning("study.eve.generation_failed", plan=str(plan.id), entry=str(entry.id))
         return None
     lesson = study_store.create_lesson(
-        db, plan_id=plan.id, entry_id=entry.id, scheduled_for=day, output=output, **scope
+        db,
+        plan_id=plan.id,
+        entry_id=entry.id,
+        scheduled_for=day,
+        output=output,
+        provenance=entry.chapters,
+        **scope,
     )
     return lesson.id
 

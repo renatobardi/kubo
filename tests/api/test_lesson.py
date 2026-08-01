@@ -96,6 +96,9 @@ def stub_lesson_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.api.routes.study.study_store.get_log_for_lesson", lambda db, **kw: None
     )
     monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_chapters_by_ids", lambda db, **kw: []
+    )
+    monkeypatch.setattr(
         "kubo.api.routes.study.study_store.complete_lesson", lambda db, **kw: _log()
     )
 

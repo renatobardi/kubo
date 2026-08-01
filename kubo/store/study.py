@@ -704,6 +704,7 @@ class Lesson:
     recap: str | None
     quiz: list[dict[str, Any]]
     created_at: datetime
+    provenance: list[RecordID] | None = None
 
 
 @dataclass(frozen=True)
@@ -732,6 +733,7 @@ def _lesson_from_row(row: dict[str, Any]) -> Lesson:
         application=row["application"],
         recap=row.get("recap"),
         quiz=_quiz_of(row),
+        provenance=list(row.get("provenance") or []),
         created_at=_as_datetime(row["created_at"]),
     )
 
@@ -802,12 +804,16 @@ def create_lesson(
     entry_id: RecordID,
     scheduled_for: datetime,
     output: LessonOutput,
+    provenance: Sequence[RecordID] | None = None,
 ) -> Lesson:
     """Persiste a lição de um dia do plano e devolve o registro criado.
 
     (plano, dia) é UNIQUE: uma segunda geração para o mesmo dia é StoreError legível.
     É o que torna o job da véspera idempotente — várias janelas de retry no mesmo dia
     não podem render duas lições para o mesmo dia de estudo.
+
+    `provenance` são os capítulos do material que originaram o conteúdo da lição.
+    Quando omitido, o banco preenche com o default vazio para lições antigas.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     lesson_id = _fresh("lesson")
@@ -816,7 +822,8 @@ def create_lesson(
         [
             "CREATE $lesson SET tenant_id = $tenant, user_id = $user, study_plan = $plan, "
             "plan_entry = $entry, scheduled_for = $day, concept = $concept, "
-            "scenario = $scenario, application = $application, recap = $recap, quiz = $quiz"
+            "scenario = $scenario, application = $application, recap = $recap, "
+            "provenance = $provenance, quiz = $quiz"
         ],
         {
             "lesson": lesson_id,
@@ -829,6 +836,7 @@ def create_lesson(
             "scenario": output.scenario,
             "application": output.application,
             "recap": output.recap,
+            "provenance": list(provenance) if provenance is not None else [],
             "quiz": [item.model_dump() for item in output.quiz],
         },
     )

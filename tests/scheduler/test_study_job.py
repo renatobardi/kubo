@@ -203,6 +203,7 @@ def test_generates_the_lesson_for_the_next_study_day(store: dict[str, _Spy]) -> 
     call = store["create_lesson"].calls[0]
     assert call["plan_id"] == plan.id
     assert call["entry_id"] == entry.id
+    assert call["provenance"] == entry.chapters
     assert call["scheduled_for"] == _NEXT_DAY
     assert call["tenant_id"] == _TENANT
     assert call["user_id"] == _USER

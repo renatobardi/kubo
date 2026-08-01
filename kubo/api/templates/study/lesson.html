@@ -41,6 +41,17 @@
   </section>
   {% endfor %}
 
+  {% if provenance_chapters %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Proveniência</h2>
+    <ul class="mt-2 space-y-1 text-sm text-muted-foreground">
+      {% for chapter in provenance_chapters %}
+      <li>{{ chapter.title }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <section class="space-y-2">
     <h2 class="text-sm font-medium">Quiz <span class="text-xs font-normal text-muted-foreground">({{ questions | length }})</span></h2>
 

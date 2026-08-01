@@ -151,6 +151,7 @@ def _lesson_on(
         entry_id=entry.id,
         scheduled_for=day,
         output=_output(prefix),
+        provenance=entry.chapters,
     )
 
 
@@ -213,6 +214,7 @@ def test_create_lesson_persists_the_blocks_and_the_quiz(
         entry_id=entry.id,
         scheduled_for=_DAY_1,
         output=_output("Aula 1", recap="Você errou filas."),
+        provenance=entry.chapters,
     )
 
     assert lesson.study_plan == plan.id
@@ -221,9 +223,11 @@ def test_create_lesson_persists_the_blocks_and_the_quiz(
     assert lesson.recap == "Você errou filas."
     assert lesson.concept == "Aula 1: o conceito."
     assert [q["question"] for q in lesson.quiz] == ["Aula 1 Q1?", "Aula 1 Q2?"]
+    assert lesson.provenance == entry.chapters
     fetched = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson.id)
     assert fetched is not None
     assert fetched.application == "Aula 1: a aplicação."
+    assert fetched.provenance == entry.chapters
 
 
 def test_get_lesson_for_day_finds_only_that_day(
