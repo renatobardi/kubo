@@ -42,6 +42,10 @@ def stub_study_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leituras vazias por padrão; cada teste com dado sobrescreve o que precisa."""
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic_progress",
+        lambda db, **kw: None,
+    )
 
 
 # --- NAV --------------------------------------------------------------------------------
