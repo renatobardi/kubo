@@ -22,6 +22,7 @@ from kubo.store.study import (
     create_lesson,
     create_material,
     create_topic,
+    deactivate_plan,
     get_plan_for_topic,
     get_topic,
     list_topics_by_state,
@@ -31,6 +32,7 @@ from kubo.store.study import (
     set_plan_cadence,
     set_topic_state,
     swap_plan_entries,
+    transition_to_running,
 )
 from kubo.study.parsing import ParsedChapter
 
@@ -609,3 +611,111 @@ def test_create_lesson_unique_per_day(db: Any, tenant_id: RecordID, user_id: Rec
             plan_entry_id=entries[0].id,
             scheduled_for=lesson_dt,
         )
+
+
+def test_deactivate_plan_reverts_to_planning(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """deactivate_plan: scheduled → planning, reverte status + activated_at."""
+    topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
+    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+
+    deactivate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert topic is not None
+    assert topic.state == "planning"
+
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert plan is not None
+    assert plan.status == "proposed"
+    assert plan.activated_at is None
+
+
+def test_deactivate_plan_cas_blocks_running(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """deactivate_plan CAS: se tema já está running, não reverte (CAS falha)."""
+    from datetime import datetime
+
+    topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
+    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    # Simula scheduler: transiciona scheduled → running + congela plano.
+    transition_to_running(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        plan_id=plan_id,
+        plan_entry_id=entries[0].id,
+        scheduled_for=datetime(2026, 8, 4),
+    )
+
+    # deactivate_plan não reverte (CAS AND state='scheduled' + AND status='active' falham).
+    deactivate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert topic is not None
+    assert topic.state == "running"  # não reverteu
+
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert plan is not None
+    assert plan.status == "running"  # transition_to_running congelou o plano
+    assert plan.activated_at is not None
+
+
+def test_transition_to_running_atomic(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """transition_to_running: cria 1ª lição + transiciona scheduled→running atômico."""
+    from datetime import datetime
+
+    topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
+    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+
+    transition_to_running(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        plan_id=plan_id,
+        plan_entry_id=entries[0].id,
+        scheduled_for=datetime(2026, 8, 4),
+    )
+
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert topic is not None
+    assert topic.state == "running"
+    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1
+
+
+def test_transition_to_running_cas_idempotent(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """transition_to_running CAS: se já está running, não cria 2ª lição nem re-transiciona."""
+    from datetime import datetime
+
+    topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
+    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+
+    transition_to_running(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        plan_id=plan_id,
+        plan_entry_id=entries[0].id,
+        scheduled_for=datetime(2026, 8, 4),
+    )
+    # 2ª chamada: CAS AND state='scheduled' falha → não cria 2ª lição.
+    transition_to_running(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        plan_id=plan_id,
+        plan_entry_id=entries[0].id,
+        scheduled_for=datetime(2026, 8, 4),
+    )
+    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1

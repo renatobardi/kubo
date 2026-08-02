@@ -130,6 +130,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0031_study_chat.surql",
         # 0033 (KUBO-164): atualiza prompt do planner no catálogo.
         "0033_planner_prompt_update.surql",
+        # 0034 (KUBO-166): study_plan.status += 'running' (plano congelado pelo scheduler).
+        "0034_study_plan_running_status.surql",
     }
 
 

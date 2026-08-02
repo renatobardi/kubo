@@ -28,11 +28,9 @@ from kubo.study.planning import next_study_day
 _log = structlog.get_logger(__name__)
 
 
-def _to_date(dt: datetime, tz: timezone | None = None) -> date:
-    """Converte datetime para date na timezone dada (ou UTC se não tiver tzinfo)."""
+def _to_date(dt: datetime) -> date:
+    """Converte datetime para date (UTC se tiver tzinfo, senão naive)."""
     if dt.tzinfo is not None:
-        if tz is not None:
-            return dt.astimezone(tz).date()
         return dt.astimezone(timezone.utc).date()
     return dt.date()
 
@@ -102,8 +100,10 @@ def execute_study_lesson_job(
     """Job de lição: gera a próxima lição para temas em `running`.
 
     Filtra SÓ `running` — não gera para `scheduled` (regular) ou `archived`.
-    A próxima lição é o próximo `plan_entry` sem lição criada. Só gera na
-    véspera do próximo dia de cadência (modelo de véspera, como KUBO-137).
+    A próxima lição é o próximo `plan_entry` sem lição criada. Gera na véspera
+    do próximo dia de cadência OU no próprio dia (downtime-tolerant — se o
+    scheduler não rodou na véspera, gera no dia). O índice UNIQUE
+    `lesson_plan_day` impede duplicata (double-fire na 1ª véspera é silencioso).
     KUBO-168 traz a geração com IA (concept, scenario, application, quiz).
     """
     topics = study_store.list_topics_by_state(
@@ -122,10 +122,12 @@ def execute_study_lesson_job(
             if done >= len(entries):
                 continue  # plano concluído
             next_entry = entries[done]
-            next_day = next_study_day(after=today, weekdays=plan.weekdays)
+            # after = today - 1 para incluir today como candidato (downtime recovery).
+            next_day = next_study_day(after=today - timedelta(days=1), weekdays=plan.weekdays)
             eve = next_day - timedelta(days=1)
-            if today != eve:
-                continue  # só gera na véspera do próximo dia de cadência
+            # Janela [eve, next_day]: véspera (normal) ou dia (downtime recovery).
+            if today < eve or today > next_day:
+                continue
             lesson_date = datetime(next_day.year, next_day.month, next_day.day)
             study_store.create_lesson(
                 db,
@@ -142,6 +144,9 @@ def execute_study_lesson_job(
                 scheduled_for=next_day.isoformat(),
             )
         except StoreError:
-            _log.exception("study.lesson.failed", topic=str(topic.id))
+            # StoreError = duplicata (UNIQUE lesson_plan_day) ou falha de DB.
+            # Duplicata é esperada (double-fire na 1ª véspera); falha de DB
+            # será recuperada no próximo ciclo. Log warning, não exception.
+            _log.warning("study.lesson.skipped", topic=str(topic.id))
         except Exception:  # noqa: BLE001 — isola o tema: loga e segue
             _log.exception("study.lesson.unexpected", topic=str(topic.id))

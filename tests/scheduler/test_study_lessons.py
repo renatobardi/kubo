@@ -257,12 +257,16 @@ def test_lesson_job_generates_next_lesson_on_eve(
     assert created[0] == _ENTRY_ID_2  # próxima entry
 
 
-def test_lesson_job_skips_when_not_eve(mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Job de lição: running mas NÃO é véspera → não gera."""
+def test_lesson_job_skips_when_before_eve(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job de lição: running mas ANTES da véspera do próximo dia → não gera."""
     from kubo.scheduler import study_lessons
 
-    # Hoje = 2026-08-03 (segunda) — próximo dia = quarta 05/08, véspera = terça 04/08.
-    today = date(2026, 8, 3)
+    # Cadência mon/wed. Hoje = 2026-08-06 (quinta).
+    # Último dia de cadência = quarta 05/08. Próximo = segunda 10/08, véspera = domingo 09/08.
+    # 06/08 < 09/08 → skip.
+    today = date(2026, 8, 6)
     monkeypatch.setattr(
         study_lessons.study_store,
         "list_topics_by_state",
@@ -283,6 +287,37 @@ def test_lesson_job_skips_when_not_eve(mock_db: MagicMock, monkeypatch: pytest.M
 
     study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
     assert created == []
+
+
+def test_lesson_job_generates_on_study_day_downtime(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job de lição: running + no próprio dia (downtime) → gera."""
+    from kubo.scheduler import study_lessons
+
+    # Hoje = 2026-08-05 (quarta) = dia de cadência. Véspera = 04/08 (terça).
+    # Scheduler não rodou na véspera → gera no dia (downtime recovery).
+    today = date(2026, 8, 5)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="running")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(2)),
+    )
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    created: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "create_lesson",
+        lambda db, **kw: created.append(kw["plan_entry_id"]),
+    )
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    assert len(created) == 1
 
 
 def test_lesson_job_skips_when_plan_complete(
