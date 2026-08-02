@@ -1082,6 +1082,72 @@ def create_lesson(
     return lesson_id
 
 
+def fill_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+    concept: str,
+    scenario: str,
+    application: str,
+    recap: str | None,
+    quiz: list[dict[str, Any]],
+    provenance: list[dict[str, Any]],
+) -> None:
+    """Preenche uma lição vazia com o conteúdo gerado pelo Tutor (KUBO-168).
+
+    UPDATE no registro com os campos de IA. Se a lição já tem conteúdo
+    (re-tentativa após sucesso), o UPDATE sobrescreve — idempotente.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    db.query(
+        f"UPDATE $lesson SET concept = $concept, scenario = $scenario, "  # noqa: S608
+        f"application = $application, recap = $recap, quiz = $quiz, "
+        f"provenance = $provenance WHERE id = $lesson AND {_MATERIAL_SCOPE};",
+        {
+            "lesson": lesson_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "concept": concept,
+            "scenario": scenario,
+            "application": application,
+            "recap": recap,
+            "quiz": quiz,
+            "provenance": provenance,
+        },
+    )
+    _log.info("store.lesson.filled", lesson=str(lesson_id))
+
+
+def get_chapters_for_entry(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    entry: PlanEntry,
+) -> list[MaterialChapter]:
+    """Busca os MaterialChapter (com content) referenciados por um plan_entry.
+
+    O plan_entry.chapters é uma lista de RecordIDs de material_chapter.
+    Retorna os capítulos na ordem dos RecordIDs (que é a ordem de estudo
+    definida pelo planner).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    if not entry.chapters:
+        return []
+    chapters: list[MaterialChapter] = []
+    for chapter_id in entry.chapters:
+        rows = db.query(
+            f"SELECT * FROM material_chapter WHERE id = $chapter "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} LIMIT 1;",
+            {"chapter": chapter_id, "tenant": tenant_id, "user": user_id},
+        )
+        if rows:
+            chapters.append(_chapter_from_row(rows[0]))
+    return chapters
+
+
 def count_lessons_for_plan(
     db: Any,
     *,
