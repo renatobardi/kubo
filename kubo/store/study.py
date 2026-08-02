@@ -1155,3 +1155,346 @@ def transition_to_running(
         scheduled_for=scheduled_for.isoformat(),
     )
     return lesson_id
+
+
+# --- KUBO-167: archive / unarchive / delete / progress ----------------------------------
+
+
+@dataclass(frozen=True)
+class TopicDeleteSummary:
+    """Contagem de dependentes para confirmação reforçada de delete (KUBO-167)."""
+
+    materials: int
+    plan_entries: int
+    lessons: int
+    chat_messages: int
+
+
+@dataclass(frozen=True)
+class TopicProgress:
+    """Progresso do tema: lições concluídas / total + próxima lição (KUBO-167)."""
+
+    done: int
+    total: int
+    next_lesson_id: RecordID | None = None
+    next_lesson_date: datetime | None = None
+
+
+def archive_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Arquiva um tema: state → 'archived', grava archived_from com estado anterior.
+
+    O scheduler não gera lições para archived (filtra por 'scheduled'/'running').
+    Desarquivar restaura o estado anterior via `unarchive_topic`.
+
+    CAS em `state = $prev` fecha a janela TOCTOU com o scheduler: se o job
+    `study_transition` transicionou para `running` entre o `get_topic` e o
+    UPDATE, o CAS falha e nada é persistido (caller decide o que fazer).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    if topic.state == "archived":
+        raise StoreError("tema já está arquivado")
+    result = db.query(
+        f"UPDATE $topic SET state = 'archived', archived_from = $prev "  # noqa: S608
+        f"WHERE {_MATERIAL_SCOPE} AND state = $prev RETURN id;",
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": topic.state},
+    )
+    if not result:
+        raise StoreError("state changed concurrently — archive aborted")
+    _log.info("store.topic.archived", topic=str(topic_id), archived_from=topic.state)
+
+
+def unarchive_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Desarquiva um tema: restaura estado de archived_from e limpa o campo.
+
+    CAS em `state = 'archived'` fecha TOCTOU: se outro processo desarquivou
+    primeiro, o UPDATE não aplica.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    if topic.state != "archived":
+        raise StoreError("tema não está arquivado")
+    # Lê archived_from do banco (não está no dataclass Topic).
+    rows = db.query(
+        f"SELECT archived_from FROM topic WHERE id = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    prev = rows[0]["archived_from"] if rows and rows[0]["archived_from"] else "draft"
+    result = db.query(
+        f"UPDATE $topic SET state = $prev, archived_from = NONE "  # noqa: S608
+        f"WHERE {_MATERIAL_SCOPE} AND state = 'archived' RETURN id;",
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": prev},
+    )
+    if not result:
+        raise StoreError("state changed concurrently — unarchive aborted")
+    _log.info("store.topic.unarchived", topic=str(topic_id), restored_to=prev)
+
+
+def list_archived_topics(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> list[Topic]:
+    """Lista os temas ARQUIVADOS do usuário, mais recentes primeiro."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM topic WHERE {_MATERIAL_SCOPE} AND state = 'archived' "  # noqa: S608
+        "ORDER BY created_at DESC;",
+        {"tenant": tenant_id, "user": user_id},
+    )
+    return [_topic_from_row(row) for row in rows]
+
+
+def delete_topic(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Deleta um tema e todos os dependentes (cascade total, KUBO-167).
+
+    Remove: study_log, study_chat, lessons, plan_entries, study_plan,
+    material_chapters, materials, topic. Arquivos no volume são removidos
+    pela rota (best-effort). Tudo numa única transação atômica — falha no
+    meio reverte tudo (não deixa tema órfão sem dependentes).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    # Busca IDs de materials, plans e lessons antes da transação (subqueries em
+    # transação SurrealDB não veem estado intermediário corretamente).
+    mat_rows = db.query(
+        f"SELECT id FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    material_ids = [r["id"] for r in mat_rows]
+    plan_rows = db.query(
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    plan_ids = [r["id"] for r in plan_rows]
+    lesson_ids: list[RecordID] = []
+    for pid in plan_ids:
+        l_rows = db.query(
+            f"SELECT id FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+            {"plan": pid, "tenant": tenant_id, "user": user_id},
+        )
+        lesson_ids.extend(r["id"] for r in l_rows)
+    # Monta statements por ID (subquery em transação não funciona).
+    # Nomes de parâmetro usam contador estável (não o ID do registro) — IDs
+    # podem conter caracteres inválidos para identificadores SurrealQL.
+    stmts: list[str] = []
+    for i, _mid in enumerate(material_ids):
+        stmts.append(f"DELETE FROM material_chapter WHERE material = $m_{i};")  # noqa: S608
+    for i, _pid in enumerate(plan_ids):
+        stmts.append(f"DELETE FROM plan_entry WHERE study_plan = $p_{i};")  # noqa: S608
+        stmts.append(f"DELETE FROM lesson WHERE study_plan = $p_{i};")  # noqa: S608
+    for i, _lid in enumerate(lesson_ids):
+        stmts.append(f"DELETE FROM study_log WHERE lesson = $l_{i};")  # noqa: S608
+    stmts.extend(
+        [
+            f"DELETE FROM study_chat WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"DELETE FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"DELETE FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"DELETE FROM topic WHERE id = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        ]
+    )
+    params: dict[str, Any] = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
+    for i, mid in enumerate(material_ids):
+        params[f"m_{i}"] = mid
+    for i, pid in enumerate(plan_ids):
+        params[f"p_{i}"] = pid
+    for i, lid in enumerate(lesson_ids):
+        params[f"l_{i}"] = lid
+    transaction.run_transaction(db, stmts, params)
+    _log.info("store.topic.deleted", topic=str(topic_id))
+
+
+def get_topic_delete_summary(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> TopicDeleteSummary:
+    """Contagem de dependentes do tema para confirmação reforçada de delete."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    params = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
+    mat_rows = db.query(
+        f"SELECT count() FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        params,
+    )
+    # Busca plan_ids antes (subquery em SurrealDB não funciona).
+    plan_rows = db.query(
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        params,
+    )
+    plan_ids = [r["id"] for r in plan_rows]
+    entry_count = 0
+    lesson_count = 0
+    # Tema tem 1 plano (1:1); usa o primeiro se existir.
+    if plan_ids:
+        pid = plan_ids[0]
+        e_rows = db.query(
+            f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            {"plan": pid, "tenant": tenant_id, "user": user_id},
+        )
+        entry_count = e_rows[0]["count"] if e_rows else 0
+        l_rows = db.query(
+            f"SELECT count() FROM lesson WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            {"plan": pid, "tenant": tenant_id, "user": user_id},
+        )
+        lesson_count = l_rows[0]["count"] if l_rows else 0
+    chat_rows = db.query(
+        f"SELECT count() FROM study_chat WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        params,
+    )
+    return TopicDeleteSummary(
+        materials=mat_rows[0]["count"] if mat_rows else 0,
+        plan_entries=entry_count,
+        lessons=lesson_count,
+        chat_messages=chat_rows[0]["count"] if chat_rows else 0,
+    )
+
+
+def get_topic_progress(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> TopicProgress:
+    """Progresso do tema: lições concluídas / total de entries + próxima lição.
+
+    - total = número de plan_entries do plano do tema (0 se sem plano).
+    - done = número de lessons com study_log (concluídas).
+    - next_lesson_id = primeira lesson sem study_log, ordenada por scheduled_for.
+
+    Otimizado: 1 query de entries + 1 query de lessons + 1 query de study_logs
+    (batch) — sem N+1 por lição.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    params = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
+    # Busca o plano do tema (1:1) + total de entries.
+    plan_rows = db.query(
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        params,
+    )
+    if not plan_rows:
+        return TopicProgress(done=0, total=0, next_lesson_id=None)
+    plan_id = plan_rows[0]["id"]
+    entry_rows = db.query(
+        f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
+        f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    total = entry_rows[0]["count"] if entry_rows else 0
+    if total == 0:
+        return TopicProgress(done=0, total=0, next_lesson_id=None)
+    # Lessons do plano (ordenadas por scheduled_for) + study_logs (batch).
+    lessons = db.query(
+        f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
+        f"AND {_MATERIAL_SCOPE} ORDER BY scheduled_for;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lessons:
+        return TopicProgress(done=0, total=total, next_lesson_id=None)
+    lesson_ids = [r["id"] for r in lessons]
+    # Busca study_logs do tenant/user em batch (set em memória). O filtro final
+    # `lid in done_ids` só conta lições deste plano (lesson_ids), então logs de
+    # outros temas não afetam o resultado — apenas evita N+1 por lição.
+    log_rows = db.query(
+        f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        {"tenant": tenant_id, "user": user_id},
+    )
+    done_ids = {str(r["lesson"]) for r in log_rows}
+    done = sum(1 for lid in lesson_ids if str(lid) in done_ids)
+    next_row = next((r for r in lessons if str(r["id"]) not in done_ids), None)
+    next_lesson_id = next_row["id"] if next_row else None
+    next_lesson_date = next_row["scheduled_for"] if next_row else None
+    return TopicProgress(
+        done=done,
+        total=total,
+        next_lesson_id=next_lesson_id,
+        next_lesson_date=next_lesson_date,
+    )
+
+
+def get_topics_progress_batch(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_ids: list[RecordID],
+) -> dict[str, TopicProgress]:
+    """Progresso em lote para a lista de temas — reutiliza o set de study_logs
+    (1 query global) em vez de N queries por tema. Retorna dict indexado por
+    str(topic_id) → TopicProgress.
+    """
+    if not topic_ids:
+        return {}
+    # Busca study_logs do tenant/user uma vez (set em memória).
+    log_rows = db.query(
+        f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        {"tenant": tenant_id, "user": user_id},
+    )
+    done_ids = {str(r["lesson"]) for r in log_rows}
+    result: dict[str, TopicProgress] = {}
+    for tid in topic_ids:
+        # Busca o plano do tema (1:1).
+        plan_rows = db.query(
+            f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            {"topic": tid, "tenant": tenant_id, "user": user_id},
+        )
+        if not plan_rows:
+            result[str(tid)] = TopicProgress(done=0, total=0)
+            continue
+        plan_id = plan_rows[0]["id"]
+        entry_rows = db.query(
+            f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+        )
+        total = entry_rows[0]["count"] if entry_rows else 0
+        if total == 0:
+            result[str(tid)] = TopicProgress(done=0, total=0)
+            continue
+        lessons = db.query(
+            f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} ORDER BY scheduled_for;",
+            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+        )
+        if not lessons:
+            result[str(tid)] = TopicProgress(done=0, total=total)
+            continue
+        lesson_ids = [r["id"] for r in lessons]
+        done = sum(1 for lid in lesson_ids if str(lid) in done_ids)
+        next_row = next((r for r in lessons if str(r["id"]) not in done_ids), None)
+        result[str(tid)] = TopicProgress(
+            done=done,
+            total=total,
+            next_lesson_id=next_row["id"] if next_row else None,
+            next_lesson_date=next_row["scheduled_for"] if next_row else None,
+        )
+    return result

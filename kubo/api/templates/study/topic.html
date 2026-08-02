@@ -13,6 +13,33 @@
     <div class="mt-0.5 text-sm">{{ state_label }}</div>
   </section>
 
+  {# Ações de gestão: arquivar/desarquivar/deletar (KUBO-167). #}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Gestão</h2>
+    <div class="mt-3 flex flex-wrap gap-2">
+      {% if topic.state != "archived" %}
+      <form method="post" action="{{ topic_url }}/archive" class="inline"
+            onsubmit="return confirm('Arquivar este estudo? O scheduler pausará até desarquivar.')">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+          Arquivar
+        </button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ topic_url }}/unarchive" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="rounded-4xl bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90">
+          Desarquivar
+        </button>
+      </form>
+      {% endif %}
+      <a href="{{ topic_url }}/delete"
+         class="rounded-4xl px-3 py-1 text-xs text-destructive ring-1 ring-destructive/30 transition-colors hover:bg-destructive/10">
+        Deletar
+      </a>
+    </div>
+  </section>
+
   {# Nome editável inline — disponível em todos os estados não-arquivados (ADR-0047 §3). #}
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <h2 class="text-sm font-medium">Nome do estudo</h2>

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Deletar estudo · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Deletar estudo", "Confirmação reforçada — tudo será perdido.") }}
+
+  <div class="rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+    <p class="text-sm font-medium">Tem certeza que deseja deletar <span class="text-primary">{{ topic.title }}</span>?</p>
+    <p class="mt-2 text-xs text-muted-foreground">Esta ação é irreversível. Os seguintes dados serão permanentemente removidos:</p>
+
+    <ul class="mt-4 space-y-1 text-sm">
+      <li>{{ summary.materials }} {{ "material" if summary.materials == 1 else "materiais" }}</li>
+      <li>{{ summary.plan_entries }} {{ "lição" if summary.plan_entries == 1 else "lições" }} planejada{{ "s" if summary.plan_entries != 1 }}</li>
+      <li>{{ summary.lessons }} {{ "lição" if summary.lessons == 1 else "lições" }} gerada{{ "s" if summary.lessons != 1 }}</li>
+      <li>{{ summary.chat_messages }} {{ "mensagem" if summary.chat_messages == 1 else "mensagens" }} de conversa</li>
+    </ul>
+
+    <form method="post" action="/study/topics/{{ topic.id.id | urlencode }}/delete" class="mt-6 space-y-3">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="confirm" value="yes" required>
+        <span>Entendo que tudo será perdido e não pode ser desfeito.</span>
+      </label>
+      <div class="flex gap-2">
+        <a href="/study/topics/{{ topic.id.id | urlencode }}"
+           class="rounded-4xl px-4 py-2 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+          Cancelar
+        </a>
+        <button type="submit"
+                class="rounded-4xl bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90">
+          Deletar definitivamente
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

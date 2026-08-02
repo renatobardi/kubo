@@ -113,3 +113,7 @@ A Emenda 2 dizia que a restauração do scheduler de lições seria rastreada em
 - **KUBO-168** traz a **geração com IA** sobre o registro vazio: `concept`, `scenario`, `application`, `quiz` a partir do `plan_entry` + capítulos. Sem IA, a lição é um placeholder com `scheduled_for` — o scheduler de KUBO-166 não chama LLM.
 
 A reversão `scheduled→planning` (botão "Editar plano") é atômica via `deactivate_plan` (reverte `status='proposed'` + `activated_at=NONE` + `state='planning'` com CAS `AND state='scheduled'`). Se o scheduler já transicionou para `running`, o CAS falha e a rota devolve 400 (`_TOPIC_FROZEN`).
+
+### Emenda 6 — Delete de Material em `planning` (KUBO-167)
+
+O §4 diz que deletar Material em `planning` "exige regenerar o Plano antes de reativar". A implementação de KUBO-167 **permite o delete** (não bloqueia) e **delega ao dono** a regeneração: `plan_entry.chapters` pode ficar com refs órfãs a capítulos apagados, e `activate_plan` não valida isso. A UI mostra o plano com capítulos pendentes e o dono deve repropor o plano via chat do `planner` antes de ativar. Se o dono ativar com capítulos órfãos, a geração de lição (KUBO-168) falha graciosamente (capítulo não encontrado → lição placeholder). Esta emenda registra a decisão: **validação de capítulos órfãos em `activate_plan` fica fora de escopo do KUBO-167**; se virmos confusão real na UX, adicionaremos validação em follow-up.

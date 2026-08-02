@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.errors import StoreError
-from kubo.store.study import Topic
+from kubo.store.study import Topic, TopicProgress
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
@@ -42,6 +42,14 @@ def stub_study_topic_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic_progress",
+        lambda db, **kw: TopicProgress(done=0, total=0),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topics_progress_batch",
+        lambda db, **kw: {},
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.create_topic", lambda db, **kw: _topic())
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_name", lambda db, **kw: None)
     monkeypatch.setattr(

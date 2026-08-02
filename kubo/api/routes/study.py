@@ -282,15 +282,40 @@ def _persist_material(
 
 @router.get("/topics")
 def list_topics_page(request: Request) -> Response:
-    """Lista os temas do usuário com nome e estado."""
+    """Lista os temas do usuário com nome, estado e progresso.
+
+    `?filter=archived` mostra a aba de arquivados; sem filter, ativos.
+    """
+    archived = request.query_params.get("filter") == "archived"
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
-        topics = study_store.list_topics(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-    rows = [{"topic": t, "state_label": _STATE_LABELS.get(t.state, t.state)} for t in topics]
+        if archived:
+            topics = study_store.list_archived_topics(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+            )
+        else:
+            topics = study_store.list_topics(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        # Enriquece com progresso em lote (1 query de study_log global).
+        progress_map = study_store.get_topics_progress_batch(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_ids=[t.id for t in topics],
+        )
+        rows = [
+            {
+                "topic": t,
+                "state_label": _STATE_LABELS.get(t.state, t.state),
+                "progress": progress_map.get(str(t.id)),
+            }
+            for t in topics
+        ]
     return templates.TemplateResponse(
-        request, _TOPICS_LIST_TEMPLATE, {"rows": rows, "csrf": csrf_token(request)}
+        request,
+        _TOPICS_LIST_TEMPLATE,
+        {"rows": rows, "csrf": csrf_token(request), "archived": archived},
     )
 
 
@@ -538,8 +563,11 @@ def delete_material(
         topic = _topic_of(db, key, ctx)
     if topic is None:
         return _topic_missing(request, key)
-    if topic.state != "draft":
-        return PlainTextResponse(_TOPIC_NOT_DRAFT, status_code=400)
+    # draft e planning: permitido (em planning, dono regenera o plano depois).
+    # scheduled/running: congelado. archived: só leitura.
+    if topic.state in ("scheduled", "running", "archived"):
+        msg = _TOPIC_ARCHIVED_READONLY if topic.state == "archived" else _TOPIC_FROZEN_MATERIAL
+        return PlainTextResponse(msg, status_code=400)
     material_id = RecordID("material", mkey.strip())
     try:
         with client.connect() as db:
@@ -1356,6 +1384,12 @@ def set_cadence(
 _TOPIC_NOT_PLANNING_ACTIVATE = "Só é possível ativar um estudo em planejamento."
 _TOPIC_NOT_SCHEDULED_EDIT = "Só é possível editar o plano de um estudo agendado."
 _TOPIC_FROZEN = "O plano está congelado (lições já geradas) e não pode ser editado."
+_TOPIC_ALREADY_ARCHIVED = "O estudo já está arquivado."
+_TOPIC_NOT_ARCHIVED = "O estudo não está arquivado."
+_TOPIC_FROZEN_MATERIAL = "Materiais são imutáveis quando o estudo está agendado ou em andamento."
+_DELETE_CONFIRM_REQUIRED = "Confirmação obrigatória — marque que entende as consequências."
+_TOPIC_ARCHIVED_READONLY = "O estudo está arquivado (só leitura). Desarquive para editar."
+_TOPIC_STATE_CHANGED = "O estado do estudo mudou enquanto você operava — recarregue a página."
 _TOPIC_NO_PLAN = "Ative o plano apenas depois que o planner propor um plano."
 _TOPIC_NO_CADENCE = "Defina a cadência (dias da semana) antes de ativar o plano."
 
@@ -1443,3 +1477,136 @@ def edit_plan_back(
         _log.warning("study.edit_plan.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+# --- KUBO-167: archive / unarchive / delete ---------------------------------------------
+
+
+@router.get("/topics/{key}/delete")
+def delete_topic_confirm(request: Request, key: str) -> Response:
+    """Tela de confirmação reforçada: mostra contagem de dependentes antes de deletar."""
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        summary = study_store.get_topic_delete_summary(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    return templates.TemplateResponse(
+        request,
+        "study/delete_confirm.html",
+        {"topic": topic, "summary": summary, "csrf": csrf_token(request)},
+    )
+
+
+@router.post("/topics/{key}/archive")
+def archive_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Arquiva o tema: state → 'archived', scheduler pausa."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state == "archived":
+            return PlainTextResponse(_TOPIC_ALREADY_ARCHIVED, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.archive_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+    except StoreError as exc:
+        if "concurrently" in str(exc):
+            return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
+        _log.warning("study.archive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
+        _log.warning("study.archive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/unarchive")
+def unarchive_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Desarquiva o tema: restaura estado anterior, scheduler retoma."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "archived":
+            return PlainTextResponse(_TOPIC_NOT_ARCHIVED, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.unarchive_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+    except StoreError as exc:
+        if "concurrently" in str(exc):
+            return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
+        _log.warning("study.unarchive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
+        _log.warning("study.unarchive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/delete")
+def delete_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+    confirm: Annotated[str, Form()] = "",
+) -> Response:
+    """Deleta o tema com cascade total. Exige confirmação reforçada (confirm=yes)."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+    if confirm != "yes":
+        return PlainTextResponse(_DELETE_CONFIRM_REQUIRED, status_code=400)
+    # Coleta arquivos de materiais para remover do volume (best-effort).
+    try:
+        with client.connect() as db:
+            materials = study_store.list_materials_by_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+        with client.connect_rw() as db:
+            study_store.delete_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.delete.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    # Remove arquivos do volume (best-effort: registros já foram removidos do banco).
+    for mat in materials:
+        try:
+            Path(mat.file_path).unlink(missing_ok=True)
+        except OSError:
+            _log.warning("study.material.file_unlink_failed", path=mat.file_path)
+    _log.info("study.topic.deleted", topic=_log_key(key))
+    return RedirectResponse(_TOPICS_ROUTE, status_code=303)
