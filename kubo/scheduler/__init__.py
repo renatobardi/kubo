@@ -27,6 +27,10 @@ from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
+from kubo.scheduler.study_lessons import (
+    execute_study_lesson_job,
+    execute_study_transition_job,
+)
 from kubo.scheduler.sweep import DEST_DISPATCH, SWEEP_DISPATCH
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
@@ -91,8 +95,9 @@ class Schedules(BaseModel):
     supersede no ADR-0022).
 
     Jobs internos de Estudos (`JobEntry`, KUBO-137/138) foram desregistrados em KUBO-161
-    (ADR-0047): as rotas de plano/lição foram removidas e não há planos ativos. KUBO-166
-    traz os jobs de volta quando o ciclo de ativação estiver implementado."""
+    (ADR-0047) e reregistrados em KUBO-166 como jobs internos em código (não entries do
+    YAML): `study_transition` (06:00) e `study_lesson` (07:00). KUBO-168 traz a geração
+    de lição com IA sobre o schema novo."""
 
     model_config = ConfigDict(extra="forbid")
     timezone: str
@@ -403,6 +408,58 @@ def _add_digest_poll_job(
     )
 
 
+# Cron dos jobs de Estudos (KUBO-166, ADR-0047 §3) — fixo no código, não no
+# schedules.yaml: é operação do scheduler de Estudos, não catálogo de workers.
+_STUDY_TRANSITION_CRON = "0 6 * * *"  # 06:00 — véspera do 1º dia
+_STUDY_LESSON_CRON = "0 7 * * *"  # 07:00 — geração diária
+
+
+def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
+    """Registra os jobs de Estudos: transição scheduled→running + geração de lição.
+
+    Job de transição roda às 06:00 (antes do job de lição) — busca temas em
+    `scheduled` e transiciona para `running` na véspera do 1º dia de cadência.
+    Job de lição roda às 07:00 — busca temas em `running` e gera a próxima lição.
+    Ambos resolvem tenant/user via `resolve_scheduler_tenant_and_user` (uso
+    pessoal, usuário único). KUBO-168 traz a geração de lição com IA.
+    """
+
+    def _transition() -> None:
+        try:
+            with client.connect(client.config()) as db:
+                tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+                from datetime import date
+
+                execute_study_transition_job(
+                    db, tenant_id=tenant_id, user_id=user_id, today=date.today()
+                )
+        except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
+            _log.exception("study_transition_job_failed")
+
+    def _lesson() -> None:
+        try:
+            with client.connect(client.config()) as db:
+                tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+                from datetime import date
+
+                execute_study_lesson_job(
+                    db, tenant_id=tenant_id, user_id=user_id, today=date.today()
+                )
+        except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
+            _log.exception("study_lesson_job_failed")
+
+    scheduler.add_job(
+        _transition,
+        trigger=_cron_trigger(_STUDY_TRANSITION_CRON, tz, label="study_transition"),
+        id="study_transition",
+    )
+    scheduler.add_job(
+        _lesson,
+        trigger=_cron_trigger(_STUDY_LESSON_CRON, tz, label="study_lesson"),
+        id="study_lesson",
+    )
+
+
 def build_scheduler(
     schedules: Schedules,
     settings: settings_store.Settings | None = None,
@@ -424,6 +481,7 @@ def build_scheduler(
     if settings is not None:
         _add_digest_job(scheduler, settings, tz)
         _add_digest_poll_job(scheduler, settings, tz)
+        _add_study_jobs(scheduler, tz)
     return scheduler
 
 

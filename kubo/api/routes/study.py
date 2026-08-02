@@ -1348,3 +1348,86 @@ def set_cadence(
     except ValueError:
         return PlainTextResponse("Dia da semana inválido.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+# --- Ativação + transições reversíveis (KUBO-166, ADR-0047 §3) --------------------------
+
+
+_TOPIC_NOT_PLANNING_ACTIVATE = "Só é possível ativar um estudo em planejamento."
+_TOPIC_NOT_SCHEDULED_EDIT = "Só é possível editar o plano de um estudo agendado."
+_TOPIC_FROZEN = "O plano está congelado (lições já geradas) e não pode ser editado."
+
+
+@router.post("/topics/{key}/activate")
+def activate_topic(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Ativa o Plano: planning → scheduled.
+
+    O dono clica "Ativar" quando está satisfeito com o Plano. O scheduler gera
+    a 1ª lição na véspera do 1º dia de cadência (scheduled → running).
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state != "planning":
+            return PlainTextResponse(_TOPIC_NOT_PLANNING_ACTIVATE, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.activate_plan(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.activate.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.post("/topics/{key}/edit-plan")
+def edit_plan_back(
+    request: Request,
+    key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Volta de scheduled → planning (reversível pré-1ª lição).
+
+    Permite ao dono ajustar o Plano antes do scheduler gerar a 1ª lição.
+    A partir de `running` (congelado), a transição é bloqueada.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        if topic.state == "running":
+            return PlainTextResponse(_TOPIC_FROZEN, status_code=400)
+        if topic.state != "scheduled":
+            return PlainTextResponse(_TOPIC_NOT_SCHEDULED_EDIT, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            study_store.set_topic_state(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+                state="planning",
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.edit_plan.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)

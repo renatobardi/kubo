@@ -175,11 +175,11 @@ def test_unknown_timezone_is_rejected() -> None:
 
 def test_load_schedules_reads_real_repo_config() -> None:
     """`load_schedules()` sobre o `schedules.yaml` real da raiz, PÓS corte RSS (#108), migração
-    do GitHub pro sweep (#110), KUBO-44 (digest sai do YAML) e KUBO-161 (jobs de Estudos
-    desregistrados, ADR-0047): 1 `sweep: rss` + 1 `sweep: github-repo` (ADR-0025 §4/§5) + 1
-    destilador diário ATIVO (ADR-0013 §VIII) — 3 entries, timezone explícita, ZERO
-    worker `feed` estático, ZERO flow agendado (FlowEntry aposentado, #110), ZERO digest
-    no YAML e ZERO jobs de Estudos (desregistrados em KUBO-161)."""
+    do GitHub pro sweep (#110), KUBO-44 (digest sai do YAML) e KUBO-166 (jobs de Estudos
+    reregistrados em código, não no YAML): 1 `sweep: rss` + 1 `sweep: github-repo`
+    (ADR-0025 §4/§5) + 1 destilador diário ATIVO (ADR-0013 §VIII) — 3 entries, timezone
+    explícita, ZERO worker `feed` estático, ZERO flow agendado (FlowEntry aposentado, #110),
+    ZERO digest no YAML e ZERO entries de Estudos no YAML (jobs são internos em código)."""
     from kubo.scheduler import SweepEntry, WorkerEntry, load_schedules
 
     schedules = load_schedules()
@@ -230,14 +230,15 @@ def test_distiller_entry_config_validates() -> None:
 
 def test_build_scheduler_creates_yaml_digest_and_poll_jobs() -> None:
     """Com settings, o scheduler monta: 3 jobs do YAML (2 sweeps + distiller) + digest +
-    poll = 5. Jobs de Estudos foram desregistrados em KUBO-161 (ADR-0047). Não inicia o
-    scheduler (`.start()` bloquearia)."""
+    poll + 2 jobs de Estudos (study_transition + study_lesson) = 7. Jobs de Estudos
+    foram reregistrados em KUBO-166 (ADR-0047 §3). Não inicia o scheduler
+    (`.start()` bloquearia)."""
     from kubo.scheduler import build_scheduler, load_schedules
 
     scheduler = build_scheduler(load_schedules(), _scheduler_settings())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 5
+    assert len(scheduler.get_jobs()) == 7
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:

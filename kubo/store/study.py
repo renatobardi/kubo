@@ -934,3 +934,123 @@ def remove_chapter_from_entry(
     )
     _log.info("store.plan.chapter_removed", entry=str(entry_id), chapter=str(chapter_id))
     return True
+
+
+# --- Ativação + scheduler + imutabilidade (KUBO-166) -------------------------------------
+
+
+def activate_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Ativa o plano do tema: planning → scheduled.
+
+    Seta `study_plan.status='active'` + `activated_at=now` e `topic.state='scheduled'`.
+    Atômico numa transação — se qualquer statement falha, nada é persistido.
+    Não valida a legalidade da transição aqui (a rota decide); só persiste.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        raise StoreError("plano não encontrado para o tema")
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $plan SET status = 'active', activated_at = time::now() "  # noqa: S608
+            f"WHERE {_PLAN_SCOPE};",
+            f"UPDATE $topic SET state = 'scheduled' WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        ],
+        {
+            "plan": plan.id,
+            "topic": topic_id,
+            "tenant": tenant_id,
+            "user": user_id,
+        },
+    )
+    _log.info("store.plan.activated", topic=str(topic_id))
+
+
+def list_topics_by_state(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    state: str,
+) -> list[Topic]:
+    """Lista temas em um estado específico (escopo user dentro do tenant).
+
+    Usado pelo scheduler para encontrar temas em 'scheduled' e 'running'.
+    """
+    rows = db.query(
+        f"SELECT * FROM topic WHERE state = $state AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"state": state, "tenant": tenant_id, "user": user_id},
+    )
+    return [_topic_from_row(r) for r in rows]
+
+
+def create_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    plan_entry_id: RecordID,
+    scheduled_for: datetime,
+) -> RecordID:
+    """Cria um registro de lição para um plan_entry num dia específico.
+
+    O conteúdo da lição (concept, scenario, application, quiz) é gerado pelo
+    scheduler (KUBO-168 traz a geração com IA). Aqui cria o registro com
+    campos vazios — o scheduler preenche. O índice UNIQUE lesson_plan_day
+    impede duplicata por dia.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_id = _fresh("lesson")
+    try:
+        transaction.run_transaction(
+            db,
+            [
+                "CREATE $lesson SET tenant_id = $tenant, user_id = $user, "
+                "study_plan = $plan, plan_entry = $entry, "
+                "scheduled_for = $when, "
+                "concept = '', scenario = '', application = '', quiz = [], provenance = [];"
+            ],
+            {
+                "lesson": lesson_id,
+                "tenant": tenant_id,
+                "user": user_id,
+                "plan": plan_id,
+                "entry": plan_entry_id,
+                "when": scheduled_for,
+            },
+        )
+    except Exception as exc:
+        raise StoreError(f"erro ao criar lição: {exc}") from exc
+    _log.info(
+        "store.lesson.created",
+        lesson=str(lesson_id),
+        plan=str(plan_id),
+        scheduled_for=scheduled_for.isoformat(),
+    )
+    return lesson_id
+
+
+def count_lessons_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> int:
+    """Conta quantas lições já foram geradas para um plano."""
+    rows = db.query(
+        f"SELECT count() AS n FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return rows[0].get("n", 0) if rows else 0
