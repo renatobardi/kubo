@@ -9,14 +9,16 @@ propõe, o sistema confere. Falha de LLM não trava a tela — a rota cai no
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+import re
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError
-from kubo.executors.base import Executor
+from kubo.executors.base import Executor, StreamingExecutor
 from kubo.store.study import MaterialChapter
 
 _log = structlog.get_logger(__name__)
@@ -60,6 +62,19 @@ class PlannerChatUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str
+    lessons: list[PlanLesson] | None = Field(default=None, max_length=200)
+
+
+class PlannerStreamPlan(BaseModel):
+    """Bloco JSON extraído do stream do planner (KUBO-168): só o plano.
+
+    No modo streaming, o texto explicativo viaja fora do bloco JSON (como
+    chunks de texto livre). O bloco JSON marcado com ```json contém só as
+    lições. `text` não existe aqui — o texto vem dos chunks acumulados.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     lessons: list[PlanLesson] | None = Field(default=None, max_length=200)
 
 
@@ -165,6 +180,44 @@ class Planner:
                 _log.info("study.planner.chat_incoherent", chapters=len(chapters))
                 lessons = None
         return PlannerChatReply(text=update.text, lessons=lessons)
+
+    def stream_chat(
+        self,
+        executor: StreamingExecutor,
+        *,
+        user_message: str,
+        chapters: Sequence[MaterialChapter],
+        current_plan: Sequence[tuple[str, list[int]]],
+        planning_history: Sequence[tuple[str, str]] = (),
+        focus: str | None = None,
+        depth: str | None = None,
+        material_summaries: Sequence[str] = (),
+    ) -> Iterator[str]:
+        """Chat incremental com streaming (KUBO-168, AC#29).
+
+        Diferente de `chat` (que devolve PlannerChatReply via JSON estruturado),
+        `stream_chat` devolve chunks de texto livre. O LLM produz texto
+        explicativo seguido de um bloco JSON marcado com ```json. O caller
+        acumula os chunks e usa `extract_planner_reply` no final para separar
+        texto do plano. Mesma demarcação de `untrusted_content` do `chat`.
+        """
+        instruction = (
+            self._prompt + "\n\nResponda com texto explicativo em português do Brasil. Se a "
+            "resposta incluir um plano atualizado, adicione ao final um bloco "
+            'JSON marcado com ```json contendo {"lessons": [{"title": "...", '
+            '"chapter_seqs": [...]}]}. Se não atualizar o plano, não inclua o '
+            "bloco JSON."
+        )
+        content = _build_chat_content(
+            chapters,
+            user_message=user_message,
+            current_plan=current_plan,
+            planning_history=planning_history,
+            focus=focus,
+            depth=depth,
+            material_summaries=material_summaries,
+        )
+        yield from executor.stream(instruction, content)
 
 
 def mechanical_proposal(chapters: Sequence[MaterialChapter]) -> PlanProposal:
@@ -341,3 +394,37 @@ def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:
             return False
         seen |= set(seqs)
     return True
+
+
+# Regex para extrair bloco JSON marcado com ```json ... ``` do texto do stream.
+_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL)
+
+
+def extract_planner_reply(
+    full_text: str, chapters: Sequence[MaterialChapter]
+) -> PlannerChatReply | None:
+    """Extrai PlannerChatReply do texto completo acumulado do stream (KUBO-168).
+
+    Separar o texto explicativo do bloco JSON (plano). Se não há bloco JSON,
+    devolve só texto (lessons=None). Se o bloco JSON é incoerente (seq
+    inexistente), descarta o plano mas preserva o texto — mesma postura do
+    `chat`. Remove o bloco JSON do texto exibido ao dono.
+    """
+    match = _JSON_BLOCK_RE.search(full_text)
+    if match is None:
+        return PlannerChatReply(text=full_text.strip(), lessons=None)
+    json_str = match.group(1)
+    text = (full_text[: match.start()] + full_text[match.end() :]).strip()
+    try:
+        data = json.loads(json_str)
+        plan = PlannerStreamPlan.model_validate(data)
+    except (json.JSONDecodeError, ValidationError):
+        _log.info("study.planner.stream_parse_failed")
+        return PlannerChatReply(text=full_text.strip(), lessons=None)
+    lessons: list[PlanLesson] | None = plan.lessons or None
+    if lessons is not None:
+        proposal = PlanProposal(lessons=lessons)
+        if not _is_coherent(proposal, {chapter.seq for chapter in chapters}):
+            _log.info("study.planner.stream_incoherent")
+            lessons = None
+    return PlannerChatReply(text=text, lessons=lessons)

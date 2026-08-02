@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.store.study import Material, PlanEntry, StudyPlan, Topic
-from kubo.study.planner import PlanLesson, PlannerChatReply, PlanProposal
+from kubo.study.planner import PlanLesson, PlanProposal
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
@@ -152,14 +152,12 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
         )(),
     )
 
-    # Planner.chat mockado: devolve texto + plano atualizado.
-    def _fake_chat(self: Any, **kw: Any) -> PlannerChatReply:
-        return PlannerChatReply(
-            text="Juntei as lições 1 e 2.",
-            lessons=[PlanLesson(title="Tudo junto", chapter_seqs=[1, 2, 3])],
-        )
+    # Planner.stream_chat mockado: devolve chunks que formam texto + bloco JSON.
+    def _fake_stream_chat(self: Any, executor: Any, **kw: Any) -> Any:
+        yield "Juntei as lições 1 e 2."
+        yield '\n\n```json\n{"lessons": [{"title": "Tudo junto", "chapter_seqs": [1, 2, 3]}]}\n```'
 
-    monkeypatch.setattr("kubo.study.planner.Planner.chat", _fake_chat)
+    monkeypatch.setattr("kubo.study.planner.Planner.stream_chat", _fake_stream_chat)
 
     # Planner.propose mockado para repropose.
     def _fake_propose(self: Any, chapters: Any, **kw: Any) -> PlanProposal:

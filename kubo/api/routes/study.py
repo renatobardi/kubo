@@ -49,7 +49,12 @@ from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
-from kubo.study.planner import Planner, PlannerChatReply, mechanical_proposal
+from kubo.study.planner import (
+    Planner,
+    PlannerChatReply,
+    extract_planner_reply,
+    mechanical_proposal,
+)
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -810,8 +815,13 @@ _TOPIC_NOT_DRAFT_CLOSE = "Só é possível fechar um estudo em rascunho."
 _TOPIC_EMPTY_CLOSE = "Adicione pelo menos um material antes de fechar o estudo."
 
 
-def _planner(ctx: SessionContext) -> Planner:
-    """Constrói o planner com a persona `planner` (modelo vem do catálogo)."""
+def _planner(ctx: SessionContext) -> tuple[Planner, ApiExecutor]:
+    """Constrói o planner + executor com a persona `planner` (modelo do catálogo).
+
+    O executor é devolvido separadamente para `stream_chat` (KUBO-168): o
+    Planner usa `Executor` para `chat`/`propose` e `StreamingExecutor` para
+    `stream_chat`. `ApiExecutor` implementa ambos.
+    """
     with client.connect() as db:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "planner")
     executor = ApiExecutor(
@@ -821,7 +831,7 @@ def _planner(ctx: SessionContext) -> Planner:
             timeout=_PLANNER_TIMEOUT,
         ),
     )
-    return Planner(executor=executor, prompt=persona.prompt)
+    return Planner(executor=executor, prompt=persona.prompt), executor
 
 
 def _collect_all_chapters(
@@ -902,7 +912,7 @@ def close_topic(
     # Propõe o plano (LLM ou fallback mecânico).
     from kubo.study.planner import mechanical_proposal
 
-    planner = _planner(ctx)
+    planner, _executor = _planner(ctx)
     proposal = planner.propose(
         chapters,
         focus=topic.focus,
@@ -1105,34 +1115,66 @@ def chat_with_planner(
         _log.warning("study.planner_chat.user_persist_failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
-    planner = _planner(ctx)
+    planner, stream_executor = _planner(ctx)
 
-    def _stream() -> Any:
-        """Chama o planner (síncrono, não-streaming) e envia resultado via SSE."""
-        try:
-            reply = planner.chat(
-                user_message=message,
-                chapters=chapters,
-                current_plan=current_plan,
-                planning_history=history,
-                focus=topic.focus,
-                depth=topic.depth,
-                material_summaries=summaries,
-            )
-        except (ExecutorError, StoreError, ConfigError) as exc:
-            _log.warning("study.planner_chat.failed", topic=_log_key(key), error=str(exc))
-            yield {"event": "error", "data": "Falha ao gerar resposta."}
-            return
-        if reply is None:
-            yield {"event": "error", "data": "Falha ao gerar resposta."}
-            return
-        plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
-        yield {
-            "event": "done",
-            "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
-        }
+    return EventSourceResponse(
+        _planner_stream(
+            planner=planner,
+            stream_executor=stream_executor,
+            message=message,
+            chapters=chapters,
+            current_plan=current_plan,
+            history=history,
+            topic=topic,
+            summaries=summaries,
+            ctx=ctx,
+            key=key,
+        )
+    )
 
-    return EventSourceResponse(_stream())
+
+def _planner_stream(
+    *,
+    planner: Planner,
+    stream_executor: ApiExecutor,
+    message: str,
+    chapters: list[study_store.MaterialChapter],
+    current_plan: list[tuple[str, list[int]]],
+    history: list[tuple[str, str]],
+    topic: study_store.Topic,
+    summaries: list[str],
+    ctx: SessionContext,
+    key: str,
+) -> Any:
+    """Generator SSE que streama chunks do planner e envia done ao final (KUBO-168)."""
+    chunks: list[str] = []
+    try:
+        for chunk in planner.stream_chat(
+            stream_executor,
+            user_message=message,
+            chapters=chapters,
+            current_plan=current_plan,
+            planning_history=history,
+            focus=topic.focus,
+            depth=topic.depth,
+            material_summaries=summaries,
+        ):
+            chunks.append(chunk)
+            yield {"event": "chunk", "data": chunk}
+    except (ExecutorError, StoreError, ConfigError) as exc:
+        _log.warning("study.planner_chat.stream_failed", topic=_log_key(key), error=str(exc))
+        yield {"event": "error", "data": "Falha ao gerar resposta."}
+        return
+    full = "".join(chunks)
+    reply = extract_planner_reply(full, chapters)
+    if reply is None:
+        yield {"event": "error", "data": "Falha ao gerar resposta."}
+        return
+    plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
+    yield {
+        "event": "done",
+        "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
+    }
 
 
 @router.post("/topics/{key}/back-to-draft")
@@ -1191,7 +1233,7 @@ def repropose_plan(
         summaries = _material_summaries_of(db, ctx, topic.id)
         planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
-    planner = _planner(ctx)
+    planner, _executor = _planner(ctx)
     proposal = planner.propose(
         chapters,
         focus=topic.focus,
