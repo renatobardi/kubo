@@ -117,3 +117,19 @@ A reversão `scheduled→planning` (botão "Editar plano") é atômica via `deac
 ### Emenda 6 — Delete de Material em `planning` (KUBO-167)
 
 O §4 diz que deletar Material em `planning` "exige regenerar o Plano antes de reativar". A implementação de KUBO-167 **permite o delete** (não bloqueia) e **delega ao dono** a regeneração: `plan_entry.chapters` pode ficar com refs órfãs a capítulos apagados, e `activate_plan` não valida isso. A UI mostra o plano com capítulos pendentes e o dono deve repropor o plano via chat do `planner` antes de ativar. Se o dono ativar com capítulos órfãos, a geração de lição (KUBO-168) falha graciosamente (capítulo não encontrado → lição placeholder). Esta emenda registra a decisão: **validação de capítulos órfãos em `activate_plan` fica fora de escopo do KUBO-167**; se virmos confusão real na UX, adicionaremos validação em follow-up.
+
+### Emenda 7 — Delete do último Material em `planning` auto-reverte a `draft` (2026-08-02)
+
+A Emenda 6 permitia deletar Material em `planning` e delegava ao dono a regeneração. O caso extremo — deletar o **último** Material em `planning` — deixava o Tema num estado inválido: `planning` sem Materiais, sem capítulos, sem sobre o que propor. A rota `repropose_plan` crashava (KeyError/ValidationError ao tentar construir plano de capítulos inexistentes).
+
+**Decisão:** deletar o último Material em `planning` **auto-reverte o Tema a `draft`**. O estado `planning` sem Materiais não tem sentido — o Plano é proposição sobre capítulos de Materiais. O auto-revert previne o estado em vez de tratar o crash depois. A rota `delete_material` checa `count_materials_by_topic` após o delete; se 0 e o estado era `planning`, chama `revert_to_draft_if_planning` (CAS em `state='planning'`) e redireciona com `?notice=voltou-rascunho` (banner informativo no template). O CAS fecha a janela TOCTOU: se outra requisição ativou o plano (planning → scheduled) entre o delete e a reversão, o CAS falha e a rota devolve `_TOPIC_STATE_CHANGED` (400) em vez de sobrescrever `scheduled` com `draft`.
+
+**Guarda defensiva:** a rota `repropose_plan` também guarda contra chapters vazio (400 legível, não 500) — defesa em profundidade caso o auto-revert falhe (race condition, erro de escrita).
+
+**Muda a Emenda 6:** o caso "deletar último Material em planning" deixa de ser "delega ao dono" e vira "sistema reverte automaticamente". O caso "deletar Material não-último em planning" mantém o comportamento da Emenda 6 (delega ao dono, plano fica com refs órfãs).
+
+### Emenda 8 — Rename do item de nav "Estudos" → "Temas" (2026-08-02)
+
+O grupo da sidebar `Estudos` (domínio) tinha um único item também rotulado `Estudos` (entidade), criando a repetição `ESTUDOS / Estudos` na sidebar. Os outros grupos seguem o padrão domínio → entidades (`Conhecimento` → Destilados/Entidades/Fontes; `Trabalho` → Fluxos/Execuções; `Distribuição` → Destinos/Envios).
+
+**Decisão:** o item de nav passa a se chamar `Temas` (a entidade listada na tela, per `CONTEXT.md`), enquanto o grupo permanece `Estudos` (o domínio). O rename se propaga aos textos da UI que referenciam a entidade: H1 da lista, botão "Novo tema", "Deletar tema", "Fechar tema", "Nome do tema", mensagens de erro das rotas. Permanece "estudo" onde é domínio/atividade: "Plano de estudo" (termo canônico do glossário), "o que quer do estudo" (atividade), `_NOT_A_MEMBER = "Estudos é pessoal..."` (domínio).

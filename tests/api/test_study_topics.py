@@ -75,10 +75,10 @@ def test_topics_page_requires_auth(client: TestClient) -> None:
 
 
 def test_topics_page_shows_empty_state(authed_client: TestClient) -> None:
-    """Sem temas, mostra o estado vazio com botão 'Novo estudo'."""
+    """Sem temas, mostra o estado vazio com botão 'Novo tema'."""
     html = authed_client.get("/study/topics").text
-    assert "Nenhum estudo ainda" in html
-    assert "Novo estudo" in html
+    assert "Nenhum tema ainda" in html
+    assert "Novo tema" in html
 
 
 def test_topics_page_lists_topics_with_name_and_state(

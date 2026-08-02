@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
-{% block title %}Estudos · Kubo{% endblock %}
+{% block title %}Temas · Kubo{% endblock %}
 {% block content %}
 <div class="space-y-4">
-  {{ macros.page_header("Estudos", "Seus estudos e em que pé está cada um.") }}
+  {{ macros.page_header("Temas", "Seus temas de estudo e em que pé está cada um.") }}
 
   {# Abas: ativos / arquivados #}
   <div class="flex gap-2">
@@ -19,7 +19,7 @@
 
   {% if not rows %}
     <div class="rounded-xl bg-card p-6 text-sm text-muted-foreground ring-1 ring-foreground/10">
-      {% if archived %}Nenhum estudo arquivado.{% else %}Nenhum estudo ainda. Comece criando um novo.{% endif %}
+      {% if archived %}Nenhum tema arquivado.{% else %}Nenhum tema ainda. Comece criando um novo.{% endif %}
     </div>
   {% else %}
   <div class="space-y-2">
@@ -45,7 +45,7 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button type="submit"
             class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px md:w-auto">
-      Novo estudo
+      Novo tema
     </button>
   </form>
   {% endif %}

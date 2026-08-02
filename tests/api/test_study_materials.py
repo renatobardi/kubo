@@ -19,6 +19,7 @@ from kubo.store.study import Material, Topic
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
+_TOPIC_ID = RecordID("topic", "abc123")
 
 
 def _topic(**kw: object) -> Topic:
@@ -335,3 +336,132 @@ def test_delete_material_rejects_non_draft_topic(
         follow_redirects=False,
     )
     assert resp.status_code == 400
+
+
+# --- Delete do último Material em planning → auto-revert a draft (ADR-0047 Emenda 7) -----
+
+
+def test_delete_last_material_in_planning_reverts_to_draft(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deletar o último Material em planning reverte o Tema a draft (Emenda 7).
+
+    Sem Materiais, não há sobre o que propor — o estado planning é inválido.
+    O auto-revert previne o estado em vez de tratar o crash em repropose.
+    """
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
+    )
+    revert_calls: list[dict[str, object]] = []
+
+    def _capture_revert(db: object, **kw: object) -> bool:
+        revert_calls.append(kw)
+        return True
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning", _capture_revert
+    )
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials/mat1/delete",
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    # O auto-revert chamou revert_to_draft_if_planning com o topic_id correto.
+    assert len(revert_calls) == 1, f"esperado 1 chamada, got {revert_calls}"
+    assert revert_calls[0].get("topic_id") == _TOPIC_ID, (
+        f"topic_id incorreto: {revert_calls[0].get('topic_id')}"
+    )
+    # O redirect leva o notice exato de volta a draft.
+    location = resp.headers["location"]
+    assert "notice=voltou-rascunho" in location, f"notice ausente ou incorreto: {location}"
+
+
+def test_delete_last_material_in_planning_cas_failed_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Se o CAS falhar (estado mudou concorrentemente), devolve 400, não sobrescreve."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning",
+        lambda db, **kw: False,
+    )
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials/mat1/delete",
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "mudou" in resp.text.lower()
+
+
+def test_delete_last_material_in_planning_shows_flash_on_topic_page(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tela do tema mostra o banner informativo quando o notice está no redirect."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="draft"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_materials_by_topic", lambda db, **kw: []
+    )
+    monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
+    resp = authed_client.get("/study/topics/abc123", params={"notice": "voltou-rascunho"})
+    assert resp.status_code == 200, f"esperado 200, got {resp.status_code}"
+    # O banner mostra a mensagem humana, não a chave do notice.
+    assert "Último material removido" in resp.text
+
+
+def test_delete_non_last_material_in_planning_stays_in_planning(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deletar Material em planning quando há outros NÃO reverte a draft."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 1
+    )
+    revert_calls: list[dict[str, object]] = []
+
+    def _capture_revert(db: object, **kw: object) -> bool:
+        revert_calls.append(kw)
+        return True
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning", _capture_revert
+    )
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials/mat1/delete",
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    # Não reverteu — revert_to_draft_if_planning não foi chamada.
+    assert not revert_calls, f"revert chamada indevidamente: {revert_calls}"
+    # Redirect sem notice.
+    assert "notice=" not in resp.headers["location"]

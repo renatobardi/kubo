@@ -56,9 +56,13 @@ def stub_study_reads(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_nav_has_study_group_with_single_item() -> None:
-    """O grupo Estudos tem um único item (Estudos → /study/topics)."""
+    """O grupo Estudos tem um único item (Temas → /study/topics).
+
+    O label do item é 'Temas' (a entidade listada), não 'Estudos' (o domínio) —
+    evita a repetição grupo=item que existia antes do rename (ADR-0047 Emenda 8).
+    """
     assert [(i["label"], i["route"]) for i in NAV if i["group"] == GROUP_STUDY] == [
-        ("Estudos", "/study/topics"),
+        ("Temas", "/study/topics"),
     ]
 
 
@@ -119,17 +123,17 @@ def test_topics_page_lists_topics_with_name_and_state(
 
 
 def test_topics_page_empty_state(authed_client: TestClient) -> None:
-    """Sem nenhum tema, a tela oferece começar um estudo novo."""
+    """Sem nenhum tema, a tela oferece começar um tema novo."""
     body = _content(authed_client.get("/study/topics").text)
 
-    assert "Nenhum estudo ainda" in body
+    assert "Nenhum tema ainda" in body
 
 
-def test_topics_page_has_new_study_button(authed_client: TestClient) -> None:
-    """A lista tem o botão 'Novo estudo' (POST /study/topics)."""
+def test_topics_page_has_new_topic_button(authed_client: TestClient) -> None:
+    """A lista tem o botão 'Novo tema' (POST /study/topics)."""
     body = _content(authed_client.get("/study/topics").text)
     assert 'action="/study/topics"' in body
-    assert "Novo estudo" in body
+    assert "Novo tema" in body
 
 
 # --- Portão -----------------------------------------------------------------------------

@@ -96,15 +96,17 @@ _TOPIC_TABLE = "topic"
 _DENIED = "Acesso negado."
 _CSRF_INVALID = "CSRF inválido — recarregue a página."
 _WRITE_UNAVAILABLE = "Escrita indisponível por erro de configuração."
-_EMPTY_TITLE = "O nome do estudo não pode ser vazio."
+_EMPTY_TITLE = "O nome do tema não pode ser vazio."
 _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
-_TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um estudo em rascunho."
-_OVER_LIMIT = "Limite de materiais por estudo atingido."
+_TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um tema em rascunho."
+_OVER_LIMIT = "Limite de materiais por tema atingido."
 _OVERSIZE = "Arquivo muito grande."
 _PARSE_FAILED = "Não foi possível ler o arquivo: epub/PDF inválido ou corrompido."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
-_TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um estudo em rascunho."
+_TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um tema em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
+# Chave do notice de auto-revert (query param no redirect) — o template mostra o banner.
+_AUTO_REVERT_NOTICE = "voltou-rascunho"
 _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
 _INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
 _MENTOR_MAX_TOKENS = 2048
@@ -341,7 +343,7 @@ def create_topic(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
-                title="Estudo sem nome",
+                title="Tema sem nome",
             )
     except ConfigError:
         _log.warning("study.write_unavailable")
@@ -355,6 +357,7 @@ def create_topic(
 @router.get("/topics/{key}")
 def topic_detail(request: Request, key: str) -> Response:
     """Tela do tema: lista de Materiais + dropzone (draft) ou estado."""
+    notice = request.query_params.get("notice")
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
@@ -414,6 +417,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "plan": plan,
             "plan_entries": plan_entries,
             "chapter_titles": chapter_titles,
+            "notice": notice,
         },
     )
 
@@ -452,7 +456,7 @@ def rename_topic(
     except StoreError:
         # StoreError aqui = tema arquivado (regra de negócio, não config).
         _log.warning("study.topic.rename_rejected", topic=_log_key(key))
-        return PlainTextResponse("Não é possível renomear um estudo arquivado.", status_code=400)
+        return PlainTextResponse("Não é possível renomear um tema arquivado.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -573,6 +577,26 @@ def delete_material(
     if topic.state in ("scheduled", "running", "archived"):
         msg = _TOPIC_ARCHIVED_READONLY if topic.state == "archived" else _TOPIC_FROZEN_MATERIAL
         return PlainTextResponse(msg, status_code=400)
+    material = _fetch_and_delete_material(ctx, topic.id, mkey)
+    if isinstance(material, Response):
+        return material
+    # Remove o arquivo do volume (best-effort: registro já foi removido do banco).
+    try:
+        Path(material.file_path).unlink(missing_ok=True)
+    except OSError:
+        _log.warning("study.material.file_unlink_failed", path=material.file_path)
+    _log.info("study.material.deleted", material=_log_key(mkey), topic=_log_key(key))
+    # Auto-revert a draft se era o último Material em planning (ADR-0047 Emenda 7).
+    auto = _auto_revert_if_empty(ctx, topic, key)
+    if auto is not None:
+        return auto
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+def _fetch_and_delete_material(
+    ctx: SessionContext, topic_id: RecordID, mkey: str
+) -> study_store.Material | Response:
+    """Busca, valida e deleta o material; devolve o Material ou Response de erro."""
     material_id = RecordID("material", mkey.strip())
     try:
         with client.connect() as db:
@@ -582,7 +606,7 @@ def delete_material(
         if material is None:
             return PlainTextResponse("Material não encontrado.", status_code=404)
         # Valida que o material pertence ao Tema da URL (não a outro Tema).
-        if material.topic != topic.id:
+        if material.topic != topic_id:
             return PlainTextResponse("Material não encontrado.", status_code=404)
         with client.connect_rw() as db:
             study_store.delete_material(
@@ -594,13 +618,50 @@ def delete_material(
     except StoreError:
         _log.warning("study.material.delete_failed", material=_log_key(mkey))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
-    # Remove o arquivo do volume (best-effort: registro já foi removido do banco).
+    return material
+
+
+def _auto_revert_if_empty(
+    ctx: SessionContext, topic: study_store.Topic, key: str
+) -> Response | None:
+    """Reverte planning → draft se o Tema ficou sem Materiais após um delete.
+
+    Sem Materiais, não há sobre o que propor — o estado planning é inválido.
+    Usa CAS (`revert_to_draft_if_planning`): se o estado mudou concorrentemente
+    (outra req ativou o plano), o CAS falha e a rota devolve `_TOPIC_STATE_CHANGED`
+    em vez de sobrescrever `scheduled` com `draft`.
+
+    Devolve RedirectResponse com `?notice=` se reverteu, None se nada a fazer,
+    ou PlainTextResponse(400/503) se o CAS falhou ou a escrita falhou.
+    """
+    if topic.state != "planning":
+        return None
+    with client.connect() as db:
+        remaining = study_store.count_materials_by_topic(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_id=topic.id,
+        )
+    if remaining > 0:
+        return None
     try:
-        Path(material.file_path).unlink(missing_ok=True)
-    except OSError:
-        _log.warning("study.material.file_unlink_failed", path=material.file_path)
-    _log.info("study.material.deleted", material=_log_key(mkey), topic=_log_key(key))
-    return RedirectResponse(_topic_url(topic.id), status_code=303)
+        with client.connect_rw() as db:
+            reverted = study_store.revert_to_draft_if_planning(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                topic_id=topic.id,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.material.auto_revert_failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    if not reverted:
+        _log.info("study.material.auto_revert_cas_failed", topic=_log_key(key))
+        return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=400)
+    _log.info("study.material.auto_reverted", topic=_log_key(key))
+    location = f"{_topic_url(topic.id)}?notice={_AUTO_REVERT_NOTICE}"
+    return RedirectResponse(location, status_code=303)
 
 
 # --- Chat com mentor (KUBO-163, ADR-0047 §6) --------------------------------------------
@@ -818,8 +879,8 @@ def set_topic_fields(
 # --- Fechar Tema + planner propõe Plano (KUBO-164, ADR-0047 §2) -------------------------
 
 
-_TOPIC_NOT_DRAFT_CLOSE = "Só é possível fechar um estudo em rascunho."
-_TOPIC_EMPTY_CLOSE = "Adicione pelo menos um material antes de fechar o estudo."
+_TOPIC_NOT_DRAFT_CLOSE = "Só é possível fechar um tema em rascunho."
+_TOPIC_EMPTY_CLOSE = "Adicione pelo menos um material antes de fechar o tema."
 
 
 def _planner(ctx: SessionContext) -> tuple[Planner, ApiExecutor]:
@@ -983,7 +1044,8 @@ def close_topic(
 # --- Fase 2: chat com planner + edição incremental (KUBO-165, ADR-0047 §2) ---------------
 
 
-_TOPIC_NOT_PLANNING = "Só é possível operar um estudo em planejamento."
+_TOPIC_NOT_PLANNING = "Só é possível operar um tema em planejamento."
+_REPROPOSE_NO_CHAPTERS = "Adicione materiais antes de repropor o plano."
 _INVALID_ID = "Identificador inválido."
 
 
@@ -1258,6 +1320,12 @@ def repropose_plan(
         summaries = _material_summaries_of(db, ctx, topic.id)
         planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
+    # Guarda defensiva (ADR-0047 Emenda 7): sem capítulos, não há sobre o que propor.
+    # O auto-revert no delete deveria impedir este estado, mas a rota não confia —
+    # devolve 400 legível em vez de KeyError/ValidationError (500).
+    if not chapters:
+        return PlainTextResponse(_REPROPOSE_NO_CHAPTERS, status_code=400)
+
     planner, _executor = _planner(ctx)
     proposal = planner.propose(
         chapters,
@@ -1447,15 +1515,15 @@ def set_cadence(
 # --- Ativação + transições reversíveis (KUBO-166, ADR-0047 §3) --------------------------
 
 
-_TOPIC_NOT_PLANNING_ACTIVATE = "Só é possível ativar um estudo em planejamento."
-_TOPIC_NOT_SCHEDULED_EDIT = "Só é possível editar o plano de um estudo agendado."
+_TOPIC_NOT_PLANNING_ACTIVATE = "Só é possível ativar um tema em planejamento."
+_TOPIC_NOT_SCHEDULED_EDIT = "Só é possível editar o plano de um tema agendado."
 _TOPIC_FROZEN = "O plano está congelado (lições já geradas) e não pode ser editado."
-_TOPIC_ALREADY_ARCHIVED = "O estudo já está arquivado."
-_TOPIC_NOT_ARCHIVED = "O estudo não está arquivado."
-_TOPIC_FROZEN_MATERIAL = "Materiais são imutáveis quando o estudo está agendado ou em andamento."
+_TOPIC_ALREADY_ARCHIVED = "O tema já está arquivado."
+_TOPIC_NOT_ARCHIVED = "O tema não está arquivado."
+_TOPIC_FROZEN_MATERIAL = "Materiais são imutáveis quando o tema está agendado ou em andamento."
 _DELETE_CONFIRM_REQUIRED = "Confirmação obrigatória — marque que entende as consequências."
-_TOPIC_ARCHIVED_READONLY = "O estudo está arquivado (só leitura). Desarquive para editar."
-_TOPIC_STATE_CHANGED = "O estado do estudo mudou enquanto você operava — recarregue a página."
+_TOPIC_ARCHIVED_READONLY = "O tema está arquivado (só leitura). Desarquive para editar."
+_TOPIC_STATE_CHANGED = "O estado do tema mudou enquanto você operava — recarregue a página."
 _TOPIC_NO_PLAN = "Ative o plano apenas depois que o planner propor um plano."
 _TOPIC_NO_CADENCE = "Defina a cadência (dias da semana) antes de ativar o plano."
 

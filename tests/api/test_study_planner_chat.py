@@ -340,6 +340,27 @@ def test_repropose_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
+def test_repropose_with_no_chapters_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repropor com 0 capítulos (Materiais deletados) devolve 400, não 500.
+
+    Defesa em profundidade: mesmo se o auto-revert (Emenda 7) falhar, repropose
+    não crasha com ValidationError em mechanical_proposal([]) — a rota guarda
+    cedo e devolve mensagem legível.
+    """
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_chapters_light", lambda db, **kw: []
+    )
+    resp = authed_client.post(
+        "/study/topics/abc123/repropose",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "materiais" in resp.text.lower()
+
+
 # --- POST /topics/{key}/plan/entries/{ekey}/move -----------------------------------------
 
 
