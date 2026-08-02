@@ -253,3 +253,11 @@ class ContractError(KuboError):
     O runner chama `validate_worker` antes de abrir `run` — worker inválido
     nunca executa.
     """
+
+
+class UploadRejectionError(KuboError):
+    """Motivo tipado de rejeição de upload de Material (formato/tamanho/parse).
+
+    Levantada pela validação de upload na rota de Estudos (ADR-0047). A mensagem
+    é orientação para o dono ("formato não suportado", "arquivo grande demais"),
+    exibida na tela — nunca embute o conteúdo do arquivo (entrada hostil)."""

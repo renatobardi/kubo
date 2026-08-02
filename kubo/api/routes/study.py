@@ -35,7 +35,14 @@ from surrealdb import RecordID
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
 from kubo.api.session import SessionContext, resolve_session
-from kubo.errors import ConfigError, MaterialParseError, MembershipRequiredError, StoreError
+from kubo.errors import (
+    ConfigError,
+    ExecutorError,
+    MaterialParseError,
+    MembershipRequiredError,
+    StoreError,
+    UploadRejectionError,
+)
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
@@ -219,29 +226,21 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
-class _UploadRejection(Exception):
-    """Motivo tipado de rejeição de upload (formato/tamanho/parse)."""
-
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
-
-
 def _validated_upload(
     file: UploadFile | None,
 ) -> tuple[MaterialFormat, bytes, ParsedMaterial]:
-    """Valida extensão → tamanho → parse; levanta `_UploadRejection` se recusado."""
+    """Valida extensão → tamanho → parse; levanta `UploadRejectionError` se recusado."""
     fmt = _format_of(file)
     if file is None or fmt is None:
-        raise _UploadRejection(_BAD_FORMAT)
+        raise UploadRejectionError(_BAD_FORMAT)
     limit = _max_bytes()
     data = file.file.read(limit + 1)
     if len(data) > limit:
-        raise _UploadRejection(_OVERSIZE)
+        raise UploadRejectionError(_OVERSIZE)
     try:
         parsed = parse_material(data, fmt)
     except MaterialParseError as exc:
-        raise _UploadRejection(_PARSE_FAILED) from exc
+        raise UploadRejectionError(_PARSE_FAILED) from exc
     return fmt, data, parsed
 
 
@@ -475,8 +474,8 @@ def _process_uploads(
             break
         try:
             fmt, data, parsed = _validated_upload(upload)
-        except _UploadRejection as exc:
-            rejections.append(exc.message)
+        except UploadRejectionError as exc:
+            rejections.append(str(exc))
             continue
         summary = summarizer.generate(parsed)
         original = Path(upload.filename or "").name if upload is not None else ""
@@ -716,7 +715,7 @@ def chat_with_mentor(
             ):
                 chunks.append(chunk)
                 yield {"event": "chunk", "data": chunk}
-        except Exception:  # noqa: BLE001
+        except (ExecutorError, StoreError, ConfigError):
             _log.warning("study.chat.stream_failed", topic=_log_key(key))
             yield {"event": "error", "data": "Falha ao gerar resposta."}
             return
@@ -1120,7 +1119,7 @@ def chat_with_planner(
                 depth=topic.depth,
                 material_summaries=summaries,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (ExecutorError, StoreError, ConfigError) as exc:
             _log.warning("study.planner_chat.failed", topic=_log_key(key), error=str(exc))
             yield {"event": "error", "data": "Falha ao gerar resposta."}
             return

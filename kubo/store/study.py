@@ -1061,21 +1061,18 @@ def create_lesson(
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     lesson_id = _fresh("lesson")
-    try:
-        transaction.run_transaction(
-            db,
-            [_CREATE_LESSON_SQL],
-            {
-                "lesson": lesson_id,
-                "tenant": tenant_id,
-                "user": user_id,
-                "plan": plan_id,
-                "entry": plan_entry_id,
-                "when": scheduled_for,
-            },
-        )
-    except Exception as exc:
-        raise StoreError(f"erro ao criar lição: {exc}") from exc
+    transaction.run_transaction(
+        db,
+        [_CREATE_LESSON_SQL],
+        {
+            "lesson": lesson_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "plan": plan_id,
+            "entry": plan_entry_id,
+            "when": scheduled_for,
+        },
+    )
     _log.info(
         "store.lesson.created",
         lesson=str(lesson_id),
