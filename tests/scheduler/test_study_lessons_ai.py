@@ -98,6 +98,9 @@ def test_lesson_job_fills_lesson_with_ai(
         lambda db, **kw: (_plan(), _entries(1)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 0)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     monkeypatch.setattr(study_lessons.study_store, "create_lesson", lambda db, **kw: _LESSON_ID)
 
     # Tutor mockado: devolve uma lição preenchida.
@@ -158,6 +161,9 @@ def test_lesson_job_skips_fill_when_tutor_fails(
         lambda db, **kw: (_plan(), _entries(1)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 0)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     monkeypatch.setattr(study_lessons.study_store, "create_lesson", lambda db, **kw: _LESSON_ID)
 
     filled: list[RecordID] = []
@@ -182,6 +188,73 @@ def test_lesson_job_skips_fill_when_tutor_fails(
     assert filled == []
 
 
+def test_lesson_job_retries_placeholder_lesson(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lição placeholder (sem concept) é re-tentada: não cria nova, reutiliza a existente."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 4)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="running")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 0)
+    # Placeholder existe (Tutor falhou antes).
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: _LESSON_ID
+    )
+    created: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "create_lesson",
+        lambda db, **kw: created.append(kw["plan_entry_id"]),
+    )
+
+    from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
+
+    lesson_output = LessonOutput(
+        concept="Conceito retry",
+        scenario="Cenário",
+        application="Aplicação",
+        recap=None,
+        provenance=[ProvenanceItem(chapter_seq=1, quote="trecho")],
+        quiz=[
+            QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
+            QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
+        ],
+    )
+    filled: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "fill_lesson",
+        lambda db, **kw: filled.append(kw["lesson_id"]),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_chapters_for_entry",
+        lambda db, **kw: [_CHAPTER],
+    )
+    monkeypatch.setattr(
+        study_lessons,
+        "_build_tutor",
+        lambda db, tenant_id, user_id: _FakeTutor(lesson_output),
+    )
+    monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    # Não criou nova lição (reutilizou a placeholder).
+    assert created == []
+    # Preencheu a lição existente.
+    assert filled == [_LESSON_ID]
+
+
 class _FakeTutor:
     """Fake de Tutor: devolve `output` (LessonOutput ou None)."""
 
@@ -190,3 +263,152 @@ class _FakeTutor:
 
     def generate(self, **kw: object) -> object | None:
         return self._output
+
+
+# --- execute_study_transition_job com IA (KUBO-168) --------------------------------------
+
+
+def test_transition_job_generates_lesson_content(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Transição scheduled→running cria lição e chama Tutor + fill_lesson."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 3)  # segunda, véspera da terça (1º dia de cadência)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="scheduled")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "transition_to_running",
+        lambda db, **kw: _LESSON_ID,
+    )
+
+    from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
+
+    lesson_output = LessonOutput(
+        concept="Conceito transição",
+        scenario="Cenário",
+        application="Aplicação",
+        recap=None,
+        provenance=[ProvenanceItem(chapter_seq=1, quote="trecho")],
+        quiz=[
+            QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
+            QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
+        ],
+    )
+    filled: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "fill_lesson",
+        lambda db, **kw: filled.append(kw["lesson_id"]),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_chapters_for_entry",
+        lambda db, **kw: [_CHAPTER],
+    )
+    monkeypatch.setattr(
+        study_lessons,
+        "_build_tutor",
+        lambda db, tenant_id, user_id: _FakeTutor(lesson_output),
+    )
+    monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
+
+    study_lessons.execute_study_transition_job(
+        mock_db, tenant_id=_TENANT, user_id=_USER, today=today
+    )
+    assert filled == [_LESSON_ID]
+
+
+def test_transition_job_skips_fill_when_no_lesson_returned(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """transition_to_running devolve None (idempotente) → não chama fill_lesson."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 3)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="scheduled")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "transition_to_running",
+        lambda db, **kw: None,  # já transicionado (idempotente)
+    )
+    filled: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "fill_lesson",
+        lambda db, **kw: filled.append(kw["lesson_id"]),
+    )
+    monkeypatch.setattr(
+        study_lessons,
+        "_build_tutor",
+        lambda db, tenant_id, user_id: _FakeTutor(None),
+    )
+
+    study_lessons.execute_study_transition_job(
+        mock_db, tenant_id=_TENANT, user_id=_USER, today=today
+    )
+    assert filled == []
+
+
+def test_transition_job_skips_fill_when_chapters_empty(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_chapters_for_entry devolve [] → lição fica como placeholder."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 3)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="scheduled")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "transition_to_running",
+        lambda db, **kw: _LESSON_ID,
+    )
+    filled: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "fill_lesson",
+        lambda db, **kw: filled.append(kw["lesson_id"]),
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_chapters_for_entry",
+        lambda db, **kw: [],  # sem capítulos
+    )
+    monkeypatch.setattr(
+        study_lessons,
+        "_build_tutor",
+        lambda db, tenant_id, user_id: _FakeTutor(None),
+    )
+    monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
+
+    study_lessons.execute_study_transition_job(
+        mock_db, tenant_id=_TENANT, user_id=_USER, today=today
+    )
+    assert filled == []  # placeholder, não preencheu

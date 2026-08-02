@@ -245,6 +245,9 @@ def test_lesson_job_generates_next_lesson_on_eve(
         lambda db, **kw: (_plan(), _entries(2)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     created: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,
@@ -278,6 +281,9 @@ def test_lesson_job_skips_when_before_eve(
         lambda db, **kw: (_plan(), _entries(2)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     created: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,
@@ -309,6 +315,9 @@ def test_lesson_job_generates_on_study_day_downtime(
         lambda db, **kw: (_plan(), _entries(2)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     created: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,
@@ -338,6 +347,9 @@ def test_lesson_job_skips_when_plan_complete(
         lambda db, **kw: (_plan(), _entries(2)),
     )
     monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 2)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
     created: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,

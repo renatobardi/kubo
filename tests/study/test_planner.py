@@ -466,3 +466,22 @@ def test_stream_chat_incoherent_plan_discarded() -> None:
     assert reply is not None
     assert "Aqui está." in reply.text
     assert reply.lessons is None
+
+
+def test_stream_chat_propagates_executor_error() -> None:
+    """stream_chat propaga ExecutorError durante a iteração dos chunks."""
+    from kubo.errors import ExecutorError
+    from kubo.study.planner import Planner
+
+    stream_executor = _FakeStreamingExecutor(chunks=[], error=ExecutorError("provider down"))
+    planner = Planner(executor=_FakeExecutor(), prompt=_PROMPT)
+
+    with pytest.raises(ExecutorError):
+        list(
+            planner.stream_chat(
+                stream_executor,
+                user_message="junta",
+                chapters=_chapters(),
+                current_plan=[("L1", [1, 2])],
+            )
+        )

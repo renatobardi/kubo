@@ -219,20 +219,36 @@ def execute_study_lesson_job(
             if today < eve or today > next_day:
                 continue
             lesson_date = datetime(next_day.year, next_day.month, next_day.day)
-            lesson_id = study_store.create_lesson(
+            # Re-tenta lição placeholder (Tutor falhou antes) antes de criar nova.
+            lesson_id = study_store.get_pending_lesson_for_entry(
                 db,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 plan_id=plan.id,
                 plan_entry_id=next_entry.id,
-                scheduled_for=lesson_date,
             )
-            _log.info(
-                "study.lesson.generated",
-                topic=str(topic.id),
-                entry=str(next_entry.id),
-                scheduled_for=next_day.isoformat(),
-            )
+            if lesson_id is None:
+                lesson_id = study_store.create_lesson(
+                    db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    plan_id=plan.id,
+                    plan_entry_id=next_entry.id,
+                    scheduled_for=lesson_date,
+                )
+                _log.info(
+                    "study.lesson.generated",
+                    topic=str(topic.id),
+                    entry=str(next_entry.id),
+                    scheduled_for=next_day.isoformat(),
+                )
+            else:
+                _log.info(
+                    "study.lesson.retry",
+                    topic=str(topic.id),
+                    entry=str(next_entry.id),
+                    lesson=str(lesson_id),
+                )
             # KUBO-168: gera conteúdo com IA.
             work_context = _work_context_for(db, user_id)
             _generate_lesson_content(

@@ -36,10 +36,17 @@ def test_short_history_passes_through() -> None:
     """Histórico curto (cabe na janela) devolve intacto — sem resumir."""
     history = _history(5)  # 500 chars total, bem abaixo da janela
     summarizer = _FakeSummarizer()
+    factory_calls = 0
 
-    result = sliding_window_history(history, summarizer, window_chars=_WINDOW_CHARS)
+    def _factory() -> _FakeSummarizer:
+        nonlocal factory_calls
+        factory_calls += 1
+        return summarizer
+
+    result = sliding_window_history(history, _factory, window_chars=_WINDOW_CHARS)
     assert result == history
     assert summarizer.calls == []  # não chamou o summarizer
+    assert factory_calls == 0  # factory não invocada (histórico curto)
 
 
 def test_long_history_summarizes_old_turns() -> None:
@@ -47,7 +54,7 @@ def test_long_history_summarizes_old_turns() -> None:
     history = _history(100)  # 10_000 chars, bem acima da janela de 4_000
     summarizer = _FakeSummarizer(summary="Dono quer estudar agentes.")
 
-    result = sliding_window_history(history, summarizer, window_chars=_WINDOW_CHARS)
+    result = sliding_window_history(history, lambda: summarizer, window_chars=_WINDOW_CHARS)
     # O primeiro turno é o resumo.
     assert result[0] == ("system", "Resumo da conversa anterior: Dono quer estudar agentes.")
     # Os turnos recentes estão inteiros (não truncados).
@@ -62,7 +69,7 @@ def test_long_history_fallback_on_summary_failure() -> None:
     history = _history(100)
     summarizer = _FakeSummarizer(summary=None)
 
-    result = sliding_window_history(history, summarizer, window_chars=_WINDOW_CHARS)
+    result = sliding_window_history(history, lambda: summarizer, window_chars=_WINDOW_CHARS)
     # Sem resumo, os turnos recentes ficam (truncado do início).
     assert len(result) < len(history)
     # Os turnos mais recentes estão presentes.
@@ -72,5 +79,5 @@ def test_long_history_fallback_on_summary_failure() -> None:
 def test_empty_history_returns_empty() -> None:
     """Histórico vazio devolve vazio."""
     summarizer = _FakeSummarizer()
-    result = sliding_window_history([], summarizer, window_chars=_WINDOW_CHARS)
+    result = sliding_window_history([], lambda: summarizer, window_chars=_WINDOW_CHARS)
     assert result == []

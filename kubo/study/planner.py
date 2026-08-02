@@ -397,7 +397,7 @@ def _is_coherent(proposal: PlanProposal, known: set[int]) -> bool:
 
 
 # Regex para extrair bloco JSON marcado com ```json ... ``` do texto do stream.
-_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL)
+_JSON_BLOCK_RE = re.compile(r"```json[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
 
 
 def extract_planner_reply(
@@ -419,12 +419,12 @@ def extract_planner_reply(
         data = json.loads(json_str)
         plan = PlannerStreamPlan.model_validate(data)
     except (json.JSONDecodeError, ValidationError):
-        _log.info("study.planner.stream_parse_failed")
+        _log.info("study.planner.stream_parse_failed", chapters=len(chapters))
         return PlannerChatReply(text=full_text.strip(), lessons=None)
     lessons: list[PlanLesson] | None = plan.lessons or None
     if lessons is not None:
         proposal = PlanProposal(lessons=lessons)
         if not _is_coherent(proposal, {chapter.seq for chapter in chapters}):
-            _log.info("study.planner.stream_incoherent")
+            _log.info("study.planner.stream_incoherent", chapters=len(chapters))
             lessons = None
     return PlannerChatReply(text=text, lessons=lessons)

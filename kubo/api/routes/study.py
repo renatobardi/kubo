@@ -646,7 +646,7 @@ def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[t
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx))
 
 
 def _chat_precheck(
@@ -995,7 +995,7 @@ def _planning_chat_history_of(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx))
 
 
 def _current_plan_as_tuples(
