@@ -47,6 +47,7 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.planner import (
@@ -635,11 +636,17 @@ def _material_summaries_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> 
 
 
 def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[tuple[str, str]]:
-    """Histórico da conversa como lista de (role, content) para o mentor."""
+    """Histórico da conversa como lista de (role, content) para o mentor.
+
+    Aplica janela deslizante com resumo (KUBO-168, ADR-0047 Emenda 4): turnos
+    antigos são resumidos em vez de truncados. Se o resumo falha, fallback
+    para truncamento.
+    """
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
-    return [(m.role, m.content) for m in messages]
+    history = [(m.role, m.content) for m in messages]
+    return sliding_window_history(history, _summarizer(ctx))
 
 
 def _chat_precheck(
@@ -978,19 +985,17 @@ def close_topic(
 
 _TOPIC_NOT_PLANNING = "Só é possível operar um estudo em planejamento."
 _INVALID_ID = "Identificador inválido."
-_PLANNER_HISTORY_WINDOW = 10
 
 
 def _planning_chat_history_of(
     db: Any, ctx: SessionContext, topic_id: RecordID
 ) -> list[tuple[str, str]]:
-    """Histórico da conversa com planner (phase=planning), janela deslizante pela cauda."""
+    """Histórico da conversa com planner (phase=planning), janela deslizante com resumo."""
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
-    # Janela deslizante: últimos N turnos (padrão do mentor, ADR-0047 emenda 4).
-    recent = messages[-_PLANNER_HISTORY_WINDOW * 2 :] if messages else []
-    return [(m.role, m.content) for m in recent]
+    history = [(m.role, m.content) for m in messages]
+    return sliding_window_history(history, _summarizer(ctx))
 
 
 def _current_plan_as_tuples(
