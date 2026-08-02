@@ -10,7 +10,7 @@ salvar meia proposta daria ao dono um plano que aponta para capítulos que ele n
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import TypeVar, cast
 
 import pytest
@@ -402,12 +402,12 @@ class _FakeStreamingExecutor:
         self.received_instructions: list[str] = []
         self.received_content: list[str] = []
 
-    def stream(self, instruction: str, untrusted_content: str) -> list[str]:
+    def stream(self, instruction: str, untrusted_content: str) -> Iterator[str]:
         self.received_instructions.append(instruction)
         self.received_content.append(untrusted_content)
         if self._error is not None:
             raise self._error
-        return self._chunks
+        yield from self._chunks
 
 
 def test_stream_chat_yields_text_chunks() -> None:
