@@ -238,22 +238,22 @@ def test_close_topic_falls_back_to_mechanical_when_planner_fails(
 def test_topic_detail_draft_with_materials_shows_close_button(
     authed_client: TestClient,
 ) -> None:
-    """Tema em draft com materiais mostra botão 'Fechar estudo'."""
+    """Tema em draft com materiais mostra botão 'Fechar tema'."""
     html = authed_client.get("/study/topics/abc123").text
-    assert "Fechar estudo" in html
+    assert "Fechar tema" in html
     assert "/close" in html
 
 
 def test_topic_detail_draft_without_materials_hides_close_button(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tema em draft SEM materiais NÃO mostra botão 'Fechar estudo'."""
+    """Tema em draft SEM materiais NÃO mostra botão 'Fechar tema'."""
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_materials_by_topic",
         lambda db, **kw: [],
     )
     html = authed_client.get("/study/topics/abc123").text
-    assert "Fechar estudo" not in html
+    assert "Fechar tema" not in html
 
 
 def test_topic_detail_planning_shows_plan(
