@@ -297,19 +297,21 @@ def list_topics_page(request: Request) -> Response:
             )
         else:
             topics = study_store.list_topics(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-        # Enriquece com progresso (lições feitas/total + próxima lição).
-        rows = []
-        for t in topics:
-            progress = study_store.get_topic_progress(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=t.id
-            )
-            rows.append(
-                {
-                    "topic": t,
-                    "state_label": _STATE_LABELS.get(t.state, t.state),
-                    "progress": progress,
-                }
-            )
+        # Enriquece com progresso em lote (1 query de study_log global).
+        progress_map = study_store.get_topics_progress_batch(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_ids=[t.id for t in topics],
+        )
+        rows = [
+            {
+                "topic": t,
+                "state_label": _STATE_LABELS.get(t.state, t.state),
+                "progress": progress_map.get(str(t.id)),
+            }
+            for t in topics
+        ]
     return templates.TemplateResponse(
         request,
         _TOPICS_LIST_TEMPLATE,
@@ -1387,6 +1389,7 @@ _TOPIC_NOT_ARCHIVED = "O estudo não está arquivado."
 _TOPIC_FROZEN_MATERIAL = "Materiais são imutáveis quando o estudo está agendado ou em andamento."
 _DELETE_CONFIRM_REQUIRED = "Confirmação obrigatória — marque que entende as consequências."
 _TOPIC_ARCHIVED_READONLY = "O estudo está arquivado (só leitura). Desarquive para editar."
+_TOPIC_STATE_CHANGED = "O estado do estudo mudou enquanto você operava — recarregue a página."
 _TOPIC_NO_PLAN = "Ative o plano apenas depois que o planner propor um plano."
 _TOPIC_NO_CADENCE = "Defina a cadência (dias da semana) antes de ativar o plano."
 
@@ -1522,7 +1525,12 @@ def archive_topic(
             study_store.archive_topic(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
             )
-    except (ConfigError, StoreError):
+    except StoreError as exc:
+        if "concurrently" in str(exc):
+            return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
+        _log.warning("study.archive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
         _log.warning("study.archive.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
@@ -1551,7 +1559,12 @@ def unarchive_topic(
             study_store.unarchive_topic(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
             )
-    except (ConfigError, StoreError):
+    except StoreError as exc:
+        if "concurrently" in str(exc):
+            return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
+        _log.warning("study.unarchive.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
         _log.warning("study.unarchive.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)

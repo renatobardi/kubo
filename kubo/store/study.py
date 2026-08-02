@@ -1202,14 +1202,13 @@ def archive_topic(
         raise StoreError(_TOPIC_NOT_FOUND_MSG)
     if topic.state == "archived":
         raise StoreError("tema já está arquivado")
-    transaction.run_transaction(
-        db,
-        [
-            f"UPDATE $topic SET state = 'archived', archived_from = $prev "  # noqa: S608
-            f"WHERE {_MATERIAL_SCOPE} AND state = $prev;",
-        ],
+    result = db.query(
+        f"UPDATE $topic SET state = 'archived', archived_from = $prev "  # noqa: S608
+        f"WHERE {_MATERIAL_SCOPE} AND state = $prev RETURN id;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": topic.state},
     )
+    if not result:
+        raise StoreError("state changed concurrently — archive aborted")
     _log.info("store.topic.archived", topic=str(topic_id), archived_from=topic.state)
 
 
@@ -1237,14 +1236,13 @@ def unarchive_topic(
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     prev = rows[0]["archived_from"] if rows and rows[0]["archived_from"] else "draft"
-    transaction.run_transaction(
-        db,
-        [
-            f"UPDATE $topic SET state = $prev, archived_from = NONE "  # noqa: S608
-            f"WHERE {_MATERIAL_SCOPE} AND state = 'archived';",
-        ],
+    result = db.query(
+        f"UPDATE $topic SET state = $prev, archived_from = NONE "  # noqa: S608
+        f"WHERE {_MATERIAL_SCOPE} AND state = 'archived' RETURN id;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": prev},
     )
+    if not result:
+        raise StoreError("state changed concurrently — unarchive aborted")
     _log.info("store.topic.unarchived", topic=str(topic_id), restored_to=prev)
 
 
@@ -1302,14 +1300,16 @@ def delete_topic(
         )
         lesson_ids.extend(r["id"] for r in l_rows)
     # Monta statements por ID (subquery em transação não funciona).
+    # Nomes de parâmetro usam contador estável (não o ID do registro) — IDs
+    # podem conter caracteres inválidos para identificadores SurrealQL.
     stmts: list[str] = []
-    for mid in material_ids:
-        stmts.append(f"DELETE FROM material_chapter WHERE material = $m_{mid.id};")  # noqa: S608
-    for pid in plan_ids:
-        stmts.append(f"DELETE FROM plan_entry WHERE study_plan = $p_{pid.id};")  # noqa: S608
-        stmts.append(f"DELETE FROM lesson WHERE study_plan = $p_{pid.id};")  # noqa: S608
-    for lid in lesson_ids:
-        stmts.append(f"DELETE FROM study_log WHERE lesson = $l_{lid.id};")  # noqa: S608
+    for i, _mid in enumerate(material_ids):
+        stmts.append(f"DELETE FROM material_chapter WHERE material = $m_{i};")  # noqa: S608
+    for i, _pid in enumerate(plan_ids):
+        stmts.append(f"DELETE FROM plan_entry WHERE study_plan = $p_{i};")  # noqa: S608
+        stmts.append(f"DELETE FROM lesson WHERE study_plan = $p_{i};")  # noqa: S608
+    for i, _lid in enumerate(lesson_ids):
+        stmts.append(f"DELETE FROM study_log WHERE lesson = $l_{i};")  # noqa: S608
     stmts.extend(
         [
             f"DELETE FROM study_chat WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
@@ -1319,12 +1319,12 @@ def delete_topic(
         ]
     )
     params: dict[str, Any] = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
-    for mid in material_ids:
-        params[f"m_{mid.id}"] = mid
-    for pid in plan_ids:
-        params[f"p_{pid.id}"] = pid
-    for lid in lesson_ids:
-        params[f"l_{lid.id}"] = lid
+    for i, mid in enumerate(material_ids):
+        params[f"m_{i}"] = mid
+    for i, pid in enumerate(plan_ids):
+        params[f"p_{i}"] = pid
+    for i, lid in enumerate(lesson_ids):
+        params[f"l_{i}"] = lid
     transaction.run_transaction(db, stmts, params)
     _log.info("store.topic.deleted", topic=str(topic_id))
 
@@ -1421,7 +1421,9 @@ def get_topic_progress(
     if not lessons:
         return TopicProgress(done=0, total=total, next_lesson_id=None)
     lesson_ids = [r["id"] for r in lessons]
-    # Busca todas as study_logs do tenant/user de uma vez (set em memória).
+    # Busca study_logs do tenant/user em batch (set em memória). O filtro final
+    # `lid in done_ids` só conta lições deste plano (lesson_ids), então logs de
+    # outros temas não afetam o resultado — apenas evita N+1 por lição.
     log_rows = db.query(
         f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
         {"tenant": tenant_id, "user": user_id},
@@ -1437,3 +1439,62 @@ def get_topic_progress(
         next_lesson_id=next_lesson_id,
         next_lesson_date=next_lesson_date,
     )
+
+
+def get_topics_progress_batch(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_ids: list[RecordID],
+) -> dict[str, TopicProgress]:
+    """Progresso em lote para a lista de temas — reutiliza o set de study_logs
+    (1 query global) em vez de N queries por tema. Retorna dict indexado por
+    str(topic_id) → TopicProgress.
+    """
+    if not topic_ids:
+        return {}
+    # Busca study_logs do tenant/user uma vez (set em memória).
+    log_rows = db.query(
+        f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        {"tenant": tenant_id, "user": user_id},
+    )
+    done_ids = {str(r["lesson"]) for r in log_rows}
+    result: dict[str, TopicProgress] = {}
+    for tid in topic_ids:
+        # Busca o plano do tema (1:1).
+        plan_rows = db.query(
+            f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            {"topic": tid, "tenant": tenant_id, "user": user_id},
+        )
+        if not plan_rows:
+            result[str(tid)] = TopicProgress(done=0, total=0)
+            continue
+        plan_id = plan_rows[0]["id"]
+        entry_rows = db.query(
+            f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+        )
+        total = entry_rows[0]["count"] if entry_rows else 0
+        if total == 0:
+            result[str(tid)] = TopicProgress(done=0, total=0)
+            continue
+        lessons = db.query(
+            f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE} ORDER BY scheduled_for;",
+            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+        )
+        if not lessons:
+            result[str(tid)] = TopicProgress(done=0, total=total)
+            continue
+        lesson_ids = [r["id"] for r in lessons]
+        done = sum(1 for lid in lesson_ids if str(lid) in done_ids)
+        next_row = next((r for r in lessons if str(r["id"]) not in done_ids), None)
+        result[str(tid)] = TopicProgress(
+            done=done,
+            total=total,
+            next_lesson_id=next_row["id"] if next_row else None,
+            next_lesson_date=next_row["scheduled_for"] if next_row else None,
+        )
+    return result

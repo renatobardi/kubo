@@ -31,7 +31,7 @@
         {% if row.progress and row.progress.total > 0 %}
         <span class="shrink-0 text-xs text-muted-foreground">{{ row.progress.done }}/{{ row.progress.total }}</span>
         {% if row.progress.next_lesson_date %}
-        <span class="shrink-0 text-xs text-muted-foreground">próx. {{ row.progress.next_lesson_date | date("dd/MM") }}</span>
+        <span class="shrink-0 text-xs text-muted-foreground">próx. {{ row.progress.next_lesson_date.strftime("%d/%m") }}</span>
         {% endif %}
         {% endif %}
         <span class="shrink-0 rounded-4xl px-2 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">{{ row.state_label }}</span>

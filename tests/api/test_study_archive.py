@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -136,6 +137,10 @@ def stub_archive_store(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda db, **kw: TopicProgress(done=0, total=2, next_lesson_id=None),
     )
     monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topics_progress_batch",
+        lambda db, **kw: {},
+    )
+    monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_material",
         lambda db, **kw: _material(),
     )
@@ -252,7 +257,7 @@ def test_delete_topic_redirects_to_list(authed_client: TestClient) -> None:
 
 
 def test_delete_topic_unlinks_material_files(
-    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """POST /delete remove arquivos do volume (best-effort) e não quebra em OSError."""
     # Cria arquivo fake no tmp_path.
@@ -383,11 +388,11 @@ def test_list_topics_shows_progress(
         lambda db, **kw: [_topic(state="running")],
     )
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.get_topic_progress",
-        lambda db, **kw: TopicProgress(done=3, total=10, next_lesson_id=None),
+        "kubo.api.routes.study.study_store.get_topics_progress_batch",
+        lambda db, **kw: {str(_TOPIC_ID): TopicProgress(done=3, total=10)},
     )
     html = authed_client.get("/study/topics").text
-    assert "3" in html and "10" in html  # 3/10
+    assert "3/10" in html
 
 
 # --- GET /topics?filter=archived ---------------------------------------------------------
