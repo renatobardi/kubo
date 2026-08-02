@@ -668,6 +668,13 @@ def _entry_from_row(row: dict[str, Any]) -> PlanEntry:
 
 _PLAN_SCOPE = f"topic = $topic AND {_MATERIAL_SCOPE}"
 
+_CREATE_LESSON_SQL = (
+    "CREATE $lesson SET tenant_id = $tenant, user_id = $user, "
+    "study_plan = $plan, plan_entry = $entry, "
+    "scheduled_for = $when, "
+    "concept = '', scenario = '', application = '', quiz = [], provenance = [];"
+)
+
 
 def save_plan_proposal(
     db: Any,
@@ -934,3 +941,217 @@ def remove_chapter_from_entry(
     )
     _log.info("store.plan.chapter_removed", entry=str(entry_id), chapter=str(chapter_id))
     return True
+
+
+# --- Ativação + scheduler + imutabilidade (KUBO-166) -------------------------------------
+
+
+def activate_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Ativa o plano do tema: planning → scheduled.
+
+    Seta `study_plan.status='active'` + `activated_at=now` e `topic.state='scheduled'`.
+    Atômico numa transação — se qualquer statement falha, nada é persistido.
+    Não valida a legalidade da transição aqui (a rota decide); só persiste.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        raise StoreError("plano não encontrado para o tema")
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $plan SET status = 'active', activated_at = time::now() "  # noqa: S608
+            f"WHERE {_PLAN_SCOPE};",
+            f"UPDATE $topic SET state = 'scheduled' WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        ],
+        {
+            "plan": plan.id,
+            "topic": topic_id,
+            "tenant": tenant_id,
+            "user": user_id,
+        },
+    )
+    _log.info("store.plan.activated", topic=str(topic_id))
+
+
+def deactivate_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Reverte ativação: scheduled → planning.
+
+    Seta `study_plan.status='proposed'` + `activated_at=NONE` e
+    `topic.state='planning'` numa transação atômica. Ambos os UPDATEs têm CAS
+    (`AND status = 'active'` no plano, `AND state = 'scheduled'` no tema) — se
+    o scheduler já transicionou para `running`, nenhum UPDATE aplica e a rota
+    devolve 400 (`_TOPIC_FROZEN`). A rota checa `state == 'scheduled'` antes
+    da chamada; o CAS protege contra a janela TOCTOU entre o check e o write.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        raise StoreError("plano não encontrado para o tema")
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $plan SET status = 'proposed', activated_at = NONE "  # noqa: S608
+            f"WHERE {_PLAN_SCOPE} AND status = 'active';",
+            f"UPDATE $topic SET state = 'planning' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"AND state = 'scheduled';",
+        ],
+        {
+            "plan": plan.id,
+            "topic": topic_id,
+            "tenant": tenant_id,
+            "user": user_id,
+        },
+    )
+    _log.info("store.plan.deactivated", topic=str(topic_id))
+
+
+def list_topics_by_state(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    state: str,
+) -> list[Topic]:
+    """Lista temas em um estado específico (escopo user dentro do tenant).
+
+    Usado pelo scheduler para encontrar temas em 'scheduled' e 'running'.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM topic WHERE state = $state AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"state": state, "tenant": tenant_id, "user": user_id},
+    )
+    return [_topic_from_row(r) for r in rows]
+
+
+def create_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    plan_entry_id: RecordID,
+    scheduled_for: datetime,
+) -> RecordID:
+    """Cria um registro de lição para um plan_entry num dia específico.
+
+    O conteúdo da lição (concept, scenario, application, quiz) é gerado pelo
+    scheduler (KUBO-168 traz a geração com IA). Aqui cria o registro com
+    campos vazios — o scheduler preenche. O índice UNIQUE lesson_plan_day
+    impede duplicata por dia.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_id = _fresh("lesson")
+    try:
+        transaction.run_transaction(
+            db,
+            [_CREATE_LESSON_SQL],
+            {
+                "lesson": lesson_id,
+                "tenant": tenant_id,
+                "user": user_id,
+                "plan": plan_id,
+                "entry": plan_entry_id,
+                "when": scheduled_for,
+            },
+        )
+    except Exception as exc:
+        raise StoreError(f"erro ao criar lição: {exc}") from exc
+    _log.info(
+        "store.lesson.created",
+        lesson=str(lesson_id),
+        plan=str(plan_id),
+        scheduled_for=scheduled_for.isoformat(),
+    )
+    return lesson_id
+
+
+def count_lessons_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> int:
+    """Conta quantas lições já foram geradas para um plano."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT count() FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return rows[0]["count"] if rows else 0
+
+
+def transition_to_running(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    plan_id: RecordID,
+    plan_entry_id: RecordID,
+    scheduled_for: datetime,
+) -> RecordID | None:
+    """Transição atômica scheduled → running + cria 1ª lição (KUBO-166).
+
+    Cria a lição, transiciona o tema para `running` e o plano para
+    `status='running'` (congelado) numa única transação. Se qualquer
+    statement falha, nada é persistido — evita o estado inconsistente de
+    lição criada com tema ainda em `scheduled`. O CAS `AND state =
+    'scheduled'` garante que não transiciona um tema que já está em
+    `running` (idempotente). O `plan.status='running'` permite que
+    `deactivate_plan` faça CAS em `status='active'` (só reverte se o
+    plano ainda não foi congelado pelo scheduler).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    if topic.state == "running":
+        return  # idempotente: já transicionado (scheduler re-rodou)
+    lesson_id = _fresh("lesson")
+    transaction.run_transaction(
+        db,
+        [
+            _CREATE_LESSON_SQL,
+            f"UPDATE $plan SET status = 'running' WHERE {_PLAN_SCOPE} "  # noqa: S608
+            f"AND status = 'active';",
+            f"UPDATE $topic SET state = 'running' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"AND state = 'scheduled';",
+        ],
+        {
+            "lesson": lesson_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "plan": plan_id,
+            "entry": plan_entry_id,
+            "when": scheduled_for,
+            "topic": topic_id,
+        },
+    )
+    _log.info(
+        "store.lesson.transition_to_running",
+        lesson=str(lesson_id),
+        topic=str(topic_id),
+        scheduled_for=scheduled_for.isoformat(),
+    )
+    return lesson_id

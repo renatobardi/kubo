@@ -43,7 +43,7 @@ schedules:
   # o corte). Pausar/arquivar pela UI de fato para a coleta a partir daqui.
   - sweep: github-repo
     cron: "0 7 * * *"
-  # ── ESTUDOS — jobs de véspera e sino removidos (ADR-0047, KUBO-161) ──────────
-  # O scheduler de study (study-eve, study-bell) foi desregistrado nesta fatia:
-  # as rotas de plano/lição foram removidas e não há planos ativos para gerar.
-  # KUBO-166 traz os jobs de volta quando o ciclo de ativação estiver implementado.
+  # ── ESTUDOS — jobs registrados em código (KUBO-166, ADR-0047 §3) ──────────────
+  # Os jobs de Estudos (study_transition 06:00, study_lesson 07:00) são registrados
+  # em código no build_scheduler, não aqui — são operação fixa do scheduler de
+  # Estudos, não catálogo de workers. KUBO-168 traz a geração de lição com IA.

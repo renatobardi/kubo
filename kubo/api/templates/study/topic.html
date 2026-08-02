@@ -306,13 +306,15 @@
   {% endif %}
 
   {# Fase 2 — Planning: plano + chat com planner + edição (KUBO-165). #}
-  {% if topic.state == "planning" and plan %}
+  {# Scheduled/Running: plano só leitura + botão Editar plano (scheduled) (KUBO-166). #}
+  {% if topic.state in ("planning", "scheduled", "running") and plan %}
 
-  {# Plano de estudo com edição manual. #}
+  {# Plano de estudo com edição manual (só em planning). #}
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <div class="flex items-center justify-between">
       <h2 class="text-sm font-medium">Plano de estudo</h2>
       <div class="flex gap-2">
+        {% if topic.state == "planning" %}
         {# Botão Voltar (planning → draft). #}
         <form method="post" action="{{ topic_url }}/back-to-draft" class="inline">
           <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -328,14 +330,41 @@
             Repropor tudo
           </button>
         </form>
+        {# Botão Ativar (planning → scheduled, KUBO-166). #}
+        <form method="post" action="{{ topic_url }}/activate" class="inline"
+              onsubmit="return confirm('Ativar o plano? O scheduler começará a gerar lições na véspera do primeiro dia de cadência.')">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit"
+                  class="rounded-4xl bg-primary px-4 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90">
+            Ativar plano
+          </button>
+        </form>
+        {% elif topic.state == "scheduled" %}
+        {# Botão Editar plano (scheduled → planning, KUBO-166). #}
+        <form method="post" action="{{ topic_url }}/edit-plan" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+            Editar plano
+          </button>
+        </form>
+        {% endif %}
       </div>
     </div>
-    <p class="mt-1 text-xs text-muted-foreground">O planner agrupou os capítulos em {{ plan_entries|length }} lições. Converse com o planner para ajustar ou edite manualmente.</p>
+    <p class="mt-1 text-xs text-muted-foreground">
+      {% if topic.state == "planning" %}
+      O planner agrupou os capítulos em {{ plan_entries|length }} lições. Converse com o planner para ajustar ou edite manualmente.
+      {% elif topic.state == "scheduled" %}
+      Plano ativado. O scheduler gerará a primeira lição na véspera do primeiro dia de cadência.
+      {% elif topic.state == "running" %}
+      Plano em execução (congelado). As lições estão sendo geradas pelo scheduler.
+      {% endif %}
+    </p>
 
-    {# Lista de lições com setas ↑/↓ e botão de remover capítulo. #}
+    {# Lista de lições com setas ↑/↓ e botão de remover capítulo (só em planning). #}
     <ol class="mt-3 space-y-2">
       {% for entry in plan_entries %}
       <li class="flex items-start gap-3 rounded-2xl bg-input/30 px-4 py-2 text-sm">
+        {% if topic.state == "planning" %}
         <div class="flex flex-col gap-0.5 pt-0.5">
           <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/move" class="inline">
             <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -350,6 +379,7 @@
                     aria-label="Mover lição '{{ entry.title }}' para baixo" {% if loop.last %}disabled{% endif %}>↓</button>
           </form>
         </div>
+        {% endif %}
         <span class="font-semibold text-muted-foreground">{{ entry.seq }}.</span>
         <div class="flex-1">
           <span>{{ entry.title }}</span>
@@ -357,7 +387,7 @@
             {% for ch_id in entry.chapters %}
             <span class="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-xs text-muted-foreground">
               {{ chapter_titles.get(ch_id|string, ch_id|string) }}
-              {% if entry.chapters|length > 1 %}
+              {% if entry.chapters|length > 1 and topic.state == "planning" %}
               <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/remove-chapter" class="inline">
                 <input type="hidden" name="csrf" value="{{ csrf }}">
                 <input type="hidden" name="chapter_id" value="{{ ch_id }}">
@@ -385,7 +415,8 @@
       {% if plan.weekdays %}
       <p class="mt-1 text-xs text-muted-foreground">Dias: {{ plan.weekdays|join(', ') }}</p>
       {% endif %}
-      {# Formulário de cadência. #}
+      {% if topic.state == "planning" %}
+      {# Formulário de cadência (só em planning). #}
       <form method="post" action="{{ topic_url }}/plan/cadence" class="mt-2 flex flex-wrap gap-2">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         {% set _day_labels = {'mon': 'Seg', 'tue': 'Ter', 'wed': 'Qua', 'thu': 'Qui', 'fri': 'Sex', 'sat': 'Sáb', 'sun': 'Dom'} %}
@@ -397,10 +428,12 @@
         {% endfor %}
         <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">Salvar</button>
       </form>
+      {% endif %}
     </div>
   </section>
 
-  {# Chat com planner (KUBO-165). #}
+  {# Chat com planner (KUBO-165) — só em planning. #}
+  {% if topic.state == "planning" %}
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <h2 class="text-sm font-medium">Conversa com o planner</h2>
     <p class="mt-1 text-xs text-muted-foreground">Peça ajustes no plano (ex: "junta lição 1 e 2", "foca em X", "cadência 3x semana").</p>
@@ -519,6 +552,8 @@
     };
   })();
   </script>
+  {% endif %}
+  {# Fim do chat com planner (só em planning). #}
   {% endif %}
 </div>
 {% endblock %}
