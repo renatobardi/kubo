@@ -19,6 +19,7 @@ from kubo.store.study import Material, Topic
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
+_TOPIC_ID = RecordID("topic", "abc123")
 
 
 def _topic(**kw: object) -> Topic:
@@ -358,12 +359,15 @@ def test_delete_last_material_in_planning_reverts_to_draft(
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
     )
-    set_state_calls: list[dict[str, object]] = []
+    revert_calls: list[dict[str, object]] = []
 
-    def _capture_set_state(db: object, **kw: object) -> None:
-        set_state_calls.append(kw)
+    def _capture_revert(db: object, **kw: object) -> bool:
+        revert_calls.append(kw)
+        return True
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_state", _capture_set_state)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning", _capture_revert
+    )
     csrf = _csrf(authed_client)
     resp = authed_client.post(
         "/study/topics/abc123/materials/mat1/delete",
@@ -371,12 +375,42 @@ def test_delete_last_material_in_planning_reverts_to_draft(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    # O auto-revert chamou set_topic_state com state="draft".
-    assert any(c.get("state") == "draft" for c in set_state_calls), (
-        f"set_topic_state não foi chamada com state=draft: {set_state_calls}"
+    # O auto-revert chamou revert_to_draft_if_planning com o topic_id correto.
+    assert len(revert_calls) == 1, f"esperado 1 chamada, got {revert_calls}"
+    assert revert_calls[0].get("topic_id") == _TOPIC_ID, (
+        f"topic_id incorreto: {revert_calls[0].get('topic_id')}"
     )
-    # O redirect leva o notice de volta a draft.
-    assert "notice=" in resp.headers["location"]
+    # O redirect leva o notice exato de volta a draft.
+    location = resp.headers["location"]
+    assert "notice=voltou-rascunho" in location, f"notice ausente ou incorreto: {location}"
+
+
+def test_delete_last_material_in_planning_cas_failed_returns_400(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Se o CAS falhar (estado mudou concorrentemente), devolve 400, não sobrescreve."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning",
+        lambda db, **kw: False,
+    )
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials/mat1/delete",
+        data={"csrf": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "mudou" in resp.text.lower()
 
 
 def test_delete_last_material_in_planning_shows_flash_on_topic_page(
@@ -411,12 +445,15 @@ def test_delete_non_last_material_in_planning_stays_in_planning(
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 1
     )
-    set_state_calls: list[dict[str, object]] = []
+    revert_calls: list[dict[str, object]] = []
 
-    def _capture_set_state(db: object, **kw: object) -> None:
-        set_state_calls.append(kw)
+    def _capture_revert(db: object, **kw: object) -> bool:
+        revert_calls.append(kw)
+        return True
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_state", _capture_set_state)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning", _capture_revert
+    )
     csrf = _csrf(authed_client)
     resp = authed_client.post(
         "/study/topics/abc123/materials/mat1/delete",
@@ -424,7 +461,7 @@ def test_delete_non_last_material_in_planning_stays_in_planning(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    # Não reverteu a draft — set_topic_state não foi chamada.
-    assert not set_state_calls, f"set_topic_state chamada indevidamente: {set_state_calls}"
+    # Não reverteu — revert_to_draft_if_planning não foi chamada.
+    assert not revert_calls, f"revert chamada indevidamente: {revert_calls}"
     # Redirect sem notice.
     assert "notice=" not in resp.headers["location"]

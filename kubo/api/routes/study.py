@@ -627,8 +627,12 @@ def _auto_revert_if_empty(
     """Reverte planning → draft se o Tema ficou sem Materiais após um delete.
 
     Sem Materiais, não há sobre o que propor — o estado planning é inválido.
+    Usa CAS (`revert_to_draft_if_planning`): se o estado mudou concorrentemente
+    (outra req ativou o plano), o CAS falha e a rota devolve `_TOPIC_STATE_CHANGED`
+    em vez de sobrescrever `scheduled` com `draft`.
+
     Devolve RedirectResponse com `?notice=` se reverteu, None se nada a fazer,
-    ou PlainTextResponse(503) se a escrita falhou.
+    ou PlainTextResponse(400/503) se o CAS falhou ou a escrita falhou.
     """
     if topic.state != "planning":
         return None
@@ -643,16 +647,18 @@ def _auto_revert_if_empty(
         return None
     try:
         with client.connect_rw() as db:
-            study_store.set_topic_state(
+            reverted = study_store.revert_to_draft_if_planning(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 topic_id=topic.id,
-                state="draft",
             )
     except (ConfigError, StoreError):
         _log.warning("study.material.auto_revert_failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    if not reverted:
+        _log.info("study.material.auto_revert_cas_failed", topic=_log_key(key))
+        return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=400)
     _log.info("study.material.auto_reverted", topic=_log_key(key))
     location = f"{_topic_url(topic.id)}?notice={_AUTO_REVERT_NOTICE}"
     return RedirectResponse(location, status_code=303)

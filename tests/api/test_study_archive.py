@@ -149,6 +149,9 @@ def stub_archive_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 1
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_state", lambda db, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.revert_to_draft_if_planning", lambda db, **kw: True
+    )
 
 
 # --- POST /topics/{key}/archive ----------------------------------------------------------

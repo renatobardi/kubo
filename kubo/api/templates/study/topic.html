@@ -6,7 +6,14 @@
 {% block title %}{{ topic.title }} · Temas · Kubo{% endblock %}
 {% block content %}
 <div class="space-y-4">
-  {{ macros.page_header(topic.title, "Adicione materiais para começar. O nome do tema pode ser ajustado quando quiser.") }}
+  {% set subtitle = {
+    "draft": "Adicione materiais e converse com o mentor. O nome do tema pode ser ajustado quando quiser.",
+    "planning": "Ajuste o plano proposto pelo planner. O nome do tema pode ser ajustado quando quiser.",
+    "scheduled": "Plano agendado. O nome do tema pode ser ajustado quando quiser.",
+    "running": "Estudo em andamento. O nome do tema pode ser ajustado quando quiser.",
+    "archived": "Tema arquivado (só leitura). Desarquive para editar.",
+  }.get(topic.state, "Tema de estudo.") %}
+  {{ macros.page_header(topic.title, subtitle) }}
 
   {% if notice == "voltou-rascunho" %}
   <div class="rounded-xl bg-primary/10 px-4 py-3 text-sm text-primary ring-1 ring-primary/20">

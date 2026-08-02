@@ -59,7 +59,7 @@ def test_nav_has_study_group_with_single_item() -> None:
     """O grupo Estudos tem um único item (Temas → /study/topics).
 
     O label do item é 'Temas' (a entidade listada), não 'Estudos' (o domínio) —
-    evita a repetição grupo=item que existia antes do rename (ADR-0047 Emenda 7).
+    evita a repetição grupo=item que existia antes do rename (ADR-0047 Emenda 8).
     """
     assert [(i["label"], i["route"]) for i in NAV if i["group"] == GROUP_STUDY] == [
         ("Temas", "/study/topics"),

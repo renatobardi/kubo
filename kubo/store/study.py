@@ -610,6 +610,34 @@ def set_topic_state(
     _log.info("store.topic.state_changed", topic=str(topic_id), state=state)
 
 
+def revert_to_draft_if_planning(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> bool:
+    """Reverte planning → draft com CAS em `state = 'planning'`.
+
+    Usado pelo auto-revert ao deletar o último Material (ADR-0047 Emenda 7).
+    O CAS fecha a janela TOCTOU: se outra requisição ativou o plano
+    (planning → scheduled) entre o delete e a reversão, o CAS falha e nada
+    é persistido — devolve False para a rota tratar.
+
+    Devolve True se reverteu, False se o estado mudou concorrentemente.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    result = db.query(
+        f"UPDATE $topic SET state = 'draft' "  # noqa: S608
+        f"WHERE {_MATERIAL_SCOPE} AND state = 'planning' RETURN id;",
+        {"topic": topic_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not result:
+        return False
+    _log.info("store.topic.auto_reverted", topic=str(topic_id))
+    return True
+
+
 @dataclass(frozen=True)
 class StudyPlan:
     """Plano de estudo proposto pelo `planner` para um Tema (ADR-0047 §2)."""
