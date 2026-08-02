@@ -528,6 +528,7 @@
       submit.disabled = true;
       addMessage('user', msg);
       const assistantP = addMessage('assistant', '...');
+      const fullText = {text: ''};
 
       try {
         const resp = await fetch(topicUrl + '/planner-chat', {
@@ -557,7 +558,11 @@
               else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
             }
             const data = dataLines.join('\n');
-            if (ev === 'error') {
+            if (ev === 'chunk') {
+              fullText.text += data;
+              assistantP.textContent = fullText.text;
+              messages.scrollTop = messages.scrollHeight;
+            } else if (ev === 'error') {
               assistantP.textContent = data || 'Erro ao gerar resposta.';
             } else if (ev === 'done') {
               try {
