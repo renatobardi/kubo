@@ -101,6 +101,13 @@ def test_scroll_containers_are_containing_blocks(authed_client: TestClient) -> N
     invisível de 1px escapava do clipping do `<main>`, esticava o documento até a
     posição dele e o documento passava a rolar, arrastando a sidebar (a "faixa em
     branco"). `relative` no `<main>` e no shell prende esses absolutos.
+
+    A prova de behavior (scrollHeight == clientHeight, sidebar imóvel) foi feita
+    via Chrome headless CDP no diagnóstico; no CI sem browser, o que dá a provar
+    é a estrutura que causa o bug. A asserção de que `.sr-only` está dentro de
+    `<main>` (e não órfão no body) vive em test_study_topics.py, que renderiza
+    study/topic — a tela onde o bug apareceu e que tem `.sr-only` no form do
+    planner chat.
     """
     html = authed_client.get("/").text
 

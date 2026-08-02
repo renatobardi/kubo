@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.errors import StoreError
-from kubo.store.study import Topic, TopicProgress
+from kubo.store.study import StudyPlan, Topic, TopicProgress
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
@@ -140,6 +140,59 @@ def test_topic_detail_404_for_missing_topic(
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
     resp = authed_client.get("/study/topics/naoexiste")
     assert resp.status_code == 404
+
+
+def test_topic_detail_planning_sr_only_inside_main(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bug da sidebar que rola: `.sr-only` (position:absolute) tem que estar dentro
+    de `<main>`, e `<main>` tem que ser `relative` + `overflow-y-auto`.
+
+    O mecanismo: sem ancestral posicionado, o containing block de `.sr-only` é o
+    viewport, e `overflow` só recorta descendentes cujo containing block está
+    DENTRO do elemento. O label invisível escapava do clipping, esticava o
+    documento e a sidebar rolava junto. A prova de behavior real (scrollHeight ==
+    clientHeight) foi feita via Chrome headless CDP; no CI, o que dá a provar é
+    que a estrutura causadora está correta: `.sr-only` dentro de `<main>` com
+    `relative` + `overflow-y-auto`.
+    """
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_for_topic",
+        lambda db, **kw: (
+            StudyPlan(
+                id=RecordID("study_plan", "p1"),
+                tenant_id=_TENANT,
+                user_id=_USER,
+                topic=RecordID("topic", "abc123"),
+                status="proposed",
+                weekdays=[],
+                target_date=None,
+                activated_at=None,
+                created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            [],
+        ),
+    )
+    monkeypatch.setattr("kubo.api.routes.study._collect_all_chapters", lambda *a, **kw: [])
+
+    html = authed_client.get("/study/topics/abc123").text
+
+    main_start = html.find("<main")
+    main_end = html.find("</main>") + len("</main>")
+    assert main_start != -1 and main_end > main_start, "página sem <main>"
+
+    main_tag = html[main_start : html.find(">", main_start) + 1]
+    assert "relative" in main_tag, f"<main> sem `relative`: {main_tag}"
+    assert "overflow-y-auto" in main_tag, f"<main> sem `overflow-y-auto`: {main_tag}"
+
+    # `.sr-only` (planner chat label) tem que estar dentro de <main>.
+    sr_only = html.find("sr-only")
+    assert sr_only != -1, "study/topic sem .sr-only — teste não exercita o bug"
+    assert main_start < sr_only < main_end, ".sr-only fora do <main>: absolutos escapam"
 
 
 # --- Editar nome do Tema -----------------------------------------------------------------
