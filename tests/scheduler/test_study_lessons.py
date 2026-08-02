@@ -2,8 +2,10 @@
 
 Testes UNIT com store mockada. O scheduler chama a store; aqui validamos que:
 - Job de transição busca 'scheduled', checa véspera do 1º dia, transiciona + cria 1ª lição
-- Job de lição busca 'running', gera próxima lição
+- Job de lição busca 'running', gera próxima lição na véspera do próximo dia de cadência
 - Não gera para 'scheduled' (regular) ou 'archived'
+- Tolerante a downtime (transição dispara na véspera OU depois)
+- Plano concluído não gera mais lições
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ _USER = RecordID("user", "u1")
 _TOPIC_ID = RecordID("topic", "topic1")
 _PLAN_ID = RecordID("study_plan", "plan1")
 _ENTRY_ID = RecordID("plan_entry", "e1")
+_ENTRY_ID_2 = RecordID("plan_entry", "e2")
 
 
 def _topic(state: str = "scheduled") -> Topic:
@@ -34,33 +37,36 @@ def _topic(state: str = "scheduled") -> Topic:
     )
 
 
-def _plan(activated_at: datetime | None = None) -> StudyPlan:
+def _plan(activated_at: datetime | None = None, weekdays: list[str] | None = None) -> StudyPlan:
     return StudyPlan(
         id=_PLAN_ID,
         tenant_id=_TENANT,
         user_id=_USER,
         topic=_TOPIC_ID,
         status="active",
-        weekdays=["mon", "wed"],
+        weekdays=["mon", "wed"] if weekdays is None else weekdays,
         target_date=datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc),
         activated_at=activated_at or datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
         created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
     )
 
 
-def _entries() -> list[PlanEntry]:
-    return [
-        PlanEntry(
-            id=_ENTRY_ID,
-            study_plan=_PLAN_ID,
-            tenant_id=_TENANT,
-            user_id=_USER,
-            seq=1,
-            title="Lição 1",
-            chapters=[RecordID("material_chapter", "c1")],
-            created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
-        ),
-    ]
+def _entries(n: int = 1) -> list[PlanEntry]:
+    out: list[PlanEntry] = []
+    for i in range(1, n + 1):
+        out.append(
+            PlanEntry(
+                id=RecordID("plan_entry", f"e{i}"),
+                study_plan=_PLAN_ID,
+                tenant_id=_TENANT,
+                user_id=_USER,
+                seq=i,
+                title=f"Lição {i}",
+                chapters=[RecordID("material_chapter", f"c{i}")],
+                created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            )
+        )
+    return out
 
 
 @pytest.fixture
@@ -74,7 +80,7 @@ def mock_db() -> MagicMock:
 def test_transition_job_transitions_scheduled_to_running(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job de transição: scheduled + véspera do 1º dia → running + 1ª lição."""
+    """Job de transição: scheduled + véspera do 1º dia → running + 1ª lição (atômico)."""
     from kubo.scheduler import study_lessons
 
     # 1º dia de cadência = 2026-08-03 (segunda). Véspera = 2026-08-02 (domingo).
@@ -82,7 +88,6 @@ def test_transition_job_transitions_scheduled_to_running(
     # Hoje = 2026-08-02 = véspera → transiciona.
     today = date(2026, 8, 2)
 
-    # Mock: list_topics_by_state devolve 1 tema scheduled
     monkeypatch.setattr(
         study_lessons.study_store,
         "list_topics_by_state",
@@ -91,33 +96,25 @@ def test_transition_job_transitions_scheduled_to_running(
     monkeypatch.setattr(
         study_lessons.study_store,
         "get_plan_for_topic",
-        lambda db, **kw: (_plan(), _entries()),
+        lambda db, **kw: (_plan(), _entries(1)),
     )
     transitions: list[RecordID] = []
-    lessons: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,
-        "set_topic_state",
+        "transition_to_running",
         lambda db, **kw: transitions.append(kw["topic_id"]),
     )
-    monkeypatch.setattr(
-        study_lessons.study_store,
-        "create_lesson",
-        lambda db, **kw: lessons.append(kw["plan_id"]),
-    )
-    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 0)
 
     study_lessons.execute_study_transition_job(
         mock_db, tenant_id=_TENANT, user_id=_USER, today=today
     )
     assert len(transitions) == 1
-    assert len(lessons) == 1
 
 
-def test_transition_job_skips_when_not_eve(
+def test_transition_job_skips_when_before_eve(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job de transição: scheduled mas NÃO é véspera → não transiciona."""
+    """Job de transição: scheduled mas ANTES da véspera → não transiciona."""
     from kubo.scheduler import study_lessons
 
     today = date(2026, 8, 1)  # sábado, 1º dia é 03/08 (segunda), véspera é 02/08
@@ -129,15 +126,14 @@ def test_transition_job_skips_when_not_eve(
     monkeypatch.setattr(
         study_lessons.study_store,
         "get_plan_for_topic",
-        lambda db, **kw: (_plan(), _entries()),
+        lambda db, **kw: (_plan(), _entries(1)),
     )
     transitions: list[RecordID] = []
     monkeypatch.setattr(
         study_lessons.study_store,
-        "set_topic_state",
+        "transition_to_running",
         lambda db, **kw: transitions.append(kw["topic_id"]),
     )
-    monkeypatch.setattr(study_lessons.study_store, "create_lesson", lambda db, **kw: None)
 
     study_lessons.execute_study_transition_job(
         mock_db, tenant_id=_TENANT, user_id=_USER, today=today
@@ -145,7 +141,68 @@ def test_transition_job_skips_when_not_eve(
     assert transitions == []
 
 
-def test_transition_job_does_not_process_running(
+def test_transition_job_tolerates_downtime(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job de transição: scheduled + DEPOIS da véspera (downtime) → transiciona."""
+    from kubo.scheduler import study_lessons
+
+    # Hoje = 2026-08-05 (quarta) — véspera foi 02/08, mas job não rodou.
+    today = date(2026, 8, 5)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="scheduled")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    transitions: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "transition_to_running",
+        lambda db, **kw: transitions.append(kw["topic_id"]),
+    )
+
+    study_lessons.execute_study_transition_job(
+        mock_db, tenant_id=_TENANT, user_id=_USER, today=today
+    )
+    assert len(transitions) == 1
+
+
+def test_transition_job_skips_no_cadence(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job de transição: plano sem weekdays → não transiciona (log warning)."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 2)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="scheduled")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(weekdays=[]), _entries(1)),
+    )
+    transitions: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "transition_to_running",
+        lambda db, **kw: transitions.append(kw["topic_id"]),
+    )
+
+    study_lessons.execute_study_transition_job(
+        mock_db, tenant_id=_TENANT, user_id=_USER, today=today
+    )
+    assert transitions == []
+
+
+def test_transition_job_only_queries_scheduled(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Job de transição só busca 'scheduled', não 'running'."""
@@ -166,44 +223,101 @@ def test_transition_job_does_not_process_running(
 # --- execute_study_lesson_job ----------------------------------------------------------
 
 
-def test_lesson_job_processes_running(mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Job de lição busca 'running' e gera próxima lição."""
-    from kubo.scheduler import study_lessons
-
-    calls: list[str] = []
-    monkeypatch.setattr(
-        study_lessons.study_store,
-        "list_topics_by_state",
-        lambda db, **kw: calls.append(kw["state"]) or [],
-    )
-    study_lessons.execute_study_lesson_job(
-        mock_db, tenant_id=_TENANT, user_id=_USER, today=date(2026, 8, 4)
-    )
-    assert "running" in calls
-
-
-def test_lesson_job_does_not_process_scheduled(
+def test_lesson_job_generates_next_lesson_on_eve(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job de lição NÃO busca 'scheduled' (filtra só running)."""
+    """Job de lição: running + véspera do próximo dia de cadência → gera próxima lição.
+
+    Cadência mon/wed. Hoje = 2026-08-04 (terça) = véspera de quarta (2026-08-05).
+    1 lição já gerada (done=1), 2 entries → gera entry[1] (Lição 2).
+    """
     from kubo.scheduler import study_lessons
 
-    calls: list[str] = []
+    today = date(2026, 8, 4)  # terça, véspera de quarta
     monkeypatch.setattr(
         study_lessons.study_store,
         "list_topics_by_state",
-        lambda db, **kw: calls.append(kw["state"]) or [],
+        lambda db, **kw: [_topic(state="running")],
     )
-    study_lessons.execute_study_lesson_job(
-        mock_db, tenant_id=_TENANT, user_id=_USER, today=date(2026, 8, 4)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(2)),
     )
-    assert "scheduled" not in calls
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    created: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "create_lesson",
+        lambda db, **kw: created.append(kw["plan_entry_id"]),
+    )
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    assert len(created) == 1
+    assert created[0] == _ENTRY_ID_2  # próxima entry
 
 
-def test_lesson_job_does_not_process_archived(
+def test_lesson_job_skips_when_not_eve(mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Job de lição: running mas NÃO é véspera → não gera."""
+    from kubo.scheduler import study_lessons
+
+    # Hoje = 2026-08-03 (segunda) — próximo dia = quarta 05/08, véspera = terça 04/08.
+    today = date(2026, 8, 3)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="running")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(2)),
+    )
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 1)
+    created: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "create_lesson",
+        lambda db, **kw: created.append(kw["plan_entry_id"]),
+    )
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    assert created == []
+
+
+def test_lesson_job_skips_when_plan_complete(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job de lição NÃO busca 'archived'."""
+    """Job de lição: running mas todas as lições já geradas → não gera."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 4)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="running")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(2)),
+    )
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 2)
+    created: list[RecordID] = []
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "create_lesson",
+        lambda db, **kw: created.append(kw["plan_entry_id"]),
+    )
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    assert created == []
+
+
+def test_lesson_job_only_queries_running(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job de lição NÃO busca 'scheduled' ou 'archived' (filtra só running)."""
     from kubo.scheduler import study_lessons
 
     calls: list[str] = []
@@ -215,4 +329,4 @@ def test_lesson_job_does_not_process_archived(
     study_lessons.execute_study_lesson_job(
         mock_db, tenant_id=_TENANT, user_id=_USER, today=date(2026, 8, 4)
     )
-    assert "archived" not in calls
+    assert calls == ["running"]

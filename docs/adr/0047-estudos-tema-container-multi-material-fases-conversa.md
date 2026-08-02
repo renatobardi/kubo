@@ -104,3 +104,12 @@ A invariante 7 ("sem UI rica na fase 1") e a stack HTMX não cobrem streaming SS
 ### Emenda 4 — Janela deslizante sem resumo (KUBO-163, 2026-08-01)
 
 O §2 prevê "janela deslizante com resumo dos turnos anteriores (padrão `distilled`)". A implementação atual trunca por `_MAX_HISTORY_CHARS` (descarta turnos antigos sem resumir). O resumo dos turnos antigos fica para KUBO-168 (junto com a Fase 2, que também precisa de resumo da conversa com `mentor`). A truncagem é aceitável na Fase 1 porque a conversa é curta (definição de Tema, não revisão de Plano).
+
+### Emenda 5 — Scheduler de lições: split KUBO-166 × KUBO-168 (2026-08-02)
+
+A Emenda 2 dizia que a restauração do scheduler de lições seria rastreada em **KUBO-168**. Na implementação, o trabalho foi **splitado**:
+
+- **KUBO-166** (esta fatia) restaura a **estrutura** do scheduler: dois jobs em código (`study_transition` 06:00, `study_lesson` 07:00), transição atômica `scheduled→running` + criação de 1ª lição (registro vazio), geração de próxima lição (registro vazio) na véspera do próximo dia de cadência. Os jobs filtram só `running` (não `scheduled`/`archived`); a 1ª lição é parte da transição, não da geração regular. Tolerante a downtime (transição dispara na véspera OU depois). A transição é atômica via `transition_to_running` (CREATE lesson + UPDATE topic.state='running' numa transação, com CAS `AND state='scheduled'`).
+- **KUBO-168** traz a **geração com IA** sobre o registro vazio: `concept`, `scenario`, `application`, `quiz` a partir do `plan_entry` + capítulos. Sem IA, a lição é um placeholder com `scheduled_for` — o scheduler de KUBO-166 não chama LLM.
+
+A reversão `scheduled→planning` (botão "Editar plano") é atômica via `deactivate_plan` (reverte `status='proposed'` + `activated_at=NONE` + `state='planning'` com CAS `AND state='scheduled'`). Se o scheduler já transicionou para `running`, o CAS falha e a rota devolve 400 (`_TOPIC_FROZEN`).

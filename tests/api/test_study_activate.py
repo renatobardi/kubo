@@ -113,7 +113,47 @@ def stub_activate_store(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda db, **kw: (_plan(), _entries()),
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.activate_plan", lambda db, **kw: None)
+    monkeypatch.setattr("kubo.api.routes.study.study_store.deactivate_plan", lambda db, **kw: None)
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_state", lambda db, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_chapters_light", lambda db, **kw: []
+    )
+
+
+# --- GET /topics/{key} (scheduled/running mostram plano) --------------------------------
+
+
+def test_get_scheduled_shows_edit_plan_button(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET em scheduled renderiza o botão 'Editar plano' (plano visível)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="scheduled"),
+    )
+    html = authed_client.get(f"/study/topics/{_TOPIC_ID.id}").text
+    assert "/edit-plan" in html
+    assert "Editar plano" in html
+
+
+def test_get_running_shows_frozen_message(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET em running renderiza mensagem de congelado (sem botão de editar)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="running"),
+    )
+    html = authed_client.get(f"/study/topics/{_TOPIC_ID.id}").text
+    assert "congelado" in html
+    assert "/edit-plan" not in html
+
+
+def test_get_planning_shows_activate_button(authed_client: TestClient) -> None:
+    """GET em planning renderiza o botão 'Ativar plano'."""
+    html = authed_client.get(f"/study/topics/{_TOPIC_ID.id}").text
+    assert "/activate" in html
+    assert "Ativar plano" in html
 
 
 # --- POST /topics/{key}/activate --------------------------------------------------------
@@ -130,38 +170,52 @@ def test_activate_transitions_planning_to_scheduled(authed_client: TestClient) -
     assert f"/study/topics/{_TOPIC_ID.id}" in resp.headers["location"]
 
 
-def test_activate_rejects_non_planning(authed_client: TestClient) -> None:
+def test_activate_rejects_non_planning(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """POST /activate em draft → 400."""
-    from kubo.api.routes import study as study_routes
-
-    original = study_routes.study_store.get_topic
-    study_routes.study_store.get_topic = lambda db, **kw: _topic(state="draft")
-    try:
-        resp = authed_client.post(
-            f"/study/topics/{_TOPIC_ID.id}/activate",
-            data={"csrf": _csrf(authed_client)},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 400
-    finally:
-        study_routes.study_store.get_topic = original
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="draft"),
+    )
+    resp = authed_client.post(
+        f"/study/topics/{_TOPIC_ID.id}/activate",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
 
-def test_activate_rejects_running(authed_client: TestClient) -> None:
+def test_activate_rejects_running(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """POST /activate em running → 400 (congelado)."""
-    from kubo.api.routes import study as study_routes
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="running"),
+    )
+    resp = authed_client.post(
+        f"/study/topics/{_TOPIC_ID.id}/activate",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
-    original = study_routes.study_store.get_topic
-    study_routes.study_store.get_topic = lambda db, **kw: _topic(state="running")
-    try:
-        resp = authed_client.post(
-            f"/study/topics/{_TOPIC_ID.id}/activate",
-            data={"csrf": _csrf(authed_client)},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 400
-    finally:
-        study_routes.study_store.get_topic = original
+
+def test_activate_rejects_no_cadence(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /activate com plano sem weekdays → 400."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_for_topic",
+        lambda db, **kw: (_plan(weekdays=[]), _entries()),
+    )
+    resp = authed_client.post(
+        f"/study/topics/{_TOPIC_ID.id}/activate",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
 
 def test_activate_rejects_bad_csrf(authed_client: TestClient) -> None:
@@ -177,39 +231,37 @@ def test_activate_rejects_bad_csrf(authed_client: TestClient) -> None:
 # --- POST /topics/{key}/edit-plan -------------------------------------------------------
 
 
-def test_edit_plan_transitions_scheduled_to_planning(authed_client: TestClient) -> None:
+def test_edit_plan_transitions_scheduled_to_planning(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """POST /edit-plan em scheduled → 303 redirect (state=planning)."""
-    from kubo.api.routes import study as study_routes
-
-    original = study_routes.study_store.get_topic
-    study_routes.study_store.get_topic = lambda db, **kw: _topic(state="scheduled")
-    try:
-        resp = authed_client.post(
-            f"/study/topics/{_TOPIC_ID.id}/edit-plan",
-            data={"csrf": _csrf(authed_client)},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert f"/study/topics/{_TOPIC_ID.id}" in resp.headers["location"]
-    finally:
-        study_routes.study_store.get_topic = original
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="scheduled"),
+    )
+    resp = authed_client.post(
+        f"/study/topics/{_TOPIC_ID.id}/edit-plan",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert f"/study/topics/{_TOPIC_ID.id}" in resp.headers["location"]
 
 
-def test_edit_plan_rejects_running(authed_client: TestClient) -> None:
+def test_edit_plan_rejects_running(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """POST /edit-plan em running → 400 (congelado, irreversível)."""
-    from kubo.api.routes import study as study_routes
-
-    original = study_routes.study_store.get_topic
-    study_routes.study_store.get_topic = lambda db, **kw: _topic(state="running")
-    try:
-        resp = authed_client.post(
-            f"/study/topics/{_TOPIC_ID.id}/edit-plan",
-            data={"csrf": _csrf(authed_client)},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 400
-    finally:
-        study_routes.study_store.get_topic = original
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="running"),
+    )
+    resp = authed_client.post(
+        f"/study/topics/{_TOPIC_ID.id}/edit-plan",
+        data={"csrf": _csrf(authed_client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
 
 
 def test_edit_plan_rejects_planning(authed_client: TestClient) -> None:

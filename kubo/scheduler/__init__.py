@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -428,11 +429,8 @@ def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
         try:
             with client.connect(client.config()) as db:
                 tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-                from datetime import date
-
-                execute_study_transition_job(
-                    db, tenant_id=tenant_id, user_id=user_id, today=date.today()
-                )
+                today = datetime.now(tz).date()
+                execute_study_transition_job(db, tenant_id=tenant_id, user_id=user_id, today=today)
         except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
             _log.exception("study_transition_job_failed")
 
@@ -440,11 +438,8 @@ def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
         try:
             with client.connect(client.config()) as db:
                 tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-                from datetime import date
-
-                execute_study_lesson_job(
-                    db, tenant_id=tenant_id, user_id=user_id, today=date.today()
-                )
+                today = datetime.now(tz).date()
+                execute_study_lesson_job(db, tenant_id=tenant_id, user_id=user_id, today=today)
         except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
             _log.exception("study_lesson_job_failed")
 

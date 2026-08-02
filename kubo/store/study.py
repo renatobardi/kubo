@@ -592,22 +592,38 @@ def set_topic_state(
     user_id: RecordID,
     topic_id: RecordID,
     state: str,
-) -> None:
+    from_state: str | None = None,
+) -> bool:
     """Transiciona o estado do tema (draft → planning → scheduled → ...).
 
     Não valida a legalidade da transição aqui — a rota decide quais transições
-    são permitidas. A store só persiste.
+    são permitidas. A store só persiste. Se `from_state` é fornecido, o UPDATE
+    só aplica se o estado atual corresponder (CAS — evita TOCTOU entre o check
+    da rota e o write). Devolve True se aplicou, False se o estado mudou.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if topic is None:
         raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    if from_state is not None:
+        guard = " AND state = $from_state"
+        params: dict[str, Any] = {
+            "topic": topic_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "state": state,
+            "from_state": from_state,
+        }
+    else:
+        guard = ""
+        params = {"topic": topic_id, "tenant": tenant_id, "user": user_id, "state": state}
     transaction.run_transaction(
         db,
-        [f"UPDATE $topic SET state = $state WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
-        {"topic": topic_id, "tenant": tenant_id, "user": user_id, "state": state},
+        [f"UPDATE $topic SET state = $state WHERE {_MATERIAL_SCOPE}{guard}"],  # noqa: S608
+        params,
     )
     _log.info("store.topic.state_changed", topic=str(topic_id), state=state)
+    return True
 
 
 @dataclass(frozen=True)
@@ -976,6 +992,45 @@ def activate_plan(
     _log.info("store.plan.activated", topic=str(topic_id))
 
 
+def deactivate_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+) -> None:
+    """Reverte ativação: scheduled → planning.
+
+    Seta `study_plan.status='proposed'` + `activated_at=NONE` e
+    `topic.state='planning'` numa transação atômica. O CAS em `from_state`
+    garante que só reverte se o tema estiver em `scheduled` — se o scheduler
+    já transicionou para `running`, o UPDATE não aplica e a rota devolve 409.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if topic is None:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        raise StoreError("plano não encontrado para o tema")
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $plan SET status = 'proposed', activated_at = NONE "  # noqa: S608
+            f"WHERE {_PLAN_SCOPE};",
+            f"UPDATE $topic SET state = 'planning' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"AND state = 'scheduled';",
+        ],
+        {
+            "plan": plan.id,
+            "topic": topic_id,
+            "tenant": tenant_id,
+            "user": user_id,
+        },
+    )
+    _log.info("store.plan.deactivated", topic=str(topic_id))
+
+
 def list_topics_by_state(
     db: Any,
     *,
@@ -987,6 +1042,7 @@ def list_topics_by_state(
 
     Usado pelo scheduler para encontrar temas em 'scheduled' e 'running'.
     """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT * FROM topic WHERE state = $state AND {_MATERIAL_SCOPE};",  # noqa: S608
         {"state": state, "tenant": tenant_id, "user": user_id},
@@ -1049,8 +1105,58 @@ def count_lessons_for_plan(
     plan_id: RecordID,
 ) -> int:
     """Conta quantas lições já foram geradas para um plano."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT count() AS n FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT count() FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
-    return rows[0].get("n", 0) if rows else 0
+    return rows[0]["count"] if rows else 0
+
+
+def transition_to_running(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    plan_id: RecordID,
+    plan_entry_id: RecordID,
+    scheduled_for: datetime,
+) -> RecordID:
+    """Transição atômica scheduled → running + cria 1ª lição (KUBO-166).
+
+    Cria a lição e transiciona o tema para `running` numa única transação.
+    Se qualquer statement falha, nada é persistido — evita o estado
+    inconsistente de lição criada com tema ainda em `scheduled`.
+    O CAS `AND state = 'scheduled'` garante que não transiciona um tema
+    que já está em `running` (idempotente).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_id = _fresh("lesson")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $lesson SET tenant_id = $tenant, user_id = $user, "
+            "study_plan = $plan, plan_entry = $entry, "
+            "scheduled_for = $when, "
+            "concept = '', scenario = '', application = '', quiz = [], provenance = [];",
+            f"UPDATE $topic SET state = 'running' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"AND state = 'scheduled';",
+        ],
+        {
+            "lesson": lesson_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "plan": plan_id,
+            "entry": plan_entry_id,
+            "when": scheduled_for,
+            "topic": topic_id,
+        },
+    )
+    _log.info(
+        "store.lesson.transition_to_running",
+        lesson=str(lesson_id),
+        topic=str(topic_id),
+        scheduled_for=scheduled_for.isoformat(),
+    )
+    return lesson_id

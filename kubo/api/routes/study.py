@@ -361,12 +361,12 @@ def topic_detail(request: Request, key: str) -> Response:
             study_store.get_plan_for_topic(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
             )
-            if topic.state == "planning"
+            if topic.state in ("planning", "scheduled", "running")
             else (None, [])
         )
         # Mapa chapter_id → título para exibir nomes legíveis no plano (KUBO-165).
         chapter_titles: dict[str, str] = {}
-        if topic.state == "planning":
+        if topic.state in ("planning", "scheduled", "running"):
             for ch in _collect_all_chapters(db, ctx, topic.id):
                 chapter_titles[str(ch.id)] = f"{ch.seq}. {ch.title}"
     return templates.TemplateResponse(
@@ -1356,6 +1356,8 @@ def set_cadence(
 _TOPIC_NOT_PLANNING_ACTIVATE = "Só é possível ativar um estudo em planejamento."
 _TOPIC_NOT_SCHEDULED_EDIT = "Só é possível editar o plano de um estudo agendado."
 _TOPIC_FROZEN = "O plano está congelado (lições já geradas) e não pode ser editado."
+_TOPIC_NO_PLAN = "Ative o plano apenas depois que o planner propor um plano."
+_TOPIC_NO_CADENCE = "Defina a cadência (dias da semana) antes de ativar o plano."
 
 
 @router.post("/topics/{key}/activate")
@@ -1380,6 +1382,14 @@ def activate_topic(
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING_ACTIVATE, status_code=400)
+        # Pré-condições: plano existe e tem cadência.
+        plan, _ = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        if plan is None:
+            return PlainTextResponse(_TOPIC_NO_PLAN, status_code=400)
+        if not plan.weekdays:
+            return PlainTextResponse(_TOPIC_NO_CADENCE, status_code=400)
     try:
         with client.connect_rw() as db:
             study_store.activate_plan(
@@ -1403,7 +1413,10 @@ def edit_plan_back(
     """Volta de scheduled → planning (reversível pré-1ª lição).
 
     Permite ao dono ajustar o Plano antes do scheduler gerar a 1ª lição.
-    A partir de `running` (congelado), a transição é bloqueada.
+    A partir de `running` (congelado), a transição é bloqueada. A reversão é
+    atômica via `deactivate_plan` (reverte status/activated_at + state) com CAS
+    em `state='scheduled'` — se o scheduler já transicionou para `running`,
+    o UPDATE não aplica e a rota devolve 409.
     """
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
@@ -1420,12 +1433,11 @@ def edit_plan_back(
             return PlainTextResponse(_TOPIC_NOT_SCHEDULED_EDIT, status_code=400)
     try:
         with client.connect_rw() as db:
-            study_store.set_topic_state(
+            study_store.deactivate_plan(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 topic_id=topic.id,
-                state="planning",
             )
     except (ConfigError, StoreError):
         _log.warning("study.edit_plan.failed", topic=_log_key(key))
