@@ -437,3 +437,20 @@ def test_archived_topic_not_found_by_scheduler(
 
     assert str(topic_id) not in {str(t.id) for t in running}
     assert str(topic_id) not in {str(t.id) for t in scheduled}
+
+
+def test_unarchive_topic_scheduler_resumes(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """Desarquivar restaura o estado anterior e o scheduler volta a encontrar o tema."""
+    topic_id, plan_id = _topic_with_plan(db, tenant_id, user_id)
+    set_plan_cadence(
+        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id, weekdays=["mon", "wed"]
+    )
+    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    # Arquiva (scheduler pausa).
+    archive_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    scheduled = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="scheduled")
+    assert str(topic_id) not in {str(t.id) for t in scheduled}
+    # Desarquiva (scheduler retoma).
+    unarchive_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    scheduled = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="scheduled")
+    assert str(topic_id) in {str(t.id) for t in scheduled}
