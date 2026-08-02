@@ -92,6 +92,32 @@ def test_sidebar_collapse_wired(authed_client: TestClient) -> None:
     assert "nav-collapsed" in html  # classe + reaplicação no <head>
 
 
+def test_scroll_containers_are_containing_blocks(authed_client: TestClient) -> None:
+    """O `<main>` (que rola) e o shell (que recorta) precisam ser containing block.
+
+    Regressão real: `.sr-only` do Tailwind é `position:absolute`. Sem ancestral
+    posicionado, o containing block dele é o viewport — e `overflow` só recorta
+    descendente cujo containing block está DENTRO do elemento. Resultado: um label
+    invisível de 1px escapava do clipping do `<main>`, esticava o documento até a
+    posição dele e o documento passava a rolar, arrastando a sidebar (a "faixa em
+    branco"). `relative` no `<main>` e no shell prende esses absolutos.
+    """
+    html = authed_client.get("/").text
+
+    def open_tag(anchor: str) -> str:
+        """Tag de abertura que contém `anchor` — tolerante à ordem das classes."""
+        at = html.find(anchor)
+        assert at != -1, f"não achei {anchor!r} no shell renderizado"
+        return html[html.rfind("<", 0, at) : html.find(">", at) + 1]
+
+    main_tag = open_tag("<main")
+    shell_tag = open_tag("h-dvh")
+    assert "overflow-y-auto" in main_tag, "main deixou de ser o container de rolagem"
+    assert "relative" in main_tag, f"main sem `relative` (absolutos escapam): {main_tag}"
+    assert "overflow-hidden" in shell_tag, "shell deixou de recortar"
+    assert "relative" in shell_tag, f"shell sem `relative` (absolutos escapam): {shell_tag}"
+
+
 def test_login_logo_is_floating_sakura(client: TestClient) -> None:
     """[S3] A tela de login também usa a sakura solta (ambos os tokens theme-aware),
     não o favicon com fundo. Prova theme-aware = tokens presentes; a alternância real
