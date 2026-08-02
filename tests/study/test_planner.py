@@ -10,7 +10,7 @@ salvar meia proposta daria ao dono um plano que aponta para capítulos que ele n
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import TypeVar, cast
 
 import pytest
@@ -388,3 +388,100 @@ def test_chat_returns_none_on_executor_failure() -> None:
         )
         is None
     )
+
+
+# --- KUBO-168: streaming do planner ------------------------------------------------------
+
+
+class _FakeStreamingExecutor:
+    """Fake de `StreamingExecutor`: devolve `chunks` ou levanta `error`."""
+
+    def __init__(self, chunks: list[str], error: Exception | None = None) -> None:
+        self._chunks = chunks
+        self._error = error
+        self.received_instructions: list[str] = []
+        self.received_content: list[str] = []
+
+    def stream(self, instruction: str, untrusted_content: str) -> Iterator[str]:
+        self.received_instructions.append(instruction)
+        self.received_content.append(untrusted_content)
+        if self._error is not None:
+            raise self._error
+        yield from self._chunks
+
+
+def test_stream_chat_yields_text_chunks() -> None:
+    """stream_chat devolve chunks de texto do LLM (streaming)."""
+    from kubo.study.planner import Planner
+
+    stream_executor = _FakeStreamingExecutor(chunks=["Juntei ", "as lições."])
+    planner = Planner(executor=_FakeExecutor(), prompt=_PROMPT)
+
+    chunks = list(
+        planner.stream_chat(
+            stream_executor,
+            user_message="junta lição 1 e 2",
+            chapters=_chapters(),
+            current_plan=[("L1", [1, 2])],
+        )
+    )
+    assert chunks == ["Juntei ", "as lições."]
+
+
+def test_stream_chat_with_plan_block_extracts_reply() -> None:
+    """stream_chat com bloco JSON no final → extract_planner_reply devolve texto + plano."""
+    from kubo.study.planner import extract_planner_reply
+
+    full_text = (
+        "Juntei as lições 1 e 2 numa só.\n\n"
+        '```json\n{"lessons": [{"title": "Fundamentos", "chapter_seqs": [1, 2, 3, 4]}]}\n```'
+    )
+    reply = extract_planner_reply(full_text, _chapters())
+    assert reply is not None
+    assert "Juntei as lições" in reply.text
+    assert "```json" not in reply.text
+    assert reply.lessons is not None
+    assert len(reply.lessons) == 1
+    assert reply.lessons[0].chapter_seqs == [1, 2, 3, 4]
+
+
+def test_stream_chat_without_plan_block_extracts_text_only() -> None:
+    """Texto sem bloco JSON → extract_planner_reply devolve texto sem lessons."""
+    from kubo.study.planner import extract_planner_reply
+
+    reply = extract_planner_reply("Entendi, vou manter o plano.", _chapters())
+    assert reply is not None
+    assert reply.text == "Entendi, vou manter o plano."
+    assert reply.lessons is None
+
+
+def test_stream_chat_incoherent_plan_discarded() -> None:
+    """Bloco JSON com seq inexistente → lessons descartado, texto preservado."""
+    from kubo.study.planner import extract_planner_reply
+
+    full_text = (
+        'Aqui está.\n\n```json\n{"lessons": [{"title": "Fantasma", "chapter_seqs": [99]}]}\n```'
+    )
+    reply = extract_planner_reply(full_text, _chapters())
+    assert reply is not None
+    assert "Aqui está." in reply.text
+    assert reply.lessons is None
+
+
+def test_stream_chat_propagates_executor_error() -> None:
+    """stream_chat propaga ExecutorError durante a iteração dos chunks."""
+    from kubo.errors import ExecutorError
+    from kubo.study.planner import Planner
+
+    stream_executor = _FakeStreamingExecutor(chunks=[], error=ExecutorError("provider down"))
+    planner = Planner(executor=_FakeExecutor(), prompt=_PROMPT)
+
+    with pytest.raises(ExecutorError):
+        list(
+            planner.stream_chat(
+                stream_executor,
+                user_message="junta",
+                chapters=_chapters(),
+                current_plan=[("L1", [1, 2])],
+            )
+        )

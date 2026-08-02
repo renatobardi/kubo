@@ -23,19 +23,11 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
-import structlog
-
 from kubo.executors.base import StreamingExecutor
-
-_log = structlog.get_logger(__name__)
 
 # Valores válidos de profundidade (espelha o ASSERT da migration 0031).
 # Única fonte de verdade — rota e mentor importam daqui.
 VALID_DEPTHS = ("superficial", "intermediario", "aprofundado")
-
-# Teto de caracteres do histórico que vai ao prompt (janela deslizante).
-# Os turnos mais antigos são truncados primeiro — os recentes ficam inteiros.
-_MAX_HISTORY_CHARS = 20_000
 
 # Padrões de extração das marcações de sugestão.
 # `[^\]]+` em vez de `.+?` evita backtracking super-linear (Sonar S8786/S5857).
@@ -113,19 +105,13 @@ def _content(
 
 
 def _format_history(history: Sequence[tuple[str, str]]) -> str:
-    """Formata o histórico como turnos, respeitando o teto de caracteres."""
+    """Formata o histórico como turnos.
+
+    A janela deslizante com resumo já foi aplicada pela rota (KUBO-168,
+    ADR-0047 Emenda 4) antes de chegar aqui — não há truncamento neste nível.
+    """
     lines = [f"{role}: {content}" for role, content in history]
-    full = "\n".join(lines)
-    if len(full) <= _MAX_HISTORY_CHARS:
-        return f"Histórico da conversa:\n{full}"
-    # Trunca do início (turnos mais antigos saem primeiro).
-    truncated = full[-_MAX_HISTORY_CHARS:]
-    # Descarta a primeira linha parcial (turno cortado no meio).
-    newline = truncated.find("\n")
-    if newline != -1:
-        truncated = truncated[newline + 1 :]
-    _log.info("study.mentor.history_truncated", total=len(full), cap=_MAX_HISTORY_CHARS)
-    return f"Histórico da conversa (turnos recentes):\n{truncated}"
+    return "Histórico da conversa:\n" + "\n".join(lines)
 
 
 def extract_reply(text: str) -> MentorReply:

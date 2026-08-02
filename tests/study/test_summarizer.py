@@ -101,3 +101,44 @@ def test_summarizer_truncates_long_chapter_content() -> None:
     # O conteúdo enviado ao executor é truncado, não vai o texto inteiro.
     assert executor.last_content is not None
     assert len(executor.last_content) < 200_000
+
+
+# --- KUBO-168: sumarização de conversa mentor→planner ------------------------------------
+
+
+def test_summarize_conversation_returns_summary() -> None:
+    """summarize_conversation devolve um resumo da conversa do mentor."""
+    expected = SummaryOutput(summary="Dono quer estudar agentes para aplicar no trabalho.")
+    executor = _FakeExecutor(expected)
+    summarizer = Summarizer(executor=executor, prompt="Resuma.")  # type: ignore[arg-type]
+
+    transcript = "Dono: Quero estudar agentes.\nMentor: Qual seu contexto?\nDono: Arquiteto."
+    result = summarizer.summarize_conversation(transcript)
+    assert result == "Dono quer estudar agentes para aplicar no trabalho."
+
+
+def test_summarize_conversation_passes_transcript_as_untrusted() -> None:
+    """O transcript viaja como untrusted_content (cercado pelo executor)."""
+    executor = _FakeExecutor(SummaryOutput(summary="Resumo."))
+    summarizer = Summarizer(executor=executor, prompt="Resuma.")  # type: ignore[arg-type]
+
+    transcript = "Dono: oi\nMentor: olá"
+    summarizer.summarize_conversation(transcript)
+
+    assert executor.last_content is not None
+    assert "Dono: oi" in executor.last_content
+    assert "Mentor: olá" in executor.last_content
+
+
+def test_summarize_conversation_returns_none_on_failure() -> None:
+    """Falha do executor vira None — quem chama decide o fallback."""
+
+    class _FailingExecutor:
+        def complete(
+            self, instruction: str, untrusted_content: str, response_model: type[BaseModel]
+        ) -> BaseModel:
+            raise ExecutorError("provider down")
+
+    summarizer = Summarizer(executor=_FailingExecutor(), prompt="Resuma.")  # type: ignore[arg-type]
+
+    assert summarizer.summarize_conversation("Dono: oi") is None

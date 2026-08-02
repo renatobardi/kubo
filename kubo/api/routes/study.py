@@ -47,9 +47,15 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
-from kubo.study.planner import Planner, PlannerChatReply, mechanical_proposal
+from kubo.study.planner import (
+    Planner,
+    PlannerChatReply,
+    extract_planner_reply,
+    mechanical_proposal,
+)
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -630,11 +636,17 @@ def _material_summaries_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> 
 
 
 def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[tuple[str, str]]:
-    """Histórico da conversa como lista de (role, content) para o mentor."""
+    """Histórico da conversa como lista de (role, content) para o mentor.
+
+    Aplica janela deslizante com resumo (KUBO-168, ADR-0047 Emenda 4): turnos
+    antigos são resumidos em vez de truncados. Se o resumo falha, fallback
+    para truncamento.
+    """
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
-    return [(m.role, m.content) for m in messages]
+    history = [(m.role, m.content) for m in messages]
+    return sliding_window_history(history, lambda: _summarizer(ctx))
 
 
 def _chat_precheck(
@@ -810,8 +822,13 @@ _TOPIC_NOT_DRAFT_CLOSE = "Só é possível fechar um estudo em rascunho."
 _TOPIC_EMPTY_CLOSE = "Adicione pelo menos um material antes de fechar o estudo."
 
 
-def _planner(ctx: SessionContext) -> Planner:
-    """Constrói o planner com a persona `planner` (modelo vem do catálogo)."""
+def _planner(ctx: SessionContext) -> tuple[Planner, ApiExecutor]:
+    """Constrói o planner + executor com a persona `planner` (modelo do catálogo).
+
+    O executor é devolvido separadamente para `stream_chat` (KUBO-168): o
+    Planner usa `Executor` para `chat`/`propose` e `StreamingExecutor` para
+    `stream_chat`. `ApiExecutor` implementa ambos.
+    """
     with client.connect() as db:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "planner")
     executor = ApiExecutor(
@@ -821,7 +838,7 @@ def _planner(ctx: SessionContext) -> Planner:
             timeout=_PLANNER_TIMEOUT,
         ),
     )
-    return Planner(executor=executor, prompt=persona.prompt)
+    return Planner(executor=executor, prompt=persona.prompt), executor
 
 
 def _collect_all_chapters(
@@ -858,12 +875,32 @@ def _collect_all_chapters(
 
 
 def _mentor_transcript_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
-    """Transcript cru da conversa com mentor (KUBO-164: transcript cru, resumo fica p/ KUBO-168)."""
+    """Transcript cru da conversa com mentor (KUBO-164)."""
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
     lines = [f"{'Dono' if m.role == 'user' else 'Mentor'}: {m.content}" for m in messages]
     return "\n".join(lines)
+
+
+def _mentor_summary_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
+    """Resumo da conversa com mentor para o planner (KUBO-168, ADR-0047 Emenda 4).
+
+    Substitui o transcript cru no prompt do planner. Se a conversa é curta
+    (≤ 500 chars), devolve o transcript cru — resumir não vale o custo. Se
+    é longa, chama o `Summarizer.summarize_conversation`. Se o LLM falha,
+    fallback para o transcript truncado em 2000 chars (preserva a intenção
+    do dono mesmo sem IA).
+    """
+    transcript = _mentor_transcript_of(db, ctx, topic_id)
+    if len(transcript) <= 500:
+        return transcript
+    summarizer = _summarizer(ctx)
+    summary = summarizer.summarize_conversation(transcript)
+    if summary:
+        return summary
+    _log.warning("study.mentor_summary.fallback", topic=str(topic_id))
+    return transcript[:2000]
 
 
 @router.post("/topics/{key}/close")
@@ -896,13 +933,13 @@ def close_topic(
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
         chapters = _collect_all_chapters(db, ctx, topic.id)
-        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
 
     # Propõe o plano (LLM ou fallback mecânico).
     from kubo.study.planner import mechanical_proposal
 
-    planner = _planner(ctx)
+    planner, _executor = _planner(ctx)
     proposal = planner.propose(
         chapters,
         focus=topic.focus,
@@ -948,19 +985,17 @@ def close_topic(
 
 _TOPIC_NOT_PLANNING = "Só é possível operar um estudo em planejamento."
 _INVALID_ID = "Identificador inválido."
-_PLANNER_HISTORY_WINDOW = 10
 
 
 def _planning_chat_history_of(
     db: Any, ctx: SessionContext, topic_id: RecordID
 ) -> list[tuple[str, str]]:
-    """Histórico da conversa com planner (phase=planning), janela deslizante pela cauda."""
+    """Histórico da conversa com planner (phase=planning), janela deslizante com resumo."""
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
-    # Janela deslizante: últimos N turnos (padrão do mentor, ADR-0047 emenda 4).
-    recent = messages[-_PLANNER_HISTORY_WINDOW * 2 :] if messages else []
-    return [(m.role, m.content) for m in recent]
+    history = [(m.role, m.content) for m in messages]
+    return sliding_window_history(history, lambda: _summarizer(ctx))
 
 
 def _current_plan_as_tuples(
@@ -1105,34 +1140,66 @@ def chat_with_planner(
         _log.warning("study.planner_chat.user_persist_failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
 
-    planner = _planner(ctx)
+    planner, stream_executor = _planner(ctx)
 
-    def _stream() -> Any:
-        """Chama o planner (síncrono, não-streaming) e envia resultado via SSE."""
-        try:
-            reply = planner.chat(
-                user_message=message,
-                chapters=chapters,
-                current_plan=current_plan,
-                planning_history=history,
-                focus=topic.focus,
-                depth=topic.depth,
-                material_summaries=summaries,
-            )
-        except (ExecutorError, StoreError, ConfigError) as exc:
-            _log.warning("study.planner_chat.failed", topic=_log_key(key), error=str(exc))
-            yield {"event": "error", "data": "Falha ao gerar resposta."}
-            return
-        if reply is None:
-            yield {"event": "error", "data": "Falha ao gerar resposta."}
-            return
-        plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
-        yield {
-            "event": "done",
-            "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
-        }
+    return EventSourceResponse(
+        _planner_stream(
+            planner=planner,
+            stream_executor=stream_executor,
+            message=message,
+            chapters=chapters,
+            current_plan=current_plan,
+            history=history,
+            topic=topic,
+            summaries=summaries,
+            ctx=ctx,
+            key=key,
+        )
+    )
 
-    return EventSourceResponse(_stream())
+
+def _planner_stream(
+    *,
+    planner: Planner,
+    stream_executor: ApiExecutor,
+    message: str,
+    chapters: list[study_store.MaterialChapter],
+    current_plan: list[tuple[str, list[int]]],
+    history: list[tuple[str, str]],
+    topic: study_store.Topic,
+    summaries: list[str],
+    ctx: SessionContext,
+    key: str,
+) -> Any:
+    """Generator SSE que streama chunks do planner e envia done ao final (KUBO-168)."""
+    chunks: list[str] = []
+    try:
+        for chunk in planner.stream_chat(
+            stream_executor,
+            user_message=message,
+            chapters=chapters,
+            current_plan=current_plan,
+            planning_history=history,
+            focus=topic.focus,
+            depth=topic.depth,
+            material_summaries=summaries,
+        ):
+            chunks.append(chunk)
+            yield {"event": "chunk", "data": chunk}
+    except (ExecutorError, StoreError, ConfigError) as exc:
+        _log.warning("study.planner_chat.stream_failed", topic=_log_key(key), error=str(exc))
+        yield {"event": "error", "data": "Falha ao gerar resposta."}
+        return
+    full = "".join(chunks)
+    reply = extract_planner_reply(full, chapters)
+    if reply is None:
+        yield {"event": "error", "data": "Falha ao gerar resposta."}
+        return
+    plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
+    yield {
+        "event": "done",
+        "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
+    }
 
 
 @router.post("/topics/{key}/back-to-draft")
@@ -1187,11 +1254,11 @@ def repropose_plan(
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
         chapters = _collect_all_chapters(db, ctx, topic.id)
-        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
         planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
-    planner = _planner(ctx)
+    planner, _executor = _planner(ctx)
     proposal = planner.propose(
         chapters,
         focus=topic.focus,

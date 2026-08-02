@@ -50,6 +50,29 @@ class Summarizer:
             return None
         return output.summary
 
+    def summarize_conversation(self, transcript: str) -> str | None:
+        """Resume a conversa do mentor para o planner (KUBO-168, ADR-0047 Emenda 4).
+
+        O transcript cru é longo e polui o prompt do planner. O resumo destila
+        a intenção do dono em poucas linhas. Usa o mesmo executor + schema do
+        sumário de material, mas com prompt específico de conversa. O
+        transcript viaja como `untrusted_content` (entrada hostil — texto
+        digitado pelo dono, mas também influenciado pelo mentor que leu o
+        material). Se falhar, devolve None — quem chama decide o fallback.
+        """
+        instruction = (
+            "Resuma a conversa entre o dono e o mentor sobre o estudo que ele "
+            "está montando. Destaque: o que o dono quer aprender, por que está "
+            "estudando, e qualquer contexto de trabalho relevante. Responda em "
+            "português do Brasil, em até 500 caracteres."
+        )
+        try:
+            output = self._executor.complete(instruction, transcript, SummaryOutput)
+        except (ExecutorError, ValidationError):
+            _log.info("study.summarizer.conversation_failed")
+            return None
+        return output.summary
+
 
 def _content(parsed: ParsedMaterial) -> str:
     """Monta o `untrusted_content`: título + capítulos truncados ao teto."""
