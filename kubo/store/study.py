@@ -251,6 +251,33 @@ def list_all_chapters(
     return [_chapter_from_row(row) for row in rows]
 
 
+def list_all_chapters_light(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> list[MaterialChapter]:
+    """Como `list_all_chapters`, mas sem `content` — só estrutura (id, seq, title, part).
+
+    Para rotas que só precisam do mapeamento seq→id ou de títulos (não do texto
+    integral do capítulo). Evita transferir `content` desnecessariamente.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT id, material, seq, title, part FROM material_chapter "  # noqa: S608
+        f"WHERE {_CHAPTER_SCOPE} ORDER BY seq;",
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [
+        MaterialChapter(
+            id=row["id"],
+            material=row["material"],
+            seq=row["seq"],
+            title=row["title"],
+            part=row.get("part"),
+            content="",
+        )
+        for row in rows
+    ]
+
+
 # --- Tema e plano de estudo (KUBO-136) -------------------------------------------------
 #
 # Mesmo contrato do Material acima: keyword-only, `assert_membership` no topo, filtro por
@@ -762,3 +789,148 @@ def set_plan_cadence(
         },
     )
     _log.info("store.plan.cadence_set", plan=str(plan_id), lessons=lesson_count)
+
+
+def replace_plan_entries(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    entries: Sequence[tuple[str, list[RecordID]]],
+) -> tuple[StudyPlan, list[PlanEntry]]:
+    """Substitui as entries do plano atomicamente, preservando weekdays/status.
+
+    Diferente de `save_plan_proposal` (que deleta e recria o `study_plan`), esta
+    função mantém o registro do plano intacto — apenas remove as entries antigas
+    e cria as novas numa única transação. `target_date` é recalculado com base no
+    novo número de lições + weekdays existentes (ADR-0043 §cadência). Usada pelo
+    chat incremental do planner (KUBO-165), onde a cadência definida manualmente
+    não pode ser descartada a cada mensagem.
+    """
+    from kubo.study.planning import compute_target_date
+
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    if plan is None:
+        return save_plan_proposal(
+            db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, entries=entries
+        )
+    # Recalcula target_date com base no novo número de lições + weekdays atuais.
+    target = compute_target_date(
+        start=date.today(), weekdays=list(plan.weekdays), lesson_count=len(entries)
+    )
+    # Transação única: DELETE + UPDATE target_date + N CREATEs — atômico.
+    stmts = [
+        f"DELETE FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE}",  # noqa: S608
+        f"UPDATE $plan SET target_date = $target WHERE {_MATERIAL_SCOPE}",  # noqa: S608
+    ]
+    params: dict[str, Any] = {
+        "plan": plan.id,
+        "tenant": tenant_id,
+        "user": user_id,
+        "target": datetime(target.year, target.month, target.day),
+    }
+    for i, (title, chapter_ids) in enumerate(entries, start=1):
+        entry_id = _fresh("plan_entry")
+        stmts.append(
+            f"CREATE $entry_{i} SET study_plan = $plan, tenant_id = $tenant, "
+            f"user_id = $user, seq = $seq_{i}, title = $title_{i}, "
+            f"chapters = $chapters_{i}"
+        )
+        params[f"entry_{i}"] = entry_id
+        params[f"seq_{i}"] = i
+        params[f"title_{i}"] = title
+        params[f"chapters_{i}"] = chapter_ids
+    transaction.run_transaction(db, stmts, params)
+    _log.info("store.plan.entries_replaced", plan=str(plan.id), entries=len(entries))
+    return get_plan_for_topic(  # type: ignore[return-value]
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+    )
+
+
+def swap_plan_entries(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    entry_a: RecordID,
+    entry_b: RecordID,
+) -> None:
+    """Troca os seqs de duas entries num único transaction (atômico).
+
+    Usa offset temporário (seq + 1000) para evitar colisão com o índice UNIQUE
+    `(study_plan, seq)` — atualizar in-place entraria em conflito.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Lê os seqs atuais (valida ownership via scope).
+    rows = db.query(
+        f"SELECT id, seq FROM plan_entry WHERE (id = $a OR id = $b) "  # noqa: S608
+        f"AND study_plan = $plan AND {_MATERIAL_SCOPE};",
+        {"a": entry_a, "b": entry_b, "plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if len(rows) != 2:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    seqs = {str(r["id"]): r["seq"] for r in rows}
+    seq_a, seq_b = seqs[str(entry_a)], seqs[str(entry_b)]
+    # Swap atômico: A→temp, B→seq_a, A→seq_b.
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $a SET seq = seq + 1000 WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+            f"UPDATE $b SET seq = $seq_a WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+            f"UPDATE $a SET seq = $seq_b WHERE study_plan = $plan "  # noqa: S608
+            f"AND {_MATERIAL_SCOPE};",
+        ],
+        {
+            "a": entry_a,
+            "b": entry_b,
+            "plan": plan_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "seq_a": seq_a,
+            "seq_b": seq_b,
+        },
+    )
+    _log.info("store.plan.swapped", plan=str(plan_id), a=str(entry_a), b=str(entry_b))
+
+
+def remove_chapter_from_entry(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    entry_id: RecordID,
+    chapter_id: RecordID,
+) -> bool:
+    """Remove um capítulo de uma lição (edição manual, KUBO-165).
+
+    Rejeita a remoção do último capítulo (devolve False) — não esvazia lições,
+    porque `PlanLesson` exige `min_length=1`. A contagem é lida antes da remoção
+    e o `UPDATE` usa `array::complement` num único statement transacional.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT array::len(chapters) AS n FROM plan_entry WHERE id = $entry "  # noqa: S608
+        f"AND {_MATERIAL_SCOPE};",
+        {"entry": entry_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not rows:
+        raise StoreError(_TOPIC_NOT_FOUND_MSG)
+    count = rows[0].get("n", 0)
+    if count <= 1:
+        # Último capítulo: não esvazia a lição.
+        return False
+    transaction.run_transaction(
+        db,
+        [
+            f"UPDATE $entry SET chapters = array::complement(chapters, [$ch]) "  # noqa: S608
+            f"WHERE {_MATERIAL_SCOPE};"
+        ],
+        {"entry": entry_id, "ch": chapter_id, "tenant": tenant_id, "user": user_id},
+    )
+    _log.info("store.plan.chapter_removed", entry=str(entry_id), chapter=str(chapter_id))
+    return True

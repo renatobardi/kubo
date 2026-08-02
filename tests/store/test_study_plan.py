@@ -21,9 +21,12 @@ from kubo.store.study import (
     create_topic,
     get_plan_for_topic,
     get_topic,
+    remove_chapter_from_entry,
+    replace_plan_entries,
     save_plan_proposal,
     set_plan_cadence,
     set_topic_state,
+    swap_plan_entries,
 )
 from kubo.study.parsing import ParsedChapter
 
@@ -271,3 +274,224 @@ def test_set_plan_cadence_rejects_invalid_weekday(
             plan_id=plan.id,
             weekdays=["funday"],
         )
+
+
+# --- KUBO-165: edição manual do plano (swap, remove chapter, replace) --------------------
+
+
+def test_swap_plan_entries_swaps_seqs(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """Swap de duas entries troca os seqs atomicamente."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]]), ("L3", [chapter_ids[2]])],
+    )
+
+    swap_plan_entries(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan.id,
+        entry_a=entries[0].id,
+        entry_b=entries[2].id,
+    )
+
+    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert updated[0].seq == 1
+    assert updated[0].title == "L3"
+    assert updated[1].seq == 2
+    assert updated[1].title == "L2"
+    assert updated[2].seq == 3
+    assert updated[2].title == "L1"
+
+
+def test_swap_plan_entries_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """Outro membro não pode swap de plano alheio."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+    )
+    other = tenancy.create_user(db, firebase_uid="other-swap-uid")
+    tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
+
+    with pytest.raises(StoreError):
+        swap_plan_entries(
+            db,
+            tenant_id=tenant_id,
+            user_id=other.id,
+            plan_id=plan.id,
+            entry_a=entries[0].id,
+            entry_b=entries[1].id,
+        )
+
+
+def test_remove_chapter_from_entry_updates_chapters(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Remover capítulo de uma lição atualiza a lista de chapters."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0], chapter_ids[1]]), ("L2", [chapter_ids[2]])],
+    )
+
+    ok = remove_chapter_from_entry(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        entry_id=entries[0].id,
+        chapter_id=chapter_ids[1],
+    )
+
+    assert ok is True
+    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert updated[0].chapters == [chapter_ids[0]]
+    assert updated[1].chapters == [chapter_ids[2]]
+
+
+def test_remove_chapter_from_entry_rejects_last_chapter(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Remover o último capítulo de uma lição é rejeitado (não esvazia)."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]])],
+    )
+
+    ok = remove_chapter_from_entry(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        entry_id=entries[0].id,
+        chapter_id=chapter_ids[0],
+    )
+
+    assert ok is False
+    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert updated[0].chapters == [chapter_ids[0]]
+
+
+def test_remove_chapter_from_entry_scoped_to_owner(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Outro membro não pode remover capítulo de plano alheio."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+    plan, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0], chapter_ids[1]])],
+    )
+    other = tenancy.create_user(db, firebase_uid="other-rm-ch-uid")
+    tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
+
+    with pytest.raises(StoreError):
+        remove_chapter_from_entry(
+            db,
+            tenant_id=tenant_id,
+            user_id=other.id,
+            entry_id=entries[0].id,
+            chapter_id=chapter_ids[0],
+        )
+
+
+def test_replace_plan_entries_preserves_cadence(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """replace_plan_entries preserva weekdays/target_date do plano existente."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, _ = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+    )
+    set_plan_cadence(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        plan_id=plan.id,
+        weekdays=["mon", "wed"],
+    )
+
+    # Replace entries — cadência deve sobreviver.
+    replace_plan_entries(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("Tudo junto", chapter_ids)],
+    )
+
+    updated_plan, updated_entries = get_plan_for_topic(
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+    )
+    assert updated_plan is not None
+    assert sorted(updated_plan.weekdays) == ["mon", "wed"]
+    assert updated_plan.target_date is not None
+    assert len(updated_entries) == 1
+    assert updated_entries[0].title == "Tudo junto"
+
+
+# --- KUBO-165: transição planning → draft -----------------------------------------------
+
+
+def test_set_topic_state_planning_to_draft(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """Transição planning → draft preserva materiais."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="planning")
+    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="draft")
+
+    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    assert updated is not None
+    assert updated.state == "draft"

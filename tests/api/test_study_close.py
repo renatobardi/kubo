@@ -149,7 +149,9 @@ def stub_close_store(monkeypatch: pytest.MonkeyPatch) -> None:
             for i in range(1, 4)
         ]
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.list_all_chapters", _fake_list_chapters)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_chapters_light", _fake_list_chapters
+    )
 
 
 def test_close_topic_transitions_to_planning(authed_client: TestClient) -> None:
