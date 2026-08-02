@@ -868,12 +868,32 @@ def _collect_all_chapters(
 
 
 def _mentor_transcript_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
-    """Transcript cru da conversa com mentor (KUBO-164: transcript cru, resumo fica p/ KUBO-168)."""
+    """Transcript cru da conversa com mentor (KUBO-164)."""
     messages = study_store.list_chat_messages(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
     lines = [f"{'Dono' if m.role == 'user' else 'Mentor'}: {m.content}" for m in messages]
     return "\n".join(lines)
+
+
+def _mentor_summary_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
+    """Resumo da conversa com mentor para o planner (KUBO-168, ADR-0047 Emenda 4).
+
+    Substitui o transcript cru no prompt do planner. Se a conversa é curta
+    (≤ 500 chars), devolve o transcript cru — resumir não vale o custo. Se
+    é longa, chama o `Summarizer.summarize_conversation`. Se o LLM falha,
+    fallback para o transcript truncado em 2000 chars (preserva a intenção
+    do dono mesmo sem IA).
+    """
+    transcript = _mentor_transcript_of(db, ctx, topic_id)
+    if len(transcript) <= 500:
+        return transcript
+    summarizer = _summarizer(ctx)
+    summary = summarizer.summarize_conversation(transcript)
+    if summary:
+        return summary
+    _log.warning("study.mentor_summary.fallback", topic=str(topic_id))
+    return transcript[:2000]
 
 
 @router.post("/topics/{key}/close")
@@ -906,7 +926,7 @@ def close_topic(
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
         chapters = _collect_all_chapters(db, ctx, topic.id)
-        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
 
     # Propõe o plano (LLM ou fallback mecânico).
@@ -1229,7 +1249,7 @@ def repropose_plan(
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
         chapters = _collect_all_chapters(db, ctx, topic.id)
-        transcript = _mentor_transcript_of(db, ctx, topic.id)
+        transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
         planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
