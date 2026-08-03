@@ -37,7 +37,7 @@ def test_painel_breadcrumb_has_no_group(authed_client: TestClient) -> None:
 def test_page_header_renders_title_in_content(authed_client: TestClient) -> None:
     """O título da tela vem num PageHeader (h1) dentro do conteúdo, não na barra de topo."""
     html = authed_client.get("/distilled").text
-    assert '<h1 class="text-2xl font-semibold tracking-tight">Destilados</h1>' in html
+    assert '<h1 class="text-2xl font-semibold tracking-tight" data-page-title>Destilados</h1>' in html
 
 
 def test_topbar_search_links_to_distilled(authed_client: TestClient) -> None:

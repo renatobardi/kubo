@@ -99,7 +99,7 @@
             {{ mobile_back_label or "Voltar" }}
           </a>
         {% endif %}
-        <h1 class="font-heading text-[1.875rem] font-bold leading-tight tracking-tight text-foreground" data-topic-title>{{ mobile_title or (crumb.label if crumb else "Kubo") }}</h1>
+        <h1 class="font-heading text-[1.875rem] font-bold leading-tight tracking-tight text-foreground" data-page-title>{{ mobile_title or (crumb.label if crumb else "Kubo") }}</h1>
       </header>
       <header class="hidden h-[72px] shrink-0 items-center gap-3 border-b border-border/60 px-6 md:flex">
         {# Recolher a sidebar (só ícones) [S2] — paridade com o ▢ do topo do mockup. #}

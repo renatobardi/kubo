@@ -246,7 +246,7 @@
               titleInput.value = prevTitle;
               console.error('rename failed', r.status);
             } else {
-              document.querySelectorAll('[data-topic-title]').forEach(function(el) {
+              document.querySelectorAll('[data-page-title]').forEach(function(el) {
                 el.textContent = value;
               });
               document.title = value + ' · Temas · Kubo';
