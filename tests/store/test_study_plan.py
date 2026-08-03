@@ -513,7 +513,15 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
         topic_id=topic_id,
         entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
     )
-    # NÃO define cadência — weekdays=[] como save_plan_proposal deixa.
+    # Persiste um target_date não-nulo manualmente, mantendo weekdays=[].
+    # Isso garante que o teste falha se replace_plan_entries parar de limpar
+    # o target_date existente (o UPDATE ... SET target_date = NONE é essencial).
+    from datetime import datetime
+
+    db.query(
+        "UPDATE $plan SET target_date = $target;",
+        {"plan": plan.id, "target": datetime(2026, 12, 31)},
+    )
 
     # Replace entries — não deve crashar mesmo sem cadência.
     replace_plan_entries(
