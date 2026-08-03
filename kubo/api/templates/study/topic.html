@@ -234,11 +234,24 @@
     function applySuggestion(type, value) {
       if (type === 'name') {
         const titleInput = document.querySelector('input[name="title"]');
-        if (titleInput) titleInput.value = value;
-        const renameForm = titleInput ? titleInput.closest('form') : null;
-        if (renameForm) {
-          renameForm.requestSubmit();
-        }
+        if (!titleInput) return;
+        const prevTitle = titleInput.value;
+        titleInput.value = value;
+        const fd = new FormData();
+        fd.append('csrf', csrf);
+        fd.append('title', value);
+        fetch(topicUrl + '/rename', {method: 'POST', body: fd})
+          .then(function(r) {
+            if (!r.ok) {
+              titleInput.value = prevTitle;
+              console.error('rename failed', r.status);
+            } else {
+              document.querySelectorAll('[data-page-title]').forEach(function(el) {
+                el.textContent = value;
+              });
+              document.title = value + ' · Temas · Kubo';
+            }
+          });
       } else if (type === 'focus' || type === 'depth') {
         const fd = new FormData();
         fd.append('csrf', csrf);
@@ -246,6 +259,17 @@
         fd.append('value', value);
         fetch(topicUrl + '/fields', {method: 'POST', body: fd}).then(() => location.reload());
       }
+    }
+
+    // Enter envia, Shift+Enter quebra linha. Ignora IME composition e modificadores.
+    function bindEnterToSend(inputEl, formEl) {
+      inputEl.addEventListener('keydown', function(e) {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          formEl.requestSubmit();
+        }
+      });
     }
 
     function handleSSEEvent(ev, data, assistantP, fullTextRef) {
@@ -271,6 +295,8 @@
         }
       }
     }
+
+    bindEnterToSend(input, form);
 
     form.onsubmit = async function(e) {
       e.preventDefault();
@@ -532,6 +558,8 @@
       messages.scrollTop = messages.scrollHeight;
       return p;
     }
+
+    bindEnterToSend(input, form);
 
     form.onsubmit = async function(e) {
       e.preventDefault();

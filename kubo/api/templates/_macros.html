@@ -223,7 +223,7 @@
   {# Escondido em mobile: o header large-title do shell (base.html) já mostra o
      título — duplicar aqui criaria dois <h1> visíveis na mesma tela. #}
   <div class="hidden space-y-1 border-b border-border/60 pb-5 md:block">
-    <h1 class="text-2xl font-semibold tracking-tight">{{ title }}</h1>
+    <h1 class="text-2xl font-semibold tracking-tight" data-page-title>{{ title }}</h1>
     <p class="text-sm text-muted-foreground">{{ description }}</p>
   </div>
 {% endmacro %}
