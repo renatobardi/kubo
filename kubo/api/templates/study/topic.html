@@ -235,10 +235,11 @@
       if (type === 'name') {
         const titleInput = document.querySelector('input[name="title"]');
         if (titleInput) titleInput.value = value;
-        const renameForm = titleInput ? titleInput.closest('form') : null;
-        if (renameForm) {
-          renameForm.requestSubmit();
-        }
+        const fd = new URLSearchParams();
+        fd.append('csrf', csrf);
+        fd.append('title', value);
+        fetch(topicUrl + '/rename', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: fd})
+          .then(function(r) { if (!r.ok) console.error('rename failed', r.status); });
       } else if (type === 'focus' || type === 'depth') {
         const fd = new FormData();
         fd.append('csrf', csrf);
@@ -271,6 +272,14 @@
         }
       }
     }
+
+    // Enter envia, Shift+Enter quebra linha.
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
 
     form.onsubmit = async function(e) {
       e.preventDefault();
@@ -532,6 +541,14 @@
       messages.scrollTop = messages.scrollHeight;
       return p;
     }
+
+    // Enter envia, Shift+Enter quebra linha.
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
 
     form.onsubmit = async function(e) {
       e.preventDefault();
