@@ -21,7 +21,6 @@ from kubo.store.study import (
     delete_material,
     list_all_sections,
     list_materials_by_topic,
-    list_sections_for_chapter,
 )
 from kubo.study.parsing import ParsedChapter, SectionPart
 
@@ -206,42 +205,6 @@ def test_list_all_sections_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
     # Outro usuário não vê as seções do material do primeiro usuário.
     sections = list_all_sections(db, tenant_id=tenant_id, user_id=other_user.id, material_id=mid)
     assert sections == []
-
-
-# --- list_sections_for_chapter ----------------------------------------------------------
-
-
-def test_list_sections_for_chapter_returns_only_that_chapter(
-    db: Any, tenant_id: RecordID, user_id: RecordID
-) -> None:
-    """list_sections_for_chapter devolve só as seções do capítulo especificado."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
-    chapters = _chapters(2)
-    create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        topic_id=topic.id,
-        title="Manual",
-        fmt="epub",
-        original_filename="manual.epub",
-        file_path="/data/manual.epub",
-        size_bytes=1024,
-        chapters=chapters,
-        sections=_sections_map(chapters),
-        summary="Um guia.",
-    )
-
-    from kubo.store.study import list_all_chapters
-
-    mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
-    chs = list_all_chapters(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
-    # Seções do segundo capítulo (seq=2).
-    sections = list_sections_for_chapter(
-        db, tenant_id=tenant_id, user_id=user_id, chapter_id=chs[1].id
-    )
-    assert len(sections) == 2
-    assert all(s.chapter_seq == 2 for s in sections)
 
 
 # --- delete_material apaga as seções ----------------------------------------------------

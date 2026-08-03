@@ -17,10 +17,11 @@ inteiro, e a lição cobre tudo de uma vez.
 KUBO-184 introduz uma persona `sectionizer` que particiona cada capítulo em
 **seções tópicas** — as divisões naturais do texto (ex.: "Fundamentos",
 "RAG e tool calling", "Orquestração"), não fatiamento arbitrário por
-tamanho. As seções são persistidas mas **não substituem** o capítulo como
-átomo do plano nesta fase: o planner/tutor/scheduler continuam operando em
-capítulos. A persistência é aditiva, preparando o terreno para um ticket
-futuro que fará a seção virar o átomo.
+tamanho. KUBO-185 (emenda 2026-08-03) faz a seção virar o átomo do plano:
+o planner agrupa seções em lições, permitindo múltiplas lições curtas
+diárias mesmo quando o material tem um único capítulo. Tutor e scheduler
+continuam operando em capítulos via shim de compatibilidade
+(`get_chapters_for_entry`), migrando no próximo ticket.
 
 ## Decisão
 
@@ -56,8 +57,15 @@ futuro que fará a seção virar o átomo.
    lado do `summarizer` existente. `create_material` persiste seções na
    mesma transação que o material + capítulos.
 
-7. **Aditivo**: `plan_entry` continua referenciando `material_chapter`.
-   Nenhum consumo de seções pelo planner/tutor/scheduler nesta fase.
+7. **Seção como átomo do plano (KUBO-185, emenda 2026-08-03)**: `plan_entry`
+   passa a referenciar `material_section` (não `material_chapter`). O planner
+   agrupa seções em lições, a UI mostra seções por lição, e a rota
+   `remove-chapter` vira `remove-section`. Migration destrutiva (0037) —
+   recomeço limpo (ADR-0047 §7): nenhum `plan_entry` em `running` existia.
+   `get_chapters_for_entry` vira shim de compatibilidade: deriva capítulos
+   das seções via FK `material_section.material_chapter`, mantendo tutor e
+   scheduler verdes até migrarem no próximo ticket. Materiais pré-0036
+   recebem backfill de 1 seção por capítulo na migration 0037.
 
 ## Consequências
 
@@ -73,8 +81,8 @@ futuro que fará a seção virar o átomo.
 
 **Negativas:**
 - +1 chamada LLM por capítulo no upload (latência adicional).
-- `material_section` é escrita mas não lida por ninguém nesta fase —
-  débito temporário, pago no ticket que faz a seção virar átomo.
+- `get_chapters_for_entry` vira shim temporário ( Middle Man) até tutor e
+  scheduler migrarem para `get_sections_for_entry` no próximo ticket.
 
 **Neutras:**
 - O `anchor_text` é derivado, não curado — serve como localizador

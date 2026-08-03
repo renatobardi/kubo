@@ -80,7 +80,7 @@ def _entries() -> list[PlanEntry]:
             user_id=_USER,
             seq=1,
             title="Lição 1",
-            chapters=[RecordID("material_chapter", "c1")],
+            sections=[RecordID("material_section", "s1")],
             created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
         ),
     ]
@@ -117,6 +117,9 @@ def stub_activate_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_state", lambda db, **kw: None)
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_all_chapters_light", lambda db, **kw: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_sections_light", lambda db, **kw: []
     )
 
 

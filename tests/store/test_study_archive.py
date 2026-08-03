@@ -22,6 +22,7 @@ from kubo.store.study import (
     get_topic,
     get_topic_delete_summary,
     get_topic_progress,
+    list_all_sections,
     list_archived_topics,
     list_topics,
     list_topics_by_state,
@@ -31,7 +32,7 @@ from kubo.store.study import (
     transition_to_running,
     unarchive_topic,
 )
-from kubo.study.parsing import ParsedChapter
+from kubo.study.parsing import ParsedChapter, SectionPart
 
 pytestmark = pytest.mark.integration
 
@@ -57,11 +58,36 @@ def _chapters(n: int = 3) -> list[ParsedChapter]:
     ]
 
 
+def _sections_for(chapter: ParsedChapter) -> list[SectionPart]:
+    """2 seções por capítulo — padrão do sectionizer."""
+    content = chapter.content
+    half = len(content) // 2
+    return [
+        SectionPart(
+            title=f"{chapter.title} — Parte A",
+            anchor_text=content[:half],
+            content=content[:half],
+            summary=f"Sumário A de {chapter.title}",
+        ),
+        SectionPart(
+            title=f"{chapter.title} — Parte B",
+            anchor_text=content[half:],
+            content=content[half:],
+            summary=f"Sumário B de {chapter.title}",
+        ),
+    ]
+
+
+def _sections_map(chapters: list[ParsedChapter]) -> dict[int, list[SectionPart]]:
+    return {ch.seq: _sections_for(ch) for ch in chapters}
+
+
 def _topic_with_material(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> tuple[RecordID, RecordID]:
-    """Cria um tema com 1 material e 3 capítulos; retorna (topic_id, material_id)."""
+    """Cria um tema com 1 material, 3 capítulos e 6 seções; retorna (topic_id, material_id)."""
     topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    chapters = _chapters()
     material = create_material(
         db,
         tenant_id=tenant_id,
@@ -72,8 +98,8 @@ def _topic_with_material(
         original_filename="livro.epub",
         file_path="/data/livro.epub",
         size_bytes=1024,
-        chapters=_chapters(),
-        sections=None,
+        chapters=chapters,
+        sections=_sections_map(chapters),
         summary="Um livro sobre agentes.",
     )
     return topic.id, material.id
@@ -82,19 +108,16 @@ def _topic_with_material(
 def _topic_with_plan(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[RecordID, RecordID]:
     """Cria tema + material + plano com 2 entries; retorna (topic_id, plan_id)."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    sids = [s.id for s in sections]
     plan, _entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
         entries=[
-            ("Lição 1", [chapter_ids[0]]),
-            ("Lição 2", [chapter_ids[1], chapter_ids[2]]),
+            ("Lição 1", [sids[0], sids[1], sids[2]]),
+            ("Lição 2", [sids[3], sids[4], sids[5]]),
         ],
     )
     set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="planning")

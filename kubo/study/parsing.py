@@ -87,6 +87,20 @@ class SectionPart:
     summary: str
 
 
+def fallback_part(chapter: ParsedChapter) -> SectionPart:
+    """1 seção = capítulo inteiro (mesmo fallback do ADR-0048 §6).
+
+    Ponto único de verdade — a store e o sectionizer reusão este helper.
+    Vive em `parsing.py` para que a store não dependa do módulo da persona LLM.
+    """
+    return SectionPart(
+        title=chapter.title,
+        anchor_text="",
+        content=chapter.content,
+        summary=chapter.title,
+    )
+
+
 @dataclass(frozen=True)
 class ParsedMaterial:
     """Resultado do parse: título do material (quando o formato oferece) + capítulos."""

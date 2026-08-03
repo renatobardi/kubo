@@ -22,6 +22,7 @@ import os
 import secrets
 import string
 from collections.abc import Callable, Coroutine
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -420,11 +421,11 @@ def topic_detail(request: Request, key: str) -> Response:
             if topic.state in ("planning", "scheduled", "running")
             else (None, [])
         )
-        # Mapa chapter_id → título para exibir nomes legíveis no plano (KUBO-165).
-        chapter_titles: dict[str, str] = {}
+        # Mapa section_id → título para exibir nomes legíveis no plano (KUBO-185).
+        section_titles: dict[str, str] = {}
         if topic.state in ("planning", "scheduled", "running"):
-            for ch in _collect_all_chapters(db, ctx, topic.id):
-                chapter_titles[str(ch.id)] = f"{ch.seq}. {ch.title}"
+            for sec in _collect_all_sections(db, ctx, topic.id):
+                section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -439,7 +440,7 @@ def topic_detail(request: Request, key: str) -> Response:
             "csrf": csrf_token(request),
             "plan": plan,
             "plan_entries": plan_entries,
-            "chapter_titles": chapter_titles,
+            "section_titles": section_titles,
             "notice": notice,
         },
     )
@@ -948,6 +949,9 @@ def _collect_all_chapters(
     O planner precisa de seqs únicos globais (capítulos de materiais diferentes
     podem ter o mesmo seq local). A renumeração é 1-based na ordem de leitura:
     material por material (ordem de criação), seq crescente dentro de cada.
+
+    KUBO-185: usado apenas para compatibilidade (scheduler/tutor). O planner
+    agora usa `_collect_all_sections`.
     """
     materials = study_store.list_materials_by_topic(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
@@ -971,6 +975,43 @@ def _collect_all_chapters(
                 )
             )
     return all_chapters
+
+
+def _collect_all_sections(
+    db: Any, ctx: SessionContext, topic_id: RecordID
+) -> list[study_store.MaterialSection]:
+    """Coleta todas as seções de todos os materiais do Tema, com chapter_seq GLOBAL.
+
+    KUBO-185: o planner agrupa seções (não capítulos) em lições. Cada seção é
+    identificada pelo par (chapter_seq, section_seq) — chapter_seq global
+    (renumerado pela rota) e section_seq local ao capítulo.
+
+    A renumeração de chapter_seq é 1-based na ordem de leitura: material por
+    material (ordem de criação), capítulo por capítulo (seq crescente). O
+    section_seq vem do sectionizer (local ao capítulo, 1-based).
+    """
+    materials = study_store.list_materials_by_topic(
+        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
+    )
+    all_sections: list[study_store.MaterialSection] = []
+    global_ch_seq = 0
+    for material in materials:
+        chapters = study_store.list_all_chapters_light(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
+        )
+        # Map: chapter RecordID → global chapter_seq.
+        ch_id_to_global: dict[str, int] = {}
+        for ch in chapters:
+            global_ch_seq += 1
+            ch_id_to_global[str(ch.id)] = global_ch_seq
+        sections = study_store.list_all_sections_light(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
+        )
+        for sec in sections:
+            all_sections.append(
+                dc_replace(sec, chapter_seq=ch_id_to_global.get(str(sec.material_chapter), 0))
+            )
+    return all_sections
 
 
 def _mentor_transcript_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
@@ -1031,29 +1072,34 @@ def close_topic(
         if count == 0:
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
-        chapters = _collect_all_chapters(db, ctx, topic.id)
+        sections = _collect_all_sections(db, ctx, topic.id)
         transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
+
+    # Guarda defensiva: materiais sem seções (pré-migration 0037 sem backfill)
+    # não devem crashar mechanical_proposal([]) — devolve 400 legível.
+    if not sections:
+        return PlainTextResponse(_REPROPOSE_NO_SECTIONS, status_code=400)
 
     # Propõe o plano (LLM ou fallback mecânico).
     from kubo.study.planner import mechanical_proposal
 
     planner, _executor = _planner(ctx)
     proposal = planner.propose(
-        chapters,
+        sections,
         focus=topic.focus,
         depth=topic.depth,
         mentor_transcript=transcript,
         material_summaries=summaries,
     )
     if proposal is None:
-        proposal = mechanical_proposal(chapters)
+        proposal = mechanical_proposal(sections)
         _log.info("study.close.mechanical_fallback", topic=_log_key(key))
 
-    # Resolve chapter_seqs globais → RecordIDs.
-    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    # Resolve section pairs (chapter_seq, section_seq) → RecordIDs.
+    pair_to_id = {(sec.chapter_seq, sec.seq): sec.id for sec in sections}
     entries = [
-        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs])
+        (lesson.title, [pair_to_id[pair] for pair in lesson.sections])
         for lesson in proposal.lessons
     ]
 
@@ -1083,7 +1129,7 @@ def close_topic(
 
 
 _TOPIC_NOT_PLANNING = "Só é possível operar um tema em planejamento."
-_REPROPOSE_NO_CHAPTERS = "Adicione materiais antes de repropor o plano."
+_REPROPOSE_NO_SECTIONS = "Adicione materiais antes de repropor o plano."
 _INVALID_ID = "Identificador inválido."
 
 
@@ -1100,27 +1146,27 @@ def _planning_chat_history_of(
 
 def _current_plan_as_tuples(
     db: Any, ctx: SessionContext, topic_id: RecordID
-) -> list[tuple[str, list[int]]]:
-    """Plano atual como lista de (title, chapter_seqs globais) para o planner."""
+) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Plano atual como lista de (title, section_pairs) para o planner (KUBO-185)."""
     plan, entries = study_store.get_plan_for_topic(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
     )
     if plan is None:
         return []
-    # Mapeia chapter RecordID → seq global.
-    chapters = _collect_all_chapters(db, ctx, topic_id)
-    id_to_seq = {str(ch.id): ch.seq for ch in chapters}
-    result: list[tuple[str, list[int]]] = []
+    # Mapeia section RecordID → (chapter_seq, section_seq) global.
+    sections = _collect_all_sections(db, ctx, topic_id)
+    id_to_pair = {str(sec.id): (sec.chapter_seq, sec.seq) for sec in sections}
+    result: list[tuple[str, list[tuple[int, int]]]] = []
     for e in entries:
-        seqs = [id_to_seq[str(c)] for c in e.chapters if str(c) in id_to_seq]
-        if len(seqs) != len(e.chapters):
+        pairs = [id_to_pair[str(sid)] for sid in e.sections if str(sid) in id_to_pair]
+        if len(pairs) != len(e.sections):
             _log.warning(
-                "study.plan.dropped_chapters",
+                "study.plan.dropped_sections",
                 topic=str(topic_id),
                 entry=str(e.id),
-                dropped=len(e.chapters) - len(seqs),
+                dropped=len(e.sections) - len(pairs),
             )
-        result.append((e.title, seqs))
+        result.append((e.title, pairs))
     return result
 
 
@@ -1128,7 +1174,7 @@ def _persist_planner_reply(
     ctx: SessionContext,
     topic_id: RecordID,
     reply: PlannerChatReply,
-    chapters: list[study_store.MaterialChapter],
+    sections: list[study_store.MaterialSection],
     key: str,
 ) -> bool:
     """Persiste a resposta do planner (texto + plano se atualizado). Devolve plan_updated.
@@ -1154,9 +1200,9 @@ def _persist_planner_reply(
         return False
     if not reply.lessons:
         return False
-    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    pair_to_id = {(sec.chapter_seq, sec.seq): sec.id for sec in sections}
     entries = [
-        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs]) for lesson in reply.lessons
+        (lesson.title, [pair_to_id[pair] for pair in lesson.sections]) for lesson in reply.lessons
     ]
     try:
         with client.connect_rw() as db:
@@ -1219,7 +1265,7 @@ def chat_with_planner(
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        chapters = _collect_all_chapters(db, ctx, topic.id)
+        sections = _collect_all_sections(db, ctx, topic.id)
         current_plan = _current_plan_as_tuples(db, ctx, topic.id)
         history = _planning_chat_history_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
@@ -1247,7 +1293,7 @@ def chat_with_planner(
             planner=planner,
             stream_executor=stream_executor,
             message=message,
-            chapters=chapters,
+            sections=sections,
             current_plan=current_plan,
             history=history,
             topic=topic,
@@ -1263,8 +1309,8 @@ def _planner_stream(
     planner: Planner,
     stream_executor: ApiExecutor,
     message: str,
-    chapters: list[study_store.MaterialChapter],
-    current_plan: list[tuple[str, list[int]]],
+    sections: list[study_store.MaterialSection],
+    current_plan: list[tuple[str, list[tuple[int, int]]]],
     history: list[tuple[str, str]],
     topic: study_store.Topic,
     summaries: list[str],
@@ -1277,7 +1323,7 @@ def _planner_stream(
         for chunk in planner.stream_chat(
             stream_executor,
             user_message=message,
-            chapters=chapters,
+            sections=sections,
             current_plan=current_plan,
             planning_history=history,
             focus=topic.focus,
@@ -1291,11 +1337,11 @@ def _planner_stream(
         yield {"event": "error", "data": "Falha ao gerar resposta."}
         return
     full = "".join(chunks)
-    reply = extract_planner_reply(full, chapters)
+    reply = extract_planner_reply(full, sections)
     if reply is None:
         yield {"event": "error", "data": "Falha ao gerar resposta."}
         return
-    plan_updated = _persist_planner_reply(ctx, topic.id, reply, chapters, key)
+    plan_updated = _persist_planner_reply(ctx, topic.id, reply, sections, key)
     yield {
         "event": "done",
         "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
@@ -1353,20 +1399,20 @@ def repropose_plan(
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        chapters = _collect_all_chapters(db, ctx, topic.id)
+        sections = _collect_all_sections(db, ctx, topic.id)
         transcript = _mentor_summary_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
         planning_history = _planning_chat_history_of(db, ctx, topic.id)
 
-    # Guarda defensiva (ADR-0047 Emenda 7): sem capítulos, não há sobre o que propor.
+    # Guarda defensiva (ADR-0047 Emenda 7): sem seções, não há sobre o que propor.
     # O auto-revert no delete deveria impedir este estado, mas a rota não confia —
     # devolve 400 legível em vez de KeyError/ValidationError (500).
-    if not chapters:
-        return PlainTextResponse(_REPROPOSE_NO_CHAPTERS, status_code=400)
+    if not sections:
+        return PlainTextResponse(_REPROPOSE_NO_SECTIONS, status_code=400)
 
     planner, _executor = _planner(ctx)
     proposal = planner.propose(
-        chapters,
+        sections,
         focus=topic.focus,
         depth=topic.depth,
         mentor_transcript=transcript,
@@ -1374,12 +1420,12 @@ def repropose_plan(
         planning_history=planning_history,
     )
     if proposal is None:
-        proposal = mechanical_proposal(chapters)
+        proposal = mechanical_proposal(sections)
         _log.info("study.repropose.mechanical_fallback", topic=_log_key(key))
 
-    seq_to_id = {ch.seq: ch.id for ch in chapters}
+    pair_to_id = {(sec.chapter_seq, sec.seq): sec.id for sec in sections}
     entries = [
-        (lesson.title, [seq_to_id[seq] for seq in lesson.chapter_seqs])
+        (lesson.title, [pair_to_id[pair] for pair in lesson.sections])
         for lesson in proposal.lessons
     ]
     try:
@@ -1466,22 +1512,22 @@ def move_entry(
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
-@router.post("/topics/{key}/plan/entries/{ekey}/remove-chapter")
-def remove_chapter(
+@router.post("/topics/{key}/plan/entries/{ekey}/remove-section")
+def remove_section(
     request: Request,
     key: str,
     ekey: str,
-    chapter_id: Annotated[str, Form()] = "",
+    section_id: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Remove um capítulo de uma lição (edição manual, KUBO-165)."""
+    """Remove uma seção de uma lição (edição manual, KUBO-165/185)."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse(_CSRF_INVALID, status_code=403)
     ctx = _session_of(request)
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
-    ch_rid = _parse_record_id(chapter_id, "material_chapter")
-    if ch_rid is None:
+    sec_rid = _parse_record_id(section_id, "material_section")
+    if sec_rid is None:
         return PlainTextResponse(_INVALID_ID, status_code=400)
     entry_id = RecordID("plan_entry", ekey)
     with client.connect() as db:
@@ -1494,18 +1540,18 @@ def remove_chapter(
             return PlainTextResponse("Lição não encontrada.", status_code=400)
     try:
         with client.connect_rw() as db:
-            ok = study_store.remove_chapter_from_entry(
+            ok = study_store.remove_section_from_entry(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 entry_id=entry_id,
-                chapter_id=ch_rid,
+                section_id=sec_rid,
             )
     except (ConfigError, StoreError):
-        _log.warning("study.remove_chapter.failed", topic=_log_key(key))
+        _log.warning("study.remove_section.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     if not ok:
-        return PlainTextResponse("Não é possível remover o último capítulo.", status_code=400)
+        return PlainTextResponse("Não é possível remover a última seção.", status_code=400)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 

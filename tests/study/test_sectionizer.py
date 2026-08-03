@@ -18,6 +18,8 @@ from pydantic import BaseModel, ValidationError
 from kubo.errors import ExecutorError
 from kubo.study.parsing import ParsedChapter
 from kubo.study.sectionizer import (
+    _MAX_CHAPTERS_TO_SECTIONIZE,
+    _MAX_PROMPT_TEXT,
     SectionItem,
     Sectionizer,
     SectionizerOutput,
@@ -177,16 +179,29 @@ def test_sectionize_accepts_full_coverage() -> None:
     assert len(parts) == 2
 
 
-def test_sectionize_truncates_long_chapter_content() -> None:
-    """Conteúdo de capítulo muito longo é truncado antes de ir ao prompt (controle de custo)."""
-    long_content = "x" * 200_000  # 200KB — bem acima do teto
+def test_sectionize_sends_content_within_max_prompt_text() -> None:
+    """Conteúdo dentro do teto é enviado ao executor sem truncamento."""
+    content = "x" * (_MAX_PROMPT_TEXT - 100)  # dentro do teto
     executor = _FakeExecutor(output=_output(("Seção 1", "x" * 100, "Sumário.")))
     sectionizer = Sectionizer(executor=executor, prompt=_PROMPT)  # type: ignore[arg-type]
 
-    sectionizer.sectionize(_chapter(long_content))
+    sectionizer.sectionize(_chapter(content))
 
-    # O conteúdo enviado ao executor é truncado, não vai o texto inteiro.
-    assert len(executor.received_contents[0]) < 200_000
+    # O conteúdo enviado inclui título + cabeçalho além do content.
+    assert len(executor.received_contents[0]) > _MAX_PROMPT_TEXT - 100
+    assert len(executor.received_contents[0]) <= _MAX_PROMPT_TEXT + 400
+
+
+def test_sectionize_falls_back_when_chapter_exceeds_max_prompt_text() -> None:
+    """Capítulo maior que _MAX_PROMPT_TEXT devolve None (fallback explícito, sem LLM)."""
+    long_content = "x" * (_MAX_PROMPT_TEXT + 1)
+    executor = _FakeExecutor(output=_output(("Seção 1", "x" * 100, "Sumário.")))
+    sectionizer = Sectionizer(executor=executor, prompt=_PROMPT)  # type: ignore[arg-type]
+
+    result = sectionizer.sectionize(_chapter(long_content))
+
+    assert result is None
+    assert len(executor.received_contents) == 0  # não chamou o LLM
 
 
 # --- sectionize (module-level, all chapters + fallback) ---------------------------------
@@ -252,3 +267,18 @@ def test_sectionize_mixed_success_and_fallback() -> None:
     assert len(result[2]) == 1  # fallback
     assert result[2][0].title == "Cap 2"
     assert result[2][0].content == "Tool calling."
+
+
+def test_sectionize_falls_back_beyond_chapter_cap() -> None:
+    """Capítulo além do cap (_MAX_CHAPTERS_TO_SECTIONIZE) recebe fallback sem chamar o LLM."""
+    executor = _FakeExecutor(output=_output(("Seção A", "Fundamentos. RAG.", "Sumário.")))
+    chapters = [
+        ParsedChapter(seq=i, title=f"Cap {i}", content="Fundamentos. RAG.", part=None)
+        for i in range(1, _MAX_CHAPTERS_TO_SECTIONIZE + 2)
+    ]
+
+    result = sectionize(executor=executor, prompt=_PROMPT, chapters=chapters)  # type: ignore[arg-type]
+
+    last = chapters[-1]
+    assert len(executor.received_contents) == _MAX_CHAPTERS_TO_SECTIONIZE
+    assert result[last.seq][0].title == last.title  # fallback, não "Seção A"

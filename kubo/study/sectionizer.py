@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError
 from kubo.executors.base import Executor
-from kubo.study.parsing import ParsedChapter, SectionPart
+from kubo.study.parsing import ParsedChapter, SectionPart, fallback_part
 
 _log = structlog.get_logger(__name__)
 
@@ -73,9 +73,13 @@ class Sectionizer:
     def sectionize(self, chapter: ParsedChapter) -> list[SectionPart] | None:
         """Seções validadas com `anchor_text` derivado, ou None se falhar.
 
-        None = LLM indisponível, JSON inválido, ValidationError, ou cobertura
+        None = LLM indisponível, JSON inválido, ValidationError, capítulo
+        grande demais para sectionizar (> _MAX_PROMPT_TEXT), ou cobertura
         de tokens < 90%. Quem chama decide o fallback (1 seção = capítulo).
         """
+        if len(chapter.content) > _MAX_PROMPT_TEXT:
+            _log.info("study.sectionizer.too_long", chapter=chapter.seq)
+            return None
         truncated, content = _content(chapter)
         try:
             output = self._executor.complete(self._prompt, content, SectionizerOutput)
@@ -118,19 +122,6 @@ def sectionize(
     return result
 
 
-def fallback_part(chapter: ParsedChapter) -> SectionPart:
-    """1 seção = capítulo inteiro (mesmo fallback do ADR-0048 §6).
-
-    Ponto único de verdade — a store reusa este helper em vez de duplicar.
-    """
-    return SectionPart(
-        title=chapter.title,
-        anchor_text="",
-        content=chapter.content,
-        summary=chapter.title,
-    )
-
-
 def _content(chapter: ParsedChapter) -> tuple[str, str]:
     """Monta o `untrusted_content`: título truncado + conteúdo truncado ao teto.
 
@@ -139,8 +130,7 @@ def _content(chapter: ParsedChapter) -> tuple[str, str]:
     """
     title = chapter.title[:300]
     text = chapter.content[:_MAX_PROMPT_TEXT]
-    truncated = text
-    return truncated, f"[{chapter.seq}] {title}\n{text}"
+    return text, f"[{chapter.seq}] {title}\n{text}"
 
 
 def _anchor_text(content: str) -> str:
@@ -149,7 +139,12 @@ def _anchor_text(content: str) -> str:
 
 
 def _coverage(chapter_content: str, sections_content: str) -> float:
-    """Fração de tokens (palavras) do capítulo presentes na concatenação das seções."""
+    """Fração de tokens (palavras) do capítulo presentes na concatenação das seções.
+
+    Limitação: mede sobre conjunto de palavras, não posição — seções que repetem
+    vocabulário sem cobrir trechos passam. Aceitável porque o prompt pede para
+    ecoar o conteúdo, e a validação é uma rede de segurança, não garantia total.
+    """
     ch_tokens = set(chapter_content.split())
     if not ch_tokens:
         return 1.0

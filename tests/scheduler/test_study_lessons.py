@@ -62,7 +62,7 @@ def _entries(n: int = 1) -> list[PlanEntry]:
                 user_id=_USER,
                 seq=i,
                 title=f"Lição {i}",
-                chapters=[RecordID("material_chapter", f"c{i}")],
+                sections=[RecordID("material_section", f"s{i}")],
                 created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
             )
         )
