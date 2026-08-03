@@ -843,8 +843,6 @@ def replace_plan_entries(
     chat incremental do planner (KUBO-165), onde a cadência definida manualmente
     não pode ser descartada a cada mensagem.
     """
-    from kubo.study.planning import compute_target_date
-
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     if plan is None:
@@ -852,20 +850,26 @@ def replace_plan_entries(
             db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, entries=entries
         )
     # Recalcula target_date com base no novo número de lições + weekdays atuais.
-    target = compute_target_date(
-        start=date.today(), weekdays=list(plan.weekdays), lesson_count=len(entries)
-    )
-    # Transação única: DELETE + UPDATE target_date + N CREATEs — atômico.
-    stmts = [
+    # Sem cadência (weekdays=[]), não há data-alvo para calcular — deixa None.
+    # O dono define cadência depois via set_plan_cadence, que recalcula target.
+    stmts: list[str] = [
         f"DELETE FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE}",  # noqa: S608
-        f"UPDATE $plan SET target_date = $target WHERE {_MATERIAL_SCOPE}",  # noqa: S608
     ]
     params: dict[str, Any] = {
         "plan": plan.id,
         "tenant": tenant_id,
         "user": user_id,
-        "target": datetime(target.year, target.month, target.day),
     }
+    if plan.weekdays:
+        from kubo.study.planning import compute_target_date
+
+        target = compute_target_date(
+            start=date.today(), weekdays=list(plan.weekdays), lesson_count=len(entries)
+        )
+        stmts.append(f"UPDATE $plan SET target_date = $target WHERE {_MATERIAL_SCOPE}")  # noqa: S608
+        params["target"] = datetime(target.year, target.month, target.day)
+    else:
+        stmts.append(f"UPDATE $plan SET target_date = NONE WHERE {_MATERIAL_SCOPE}")  # noqa: S608
     for i, (title, chapter_ids) in enumerate(entries, start=1):
         entry_id = _fresh("plan_entry")
         stmts.append(

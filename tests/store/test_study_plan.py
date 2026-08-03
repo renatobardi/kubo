@@ -489,6 +489,59 @@ def test_replace_plan_entries_preserves_cadence(
     assert updated_entries[0].title == "Tudo junto"
 
 
+def test_replace_plan_entries_without_cadence_does_not_crash(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """replace_plan_entries com weekdays=[] (sem cadência) não crasha.
+
+    Reproduce o bug de PRD: repropose chamava replace_plan_entries antes de
+    o dono definir cadência. compute_target_date(weekdays=[]) levantava
+    ValueError ("a cadência precisa de ao menos um dia da semana") → 500.
+    Sem cadência, target_date fica None (sem data-alvo para calcular).
+    """
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    rows = db.query(
+        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
+        {"m": material_id},
+    )
+    chapter_ids = [row["id"] for row in rows]
+
+    plan, _ = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+    )
+    # Persiste um target_date não-nulo manualmente, mantendo weekdays=[].
+    # Isso garante que o teste falha se replace_plan_entries parar de limpar
+    # o target_date existente (o UPDATE ... SET target_date = NONE é essencial).
+    from datetime import datetime
+
+    db.query(
+        "UPDATE $plan SET target_date = $target;",
+        {"plan": plan.id, "target": datetime(2026, 12, 31)},
+    )
+
+    # Replace entries — não deve crashar mesmo sem cadência.
+    replace_plan_entries(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("Tudo junto", chapter_ids)],
+    )
+
+    updated_plan, updated_entries = get_plan_for_topic(
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+    )
+    assert updated_plan is not None
+    assert updated_plan.weekdays == []
+    assert updated_plan.target_date is None
+    assert len(updated_entries) == 1
+    assert updated_entries[0].title == "Tudo junto"
+
+
 # --- KUBO-165: transição planning → draft -----------------------------------------------
 
 
