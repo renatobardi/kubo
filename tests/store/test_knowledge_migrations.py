@@ -134,6 +134,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0034_study_plan_running_status.surql",
         # 0035 (KUBO-167): archived_from no topic — estado anterior ao arquivar.
         "0035_topic_archived_from.surql",
+        # 0036 (KUBO-184, ADR-0048): Section como partição tópica de capítulo.
+        "0036_material_section.surql",
     }
 
 

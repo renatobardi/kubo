@@ -69,6 +69,7 @@ def test_create_material_with_topic_and_summary(
         file_path="/data/materials/t/u/abc.epub",
         size_bytes=1024,
         chapters=_chapters(),
+        sections=None,
         summary="Um guia sobre agentes e ateliê.",
     )
 
@@ -92,6 +93,7 @@ def test_create_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
         file_path="/data/p.epub",
         size_bytes=512,
         chapters=_chapters(1),
+        sections=None,
         summary="Resumo privado.",
     )
     other = tenancy.create_user(db, firebase_uid="other-mat-uid")
@@ -120,6 +122,7 @@ def test_list_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID
         file_path="/data/1.epub",
         size_bytes=100,
         chapters=_chapters(1),
+        sections=None,
         summary="R1",
     )
     second = create_material(
@@ -133,6 +136,7 @@ def test_list_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID
         file_path="/data/2.pdf",
         size_bytes=200,
         chapters=_chapters(1),
+        sections=None,
         summary="R2",
     )
 
@@ -157,6 +161,7 @@ def test_list_materials_by_topic_excludes_other_topics(
         file_path="/data/a.epub",
         size_bytes=100,
         chapters=_chapters(1),
+        sections=None,
         summary="RA",
     )
     create_material(
@@ -170,6 +175,7 @@ def test_list_materials_by_topic_excludes_other_topics(
         file_path="/data/b.epub",
         size_bytes=100,
         chapters=_chapters(1),
+        sections=None,
         summary="RB",
     )
 
@@ -197,6 +203,7 @@ def test_delete_material_removes_record(db: Any, tenant_id: RecordID, user_id: R
         file_path="/data/d.epub",
         size_bytes=100,
         chapters=_chapters(2),
+        sections=None,
         summary="RD",
     )
 
@@ -220,6 +227,7 @@ def test_delete_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
         file_path="/data/m.epub",
         size_bytes=100,
         chapters=_chapters(1),
+        sections=None,
         summary="RM",
     )
     other = tenancy.create_user(db, firebase_uid="other-del-uid")
@@ -250,6 +258,7 @@ def test_count_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordI
         file_path="/data/a.epub",
         size_bytes=100,
         chapters=_chapters(1),
+        sections=None,
         summary="RA",
     )
     create_material(
@@ -263,6 +272,7 @@ def test_count_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordI
         file_path="/data/b.pdf",
         size_bytes=200,
         chapters=_chapters(1),
+        sections=None,
         summary="RB",
     )
 

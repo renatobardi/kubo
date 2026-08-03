@@ -49,13 +49,14 @@ from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
-from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
+from kubo.study.parsing import MaterialFormat, ParsedMaterial, SectionPart, parse_material
 from kubo.study.planner import (
     Planner,
     PlannerChatReply,
     extract_planner_reply,
     mechanical_proposal,
 )
+from kubo.study.sectionizer import sectionize
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -123,6 +124,7 @@ _DEFAULT_MAX_MATERIALS = 5
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
 _DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 _SUMMARY_MAX_TOKENS = 1024
+_SECTIONIZER_MAX_TOKENS = 8192
 
 # Rótulos de estado do Tema (ADR-0047 §3) — a lista e o detalhe usam os mesmos.
 _STATE_LABELS: dict[str, str] = {
@@ -234,6 +236,25 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
+def _sectionizer_executor(ctx: SessionContext) -> tuple[ApiExecutor, str]:
+    """Constrói o executor + prompt da persona `sectionizer` (KUBO-184, ADR-0048).
+
+    Devolve (executor, prompt) para passar a `sectionize`. Setup pode falhar
+    (persona ausente, config de API) — quem chama decide o fallback.
+    """
+    with client.connect() as db:
+        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "sectionizer")
+    executor = ApiExecutor(
+        ApiExecutorConfig(
+            model=persona.model or _DEFAULT_MODEL,
+            max_tokens=_SECTIONIZER_MAX_TOKENS,
+            timeout=30.0,
+        ),
+        max_attempts=1,
+    )
+    return executor, persona.prompt
+
+
 def _validated_upload(
     file: UploadFile | None,
 ) -> tuple[MaterialFormat, bytes, ParsedMaterial]:
@@ -259,6 +280,7 @@ def _persist_material(
     data: bytes,
     parsed: ParsedMaterial,
     summary: str | None,
+    sections: dict[int, list[SectionPart]] | None,
     original: str,
 ) -> study_store.Material:
     """Grava arquivo + persiste material; levanta ConfigError/StoreError se falhar."""
@@ -277,6 +299,7 @@ def _persist_material(
                 file_path=str(path),
                 size_bytes=len(data),
                 chapters=parsed.chapters,
+                sections=sections,
                 summary=summary,
             )
     except (ConfigError, StoreError):
@@ -476,6 +499,13 @@ def _process_uploads(
     Respeita o limite: para de criar quando atinge `limit - existing`.
     """
     summarizer = _summarizer(ctx)
+    # Sectionizer setup: pode falhar (persona ausente, config de API) — fallback.
+    sectionizer_executor: tuple[ApiExecutor, str] | None
+    try:
+        sectionizer_executor = _sectionizer_executor(ctx)
+    except (ConfigError, StoreError, MembershipRequiredError):
+        _log.warning("study.upload.sectionizer_setup_failed", exc_info=True)
+        sectionizer_executor = None
     created = 0
     rejections: list[str] = []
     for upload in uploads:
@@ -488,9 +518,17 @@ def _process_uploads(
             rejections.append(str(exc))
             continue
         summary = summarizer.generate(parsed)
+        # Sectionização síncrona (ADR-0048): 1 chamada LLM por capítulo.
+        # Falha vira fallback (1 section por capítulo) dentro de `sectionize`.
+        sections_map: dict[int, list[SectionPart]] | None = None
+        if sectionizer_executor is not None:
+            executor, prompt = sectionizer_executor
+            sections_map = sectionize(executor=executor, prompt=prompt, chapters=parsed.chapters)
         original = Path(upload.filename or "").name if upload is not None else ""
         try:
-            material = _persist_material(ctx, topic, fmt, data, parsed, summary, original)
+            material = _persist_material(
+                ctx, topic, fmt, data, parsed, summary, sections_map, original
+            )
         except (ConfigError, StoreError):
             rejections.append(_STORE_FAILED)
             continue

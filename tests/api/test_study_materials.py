@@ -15,6 +15,7 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.errors import StoreError
 from kubo.store.study import Material, Topic
 
 _TENANT = RecordID("tenant", "breakglass")
@@ -465,3 +466,79 @@ def test_delete_non_last_material_in_planning_stays_in_planning(
     assert not revert_calls, f"revert chamada indevidamente: {revert_calls}"
     # Redirect sem notice.
     assert "notice=" not in resp.headers["location"]
+
+
+# --- KUBO-184: Sectionizer no upload ----------------------------------------------------
+
+
+def test_upload_calls_sectionizer_and_passes_sections_to_store(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Upload chama sectionize e passa o dict de seções para create_material."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="draft")
+    )
+    created: list[dict[str, object]] = []
+
+    def _create(db: object, **kw: object) -> Material:
+        created.append(kw)
+        return _material(title=str(kw.get("title", "x")))
+
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_material", _create)
+    # Sectionize mockado: devolve dict com 1 seção por capítulo.
+    from kubo.study.parsing import SectionPart
+
+    def _fake_sectionize(*, executor, prompt, chapters):
+        return {
+            ch.seq: [
+                SectionPart(title=ch.title, anchor_text="", content=ch.content, summary=ch.title)
+            ]
+            for ch in chapters
+        }
+
+    monkeypatch.setattr("kubo.api.routes.study.sectionize", _fake_sectionize)
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials",
+        data={"csrf": csrf},
+        files={"file": ("manual.epub", b"fake epub", "application/epub+zip")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert len(created) == 1
+    # sections foi passado e não é None.
+    assert created[0]["sections"] is not None
+    assert isinstance(created[0]["sections"], dict)
+
+
+def test_upload_succeeds_when_sectionizer_setup_fails(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sectionizer setup falha → upload continua com sections=None (fallback na store)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="draft")
+    )
+    created: list[dict[str, object]] = []
+
+    def _create(db: object, **kw: object) -> Material:
+        created.append(kw)
+        return _material(title=str(kw.get("title", "x")))
+
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_material", _create)
+
+    # _sectionizer_executor levanta StoreError — simula persona ausente no catálogo.
+    def _boom(ctx):
+        raise StoreError("sectionizer persona not found")
+
+    monkeypatch.setattr("kubo.api.routes.study._sectionizer_executor", _boom)
+    csrf = _csrf(authed_client)
+    resp = authed_client.post(
+        "/study/topics/abc123/materials",
+        data={"csrf": csrf},
+        files={"file": ("manual.epub", b"fake epub", "application/epub+zip")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert len(created) == 1
+    # sections é None — a store faz fallback (1 seção por capítulo).
+    assert created[0]["sections"] is None

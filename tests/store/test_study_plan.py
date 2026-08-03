@@ -76,6 +76,7 @@ def _topic_with_material(
         file_path="/data/livro.epub",
         size_bytes=1024,
         chapters=_chapters(),
+        sections=None,
         summary="Um livro sobre agentes.",
     )
     return topic.id, material.id

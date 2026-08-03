@@ -9,7 +9,7 @@ keyword-only e `assert_membership` no topo de toda função pública.
 from __future__ import annotations
 
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -19,7 +19,8 @@ from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import tenancy, transaction
-from kubo.study.parsing import ParsedChapter
+from kubo.study.parsing import ParsedChapter, SectionPart
+from kubo.study.sectionizer import fallback_part
 
 _log = structlog.get_logger(__name__)
 
@@ -33,6 +34,8 @@ _TOPIC_NOT_FOUND_MSG = "tema não encontrado"
 # `None` means "clear"; `_UNSET` means "don't touch" (same pattern as tenancy).
 _UNSET: object = object()
 _CHAPTER_SCOPE = f"material = $material AND {_MATERIAL_SCOPE}"
+# Sections têm o mesmo escopo por-material que chapters — reusa a constante.
+_SECTION_SCOPE = _CHAPTER_SCOPE
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,25 @@ class MaterialChapter:
     title: str
     part: str | None
     content: str
+
+
+@dataclass(frozen=True)
+class MaterialSection:
+    """Uma seção tópica de um capítulo (KUBO-184, ADR-0048): persistida no upload.
+
+    `chapter_seq` é populado em leitura (via join com material_chapter) — não é
+    coluna persistida. `seq` é local ao capítulo (1-based).
+    """
+
+    id: RecordID
+    material: RecordID
+    material_chapter: RecordID
+    seq: int
+    title: str
+    anchor_text: str
+    content: str
+    summary: str
+    chapter_seq: int = 0
 
 
 def _fresh(table: str) -> RecordID:
@@ -113,6 +135,25 @@ def _chapter_from_row(row: dict[str, Any]) -> MaterialChapter:
     )
 
 
+def _section_from_row(row: dict[str, Any], *, chapter_seq: int = 0) -> MaterialSection:
+    """Constrói um `MaterialSection` a partir de uma linha do banco.
+
+    `chapter_seq` é injetado pelo caller (via join com material_chapter) — não é
+    coluna persistida em material_section.
+    """
+    return MaterialSection(
+        id=row["id"],
+        material=row["material"],
+        material_chapter=row["material_chapter"],
+        seq=int(row["seq"]),
+        title=row["title"],
+        anchor_text=row.get("anchor_text", ""),
+        content=row["content"],
+        summary=row.get("summary", ""),
+        chapter_seq=chapter_seq,
+    )
+
+
 def create_material(
     db: Any,
     *,
@@ -125,12 +166,16 @@ def create_material(
     file_path: str,
     size_bytes: int,
     chapters: Sequence[ParsedChapter],
+    sections: Mapping[int, Sequence[SectionPart]] | None,
     summary: str | None,
 ) -> Material:
-    """Persiste material + capítulos atomicamente e devolve o material criado.
+    """Persiste material + capítulos + seções atomicamente e devolve o material.
 
     Exclusivo a um Tema (N:1, ADR-0047): `topic_id` é obrigatório. `summary` é
-    gerado síncrono no upload (consumido por `mentor` e `planner`).
+    gerado síncrono no upload (consumido por `mentor` e `planner`). `sections`
+    mapeia `chapter.seq` → lista de `SectionPart` (particionamento do
+    sectionizer, ADR-0048). Capítulos sem entrada no dict recebem 1 section
+    fallback (content = chapter.content) — o estudo nunca é bloqueado.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     material_id = _fresh("material")
@@ -152,18 +197,39 @@ def create_material(
         "count": len(chapters),
         "summary": summary,
     }
+    section_idx = 0
     for i, chapter in enumerate(chapters):
+        chapter_id = _fresh("material_chapter")
         statements.append(
             f"CREATE $c{i} SET material = $material, tenant_id = $tenant, user_id = $user, "
             f"seq = $cs{i}, title = $ct{i}, part = $cp{i}, content = $cc{i}"
         )
         params |= {
-            f"c{i}": _fresh("material_chapter"),
+            f"c{i}": chapter_id,
             f"cs{i}": chapter.seq,
             f"ct{i}": chapter.title,
             f"cp{i}": chapter.part,
             f"cc{i}": chapter.content,
         }
+        # Sections do capítulo: dict entry ou fallback (1 section = capítulo inteiro).
+        parts = (sections or {}).get(chapter.seq) or [fallback_part(chapter)]
+        for j, part in enumerate(parts, start=1):
+            statements.append(
+                f"CREATE $s{section_idx} SET material_chapter = $c{i}, "
+                f"material = $material, tenant_id = $tenant, user_id = $user, "
+                f"seq = $ss{section_idx}, title = $st{section_idx}, "
+                f"anchor_text = $sa{section_idx}, content = $sc{section_idx}, "
+                f"summary = $sm{section_idx}"
+            )
+            params |= {
+                f"s{section_idx}": _fresh("material_section"),
+                f"ss{section_idx}": j,
+                f"st{section_idx}": part.title,
+                f"sa{section_idx}": part.anchor_text,
+                f"sc{section_idx}": part.content,
+                f"sm{section_idx}": part.summary,
+            }
+            section_idx += 1
     transaction.run_transaction(db, statements, params)
 
     material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
@@ -174,6 +240,7 @@ def create_material(
         material=str(material_id),
         fmt=fmt,
         chapters=len(chapters),
+        sections=section_idx,
     )
     return material
 
@@ -276,6 +343,78 @@ def list_all_chapters_light(
         )
         for row in rows
     ]
+
+
+# --- Sections (KUBO-184, ADR-0048) -------------------------------------------------------
+
+
+def list_all_sections(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> list[MaterialSection]:
+    """Todas as seções de um material, ordenadas por (chapter.seq, section.seq).
+
+    `chapter_seq` é populado via join em memória (o SurrealDB não resolve
+    `material_chapter.seq` em SELECT direto). Sem consumidor nesta fase
+    (KUBO-184 é aditivo); o ticket que fizer a seção virar átomo do plano
+    consumirá esta função.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM material_section WHERE {_SECTION_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not rows:
+        return []
+    # Join: busca os seqs dos capítulos referenciados pelas sections.
+    # RecordID não é hashable, então dedup por str() preservando o objeto.
+    seen: set[str] = set()
+    chapter_ids: list[RecordID] = []
+    for row in rows:
+        cid = row["material_chapter"]
+        key = str(cid)
+        if key not in seen:
+            seen.add(key)
+            chapter_ids.append(cid)
+    ch_rows = db.query(
+        "SELECT id, seq FROM material_chapter WHERE id IN $chapters "  # noqa: S608
+        "AND tenant_id = $tenant AND user_id = $user;",
+        {"chapters": chapter_ids, "tenant": tenant_id, "user": user_id},
+    )
+    chapter_seq_by_id = {str(r["id"]): int(r["seq"]) for r in ch_rows}
+    sections = [
+        _section_from_row(row, chapter_seq=chapter_seq_by_id.get(str(row["material_chapter"]), 0))
+        for row in rows
+    ]
+    # Ordena por (chapter_seq, section.seq) — a ordem de leitura global.
+    sections.sort(key=lambda s: (s.chapter_seq, s.seq))
+    return sections
+
+
+def list_sections_for_chapter(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, chapter_id: RecordID
+) -> list[MaterialSection]:
+    """Seções de um capítulo específico, ordenadas por `seq` (local ao capítulo).
+
+    `chapter_seq` é populado via leitura direta do capítulo. Filtro por
+    tenant_id + user_id garante escopo (não usa `_SECTION_SCOPE` porque não
+    recebe `material_id` — o `material_chapter` já é único por usuário).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Busca o seq do capítulo para popular chapter_seq (e validar escopo).
+    ch_rows = db.query(
+        "SELECT seq FROM material_chapter WHERE id = $chapter "  # noqa: S608
+        "AND tenant_id = $tenant AND user_id = $user LIMIT 1;",
+        {"chapter": chapter_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not ch_rows:
+        return []
+    chapter_seq = int(ch_rows[0]["seq"])
+    rows = db.query(
+        "SELECT * FROM material_section WHERE material_chapter = $chapter "  # noqa: S608
+        "AND tenant_id = $tenant AND user_id = $user ORDER BY seq;",
+        {"chapter": chapter_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [_section_from_row(row, chapter_seq=chapter_seq) for row in rows]
 
 
 # --- Tema e plano de estudo (KUBO-136) -------------------------------------------------
@@ -446,6 +585,7 @@ def delete_material(
     transaction.run_transaction(
         db,
         [
+            f"DELETE FROM material_section WHERE {_SECTION_SCOPE}",  # noqa: S608
             f"DELETE FROM material_chapter WHERE {_CHAPTER_SCOPE}",  # noqa: S608
             f"DELETE FROM material WHERE id = $material AND {_MATERIAL_SCOPE}",  # noqa: S608
         ],
@@ -1397,9 +1537,9 @@ def delete_topic(
     """Deleta um tema e todos os dependentes (cascade total, KUBO-167).
 
     Remove: study_log, study_chat, lessons, plan_entries, study_plan,
-    material_chapters, materials, topic. Arquivos no volume são removidos
-    pela rota (best-effort). Tudo numa única transação atômica — falha no
-    meio reverte tudo (não deixa tema órfão sem dependentes).
+    material_sections, material_chapters, materials, topic. Arquivos no
+    volume são removidos pela rota (best-effort). Tudo numa única transação
+    atômica — falha no meio reverte tudo (não deixa tema órfão sem dependentes).
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
@@ -1429,6 +1569,7 @@ def delete_topic(
     # podem conter caracteres inválidos para identificadores SurrealQL.
     stmts: list[str] = []
     for i, _mid in enumerate(material_ids):
+        stmts.append(f"DELETE FROM material_section WHERE material = $m_{i};")  # noqa: S608
         stmts.append(f"DELETE FROM material_chapter WHERE material = $m_{i};")  # noqa: S608
     for i, _pid in enumerate(plan_ids):
         stmts.append(f"DELETE FROM plan_entry WHERE study_plan = $p_{i};")  # noqa: S608
