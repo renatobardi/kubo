@@ -18,7 +18,8 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
-from kubo.store import client, knowledge, migrations, settings
+from kubo.runtime.catalog_defaults import DEFAULT_INTEGRATIONS
+from kubo.store import catalog, client, knowledge, migrations, settings
 from kubo.store import destinations as destination_store
 from kubo.store.seed import (
     FEED_CADASTROS,
@@ -47,6 +48,21 @@ def db() -> Iterator[Any]:
         migrations.apply_migrations(conn)
         yield conn
         conn.query(f"REMOVE DATABASE IF EXISTS {_SEED_DB};")
+
+
+class _FakeConnect:
+    """Fake de `client.connect()`: `__enter__` devolve a conexão de teste já aberta pela
+    fixture `db`, em vez de abrir uma nova — permite testar `main()` (que faz `with
+    client.connect() as db:`) contra o banco efêmero do teste."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __enter__(self) -> Any:
+        return self._inner
+
+    def __exit__(self, *args: Any) -> None:
+        pass
 
 
 def _count_source(db: Any) -> int:
@@ -319,16 +335,6 @@ def test_main_seeds_settings_owner_destination_and_feeds_idempotently(
     """KUBO-45: main() roda settings, destino padrão e feeds sem duplicar."""
     monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "12345678")
 
-    class _FakeConnect:
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
-
-        def __enter__(self) -> Any:
-            return self._inner
-
-        def __exit__(self, *args: Any) -> None:
-            pass
-
     monkeypatch.setattr("kubo.store.seed.client.connect", lambda cfg=None: _FakeConnect(db))
 
     assert main() == 6
@@ -343,3 +349,69 @@ def test_main_seeds_settings_owner_destination_and_feeds_idempotently(
     # Segunda execução: feeds continuam 6 (não duplicou), settings/destino no-op.
     assert main() == 0
     assert _count_source(db) == 6
+
+
+def test_main_seeds_catalog_for_tenant_that_predates_adr_0042(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-191: `seed_catalog` só rodava na CRIAÇÃO do tenant (`create_tenant`). Um tenant
+    que já existia antes do ADR-0042 nunca passou por esse caminho — `catalog_integration`
+    fica vazio para sempre, e todo worker que declara integração morre com ConfigError
+    ('rss'/'telegram' não existe no catálogo). `main()` (o passo de deploy) precisa fechar
+    essa lacuna, sem depender de o tenant ser novo."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "12345678")
+
+    # Simula o tenant legado: `create_tenant` (via a fixture) já semeou o catálogo — apaga
+    # tudo para reproduzir o estado real de `breakglass` (kubo-test, 2026-08-03/04).
+    db.query("DELETE catalog_integration WHERE tenant_id = $t;", {"t": tenant_id})
+    db.query("DELETE catalog_persona WHERE tenant_id = $t;", {"t": tenant_id})
+    db.query("DELETE catalog_flow_template WHERE tenant_id = $t;", {"t": tenant_id})
+    assert catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id) == []
+
+    monkeypatch.setattr("kubo.store.seed.client.connect", lambda cfg=None: _FakeConnect(db))
+    monkeypatch.setattr(
+        "kubo.scheduler.tenant.resolve_scheduler_tenant_and_user",
+        lambda _db: (tenant_id, user_id),
+    )
+
+    main()
+
+    integrations = catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
+    names = {i["name"] for i in integrations}
+    assert names == {i["name"] for i in DEFAULT_INTEGRATIONS}
+    assert "rss" in names
+    assert "telegram" in names
+
+
+def test_main_catalog_seed_is_idempotent_and_preserves_edits(
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-191: re-rodar `main()` (todo deploy roda) não duplica o catálogo nem sobrescreve
+    uma edição do dono — mesma garantia de coalesce que `seed_catalog` já tem.
+
+    Parte do estado inicial VAZIO (como `test_main_seeds_catalog_for_tenant_that_predates_
+    adr_0042`): se não fosse, o 1º `main()` não exerceria a semeadura nova, e a asserção de
+    coalesce passaria mesmo sem `main()` tocar o catálogo — teste vácuo."""
+    monkeypatch.setenv("KUBO_OWNER_TELEGRAM_CHAT_ID", "12345678")
+    db.query("DELETE catalog_integration WHERE tenant_id = $t;", {"t": tenant_id})
+
+    monkeypatch.setattr("kubo.store.seed.client.connect", lambda cfg=None: _FakeConnect(db))
+    monkeypatch.setattr(
+        "kubo.scheduler.tenant.resolve_scheduler_tenant_and_user",
+        lambda _db: (tenant_id, user_id),
+    )
+
+    main()
+    rss = catalog.get_integration(db, tenant_id=tenant_id, name="rss", user_id=user_id)
+    assert rss is not None
+    edited = dict(rss, base_url="https://meu-proxy-rss.example")
+    catalog.upsert_integration(db, tenant_id=tenant_id, user_id=user_id, integration=edited)
+
+    main()
+
+    still_there = catalog.get_integration(db, tenant_id=tenant_id, name="rss", user_id=user_id)
+    assert still_there is not None
+    assert still_there["base_url"] == "https://meu-proxy-rss.example"
+    integrations = catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
+    names = [i["name"] for i in integrations]
+    assert len(names) == len(set(names))  # sem duplicata

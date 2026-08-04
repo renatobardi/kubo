@@ -23,7 +23,7 @@ from surrealdb import RecordID
 
 from kubo.errors import ConfigError
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
-from kubo.store import client
+from kubo.store import catalog, client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import upsert_seed_source
@@ -194,23 +194,35 @@ def seed_owner_destination(db: Any, *, tenant_id: RecordID, user_id: RecordID) -
 
 
 def main() -> int:
-    """Conecta por ambiente e semeia settings, destino padrão e feeds.
+    """Conecta por ambiente e semeia catálogo, settings, destino padrão e feeds.
 
-    Ordem (KUBO-45): settings primeiro, depois destino do dono (que escreve o
-    ponteiro `default_destination` em settings), depois os feeds legados.
-    O tenant/user é resolvido uma vez aqui e passado para os seeds que precisam
-    (centralização KUBO-128 follow-up).
+    Ordem (KUBO-45, catálogo adicionado em KUBO-191): catálogo primeiro — settings/
+    destino/feeds não dependem dele, mas todo worker que declara integração (`feed`,
+    `telegram-digest`) precisa dele para sequer montar o contexto de execução; depois
+    settings, depois destino do dono (que escreve o ponteiro `default_destination` em
+    settings), depois os feeds legados. O tenant/user é resolvido uma vez aqui e
+    passado para os seeds que precisam (centralização KUBO-128 follow-up).
+
+    `catalog.seed_catalog` roda em TODO deploy (sem marcador de uma-vez): é idempotente
+    por construção (UPSERT com id determinístico + coalesce, KUBO-119) — reusa a mesma
+    garantia que já protege reruns dos outros seeds, sem precisar de um segundo mecanismo.
+    Fecha a lacuna do ADR-0042: `seed_catalog` só rodava na CRIAÇÃO do tenant
+    (`create_tenant`); um tenant que já existia antes daquele ADR nunca era semeado, e o
+    catálogo ficava vazio para sempre (KUBO-191).
+
     Devolve total de feeds processado.
     """
     try:
         with client.connect() as db:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+            catalog.seed_catalog(db, tenant_id=tenant_id, created_by=user_id)
             settings_applied = seed_default_settings(db)
             owner_applied = seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
             count = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
     except Exception:  # noqa: BLE001 — loga estruturado e repropaga (padrão do migrations-cli)
         _log.exception("seed_failed")
         raise
+    _log.info("catalog_seeded", tenant_id=str(tenant_id))
     _log.info("default_settings_seeded", applied=settings_applied)
     _log.info("owner_destination_seeded", applied=owner_applied)
     _log.info("feed cadastros seeded", count=count)
