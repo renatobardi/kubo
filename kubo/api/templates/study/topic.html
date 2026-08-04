@@ -26,6 +26,28 @@
     <div class="mt-0.5 text-sm">{{ state_label }}</div>
   </section>
 
+  {% if topic.state in ("scheduled", "running") and lessons %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Lições</h2>
+    <ul class="mt-3 space-y-2">
+      {% for lesson in lessons %}
+      <li class="flex items-center justify-between gap-3 rounded-2xl bg-input/30 px-4 py-2 text-sm">
+        <div class="min-w-0 flex-1">
+          <span class="font-medium">{{ lesson.scheduled_for.strftime("%d/%m/%Y") }}</span>
+          {% if lesson.id|string in logs %}
+          <span class="ml-2 text-xs text-muted-foreground">concluída</span>
+          {% elif lesson.is_placeholder %}
+          <span class="ml-2 text-xs text-muted-foreground">gerando…</span>
+          {% endif %}
+        </div>
+        <a href="{{ topic_url }}/lessons/{{ lesson.id.id | urlencode }}"
+           class="shrink-0 text-xs text-primary hover:underline">Abrir</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   {# Ações de gestão: arquivar/desarquivar/deletar (KUBO-167). #}
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <h2 class="text-sm font-medium">Gestão</h2>

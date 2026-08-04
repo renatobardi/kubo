@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% set topic_url = "/study/topics/" ~ (topic.id.id | urlencode) %}
+{% set mobile_back_href = topic_url %}
+{% set mobile_title = topic.title %}
+{% block title %}{{ topic.title }} · Lição · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  <div class="flex items-center gap-2 text-sm text-muted-foreground">
+    <a href="{{ topic_url }}" class="hover:underline">&larr; Voltar para {{ topic.title }}</a>
+  </div>
+
+  {{ macros.page_header("Lição do dia", topic.title) }}
+
+  {% if lesson.is_placeholder %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <p class="text-sm text-muted-foreground">A lição ainda está sendo gerada. Volte em alguns instantes.</p>
+  </section>
+  {% else %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Conceito</h2>
+    <p class="mt-2 whitespace-pre-wrap text-sm">{{ lesson.concept }}</p>
+  </section>
+
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Cenário</h2>
+    <p class="mt-2 whitespace-pre-wrap text-sm">{{ lesson.scenario }}</p>
+  </section>
+
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Aplicação</h2>
+    <p class="mt-2 whitespace-pre-wrap text-sm">{{ lesson.application }}</p>
+  </section>
+
+  {% if study_log %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Resultado</h2>
+    <p class="mt-2 text-sm">Você acertou {{ study_log.correct_count }} de {{ lesson.quiz | length }} questões.</p>
+  </section>
+  {% else %}
+  <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+    <h2 class="text-sm font-medium">Quiz</h2>
+    <form method="post" action="{{ topic_url }}/lessons/{{ lesson.id.id }}/submit" class="mt-3 space-y-4">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% for item in lesson.quiz %}
+      <fieldset class="space-y-2">
+        <legend class="text-sm font-medium">{{ item.question }}</legend>
+        {% for option in item.options %}
+        <label class="flex items-center gap-2 rounded-2xl bg-input/30 px-3 py-2 text-sm cursor-pointer hover:bg-input/50">
+          <input type="radio" name="answers" value="{{ loop.index0 }}" required>
+          <span>{{ option }}</span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      {% endfor %}
+
+      <div>
+        <label for="reaction" class="text-xs font-semibold text-muted-foreground">Como foi essa lição?</label>
+        <select id="reaction" name="reaction" class="mt-1 h-9 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <option value="">—</option>
+          <option value="facil">Fácil</option>
+          <option value="ok">Normal</option>
+          <option value="dificil">Difícil</option>
+        </select>
+      </div>
+
+      <button type="submit" class="h-9 rounded-4xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90">
+        Concluir lição
+      </button>
+    </form>
+  </section>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -57,6 +57,7 @@ from kubo.study.planner import (
     extract_planner_reply,
     mechanical_proposal,
 )
+from kubo.study.quiz import QuizAnswerError, grade
 from kubo.study.sectionizer import sectionize
 from kubo.study.summarizer import Summarizer
 
@@ -91,6 +92,7 @@ router = APIRouter(route_class=_MembershipAwareRoute)
 
 _TOPICS_LIST_TEMPLATE = "study/topics.html"
 _TOPIC_TEMPLATE = "study/topic.html"
+_LESSON_TEMPLATE = "study/lesson.html"
 _TOPIC_NOT_FOUND_TEMPLATE = "study/topic_not_found.html"
 _TOPICS_ROUTE = "/study/topics"
 _TOPIC_TABLE = "topic"
@@ -111,6 +113,8 @@ _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o 
 _AUTO_REVERT_NOTICE = "voltou-rascunho"
 _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
 _INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
+_LESSON_NOT_FOUND = "Lição não encontrada."
+_TOPIC_FROZEN = "O plano já está em andamento; não é possível alterar a cadência."
 _MENTOR_MAX_TOKENS = 2048
 _MENTOR_TIMEOUT = 60.0
 _PLANNER_MAX_TOKENS = 4096
@@ -423,9 +427,18 @@ def topic_detail(request: Request, key: str) -> Response:
         )
         # Mapa section_id → título para exibir nomes legíveis no plano (KUBO-185).
         section_titles: dict[str, str] = {}
+        lessons: list[study_store.Lesson] = []
+        logs: dict[str, study_store.StudyLog] = {}
         if topic.state in ("planning", "scheduled", "running"):
             for sec in _collect_all_sections(db, ctx, topic.id):
                 section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
+        if topic.state in ("scheduled", "running") and plan is not None:
+            lessons = study_store.list_lessons_for_plan(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
+            )
+            logs = study_store.list_study_logs_for_plan(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
+            )
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -441,6 +454,8 @@ def topic_detail(request: Request, key: str) -> Response:
             "plan": plan,
             "plan_entries": plan_entries,
             "section_titles": section_titles,
+            "lessons": lessons,
+            "logs": logs,
             "notice": notice,
         },
     )
@@ -1828,3 +1843,104 @@ def delete_topic(
             _log.warning("study.material.file_unlink_failed", path=mat.file_path)
     _log.info("study.topic.deleted", topic=_log_key(key))
     return RedirectResponse(_TOPICS_ROUTE, status_code=303)
+
+
+# --- Tela da Lição (KUBO-201, ADR-0049 §I) ------------------------------------------------
+
+
+@router.get("/topics/{key}/lessons/{lesson_key}")
+def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
+    """Tela da lição do dia: concept, scenario, application e quiz."""
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        plan, _ = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        lesson_id = RecordID("lesson", lesson_key)
+        lesson = study_store.get_lesson(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+        )
+        if lesson is None or (plan is not None and str(lesson.study_plan) != str(plan.id)):
+            return templates.TemplateResponse(
+                request,
+                _TOPIC_NOT_FOUND_TEMPLATE,
+                {"raw": f"{key}/lessons/{lesson_key}"},
+                status_code=404,
+            )
+        study_log = study_store.get_study_log(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+        )
+    return templates.TemplateResponse(
+        request,
+        _LESSON_TEMPLATE,
+        {
+            "topic": topic,
+            "lesson": lesson,
+            "study_log": study_log,
+            "csrf": csrf_token(request),
+        },
+    )
+
+
+@router.post("/topics/{key}/lessons/{lesson_key}/submit")
+def submit_quiz(
+    request: Request,
+    key: str,
+    lesson_key: str,
+    csrf: Annotated[str, Form()] = "",
+    answers: Annotated[list[int] | None, Form()] = None,
+    reaction: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Corrige o quiz e persiste o registro de estudo do dono."""
+    answers = answers or []
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    try:
+        with client.connect_rw() as db:
+            topic = _topic_of(db, key, ctx)
+            if topic is None:
+                return _topic_missing(request, key)
+            plan, _ = study_store.get_plan_for_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+            lesson_id = RecordID("lesson", lesson_key)
+            lesson = study_store.get_lesson(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+            )
+            if lesson is None or (plan is not None and str(lesson.study_plan) != str(plan.id)):
+                return templates.TemplateResponse(
+                    request,
+                    _TOPIC_NOT_FOUND_TEMPLATE,
+                    {"raw": f"{key}/lessons/{lesson_key}"},
+                    status_code=404,
+                )
+            result = grade(lesson.quiz, answers)
+            study_store.create_study_log(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                lesson_id=lesson_id,
+                answers=answers,
+                correct_count=result.correct_count,
+                reaction=reaction,
+            )
+            _log.info(
+                "study.lesson.completed",
+                lesson=lesson_key,
+                topic=key,
+                correct=result.correct_count,
+            )
+    except QuizAnswerError as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    except (ConfigError, StoreError):
+        _log.warning("study.lesson.submit_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
