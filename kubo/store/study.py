@@ -1216,6 +1216,252 @@ def list_topics_by_state(
     return [_topic_from_row(r) for r in rows]
 
 
+# --- Lição e registro de estudo (KUBO-201, ADR-0049 §I/§II) -------------------------------
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """Lição do dia gerada pelo Tutor para uma entrada do plano."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    study_plan: RecordID
+    plan_entry: RecordID
+    scheduled_for: datetime
+    concept: str
+    scenario: str
+    application: str
+    recap: str | None
+    quiz: list[dict[str, Any]]
+    provenance: list[dict[str, Any]]
+    is_placeholder: bool
+
+
+@dataclass(frozen=True)
+class StudyLog:
+    """Registro de estudo do dono para uma lição concluída."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    lesson: RecordID
+    answers: list[int]
+    correct_count: int
+    reaction: str | None
+    completed_at: datetime
+
+
+def _lesson_from_row(row: dict[str, Any]) -> Lesson:
+    """Constrói uma `Lesson` a partir de uma linha do banco."""
+    concept = row.get("concept", "")
+    return Lesson(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        study_plan=row["study_plan"],
+        plan_entry=row["plan_entry"],
+        scheduled_for=_as_datetime(row["scheduled_for"]),
+        concept=concept,
+        scenario=row.get("scenario", ""),
+        application=row.get("application", ""),
+        recap=row.get("recap"),
+        quiz=list(row.get("quiz") or []),
+        provenance=list(row.get("provenance") or []),
+        is_placeholder=concept == "",
+    )
+
+
+def _study_log_from_row(row: dict[str, Any]) -> StudyLog:
+    """Constrói um `StudyLog` a partir de uma linha do banco."""
+    return StudyLog(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        lesson=row["lesson"],
+        answers=list(row.get("answers") or []),
+        correct_count=int(row.get("correct_count", 0)),
+        reaction=row.get("reaction"),
+        completed_at=_as_datetime(row["completed_at"]),
+    )
+
+
+def get_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+) -> Lesson | None:
+    """Lê uma lição do usuário; None se não existe ou é de outro usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE id = $lesson AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _lesson_from_row(rows[0]) if rows else None
+
+
+def list_lessons_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> list[Lesson]:
+    """Lista as lições de um plano na ordem de estudo (scheduled_for crescente)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE} "  # noqa: S608
+        "ORDER BY scheduled_for;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [_lesson_from_row(row) for row in rows]
+
+
+def create_study_log(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+    answers: list[int],
+    correct_count: int,
+    reaction: str | None,
+) -> StudyLog:
+    """Persiste o registro de estudo do dono para uma lição.
+
+    Um registro por lição: a UNIQUE `study_log_lesson` impede reescrita do
+    desempenho já usado na recapitulação. O dono só registra estudo em lições
+    que lhe pertencem.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id FROM lesson WHERE id = $lesson AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        raise StoreError("lesson not found or not owned by user")
+    existing = db.query(
+        "SELECT id FROM study_log WHERE lesson = $lesson LIMIT 1;",
+        {"lesson": lesson_id},
+    )
+    if existing:
+        raise StoreError("study log already exists for this lesson")
+    log_id = _fresh("study_log")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $log SET tenant_id = $tenant, user_id = $user, lesson = $lesson, "
+            "answers = $answers, correct_count = $correct, reaction = $reaction"
+        ],
+        {
+            "log": log_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "lesson": lesson_id,
+            "answers": answers,
+            "correct": correct_count,
+            "reaction": reaction,
+        },
+    )
+    log = get_study_log(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    if log is None:
+        raise StoreError("study log vanished during creation")
+    _log.info("store.study_log.created", log=str(log_id), lesson=str(lesson_id))
+    return log
+
+
+def get_study_log(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+) -> StudyLog | None:
+    """Lê o registro de estudo de uma lição do usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_log WHERE lesson = $lesson AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _study_log_from_row(rows[0]) if rows else None
+
+
+def list_study_logs_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> dict[str, StudyLog]:
+    """Devolve os registros de estudo de um plano indexados por `str(lesson_id)`.
+
+    A timeline do tema precisa saber, numa leitura, quais lições do plano já
+    foram concluídas.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        return {}
+    lesson_ids = [r["id"] for r in lesson_rows]
+    rows = db.query(
+        f"SELECT * FROM study_log WHERE lesson IN $lessons AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"lessons": lesson_ids, "tenant": tenant_id, "user": user_id},
+    )
+    return {str(row["lesson"]): _study_log_from_row(row) for row in rows}
+
+
+def recent_misses_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    limit: int = 10,
+) -> list[str]:
+    """Devolve os enunciados das questões erradas nos estudos recentes.
+
+    Ordena do mais recente para o mais antigo (por scheduled_for da lição) e
+    aplica `limit`. Usado pelo Tutor para recapitular na lição seguinte
+    (ADR-0049 §II).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id, quiz, scheduled_for FROM lesson "  # noqa: S608
+        f"WHERE study_plan = $plan AND concept != '' AND {_MATERIAL_SCOPE} "
+        "ORDER BY scheduled_for DESC;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        return []
+    lesson_ids = [r["id"] for r in lesson_rows]
+    log_rows = db.query(
+        f"SELECT lesson, answers FROM study_log "  # noqa: S608
+        f"WHERE lesson IN $lessons AND {_MATERIAL_SCOPE};",
+        {"lessons": lesson_ids, "tenant": tenant_id, "user": user_id},
+    )
+    answers_by_lesson = {str(r["lesson"]): list(r.get("answers") or []) for r in log_rows}
+    misses: list[str] = []
+    cap = max(1, int(limit))
+    for row in lesson_rows:
+        lesson_id = str(row["id"])
+        answers = answers_by_lesson.get(lesson_id, [])
+        quiz = list(row.get("quiz") or [])
+        if not answers or not quiz:
+            continue
+        for item, answer in zip(quiz, answers, strict=True):
+            if len(misses) >= cap:
+                return misses
+            expected = item.get("answer_index")
+            if answer != expected:
+                misses.append(str(item.get("question", "")))
+    return misses
+
+
 def create_lesson(
     db: Any,
     *,
@@ -1360,7 +1606,7 @@ def count_lessons_for_plan(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT count() FROM lesson WHERE study_plan = $plan "  # noqa: S608
-        f"AND concept != NONE AND {_MATERIAL_SCOPE} GROUP ALL;",
+        f"AND concept != '' AND {_MATERIAL_SCOPE} GROUP ALL;",
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
     return rows[0]["count"] if rows else 0
@@ -1374,7 +1620,7 @@ def get_pending_lesson_for_entry(
     plan_id: RecordID,
     plan_entry_id: RecordID,
 ) -> RecordID | None:
-    """Busca uma lição placeholder (sem concept) para re-tentar o fill.
+    """Busca uma lição placeholder (concept = '') para re-tentar o fill.
 
     Se o Tutor falhou e deixou uma lição vazia, o scheduler re-tenta: em vez
     de criar nova (bateria na UNIQUE), busca a existente e chama fill_lesson
@@ -1383,7 +1629,7 @@ def get_pending_lesson_for_entry(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT id FROM lesson WHERE study_plan = $plan "  # noqa: S608
-        f"AND plan_entry = $entry AND concept = NONE "
+        f"AND plan_entry = $entry AND concept = '' "
         f"AND {_MATERIAL_SCOPE} LIMIT 1;",
         {"plan": plan_id, "entry": plan_entry_id, "tenant": tenant_id, "user": user_id},
     )

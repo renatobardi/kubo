@@ -168,6 +168,7 @@ def test_generate_lesson_content_uses_sections_with_provenance(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
+        plan_id=entries[0].study_plan,
         lesson_id=lesson_id,
         entry=entry,
         work_context="",
