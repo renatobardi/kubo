@@ -81,6 +81,51 @@ def test_topics_page_shows_empty_state(authed_client: TestClient) -> None:
     assert "Novo tema" in html
 
 
+def test_error_dialog_present_in_page(authed_client: TestClient) -> None:
+    """Toda página renderizada inclui o dialog global de erro.
+
+    O dialog intercepta form POSTs via fetch e mostra respostas 4xx/5xx
+    num <dialog> nativo em vez de navegar para texto cru.
+    """
+    html = authed_client.get("/study/topics").text
+    assert 'id="kubo-error-dialog"' in html
+    assert 'id="kubo-error-message"' in html
+    # aria-labelledby liga o dialog ao h3 (acessibilidade — CodeRabbit).
+    assert 'aria-labelledby="kubo-error-title"' in html
+
+
+def test_error_dialog_skips_htmx_forms(authed_client: TestClient) -> None:
+    """O interceptor pula forms com hx-post — HTMX gerencia o submit deles.
+
+    Sem isso, o dashboard /auth/switch faria POST duplo (fetch + htmx).
+    """
+    html = authed_client.get("/study/topics").text
+    # O JS do _error_dialog.html contém a guarda hasAttribute('hx-post').
+    assert "hasAttribute('hx-post')" in html
+
+
+def test_error_dialog_uses_formaction(authed_client: TestClient) -> None:
+    """O interceptor respeita formAction do botão submitter (HTML spec)."""
+    html = authed_client.get("/study/topics").text
+    assert "ev.submitter && ev.submitter.formAction" in html
+
+
+def test_plain_text_errors_return_text_plain_content_type(
+    authed_client: TestClient,
+) -> None:
+    """Rotas que devolvem PlainTextResponse usam content-type text/plain.
+
+    O interceptor JS só mostra o body no dialog se content-type for text/plain
+    — JSON/HTML de handler de erro vira mensagem genérica. Este teste garante
+    que o contrato entre rotas e dialog se mantém.
+    """
+    # POST sem CSRF → 403 PlainTextResponse
+    resp = authed_client.post("/study/topics", data={}, follow_redirects=False)
+    assert resp.status_code == 403
+    ct = resp.headers.get("content-type", "")
+    assert "text/plain" in ct
+
+
 def test_topics_page_lists_topics_with_name_and_state(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,0 +1,92 @@
+{# Dialog global de erro: intercepta form POSTs via fetch e mostra respostas
+   4xx/5xx num <dialog> nativo em vez de navegar para texto cru.
+   Padrão do design system: <dialog> como o GateSheet e o RSS wizard.
+   Incluído por base.html no final do <body>. #}
+<dialog id="kubo-error-dialog" aria-labelledby="kubo-error-title"
+        class="m-0 max-w-[90vw] rounded-2xl bg-popover p-0 text-popover-foreground backdrop:bg-black/40 md:w-[420px]">
+  <div class="flex items-start gap-2.5 border-b border-border p-5">
+    <span class="mt-0.5 text-primary">{{ macros.triangle_alert("size-4") }}</span>
+    <div class="min-w-0 flex-1">
+      <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Aviso</div>
+      <h3 id="kubo-error-title" class="mt-0.5 font-heading text-base font-semibold">Não foi possível concluir</h3>
+    </div>
+    <form method="dialog" class="shrink-0"><button class="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Fechar">
+      <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button></form>
+  </div>
+  <div class="p-5">
+    <p id="kubo-error-message" class="text-sm leading-relaxed text-muted-foreground"></p>
+  </div>
+  <div class="border-t border-border p-5">
+    <button type="button" onclick="document.getElementById('kubo-error-dialog').close()" class="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">Entendi</button>
+  </div>
+</dialog>
+<script>
+  (function () {
+    var dialog = document.getElementById('kubo-error-dialog');
+    var msgEl = document.getElementById('kubo-error-message');
+
+    function showError(text) {
+      msgEl.textContent = text || 'Erro inesperado.';
+      if (!dialog.open) dialog.showModal();
+    }
+
+    // Intercepta form POST em bubble phase (depois do onsubmit confirm inline).
+    // Pula forms HTMX (hx-post) — o HTMX gerencia o submit desses forms.
+    document.addEventListener('submit', function (ev) {
+      var form = ev.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if ((form.getAttribute('method') || '').toLowerCase() !== 'post') return;
+      if (form.hasAttribute('hx-post')) return;
+      if (ev.defaultPrevented) {
+        // Confirm dismissado — limpa o busy que _busy.html marcou no capture phase.
+        var t = ev.submitter || form.querySelector('button, input[type=submit]');
+        if (t && typeof _kuboClearBusy === 'function') _kuboClearBusy(t);
+        delete form.dataset.submitting;
+        return;
+      }
+
+      ev.preventDefault();
+      var body = new FormData(form);
+      // ev.submitter pode carregar name/value (botão que disparou o submit).
+      if (ev.submitter && ev.submitter.name) {
+        body.append(ev.submitter.name, ev.submitter.value);
+      }
+      // formAction do botão sobrescreve o action do form.
+      var action = (ev.submitter && ev.submitter.formAction) || form.action;
+
+      fetch(action, {
+        method: 'POST',
+        body: body,
+        redirect: 'follow',
+      }).then(function (resp) {
+        if (resp.redirected) {
+          // 303 redirect (sucesso) — navega para a URL final.
+          window.location.href = resp.url;
+          return;
+        }
+        if (resp.ok) {
+          // 200 não-redirect: recarrega para refletir mudança de estado.
+          window.location.reload();
+          return;
+        }
+        // 4xx/5xx — só mostra texto se for text/plain (mensagem curta da rota).
+        // JSON/HTML de handler de erro vira mensagem genérica.
+        var ct = resp.headers.get('content-type') || '';
+        if (ct.indexOf('text/plain') !== -1) {
+          return resp.text().then(function (text) {
+            showError(text || 'Erro inesperado (' + resp.status + ').');
+          });
+        }
+        showError('Erro inesperado (' + resp.status + ').');
+      }).catch(function () {
+        showError('Falha de rede — verifique a conexão e tente novamente.');
+      }).finally(function () {
+        // Limpa o busy do _busy.html (o capture-phase listener já marcou o botão).
+        var t = ev.submitter || form.querySelector('button, input[type=submit]');
+        if (t && typeof _kuboClearBusy === 'function') _kuboClearBusy(t);
+        delete form.dataset.submitting;
+      });
+    }); // bubble phase (capture: false = default)
+  })();
+</script>
