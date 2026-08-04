@@ -81,6 +81,17 @@ def test_topics_page_shows_empty_state(authed_client: TestClient) -> None:
     assert "Novo tema" in html
 
 
+def test_error_dialog_present_in_page(authed_client: TestClient) -> None:
+    """Toda página renderizada inclui o dialog global de erro (KUBO-189).
+
+    O dialog intercepta form POSTs via fetch e mostra respostas 4xx/5xx
+    num <dialog> nativo em vez de navegar para texto cru.
+    """
+    html = authed_client.get("/study/topics").text
+    assert 'id="kubo-error-dialog"' in html
+    assert 'id="kubo-error-message"' in html
+
+
 def test_topics_page_lists_topics_with_name_and_state(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
