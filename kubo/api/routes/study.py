@@ -39,7 +39,6 @@ from kubo.api.session import SessionContext, resolve_session
 from kubo.errors import (
     ConfigError,
     ExecutorError,
-    MaterialParseError,
     MembershipRequiredError,
     StoreError,
     UploadRejectionError,
@@ -50,7 +49,7 @@ from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
-from kubo.study.parsing import MaterialFormat, ParsedMaterial, SectionPart, parse_material
+from kubo.study.parsing import MaterialFormat
 from kubo.study.planner import (
     Planner,
     PlannerChatReply,
@@ -58,7 +57,6 @@ from kubo.study.planner import (
     mechanical_proposal,
 )
 from kubo.study.quiz import QuizAnswerError, grade
-from kubo.study.sectionizer import sectionize
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -105,7 +103,6 @@ _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
 _TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um tema em rascunho."
 _OVER_LIMIT = "Limite de materiais por tema atingido."
 _OVERSIZE = "Arquivo muito grande."
-_PARSE_FAILED = "Não foi possível ler o arquivo: epub/PDF inválido ou corrompido."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
 _TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um tema em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
@@ -129,7 +126,6 @@ _DEFAULT_MAX_MATERIALS = 5
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
 _DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 _SUMMARY_MAX_TOKENS = 1024
-_SECTIONIZER_MAX_TOKENS = 8192
 
 # Rótulos de estado do Tema (ADR-0047 §3) — a lista e o detalhe usam os mesmos.
 _STATE_LABELS: dict[str, str] = {
@@ -241,29 +237,15 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
-def _sectionizer_executor(ctx: SessionContext) -> tuple[ApiExecutor, str]:
-    """Constrói o executor + prompt da persona `sectionizer` (KUBO-184, ADR-0048).
-
-    Devolve (executor, prompt) para passar a `sectionize`. Setup pode falhar
-    (persona ausente, config de API) — quem chama decide o fallback.
-    """
-    with client.connect() as db:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "sectionizer")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_SECTIONIZER_MAX_TOKENS,
-            timeout=30.0,
-        ),
-        max_attempts=1,
-    )
-    return executor, persona.prompt
-
-
-def _validated_upload(
+def _validated_upload_pending(
     file: UploadFile | None,
-) -> tuple[MaterialFormat, bytes, ParsedMaterial]:
-    """Valida extensão → tamanho → parse; levanta `UploadRejectionError` se recusado."""
+) -> tuple[MaterialFormat, bytes]:
+    """Valida extensão → tamanho; levanta `UploadRejectionError` se recusado.
+
+    Sem parse (ADR-0049 §III): o parse roda no job de ingestão do scheduler.
+    O dono perde o feedback imediato de "epub inválido", mas ganha upload
+    sem timeout de proxy — o trade-off está registrado no ADR.
+    """
     fmt = _format_of(file)
     if file is None or fmt is None:
         raise UploadRejectionError(_BAD_FORMAT)
@@ -271,41 +253,36 @@ def _validated_upload(
     data = file.file.read(limit + 1)
     if len(data) > limit:
         raise UploadRejectionError(_OVERSIZE)
-    try:
-        parsed = parse_material(data, fmt)
-    except MaterialParseError as exc:
-        raise UploadRejectionError(_PARSE_FAILED) from exc
-    return fmt, data, parsed
+    return fmt, data
 
 
-def _persist_material(
+def _persist_pending_material(
     ctx: SessionContext,
     topic: study_store.Topic,
     fmt: MaterialFormat,
     data: bytes,
-    parsed: ParsedMaterial,
-    summary: str | None,
-    sections: dict[int, list[SectionPart]] | None,
     original: str,
 ) -> study_store.Material:
-    """Grava arquivo + persiste material; levanta ConfigError/StoreError se falhar."""
+    """Grava arquivo + cria Material `pending`; levanta ConfigError/StoreError se falhar.
+
+    Zero LLM no request (ADR-0049 §III): o processamento (parse + sumário +
+    sectionizer) roda no job `study_ingest` do scheduler. O título vem do
+    nome do arquivo — o scheduler pode refiná-lo após o parse.
+    """
     directory = _materials_dir()  # levanta ConfigError se faltar config
     path = _save_upload(directory, ctx, fmt, data)
     try:
         with client.connect_rw() as db:
-            return study_store.create_material(
+            return study_store.create_pending_material(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 topic_id=topic.id,
-                title=parsed.title or original or "Material sem título",
+                title=Path(original).stem or original or "Material sem título",
                 fmt=fmt,
                 original_filename=original,
                 file_path=str(path),
                 size_bytes=len(data),
-                chapters=parsed.chapters,
-                sections=sections,
-                summary=summary,
             )
     except (ConfigError, StoreError):
         path.unlink(missing_ok=True)
@@ -511,17 +488,12 @@ def _process_uploads(
 ) -> tuple[int, list[str]]:
     """Processa cada arquivo do lote; devolve (criados, rejeições).
 
-    Arquivo inválido (formato/tamanho/parse) é pulado com motivo, não aborta o lote.
+    Arquivo inválido (formato/tamanho) é pulado com motivo, não aborta o lote.
     Respeita o limite: para de criar quando atinge `limit - existing`.
+
+    Zero LLM no request (ADR-0049 §III): cada arquivo vira Material `pending`;
+    o job `study_ingest` do scheduler faz parse + sumário + sectionizer.
     """
-    summarizer = _summarizer(ctx)
-    # Sectionizer setup: pode falhar (persona ausente, config de API) — fallback.
-    sectionizer_executor: tuple[ApiExecutor, str] | None
-    try:
-        sectionizer_executor = _sectionizer_executor(ctx)
-    except (ConfigError, StoreError, MembershipRequiredError):
-        _log.warning("study.upload.sectionizer_setup_failed", exc_info=True)
-        sectionizer_executor = None
     created = 0
     rejections: list[str] = []
     for upload in uploads:
@@ -529,26 +501,17 @@ def _process_uploads(
             rejections.append(_OVER_LIMIT)
             break
         try:
-            fmt, data, parsed = _validated_upload(upload)
+            fmt, data = _validated_upload_pending(upload)
         except UploadRejectionError as exc:
             rejections.append(str(exc))
             continue
-        summary = summarizer.generate(parsed)
-        # Sectionização síncrona (ADR-0048): 1 chamada LLM por capítulo.
-        # Falha vira fallback (1 section por capítulo) dentro de `sectionize`.
-        sections_map: dict[int, list[SectionPart]] | None = None
-        if sectionizer_executor is not None:
-            executor, prompt = sectionizer_executor
-            sections_map = sectionize(executor=executor, prompt=prompt, chapters=parsed.chapters)
         original = Path(upload.filename or "").name if upload is not None else ""
         try:
-            material = _persist_material(
-                ctx, topic, fmt, data, parsed, summary, sections_map, original
-            )
+            material = _persist_pending_material(ctx, topic, fmt, data, original)
         except (ConfigError, StoreError):
             rejections.append(_STORE_FAILED)
             continue
-        _log.info("study.material.uploaded", material=str(material.id))
+        _log.info("study.material.uploaded_pending", material=str(material.id))
         created += 1
     return created, rejections
 
@@ -644,6 +607,87 @@ def delete_material(
     auto = _auto_revert_if_empty(ctx, topic, key)
     if auto is not None:
         return auto
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.get("/topics/{key}/materials/partials")
+def materials_partial(
+    request: Request,
+    key: str,
+) -> Response:
+    """Devolve só a lista de Materiais (partial para polling HTMX, ADR-0049 §III).
+
+    O polling (`hx-trigger="every 5s"`) só existe no partial enquanto há
+    `pending` — quando todos estão ready/failed, o `hx-trigger` some e o
+    polling para naturalmente.
+    """
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        materials = study_store.list_materials_by_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    return templates.TemplateResponse(
+        request,
+        "study/_materials.html",
+        {
+            "topic": topic,
+            "materials": materials,
+            "csrf": csrf_token(request),
+            "topic_url": _topic_url(topic.id),
+        },
+    )
+
+
+@router.post("/topics/{key}/materials/{mkey}/retry")
+def retry_material(
+    request: Request,
+    key: str,
+    mkey: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Volta um Material `failed` para `pending` (retry manual, ADR-0049 §III).
+
+    O scheduler consome `pending` no próximo ciclo do job `study_ingest`.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+    if topic is None:
+        return _topic_missing(request, key)
+    if topic.state in ("scheduled", "running", "archived"):
+        msg = _TOPIC_ARCHIVED_READONLY if topic.state == "archived" else _TOPIC_FROZEN_MATERIAL
+        return PlainTextResponse(msg, status_code=400)
+    material_id = RecordID("material", mkey.strip())
+    try:
+        with client.connect() as db:
+            material = study_store.get_material(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
+            )
+        if material is None or material.topic != topic.id:
+            return PlainTextResponse("Material não encontrado.", status_code=404)
+        if material.status != "failed":
+            return PlainTextResponse(
+                "Só é possível tentar de novo um material que falhou.", status_code=400
+            )
+        with client.connect_rw() as db:
+            study_store.retry_material_ingest(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
+            )
+    except ConfigError:
+        _log.warning("study.write_unavailable")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except StoreError:
+        return PlainTextResponse("Material não encontrado.", status_code=404)
+    _log.info("study.material.retry", material=_log_key(mkey), topic=_log_key(key))
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
