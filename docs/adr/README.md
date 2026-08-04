@@ -56,3 +56,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0046](0046-work-context-user-profile.md) | `work_context` vive em `user_profile` e é editado em `/profile` | proposto |
 | [0047](0047-estudos-tema-container.md) | Estudos: Tema como container de N Materiais | aceito |
 | [0048](0048-sectionizer-pessoa-section-persistencia.md) | Sectionizer: particionamento de capítulos em seções + seção como átomo do plano (KUBO-184/185) | aceito |
+| [0049](0049-estudos-licao-na-ui-ingestao-background.md) | Estudos: Lição na UI, registro de estudo e ingestão de Material em background (KUBO-199) | aceito |

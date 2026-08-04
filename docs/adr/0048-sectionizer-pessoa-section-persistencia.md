@@ -96,3 +96,19 @@ caminho (planner, tutor, scheduler).
 - **Sectionizar só sob demanda (lazy)**: o plano precisa da estrutura
   de seções no momento da proposta; lazy adicionaria latência no
   planning, que é interativo.
+
+## Emendas
+
+### Emenda 1 — §6 revogado pelo ADR-0049 (2026-08-04)
+
+O §6 ("sectionização síncrona no upload") e a alternativa rejeitada
+"sectionização assíncrona (job)" caem pelo **ADR-0049 §III**. O argumento
+original — "o particionamento cabe em segundos" — era hipótese; a operação
+mostrou até 20 chamadas LLM sequenciais de 30s dentro do request de upload,
+estourando o timeout do proxy sem retomada.
+
+A ingestão (parse + sumário + sectionizer) passa a rodar num job de intervalo
+no scheduler, sobre `material.status` (`pending|ready|failed`). Tudo o mais
+deste ADR permanece: a persona `sectionizer`, o `anchor_text` derivado, a
+validação de cobertura ≥ 90%, o fallback gracioso, a tabela `material_section`
+e a seção como átomo do plano.
