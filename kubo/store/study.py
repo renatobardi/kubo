@@ -40,7 +40,11 @@ class Material:
     """Material de estudo ingerido pelo dono (epub/PDF), com o arquivo original no volume.
 
     Exclusivo a um Tema (N:1, ADR-0047): `topic` aponta para o Tema que o contém.
-    `summary` é gerado síncrono no upload (consumido por `mentor` e `planner`).
+    `summary` é gerado pelo job de ingestão (consumido por `mentor` e `planner`).
+
+    Ciclo de vida de ingestão (ADR-0049 §III): `status` é `pending` no upload,
+    vira `ready` após parse+summary+sections, ou `failed` com `error` se a
+    ingestão falhar. `ingested_at` marca o fim da ingestão bem-sucedida.
     """
 
     id: RecordID
@@ -55,6 +59,9 @@ class Material:
     chapter_count: int
     summary: str | None
     created_at: datetime
+    status: str = "ready"
+    error: str | None = None
+    ingested_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +124,9 @@ def _material_from_row(row: dict[str, Any]) -> Material:
         chapter_count=int(row["chapter_count"]),
         summary=row.get("summary"),
         created_at=_as_datetime(row["created_at"]),
+        status=row.get("status", "ready"),
+        error=row.get("error"),
+        ingested_at=_as_datetime(row["ingested_at"]) if row.get("ingested_at") else None,
     )
 
 
@@ -168,18 +178,17 @@ def create_material(
 ) -> Material:
     """Persiste material + capítulos + seções atomicamente e devolve o material.
 
-    Exclusivo a um Tema (N:1, ADR-0047): `topic_id` é obrigatório. `summary` é
-    gerado síncrono no upload (consumido por `mentor` e `planner`). `sections`
-    mapeia `chapter.seq` → lista de `SectionPart` (particionamento do
-    sectionizer, ADR-0048). `sectionize()` garante entrada para todo capítulo;
-    capítulos sem entrada no dict recebem fallback via `fallback_part`.
+    Legado (ingestão síncrona, ADR-0048 §6): cria com `status=ready`. O upload
+    novo usa `create_pending_material` + `ingest_material` (ADR-0049 §III).
+    Mantido para testes que precisam de um material já pronto sem rodar o job.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     material_id = _fresh("material")
     statements = [
         "CREATE $material SET tenant_id = $tenant, user_id = $user, topic = $topic, "
         "title = $title, fmt = $fmt, original_filename = $filename, file_path = $path, "
-        "size_bytes = $size, chapter_count = $count, summary = $summary"
+        "size_bytes = $size, chapter_count = $count, summary = $summary, "
+        "status = 'ready', ingested_at = time::now()"
     ]
     params: dict[str, Any] = {
         "material": material_id,
@@ -194,6 +203,37 @@ def create_material(
         "count": len(chapters),
         "summary": summary,
     }
+    section_idx = _append_chapters_and_sections(
+        statements, params, material_id, tenant_id, user_id, chapters, sections
+    )
+    transaction.run_transaction(db, statements, params)
+
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during creation")
+    _log.info(
+        "store.material.created",
+        material=str(material_id),
+        fmt=fmt,
+        chapters=len(chapters),
+        sections=section_idx,
+    )
+    return material
+
+
+def _append_chapters_and_sections(
+    statements: list[str],
+    params: dict[str, Any],
+    material_id: RecordID,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    chapters: Sequence[ParsedChapter],
+    sections: Mapping[int, Sequence[SectionPart]] | None,
+) -> int:
+    """Acrescenta CREATE de chapters + sections aos statements/params.
+
+    Devolve o total de sections criadas.
+    """
     section_idx = 0
     for i, chapter in enumerate(chapters):
         chapter_id = _fresh("material_chapter")
@@ -208,7 +248,6 @@ def create_material(
             f"cp{i}": chapter.part,
             f"cc{i}": chapter.content,
         }
-        # Sections do capítulo: dict entry ou fallback (1 section = capítulo inteiro).
         parts = (sections or {}).get(chapter.seq) or [fallback_part(chapter)]
         for j, part in enumerate(parts, start=1):
             statements.append(
@@ -227,19 +266,170 @@ def create_material(
                 f"sm{section_idx}": part.summary,
             }
             section_idx += 1
+    return section_idx
+
+
+def create_pending_material(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    title: str,
+    fmt: str,
+    original_filename: str,
+    file_path: str,
+    size_bytes: int,
+) -> Material:
+    """Cria um Material `pending` — arquivo gravado, ingestão pendente (ADR-0049 §III).
+
+    Zero chapters/sections/summary: esses virão do job de ingestão (`ingest_material`).
+    O upload chama isto depois de gravar o arquivo no volume; o scheduler consome
+    `list_pending_materials` e processa cada um.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    material_id = _fresh("material")
+    db.query(
+        "CREATE $material SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+        "title = $title, fmt = $fmt, original_filename = $filename, file_path = $path, "
+        "size_bytes = $size, chapter_count = 0, summary = NONE, "
+        "status = 'pending', error = NONE, ingested_at = NONE;",
+        {
+            "material": material_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "topic": topic_id,
+            "title": title,
+            "fmt": fmt,
+            "filename": original_filename,
+            "path": file_path,
+            "size": size_bytes,
+        },
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during creation")
+    _log.info("store.material.pending", material=str(material_id), fmt=fmt)
+    return material
+
+
+def ingest_material(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+    chapters: Sequence[ParsedChapter],
+    sections: Mapping[int, Sequence[SectionPart]] | None,
+    summary: str | None,
+) -> Material:
+    """Processa um Material `pending`: cria chapters + sections + summary, marca `ready`.
+
+    Idempotente: se já `ready`, remove chapters/sections antigos e recria (não
+    duplica). O scheduler chama isto após parse + sumário + sectionizer.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Limpa chapters/sections antigos (idempotência em re-ingest).
+    db.query(
+        f"DELETE FROM material_section WHERE material = $material AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    db.query(
+        f"DELETE FROM material_chapter WHERE material = $material AND {_MATERIAL_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    statements: list[str] = []
+    params: dict[str, Any] = {
+        "material": material_id,
+        "tenant": tenant_id,
+        "user": user_id,
+    }
+    section_idx = _append_chapters_and_sections(
+        statements, params, material_id, tenant_id, user_id, chapters, sections
+    )
+    statements.append(
+        "UPDATE $material SET chapter_count = $count, summary = $summary, "
+        "status = 'ready', error = NONE, ingested_at = time::now()"
+    )
+    params["count"] = len(chapters)
+    params["summary"] = summary
     transaction.run_transaction(db, statements, params)
 
     material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
     if material is None:
-        raise StoreError("material vanished during creation")
+        raise StoreError("material vanished during ingest")
     _log.info(
-        "store.material.created",
+        "store.material.ingested",
         material=str(material_id),
-        fmt=fmt,
         chapters=len(chapters),
         sections=section_idx,
     )
     return material
+
+
+def mark_material_failed(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+    error: str,
+) -> Material:
+    """Marca um Material como `failed` com motivo (ingestão falhou)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    db.query(
+        f"UPDATE $material SET status = 'failed', error = $error WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id, "error": error},
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during mark_failed")
+    _log.warning("store.material.failed", material=str(material_id), error=error)
+    return material
+
+
+def retry_material_ingest(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+) -> Material:
+    """Volta um Material `failed` para `pending` (retry manual ou backoff do scheduler)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    db.query(
+        f"UPDATE $material SET status = 'pending', error = NONE WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during retry")
+    _log.info("store.material.retry", material=str(material_id))
+    return material
+
+
+def list_pending_materials(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Material]:
+    """Lista materiais `pending` para o job de ingestão do scheduler."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM material WHERE {_MATERIAL_SCOPE} AND status = 'pending' "  # noqa: S608
+        "ORDER BY created_at ASC;",
+        {"tenant": tenant_id, "user": user_id},
+    )
+    return [_material_from_row(row) for row in rows]
+
+
+def count_ready_materials_by_topic(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, topic_id: RecordID
+) -> int:
+    """Conta materiais `ready` de um Tema — gate para chat do mentor e fechar tema."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT count() FROM material WHERE {_MATERIAL_SCOPE} AND topic = $topic "  # noqa: S608
+        "AND status = 'ready' GROUP ALL;",
+        {"tenant": tenant_id, "user": user_id, "topic": topic_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
 
 
 def list_materials(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Material]:
