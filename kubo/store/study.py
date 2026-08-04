@@ -145,7 +145,7 @@ def _section_from_row(row: dict[str, Any], *, chapter_seq: int = 0) -> MaterialS
         seq=int(row["seq"]),
         title=row["title"],
         anchor_text=row.get("anchor_text", ""),
-        content=row["content"],
+        content=row.get("content", ""),
         summary=row.get("summary", ""),
         chapter_seq=chapter_seq,
     )

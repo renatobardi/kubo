@@ -110,14 +110,32 @@
            ondragover="event.preventDefault(); this.classList.add('border-primary','bg-primary/5')"
            ondragleave="this.classList.remove('border-primary','bg-primary/5')"
            ondrop="event.preventDefault(); this.classList.remove('border-primary','bg-primary/5'); const f=document.getElementById('file-input'); f.files=event.dataTransfer.files; f.form.requestSubmit();">
-        <p class="text-sm text-muted-foreground">Arraste arquivos aqui ou clique para selecionar</p>
+        <p id="dropzone-text" class="text-sm text-muted-foreground">Arraste arquivos aqui ou clique para selecionar</p>
         <p class="text-xs text-muted-foreground">epub ou PDF · até {{ max_materials }} materiais</p>
         <label for="file-input" class="sr-only">Selecionar arquivos epub ou PDF</label>
         <input id="file-input" type="file" name="file" accept=".epub,.pdf" multiple class="hidden"
                onchange="this.form.requestSubmit()">
         <button type="submit" class="hidden">Enviar</button>
       </div>
+      <div id="dropzone-loading" class="mt-3 hidden items-center gap-2 text-sm text-muted-foreground">
+        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        <span>Enviando e processando material…</span>
+      </div>
     </form>
+    <script>
+    (function() {
+      var form = document.getElementById('dropzone-form');
+      var dz = document.getElementById('dropzone');
+      var loading = document.getElementById('dropzone-loading');
+      var dzText = document.getElementById('dropzone-text');
+      form.addEventListener('submit', function() {
+        dz.classList.add('opacity-50', 'pointer-events-none');
+        dzText.textContent = 'Processando…';
+        loading.classList.remove('hidden');
+        loading.classList.add('flex');
+      });
+    })();
+    </script>
   </section>
 
   {# Chat com mentor (KUBO-163): só em draft. Desabilitado até ≥1 Material. #}
@@ -359,14 +377,35 @@
   <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
     <h2 class="text-sm font-medium">Fechar tema</h2>
     <p class="mt-1 text-xs text-muted-foreground">Fecha o rascunho e o planner propõe um plano de estudo com base nos materiais e na conversa com o mentor.</p>
-    <form method="post" action="{{ topic_url }}/close" class="mt-3"
-          onsubmit="return confirm('Fechar o tema e gerar o plano? Não será possível adicionar mais materiais.')">
+    <form id="close-form" method="post" action="{{ topic_url }}/close" class="mt-3">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button type="submit"
-              class="h-9 rounded-4xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90">
-        Fechar tema e gerar plano
+      <button id="close-btn" type="submit"
+              class="h-9 rounded-4xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
+        <span id="close-btn-text">Fechar tema e gerar plano</span>
+        <span id="close-btn-spinner" class="hidden inline-flex items-center gap-2">
+          <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          Gerando plano…
+        </span>
       </button>
     </form>
+    <script>
+    (function() {
+      var form = document.getElementById('close-form');
+      var btn = document.getElementById('close-btn');
+      var btnText = document.getElementById('close-btn-text');
+      var spinner = document.getElementById('close-btn-spinner');
+      form.addEventListener('submit', function(e) {
+        if (!confirm('Fechar o tema e gerar o plano? Não será possível adicionar mais materiais.')) {
+          e.preventDefault();
+          return;
+        }
+        btn.disabled = true;
+        btnText.classList.add('hidden');
+        spinner.classList.remove('hidden');
+        spinner.classList.add('inline-flex');
+      });
+    })();
+    </script>
   </section>
   {% endif %}
   {% endif %}

@@ -20,6 +20,7 @@ from kubo.store.study import (
     create_topic,
     delete_material,
     list_all_sections,
+    list_all_sections_light,
     list_materials_by_topic,
 )
 from kubo.study.parsing import ParsedChapter, SectionPart
@@ -235,3 +236,42 @@ def test_delete_material_removes_sections(db: Any, tenant_id: RecordID, user_id:
     delete_material(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
 
     assert list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid) == []
+
+
+def test_list_all_sections_light_returns_empty_content(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """list_all_sections_light não seleciona `content` — deve devolver content='' sem KeyError.
+
+    Bug KUBO-189: _section_from_row acessava row["content"] direto, mas a query light
+    não seleciona content → KeyError → 500 no close_topic.
+    """
+    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Light sections")
+    chapters = [ParsedChapter(seq=1, title="Cap 1", part=None, content="Conteúdo do cap 1.")]
+    create_material(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic.id,
+        title="Livro",
+        fmt="pdf",
+        original_filename="livro.pdf",
+        file_path="/data/livro.pdf",
+        size_bytes=1024,
+        chapters=chapters,
+        sections={
+            1: [
+                SectionPart(
+                    title="Sec 1", anchor_text="anc", content="Conteúdo 1.", summary="Sumário 1"
+                )
+            ]
+        },
+        summary="Um livro.",
+    )
+    mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+
+    sections = list_all_sections_light(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    assert len(sections) == 1
+    assert sections[0].title == "Sec 1"
+    assert sections[0].content == ""  # light = sem content
+    assert sections[0].summary == "Sumário 1"

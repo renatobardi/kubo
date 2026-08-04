@@ -226,6 +226,12 @@ planning/
 # config local do Claude Code (por maquina, nao versionada)
 .claude/settings.local.json
 
+# config de MCP local — launcher macOS-only (le o token do Keychain), nao versionada
+.mcp.json
+
+# Devin CLI — config local com tokens (nao versionada)
+.devin/mcp_config.local.json
+
 # Kubo — staging e segredos
 .env.*
 !.env.example
