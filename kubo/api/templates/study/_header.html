@@ -1,0 +1,63 @@
+{# Header do Tema: badge de estado + nome inline + menu de gestão (D1, D2).
+   Disponível em todos os estados. Nome editável exceto em archived. #}
+<section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+  <div class="flex items-center justify-between gap-3">
+    <div class="flex items-center gap-2">
+      {% include "study/_state_badge.html" %}
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {% if topic.state != "archived" %}
+      <form method="post" action="{{ topic_url }}/archive" class="inline"
+            onsubmit="return confirm('Arquivar este tema? O scheduler pausará até desarquivar.')">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+          Arquivar
+        </button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ topic_url }}/unarchive" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="rounded-4xl bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90">
+          Desarquivar
+        </button>
+      </form>
+      {% endif %}
+      <a href="{{ topic_url }}/delete"
+         class="rounded-4xl px-3 py-1 text-xs text-destructive ring-1 ring-destructive/30 transition-colors hover:bg-destructive/10">
+        Deletar
+      </a>
+    </div>
+  </div>
+</section>
+
+{# Nome editável inline — disponível em todos os estados não-arquivados (ADR-0047 §3). #}
+{% if topic.state != "archived" %}
+<section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+  <h2 class="text-sm font-medium">Nome do tema</h2>
+  <form method="post" action="{{ topic_url }}/rename" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="topic-title" class="sr-only">Nome do tema</label>
+    <input id="topic-title" type="text" name="title" value="{{ topic.title }}" required
+           class="h-9 flex-1 rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    <button type="submit"
+            class="h-9 rounded-4xl px-3 text-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted sm:w-auto">
+      Salvar nome
+    </button>
+  </form>
+</section>
+{% endif %}
+
+{# Foco/Profundidade — visíveis em todos os estados não-arquivados (D4). #}
+{% if topic.state != "archived" and (topic.focus or topic.depth) %}
+<section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+  <h2 class="text-sm font-medium">Foco e profundidade</h2>
+  <div class="mt-2 flex flex-wrap gap-3 text-sm">
+    {% if topic.focus %}
+    <span class="text-muted-foreground">Foco: <span class="font-medium text-foreground">{{ topic.focus }}</span></span>
+    {% endif %}
+    {% if topic.depth %}
+    <span class="text-muted-foreground">Profundidade: <span class="font-medium text-foreground">{{ topic.depth }}</span></span>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
