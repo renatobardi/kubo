@@ -213,6 +213,54 @@ def test_topic_detail_shows_dropzone_in_draft(
     assert "dropzone" in html.lower() or "drag" in html.lower()
 
 
+def test_topic_detail_state_badge_has_semantic_color(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Badge de estado no detalhe tem cor semântica (D2)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="running")
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_for_topic", lambda db, **kw: (None, [])
+    )
+    html = authed_client.get("/study/topics/abc123").text
+    assert "Em andamento" in html
+    # running = emerald
+    assert "bg-emerald-500/10" in html or "text-emerald-700" in html
+
+
+def test_topic_detail_includes_study_chat_js(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tela do Tema inclui study-chat.js (B12 — JS unificado)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="draft")
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_materials_by_topic",
+        lambda db, **kw: [_material()],
+    )
+    html = authed_client.get("/study/topics/abc123").text
+    assert "/static/study-chat.js" in html
+
+
+def test_topic_detail_no_inline_sse_parser_duplicates(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sem cópias inline do parser SSE (B12) — handleSSEEvent/handleMentorSSEEvent removidos."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="draft")
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_materials_by_topic",
+        lambda db, **kw: [_material()],
+    )
+    html = authed_client.get("/study/topics/abc123").text
+    # As 3 cópias inline devem desaparecer — o JS unificado está em study-chat.js.
+    assert "function handleSSEEvent" not in html
+    assert "function handleMentorSSEEvent" not in html
+
+
 # --- Upload de Material -----------------------------------------------------------------
 
 
