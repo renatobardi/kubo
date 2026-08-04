@@ -38,6 +38,8 @@
       if (!(form instanceof HTMLFormElement)) return;
       if ((form.getAttribute('method') || '').toLowerCase() !== 'post') return;
       if (form.hasAttribute('hx-post')) return;
+      // Forms com handler JS próprio (SSE chat) marcam data-no-fetch.
+      if (form.hasAttribute('data-no-fetch')) return;
       if (ev.defaultPrevented) {
         // Confirm dismissado — limpa o busy que _busy.html marcou no capture phase.
         var t = ev.submitter || form.querySelector('button, input[type=submit]');
