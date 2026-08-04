@@ -158,7 +158,13 @@ def _content(
             "Questões que o aluno errou recentemente (para a recapitulação):\n"
             + "\n".join(f"- {miss}" for miss in misses)
         )
-    parts.extend(f"## [({s.chapter_seq}, {s.seq})] {s.title}\n{s.content}" for s in sections)
+    # chapter_seq == 0 significa que o join com material_chapter falhou (capítulo
+    # deletado?): o marcador (0, seq) seria inválido para provenance (ge=1), então
+    # a seção é pulada — o tutor não deve ensinar de uma seção órfã.
+    valid = [s for s in sections if s.chapter_seq >= 1]
+    if len(valid) < len(sections):
+        _log.warning("study.tutor.orphan_sections", skipped=len(sections) - len(valid))
+    parts.extend(f"## [({s.chapter_seq}, {s.seq})] {s.title}\n{s.content}" for s in valid)
     full = "\n\n".join(parts)
     if len(full) <= _MAX_PROMPT_TEXT:
         return full

@@ -330,3 +330,27 @@ def test_short_content_is_not_truncated() -> None:
     _generate(_tutor(executor))
 
     assert _TAIL in executor.received_content[0]
+
+
+def test_orphan_sections_with_chapter_seq_zero_are_skipped() -> None:
+    """Seção com chapter_seq == 0 (join falhou) não vai ao prompt — marcador (0, seq)
+    seria inválido para provenance (ge=1), e o tutor não deve ensinar de seção órfã."""
+    from dataclasses import replace as dc_replace
+
+    executor = _FakeExecutor(output=_lesson())
+    sections = _sections(2)
+    # Primeira seção órfã (chapter_seq=0), segunda normal.
+    sections[0] = dc_replace(sections[0], chapter_seq=0)
+
+    _tutor(executor).generate(
+        entry_title="Aula 3",
+        sections=sections,
+        work_context=_WORK_CONTEXT,
+        misses=[],
+    )
+
+    content = executor.received_content[0]
+    # A seção órfã não aparece no conteúdo.
+    assert "(0, 1)" not in content
+    # A seção válida aparece.
+    assert "(1, 2)" in content
