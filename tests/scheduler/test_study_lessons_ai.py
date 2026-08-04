@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 from surrealdb import RecordID
 
-from kubo.store.study import MaterialChapter, PlanEntry, StudyPlan, Topic
+from kubo.store.study import MaterialSection, PlanEntry, StudyPlan, Topic
 
 _TENANT = RecordID("tenant", "t1")
 _USER = RecordID("user", "u1")
@@ -24,8 +24,17 @@ _ENTRY_ID = RecordID("plan_entry", "e1")
 _LESSON_ID = RecordID("lesson", "l1")
 _MATERIAL_ID = RecordID("material", "m1")
 _CHAPTER_ID = RecordID("material_chapter", "c1")
-_CHAPTER = MaterialChapter(
-    id=_CHAPTER_ID, material=_MATERIAL_ID, seq=1, title="Cap 1", part=None, content="Conteúdo"
+_SECTION_ID = RecordID("material_section", "s1")
+_SECTION = MaterialSection(
+    id=_SECTION_ID,
+    material=_MATERIAL_ID,
+    material_chapter=_CHAPTER_ID,
+    seq=1,
+    title="Seção 1",
+    anchor_text="",
+    content="Conteúdo da seção",
+    summary="Sumário",
+    chapter_seq=1,
 )
 
 
@@ -111,7 +120,7 @@ def test_lesson_job_fills_lesson_with_ai(
         scenario="Cenário",
         application="Aplicação",
         recap=None,
-        provenance=[ProvenanceItem(chapter_seq=1, quote="trecho")],
+        provenance=[ProvenanceItem(chapter_seq=1, section_seq=1, quote="trecho")],
         quiz=[
             QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
             QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
@@ -125,11 +134,11 @@ def test_lesson_job_fills_lesson_with_ai(
         lambda db, **kw: filled.append(kw["lesson_id"]),
     )
 
-    # Mocka a construção do Tutor, busca de capítulos e work_context.
+    # Mocka a construção do Tutor, busca de seções e work_context.
     monkeypatch.setattr(
         study_lessons.study_store,
-        "get_chapters_for_entry",
-        lambda db, **kw: [_CHAPTER],
+        "get_sections_for_entry",
+        lambda db, **kw: [_SECTION],
     )
     monkeypatch.setattr(
         study_lessons,
@@ -174,8 +183,8 @@ def test_lesson_job_skips_fill_when_tutor_fails(
     )
     monkeypatch.setattr(
         study_lessons.study_store,
-        "get_chapters_for_entry",
-        lambda db, **kw: [_CHAPTER],
+        "get_sections_for_entry",
+        lambda db, **kw: [_SECTION],
     )
     monkeypatch.setattr(
         study_lessons,
@@ -224,7 +233,7 @@ def test_lesson_job_retries_placeholder_lesson(
         scenario="Cenário",
         application="Aplicação",
         recap=None,
-        provenance=[ProvenanceItem(chapter_seq=1, quote="trecho")],
+        provenance=[ProvenanceItem(chapter_seq=1, section_seq=1, quote="trecho")],
         quiz=[
             QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
             QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
@@ -238,8 +247,8 @@ def test_lesson_job_retries_placeholder_lesson(
     )
     monkeypatch.setattr(
         study_lessons.study_store,
-        "get_chapters_for_entry",
-        lambda db, **kw: [_CHAPTER],
+        "get_sections_for_entry",
+        lambda db, **kw: [_SECTION],
     )
     monkeypatch.setattr(
         study_lessons,
@@ -298,7 +307,7 @@ def test_transition_job_generates_lesson_content(
         scenario="Cenário",
         application="Aplicação",
         recap=None,
-        provenance=[ProvenanceItem(chapter_seq=1, quote="trecho")],
+        provenance=[ProvenanceItem(chapter_seq=1, section_seq=1, quote="trecho")],
         quiz=[
             QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
             QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
@@ -312,8 +321,8 @@ def test_transition_job_generates_lesson_content(
     )
     monkeypatch.setattr(
         study_lessons.study_store,
-        "get_chapters_for_entry",
-        lambda db, **kw: [_CHAPTER],
+        "get_sections_for_entry",
+        lambda db, **kw: [_SECTION],
     )
     monkeypatch.setattr(
         study_lessons,
@@ -368,10 +377,10 @@ def test_transition_job_skips_fill_when_no_lesson_returned(
     assert filled == []
 
 
-def test_transition_job_skips_fill_when_chapters_empty(
+def test_transition_job_skips_fill_when_sections_empty(
     mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """get_chapters_for_entry devolve [] → lição fica como placeholder."""
+    """get_sections_for_entry devolve [] → lição fica como placeholder."""
     from kubo.scheduler import study_lessons
 
     today = date(2026, 8, 3)
@@ -398,8 +407,8 @@ def test_transition_job_skips_fill_when_chapters_empty(
     )
     monkeypatch.setattr(
         study_lessons.study_store,
-        "get_chapters_for_entry",
-        lambda db, **kw: [],  # sem capítulos
+        "get_sections_for_entry",
+        lambda db, **kw: [],  # sem seções
     )
     monkeypatch.setattr(
         study_lessons,

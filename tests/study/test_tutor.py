@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
-from kubo.store.study import MaterialChapter
+from kubo.store.study import MaterialChapter, MaterialSection
 from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem, Tutor
 
 T = TypeVar("T", bound=BaseModel)
@@ -65,6 +65,24 @@ def _chapters(count: int = 2, *, body: str = "Conteúdo do capítulo") -> list[M
     ]
 
 
+def _sections(count: int = 2, *, body: str = "Conteúdo da seção") -> list[MaterialSection]:
+    """Seções da lição, (chapter_seq=1, section_seq) 1-based; o último tem o marcador de cauda."""
+    return [
+        MaterialSection(
+            id=RecordID("material_section", f"s{i}"),
+            material=RecordID("material", "m1"),
+            material_chapter=RecordID("material_chapter", "c1"),
+            seq=i,
+            title=f"Seção {i}",
+            anchor_text="",
+            content=f"{body} {i}." + (_TAIL if i == count else ""),
+            summary=f"Sumário {i}",
+            chapter_seq=1,
+        )
+        for i in range(1, count + 1)
+    ]
+
+
 def _quiz(*, answer_index: int = 0, options: int = 3) -> list[QuizItem]:
     return [
         QuizItem(
@@ -79,7 +97,7 @@ def _quiz(*, answer_index: int = 0, options: int = 3) -> list[QuizItem]:
 
 def _provenance(count: int = 1) -> list[ProvenanceItem]:
     return [
-        ProvenanceItem(chapter_seq=i, quote=f"Trecho que originou o conceito {i}.")
+        ProvenanceItem(chapter_seq=i, section_seq=i, quote=f"Trecho que originou o conceito {i}.")
         for i in range(1, count + 1)
     ]
 
@@ -102,7 +120,7 @@ def _tutor(executor: _FakeExecutor) -> Tutor:
 def _generate(tutor: Tutor, *, misses: list[str] | None = None) -> LessonOutput | None:
     return tutor.generate(
         entry_title="Aula 3 — Filas",
-        chapters=_chapters(),
+        sections=_sections(),
         work_context=_WORK_CONTEXT,
         misses=misses or [],
     )
@@ -164,28 +182,30 @@ def test_lesson_output_requires_provenance() -> None:
         )
 
 
-def test_provenance_item_requires_chapter_seq_and_quote() -> None:
-    """Provenância sem capítulo ou sem citação não localiza o trecho — incompleta."""
+def test_provenance_item_requires_chapter_seq_section_seq_and_quote() -> None:
+    """Provenância sem capítulo, sem seção ou sem citação não localiza o trecho — incompleta."""
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=0, quote="trecho")
+        ProvenanceItem(chapter_seq=0, section_seq=1, quote="trecho")
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=1, quote="")
+        ProvenanceItem(chapter_seq=1, section_seq=0, quote="trecho")
+    with pytest.raises(ValidationError):
+        ProvenanceItem(chapter_seq=1, section_seq=1, quote="")
 
 
 def test_provenance_quote_is_capped_to_prevent_reproduction() -> None:
     """A citação é localizador, não reprodução — acima de 300 chars o modelo recusa."""
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=1, quote="x" * 301)
+        ProvenanceItem(chapter_seq=1, section_seq=1, quote="x" * 301)
 
 
-def test_chapter_seq_travels_in_the_content_for_the_tutor_to_reference() -> None:
-    """O seq do capítulo vai no conteúdo (cercado) para o LLM referenciar na provenância."""
+def test_section_pair_travels_in_the_content_for_the_tutor_to_reference() -> None:
+    """O par (chapter_seq, section_seq) vai no conteúdo (cercado) para o LLM referenciar na provenância."""
     executor = _FakeExecutor(output=_lesson())
 
     _generate(_tutor(executor))
 
-    assert "[1]" in executor.received_content[0]
-    assert "[2]" in executor.received_content[0]
+    assert "(1, 1)" in executor.received_content[0]
+    assert "(1, 2)" in executor.received_content[0]
 
 
 # --- Geração ---------------------------------------------------------------------------
@@ -202,14 +222,14 @@ def test_generate_returns_the_validated_lesson() -> None:
     assert len(lesson.quiz) == 2
 
 
-def test_chapter_text_travels_as_untrusted_content() -> None:
-    """O texto do material vai no `untrusted_content` — nunca na instrução."""
+def test_section_text_travels_as_untrusted_content() -> None:
+    """O texto da seção vai no `untrusted_content` — nunca na instrução."""
     executor = _FakeExecutor(output=_lesson())
 
     _generate(_tutor(executor))
 
-    assert "Conteúdo do capítulo 1." in executor.received_content[0]
-    assert "Conteúdo do capítulo 1." not in executor.received_instructions[0]
+    assert "Conteúdo da seção 1." in executor.received_content[0]
+    assert "Conteúdo da seção 1." not in executor.received_instructions[0]
 
 
 def test_owner_work_context_travels_in_the_instruction() -> None:
@@ -306,7 +326,7 @@ def test_chapter_text_is_capped_before_reaching_the_provider(
 
     tutor.generate(
         entry_title="Aula 3",
-        chapters=_chapters(4, body="x" * 200),
+        sections=_sections(4, body="x" * 200),
         work_context=_WORK_CONTEXT,
         misses=[],
     )
