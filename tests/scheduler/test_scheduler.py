@@ -238,7 +238,8 @@ def test_build_scheduler_creates_yaml_digest_and_poll_jobs() -> None:
     scheduler = build_scheduler(load_schedules(), _scheduler_settings())
 
     assert isinstance(scheduler, BlockingScheduler)
-    assert len(scheduler.get_jobs()) == 7
+    # 2 YAML + digest + digest_poll + 3 study (transition, lesson, ingest)
+    assert len(scheduler.get_jobs()) == 8
 
 
 def test_build_scheduler_rejects_unknown_worker() -> None:
