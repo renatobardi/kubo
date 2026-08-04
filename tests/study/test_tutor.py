@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
-from kubo.store.study import MaterialChapter, MaterialSection
+from kubo.store.study import MaterialSection
 from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem, Tutor
 
 T = TypeVar("T", bound=BaseModel)
@@ -48,21 +48,6 @@ class _FakeExecutor:
             raise self._error
         assert self._output is not None, "fake sem output nem erro"
         return cast(T, self._output)
-
-
-def _chapters(count: int = 2, *, body: str = "Conteúdo do capítulo") -> list[MaterialChapter]:
-    """Capítulos da lição, `seq` 1-based; o último termina no marcador de cauda."""
-    return [
-        MaterialChapter(
-            id=RecordID("material_chapter", f"c{i}"),
-            material=RecordID("material", "m1"),
-            seq=i,
-            title=f"Capítulo {i}",
-            part=None,
-            content=f"{body} {i}." + (_TAIL if i == count else ""),
-        )
-        for i in range(1, count + 1)
-    ]
 
 
 def _sections(count: int = 2, *, body: str = "Conteúdo da seção") -> list[MaterialSection]:
@@ -96,8 +81,10 @@ def _quiz(*, answer_index: int = 0, options: int = 3) -> list[QuizItem]:
 
 
 def _provenance(count: int = 1) -> list[ProvenanceItem]:
+    """Provenância com pares (chapter_seq, section_seq) distintos — exercita
+    o caso de múltiplas seções no mesmo capítulo (1,1), (1,2), (1,3)..."""
     return [
-        ProvenanceItem(chapter_seq=i, section_seq=i, quote=f"Trecho que originou o conceito {i}.")
+        ProvenanceItem(chapter_seq=1, section_seq=i, quote=f"Trecho que originou o conceito {i}.")
         for i in range(1, count + 1)
     ]
 
@@ -311,7 +298,7 @@ def test_generate_returns_none_when_executor_fails(error: Exception) -> None:
     assert _generate(_tutor(_FakeExecutor(error=error))) is None
 
 
-def test_chapter_text_is_capped_before_reaching_the_provider(
+def test_section_text_is_capped_before_reaching_the_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """O conteúdo enviado respeita `_MAX_PROMPT_TEXT` e o corte é NO FIM.

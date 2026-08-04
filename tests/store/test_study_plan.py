@@ -563,11 +563,12 @@ def test_get_sections_for_entry_returns_sections_in_order(
 def test_get_chapters_for_entry_derives_from_sections(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """get_chapters_for_entry (compatibilidade) deriva capítulos das seções via FK.
+    """get_chapters_for_entry (shim de compatibilidade) deriva capítulos das seções via FK.
 
-    O scheduler/tutor continuam chamando get_chapters_for_entry — ele busca os
-    material_chapter referenciados pelas seções do plan_entry (via FK
-    material_chapter), deduplicando capítulos que aparecem em múltiplas seções.
+    O scheduler/tutor agora chamam get_sections_for_entry (KUBO-189); este shim
+    permanece para o tutor legacy e testes. Ele busca os material_chapter
+    referenciados pelas seções do plan_entry (via FK material_chapter),
+    deduplicando capítulos que aparecem em múltiplas seções.
     """
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
     sids = _section_ids(db, tenant_id, user_id, material_id)
