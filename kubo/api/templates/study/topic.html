@@ -450,22 +450,22 @@
         <div class="flex-1">
           <span>{{ entry.title }}</span>
           <div class="mt-1 flex flex-wrap gap-1">
-            {% for ch_id in entry.chapters %}
-            <span class="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-xs text-muted-foreground">
-              {{ chapter_titles.get(ch_id|string, ch_id|string) }}
-              {% if entry.chapters|length > 1 and topic.state == "planning" %}
-              <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/remove-chapter" class="inline">
+            {% for sec_id in entry.sections %}
+            <div class="inline-flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-xs text-muted-foreground">
+              {{ section_titles.get(sec_id|string, sec_id|string) }}
+              {% if entry.sections|length > 1 and topic.state == "planning" %}
+              <form method="post" action="{{ topic_url }}/plan/entries/{{ entry.id.id|default(entry.id|string) }}/remove-section" class="inline">
                 <input type="hidden" name="csrf" value="{{ csrf }}">
-                <input type="hidden" name="chapter_id" value="{{ ch_id }}">
+                <input type="hidden" name="section_id" value="{{ sec_id }}">
                 <button type="submit" class="text-foreground/40 hover:text-foreground"
-                        aria-label="Remover capítulo '{{ chapter_titles.get(ch_id|string, ch_id|string) }}' da lição '{{ entry.title }}'">×</button>
+                        aria-label="Remover seção '{{ section_titles.get(sec_id|string, sec_id|string) }}' da lição '{{ entry.title }}'">×</button>
               </form>
               {% endif %}
-            </span>
+            </div>
             {% endfor %}
           </div>
         </div>
-        <span class="text-xs text-muted-foreground">{{ entry.chapters|length }} capítulo(s)</span>
+        <span class="text-xs text-muted-foreground">{{ entry.sections|length }} seção(ões)</span>
       </li>
       {% endfor %}
     </ol>

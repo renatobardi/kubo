@@ -71,6 +71,36 @@ class ParsedChapter:
     part: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class SectionPart:
+    """Uma seção tópica de um capítulo (KUBO-184, ADR-0048).
+
+    Produzida pelo sectionizer no upload. `anchor_text` é derivado em código
+    dos primeiros chars de `content` (não pedido ao LLM). Vive em `parsing.py`
+    (não em `sectionizer.py`) para que a store dependa de parsing, não do
+    módulo da persona LLM.
+    """
+
+    title: str
+    anchor_text: str
+    content: str
+    summary: str
+
+
+def fallback_part(chapter: ParsedChapter) -> SectionPart:
+    """1 seção = capítulo inteiro (mesmo fallback do ADR-0048 §6).
+
+    Ponto único de verdade — a store e o sectionizer reusão este helper.
+    Vive em `parsing.py` para que a store não dependa do módulo da persona LLM.
+    """
+    return SectionPart(
+        title=chapter.title,
+        anchor_text="",
+        content=chapter.content,
+        summary=chapter.title,
+    )
+
+
 @dataclass(frozen=True)
 class ParsedMaterial:
     """Resultado do parse: título do material (quando o formato oferece) + capítulos."""

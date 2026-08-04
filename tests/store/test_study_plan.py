@@ -1,8 +1,12 @@
-"""KUBO-164 — Store de Plano: transição de estado, proposta, cadência.
+"""KUBO-164/185 — Store de Plano: transição de estado, proposta, cadência.
 
 Integração (SurrealDB real). Ao fechar um Tema, o planner propõe um Plano
 que é persistido em `study_plan` (status='proposed') + `plan_entry` (lições).
 A cadência (weekdays) é definida pelo dono e recalcula a data-alvo.
+
+KUBO-185: o átomo do plano é a seção (não o capítulo). `plan_entry.sections`
+é uma lista de RecordIDs de `material_section`. A compatibilidade
+`get_chapters_for_entry` deriva capítulos das seções (via FK `material_chapter`).
 """
 
 from __future__ import annotations
@@ -23,10 +27,13 @@ from kubo.store.study import (
     create_material,
     create_topic,
     deactivate_plan,
+    get_chapters_for_entry,
     get_plan_for_topic,
+    get_sections_for_entry,
     get_topic,
+    list_all_sections,
     list_topics_by_state,
-    remove_chapter_from_entry,
+    remove_section_from_entry,
     replace_plan_entries,
     save_plan_proposal,
     set_plan_cadence,
@@ -34,7 +41,7 @@ from kubo.store.study import (
     swap_plan_entries,
     transition_to_running,
 )
-from kubo.study.parsing import ParsedChapter
+from kubo.study.parsing import ParsedChapter, SectionPart
 
 pytestmark = pytest.mark.integration
 
@@ -60,11 +67,36 @@ def _chapters(n: int = 3) -> list[ParsedChapter]:
     ]
 
 
+def _sections_for(chapter: ParsedChapter) -> list[SectionPart]:
+    """2 seções por capítulo — padrão do sectionizer."""
+    content = chapter.content
+    half = len(content) // 2
+    return [
+        SectionPart(
+            title=f"{chapter.title} — Parte A",
+            anchor_text=content[:half],
+            content=content[:half],
+            summary=f"Sumário A de {chapter.title}",
+        ),
+        SectionPart(
+            title=f"{chapter.title} — Parte B",
+            anchor_text=content[half:],
+            content=content[half:],
+            summary=f"Sumário B de {chapter.title}",
+        ),
+    ]
+
+
+def _sections_map(chapters: list[ParsedChapter]) -> dict[int, list[SectionPart]]:
+    return {ch.seq: _sections_for(ch) for ch in chapters}
+
+
 def _topic_with_material(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> tuple[RecordID, RecordID]:
-    """Cria um tema com 1 material e 3 capítulos; retorna (topic_id, material_id)."""
+    """Cria um tema com 1 material, 3 capítulos e 6 seções (2 por capítulo)."""
     topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    chapters = _chapters()
     material = create_material(
         db,
         tenant_id=tenant_id,
@@ -75,10 +107,19 @@ def _topic_with_material(
         original_filename="livro.epub",
         file_path="/data/livro.epub",
         size_bytes=1024,
-        chapters=_chapters(),
+        chapters=chapters,
+        sections=_sections_map(chapters),
         summary="Um livro sobre agentes.",
     )
     return topic.id, material.id
+
+
+def _section_ids(
+    db: Any, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
+) -> list[RecordID]:
+    """Busca os RecordIDs das seções do material, na ordem (chapter_seq, section_seq)."""
+    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    return [s.id for s in sections]
 
 
 # --- set_topic_state --------------------------------------------------------------------
@@ -116,12 +157,7 @@ def test_save_plan_proposal_creates_plan_and_entries(
 ) -> None:
     """Proposta persistida cria study_plan (proposed) + plan_entry por lição."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    # Busca os RecordIDs dos capítulos.
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
         db,
@@ -129,8 +165,8 @@ def test_save_plan_proposal_creates_plan_and_entries(
         user_id=user_id,
         topic_id=topic_id,
         entries=[
-            ("Lição 1: Intro", [chapter_ids[0], chapter_ids[1]]),
-            ("Lição 2: Avanço", [chapter_ids[2]]),
+            ("Lição 1: Intro", [sids[0], sids[1], sids[2]]),
+            ("Lição 2: Avanço", [sids[3], sids[4], sids[5]]),
         ],
     )
 
@@ -139,10 +175,10 @@ def test_save_plan_proposal_creates_plan_and_entries(
     assert len(entries) == 2
     assert entries[0].seq == 1
     assert entries[0].title == "Lição 1: Intro"
-    assert entries[0].chapters == [chapter_ids[0], chapter_ids[1]]
+    assert entries[0].sections == [sids[0], sids[1], sids[2]]
     assert entries[1].seq == 2
     assert entries[1].title == "Lição 2: Avanço"
-    assert entries[1].chapters == [chapter_ids[2]]
+    assert entries[1].sections == [sids[3], sids[4], sids[5]]
 
 
 def test_get_plan_for_topic_returns_none_if_no_plan(
@@ -160,18 +196,14 @@ def test_get_plan_for_topic_returns_saved_plan(
 ) -> None:
     """get_plan_for_topic devolve o plano e as lições persistidas."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Lição única", chapter_ids)],
+        entries=[("Lição única", sids)],
     )
 
     plan, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
@@ -179,7 +211,7 @@ def test_get_plan_for_topic_returns_saved_plan(
     assert plan.status == "proposed"
     assert len(entries) == 1
     assert entries[0].title == "Lição única"
-    assert entries[0].chapters == chapter_ids
+    assert entries[0].sections == sids
 
 
 def test_save_plan_proposal_replaces_existing(
@@ -187,25 +219,21 @@ def test_save_plan_proposal_replaces_existing(
 ) -> None:
     """Salvar nova proposta substitui o plano anterior (1 plano por tema, UNIQUE)."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Velha", chapter_ids)],
+        entries=[("Velha", sids)],
     )
     save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Nova 1", [chapter_ids[0]]), ("Nova 2", [chapter_ids[1], chapter_ids[2]])],
+        entries=[("Nova 1", [sids[0]]), ("Nova 2", [sids[1], sids[2]])],
     )
 
     plan, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
@@ -223,18 +251,14 @@ def test_set_plan_cadence_updates_weekdays_and_target_date(
 ) -> None:
     """Definir cadência atualiza weekdays e calcula data-alvo."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]]), ("L3", [chapter_ids[2]])],
+        entries=[("L1", [sids[0]]), ("L2", [sids[1]]), ("L3", [sids[2]])],
     )
 
     set_plan_cadence(
@@ -258,18 +282,14 @@ def test_set_plan_cadence_rejects_invalid_weekday(
 ) -> None:
     """Dia inválido é ValueError (não ignorado em silêncio)."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", chapter_ids)],
+        entries=[("L1", sids)],
     )
 
     with pytest.raises(ValueError, match="inválido"):
@@ -282,24 +302,20 @@ def test_set_plan_cadence_rejects_invalid_weekday(
         )
 
 
-# --- KUBO-165: edição manual do plano (swap, remove chapter, replace) --------------------
+# --- KUBO-165: edição manual do plano (swap, remove section, replace) --------------------
 
 
 def test_swap_plan_entries_swaps_seqs(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Swap de duas entries troca os seqs atomicamente."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]]), ("L3", [chapter_ids[2]])],
+        entries=[("L1", [sids[0]]), ("L2", [sids[1]]), ("L3", [sids[2]])],
     )
 
     swap_plan_entries(
@@ -323,17 +339,13 @@ def test_swap_plan_entries_swaps_seqs(db: Any, tenant_id: RecordID, user_id: Rec
 def test_swap_plan_entries_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Outro membro não pode swap de plano alheio."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+        entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
     other = tenancy.create_user(db, firebase_uid="other-swap-uid")
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
@@ -349,98 +361,86 @@ def test_swap_plan_entries_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
         )
 
 
-def test_remove_chapter_from_entry_updates_chapters(
+def test_remove_section_from_entry_updates_sections(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """Remover capítulo de uma lição atualiza a lista de chapters."""
+    """Remover seção de uma lição atualiza a lista de sections."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0], chapter_ids[1]]), ("L2", [chapter_ids[2]])],
+        entries=[("L1", [sids[0], sids[1]]), ("L2", [sids[2]])],
     )
 
-    ok = remove_chapter_from_entry(
+    ok = remove_section_from_entry(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         entry_id=entries[0].id,
-        chapter_id=chapter_ids[1],
+        section_id=sids[1],
     )
 
     assert ok is True
     _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
-    assert updated[0].chapters == [chapter_ids[0]]
-    assert updated[1].chapters == [chapter_ids[2]]
+    assert updated[0].sections == [sids[0]]
+    assert updated[1].sections == [sids[2]]
 
 
-def test_remove_chapter_from_entry_rejects_last_chapter(
+def test_remove_section_from_entry_rejects_last_section(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """Remover o último capítulo de uma lição é rejeitado (não esvazia)."""
+    """Remover a última seção de uma lição é rejeitado (não esvazia)."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]])],
+        entries=[("L1", [sids[0]])],
     )
 
-    ok = remove_chapter_from_entry(
+    ok = remove_section_from_entry(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         entry_id=entries[0].id,
-        chapter_id=chapter_ids[0],
+        section_id=sids[0],
     )
 
     assert ok is False
     _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
-    assert updated[0].chapters == [chapter_ids[0]]
+    assert updated[0].sections == [sids[0]]
 
 
-def test_remove_chapter_from_entry_scoped_to_owner(
+def test_remove_section_from_entry_scoped_to_owner(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """Outro membro não pode remover capítulo de plano alheio."""
+    """Outro membro não pode remover seção de plano alheio."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0], chapter_ids[1]])],
+        entries=[("L1", [sids[0], sids[1]])],
     )
-    other = tenancy.create_user(db, firebase_uid="other-rm-ch-uid")
+    other = tenancy.create_user(db, firebase_uid="other-rm-sec-uid")
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
 
     with pytest.raises(StoreError):
-        remove_chapter_from_entry(
+        remove_section_from_entry(
             db,
             tenant_id=tenant_id,
             user_id=other.id,
             entry_id=entries[0].id,
-            chapter_id=chapter_ids[0],
+            section_id=sids[0],
         )
 
 
@@ -449,18 +449,14 @@ def test_replace_plan_entries_preserves_cadence(
 ) -> None:
     """replace_plan_entries preserva weekdays/target_date do plano existente."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+        entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
     set_plan_cadence(
         db,
@@ -476,7 +472,7 @@ def test_replace_plan_entries_preserves_cadence(
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Tudo junto", chapter_ids)],
+        entries=[("Tudo junto", sids)],
     )
 
     updated_plan, updated_entries = get_plan_for_topic(
@@ -500,18 +496,14 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
     Sem cadência, target_date fica None (sem data-alvo para calcular).
     """
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    rows = db.query(
-        "SELECT * FROM material_chapter WHERE material = $m ORDER BY seq;",
-        {"m": material_id},
-    )
-    chapter_ids = [row["id"] for row in rows]
+    sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("L1", [chapter_ids[0]]), ("L2", [chapter_ids[1]])],
+        entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
     # Persiste um target_date não-nulo manualmente, mantendo weekdays=[].
     # Isso garante que o teste falha se replace_plan_entries parar de limpar
@@ -529,7 +521,7 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Tudo junto", chapter_ids)],
+        entries=[("Tudo junto", sids)],
     )
 
     updated_plan, updated_entries = get_plan_for_topic(
@@ -540,6 +532,80 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
     assert updated_plan.target_date is None
     assert len(updated_entries) == 1
     assert updated_entries[0].title == "Tudo junto"
+
+
+# --- KUBO-185: get_sections_for_entry + get_chapters_for_entry (compatibility) -----------
+
+
+def test_get_sections_for_entry_returns_sections_in_order(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """get_sections_for_entry devolve as MaterialSection na ordem do plan_entry."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    sids = _section_ids(db, tenant_id, user_id, material_id)
+
+    _, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [sids[0], sids[1], sids[2]])],
+    )
+
+    sections = get_sections_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
+    assert len(sections) == 3
+    assert [str(s.id) for s in sections] == [str(sids[0]), str(sids[1]), str(sids[2])]
+    # Cada seção tem título e sumário.
+    assert sections[0].title
+    assert sections[0].summary
+
+
+def test_get_chapters_for_entry_derives_from_sections(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """get_chapters_for_entry (compatibilidade) deriva capítulos das seções via FK.
+
+    O scheduler/tutor continuam chamando get_chapters_for_entry — ele busca os
+    material_chapter referenciados pelas seções do plan_entry (via FK
+    material_chapter), deduplicando capítulos que aparecem em múltiplas seções.
+    """
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    sids = _section_ids(db, tenant_id, user_id, material_id)
+
+    _, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [sids[0], sids[1]])],  # 2 seções do mesmo capítulo (capítulo 1)
+    )
+
+    chapters = get_chapters_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
+    # 2 seções do capítulo 1 → 1 capítulo deduplicado.
+    assert len(chapters) == 1
+    assert chapters[0].title == "Capítulo 1"
+    assert chapters[0].content == "Conteúdo 1."
+
+
+def test_get_chapters_for_entry_deduplicates_across_sections(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Múltiplas seções do mesmo capítulo → 1 capítulo na lista (deduplicado)."""
+    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    sids = _section_ids(db, tenant_id, user_id, material_id)
+
+    _, entries = save_plan_proposal(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        topic_id=topic_id,
+        entries=[("L1", [sids[0], sids[1], sids[2], sids[3]])],  # 2 capítulos, 4 seções
+    )
+
+    chapters = get_chapters_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
+    # 4 seções de 2 capítulos → 2 capítulos deduplicados.
+    assert len(chapters) == 2
+    assert {ch.title for ch in chapters} == {"Capítulo 1", "Capítulo 2"}
 
 
 # --- KUBO-165: transição planning → draft -----------------------------------------------
@@ -567,13 +633,14 @@ def _plan_with_entries(
     Retorna (topic_id, plan_id).
     """
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
+    sids = _section_ids(db, tenant_id, user_id, material_id)
     set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="planning")
     plan, entries = save_plan_proposal(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         topic_id=topic_id,
-        entries=[("Lição 1", [RecordID("material_chapter", "c1")])],
+        entries=[("Lição 1", [sids[0]])],
     )
     set_plan_cadence(
         db, tenant_id=tenant_id, user_id=user_id, plan_id=plan.id, weekdays=["mon", "wed"]

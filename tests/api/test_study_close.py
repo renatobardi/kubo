@@ -80,7 +80,7 @@ def _entries() -> list[PlanEntry]:
             user_id=_USER,
             seq=1,
             title="Lição 1",
-            chapters=[RecordID("material_chapter", "c1")],
+            sections=[RecordID("material_section", "s1")],
             created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
         ),
     ]
@@ -128,12 +128,14 @@ def stub_close_store(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     # Planner mockado: devolve proposta fixa.
-    def _fake_propose(self: Any, chapters: Any, **kw: Any) -> PlanProposal:
-        return PlanProposal(lessons=[PlanLesson(title="Lição 1", chapter_seqs=[1, 2, 3])])
+    def _fake_propose(self: Any, sections: Any, **kw: Any) -> PlanProposal:
+        return PlanProposal(
+            lessons=[PlanLesson(title="Lição 1", sections=[(1, 1), (1, 2), (2, 1)])]
+        )
 
     monkeypatch.setattr("kubo.study.planner.Planner.propose", _fake_propose)
 
-    # list_chapters: devolve capítulos fake.
+    # list_chapters: devolve capítulos fake (para _collect_all_sections).
     from kubo.store.study import MaterialChapter
 
     def _fake_list_chapters(db: Any, **kw: Any) -> list[MaterialChapter]:
@@ -151,6 +153,29 @@ def stub_close_store(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_all_chapters_light", _fake_list_chapters
+    )
+
+    # list_all_sections: devolve seções fake com chapter_seq global.
+    from kubo.store.study import MaterialSection
+
+    def _fake_list_sections(db: Any, **kw: Any) -> list[MaterialSection]:
+        return [
+            MaterialSection(
+                id=RecordID("material_section", f"s{i}"),
+                material=_MATERIAL_ID,
+                material_chapter=RecordID("material_chapter", f"c{(i + 1) // 2}"),
+                seq=(i % 2) or 2,
+                title=f"Seção {i}",
+                anchor_text="",
+                content="",
+                summary=f"Sumário {i}",
+                chapter_seq=(i + 1) // 2,
+            )
+            for i in range(1, 7)
+        ]
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_sections_light", _fake_list_sections
     )
 
 
@@ -223,7 +248,7 @@ def test_close_topic_falls_back_to_mechanical_when_planner_fails(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Planner que devolve None cai no mechanical_proposal (não trava a tela)."""
-    monkeypatch.setattr("kubo.study.planner.Planner.propose", lambda self, chapters, **kw: None)
+    monkeypatch.setattr("kubo.study.planner.Planner.propose", lambda self, sections, **kw: None)
     resp = authed_client.post(
         "/study/topics/abc123/close",
         data={"csrf": _csrf(authed_client)},
@@ -267,4 +292,4 @@ def test_topic_detail_planning_shows_plan(
     html = authed_client.get("/study/topics/abc123").text
     assert "Plano de estudo" in html
     assert "Lição 1" in html
-    assert "1 capítulo(s)" in html
+    assert "Seção 1" in html  # section title rendered

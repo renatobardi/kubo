@@ -43,3 +43,8 @@ def test_mentor_usa_claude_haiku() -> None:
 def test_summarizer_usa_claude_haiku() -> None:
     """A persona `summarizer` (sumário de Material no upload, KUBO-162) nasce no Haiku 4.5."""
     assert _persona("summarizer")["model"] == "anthropic/claude-haiku-4-5"
+
+
+def test_sectionizer_usa_claude_haiku() -> None:
+    """A persona `sectionizer` (particionar capítulo em seções, KUBO-184) nasce no Haiku 4.5."""
+    assert _persona("sectionizer")["model"] == "anthropic/claude-haiku-4-5"

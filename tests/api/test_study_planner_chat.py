@@ -80,7 +80,7 @@ def _entries() -> list[PlanEntry]:
             user_id=_USER,
             seq=1,
             title="Lição 1",
-            chapters=[RecordID("material_chapter", "c1")],
+            sections=[RecordID("material_section", "s1")],
             created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
         ),
         PlanEntry(
@@ -90,7 +90,7 @@ def _entries() -> list[PlanEntry]:
             user_id=_USER,
             seq=2,
             title="Lição 2",
-            chapters=[RecordID("material_chapter", "c2"), RecordID("material_chapter", "c3")],
+            sections=[RecordID("material_section", "s2"), RecordID("material_section", "s3")],
             created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
         ),
     ]
@@ -142,7 +142,7 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
         "kubo.api.routes.study.study_store.swap_plan_entries", lambda db, **kw: None
     )
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.remove_chapter_from_entry", lambda db, **kw: True
+        "kubo.api.routes.study.study_store.remove_section_from_entry", lambda db, **kw: True
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_plan_cadence", lambda db, **kw: None)
     monkeypatch.setattr(
@@ -155,13 +155,18 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     # Planner.stream_chat mockado: devolve chunks que formam texto + bloco JSON.
     def _fake_stream_chat(self: Any, executor: Any, **kw: Any) -> Any:
         yield "Juntei as lições 1 e 2."
-        yield '\n\n```json\n{"lessons": [{"title": "Tudo junto", "chapter_seqs": [1, 2, 3]}]}\n```'
+        yield (
+            '\n\n```json\n{"lessons": [{"title": "Tudo junto", '
+            '"sections": [[1, 1], [1, 2], [2, 1]]}]}\n```'
+        )
 
     monkeypatch.setattr("kubo.study.planner.Planner.stream_chat", _fake_stream_chat)
 
     # Planner.propose mockado para repropose.
-    def _fake_propose(self: Any, chapters: Any, **kw: Any) -> PlanProposal:
-        return PlanProposal(lessons=[PlanLesson(title="Lição 1", chapter_seqs=[1, 2, 3])])
+    def _fake_propose(self: Any, sections: Any, **kw: Any) -> PlanProposal:
+        return PlanProposal(
+            lessons=[PlanLesson(title="Lição 1", sections=[(1, 1), (1, 2), (2, 1)])]
+        )
 
     monkeypatch.setattr("kubo.study.planner.Planner.propose", _fake_propose)
 
@@ -183,6 +188,29 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_all_chapters_light", _fake_list_chapters
+    )
+
+    # list_all_sections: devolve seções fake com chapter_seq global.
+    from kubo.store.study import MaterialSection
+
+    def _fake_list_sections(db: Any, **kw: Any) -> list[MaterialSection]:
+        return [
+            MaterialSection(
+                id=RecordID("material_section", f"s{i}"),
+                material=_MATERIAL_ID,
+                material_chapter=RecordID("material_chapter", f"c{(i + 1) // 2}"),
+                seq=(i % 2) or 2,
+                title=f"Seção {i}",
+                anchor_text="",
+                content="",
+                summary=f"Sumário {i}",
+                chapter_seq=(i + 1) // 2,
+            )
+            for i in range(1, 7)
+        ]
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_all_sections_light", _fake_list_sections
     )
 
 
@@ -340,17 +368,17 @@ def test_repropose_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-def test_repropose_with_no_chapters_returns_400(
+def test_repropose_with_no_sections_returns_400(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Repropor com 0 capítulos (Materiais deletados) devolve 400, não 500.
+    """Repropor com 0 seções (Materiais deletados) devolve 400, não 500.
 
     Defesa em profundidade: mesmo se o auto-revert (Emenda 7) falhar, repropose
     não crasha com ValidationError em mechanical_proposal([]) — a rota guarda
     cedo e devolve mensagem legível.
     """
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_all_chapters_light", lambda db, **kw: []
+        "kubo.api.routes.study.study_store.list_all_sections_light", lambda db, **kw: []
     )
     resp = authed_client.post(
         "/study/topics/abc123/repropose",
@@ -419,49 +447,49 @@ def test_move_entry_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-# --- POST /topics/{key}/plan/entries/{ekey}/remove-chapter -------------------------------
+# --- POST /topics/{key}/plan/entries/{ekey}/remove-section -------------------------------
 
 
-def test_remove_chapter_redirects(authed_client: TestClient) -> None:
-    """POST /plan/entries/{ekey}/remove-chapter remove capítulo e redireciona."""
+def test_remove_section_redirects(authed_client: TestClient) -> None:
+    """POST /plan/entries/{ekey}/remove-section remove seção e redireciona."""
     resp = authed_client.post(
-        "/study/topics/abc123/plan/entries/e2/remove-chapter",
-        data={"csrf": _csrf(authed_client), "chapter_id": "material_chapter:c3"},
+        "/study/topics/abc123/plan/entries/e2/remove-section",
+        data={"csrf": _csrf(authed_client), "section_id": "material_section:s3"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
 
 
-def test_remove_chapter_invalid_id_returns_400(authed_client: TestClient) -> None:
-    """chapter_id malformado devolve 400 (não 500)."""
+def test_remove_section_invalid_id_returns_400(authed_client: TestClient) -> None:
+    """section_id malformado devolve 400 (não 500)."""
     resp = authed_client.post(
-        "/study/topics/abc123/plan/entries/e2/remove-chapter",
-        data={"csrf": _csrf(authed_client), "chapter_id": "no-colon"},
+        "/study/topics/abc123/plan/entries/e2/remove-section",
+        data={"csrf": _csrf(authed_client), "section_id": "no-colon"},
         follow_redirects=False,
     )
     assert resp.status_code == 400
 
 
-def test_remove_chapter_not_planning_returns_400(
+def test_remove_section_not_planning_returns_400(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Remove chapter fora de planning devolve 400."""
+    """Remove section fora de planning devolve 400."""
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic(state="running")
     )
     resp = authed_client.post(
-        "/study/topics/abc123/plan/entries/e2/remove-chapter",
-        data={"csrf": _csrf(authed_client), "chapter_id": "material_chapter:c3"},
+        "/study/topics/abc123/plan/entries/e2/remove-section",
+        data={"csrf": _csrf(authed_client), "section_id": "material_section:s3"},
         follow_redirects=False,
     )
     assert resp.status_code == 400
 
 
-def test_remove_chapter_requires_csrf(authed_client: TestClient) -> None:
+def test_remove_section_requires_csrf(authed_client: TestClient) -> None:
     """CSRF inválido devolve 403."""
     resp = authed_client.post(
-        "/study/topics/abc123/plan/entries/e2/remove-chapter",
-        data={"csrf": "invalid", "chapter_id": "material_chapter:c3"},
+        "/study/topics/abc123/plan/entries/e2/remove-section",
+        data={"csrf": "invalid", "section_id": "material_section:s3"},
         follow_redirects=False,
     )
     assert resp.status_code == 403
