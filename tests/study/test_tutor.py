@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
-from kubo.store.study import MaterialChapter
+from kubo.store.study import MaterialSection
 from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem, Tutor
 
 T = TypeVar("T", bound=BaseModel)
@@ -50,16 +50,19 @@ class _FakeExecutor:
         return cast(T, self._output)
 
 
-def _chapters(count: int = 2, *, body: str = "Conteúdo do capítulo") -> list[MaterialChapter]:
-    """Capítulos da lição, `seq` 1-based; o último termina no marcador de cauda."""
+def _sections(count: int = 2, *, body: str = "Conteúdo da seção") -> list[MaterialSection]:
+    """Seções da lição, (chapter_seq=1, section_seq) 1-based; o último tem o marcador de cauda."""
     return [
-        MaterialChapter(
-            id=RecordID("material_chapter", f"c{i}"),
+        MaterialSection(
+            id=RecordID("material_section", f"s{i}"),
             material=RecordID("material", "m1"),
+            material_chapter=RecordID("material_chapter", "c1"),
             seq=i,
-            title=f"Capítulo {i}",
-            part=None,
+            title=f"Seção {i}",
+            anchor_text="",
             content=f"{body} {i}." + (_TAIL if i == count else ""),
+            summary=f"Sumário {i}",
+            chapter_seq=1,
         )
         for i in range(1, count + 1)
     ]
@@ -78,8 +81,10 @@ def _quiz(*, answer_index: int = 0, options: int = 3) -> list[QuizItem]:
 
 
 def _provenance(count: int = 1) -> list[ProvenanceItem]:
+    """Provenância com pares (chapter_seq, section_seq) distintos — exercita
+    o caso de múltiplas seções no mesmo capítulo (1,1), (1,2), (1,3)..."""
     return [
-        ProvenanceItem(chapter_seq=i, quote=f"Trecho que originou o conceito {i}.")
+        ProvenanceItem(chapter_seq=1, section_seq=i, quote=f"Trecho que originou o conceito {i}.")
         for i in range(1, count + 1)
     ]
 
@@ -102,7 +107,7 @@ def _tutor(executor: _FakeExecutor) -> Tutor:
 def _generate(tutor: Tutor, *, misses: list[str] | None = None) -> LessonOutput | None:
     return tutor.generate(
         entry_title="Aula 3 — Filas",
-        chapters=_chapters(),
+        sections=_sections(),
         work_context=_WORK_CONTEXT,
         misses=misses or [],
     )
@@ -164,28 +169,30 @@ def test_lesson_output_requires_provenance() -> None:
         )
 
 
-def test_provenance_item_requires_chapter_seq_and_quote() -> None:
-    """Provenância sem capítulo ou sem citação não localiza o trecho — incompleta."""
+def test_provenance_item_requires_chapter_seq_section_seq_and_quote() -> None:
+    """Provenância sem capítulo, sem seção ou sem citação não localiza o trecho — incompleta."""
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=0, quote="trecho")
+        ProvenanceItem(chapter_seq=0, section_seq=1, quote="trecho")
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=1, quote="")
+        ProvenanceItem(chapter_seq=1, section_seq=0, quote="trecho")
+    with pytest.raises(ValidationError):
+        ProvenanceItem(chapter_seq=1, section_seq=1, quote="")
 
 
 def test_provenance_quote_is_capped_to_prevent_reproduction() -> None:
     """A citação é localizador, não reprodução — acima de 300 chars o modelo recusa."""
     with pytest.raises(ValidationError):
-        ProvenanceItem(chapter_seq=1, quote="x" * 301)
+        ProvenanceItem(chapter_seq=1, section_seq=1, quote="x" * 301)
 
 
-def test_chapter_seq_travels_in_the_content_for_the_tutor_to_reference() -> None:
-    """O seq do capítulo vai no conteúdo (cercado) para o LLM referenciar na provenância."""
+def test_section_pair_travels_in_the_content_for_the_tutor_to_reference() -> None:
+    """O par (chapter_seq, section_seq) vai no conteúdo (cercado) para o LLM referenciar."""
     executor = _FakeExecutor(output=_lesson())
 
     _generate(_tutor(executor))
 
-    assert "[1]" in executor.received_content[0]
-    assert "[2]" in executor.received_content[0]
+    assert "(1, 1)" in executor.received_content[0]
+    assert "(1, 2)" in executor.received_content[0]
 
 
 # --- Geração ---------------------------------------------------------------------------
@@ -202,14 +209,14 @@ def test_generate_returns_the_validated_lesson() -> None:
     assert len(lesson.quiz) == 2
 
 
-def test_chapter_text_travels_as_untrusted_content() -> None:
-    """O texto do material vai no `untrusted_content` — nunca na instrução."""
+def test_section_text_travels_as_untrusted_content() -> None:
+    """O texto da seção vai no `untrusted_content` — nunca na instrução."""
     executor = _FakeExecutor(output=_lesson())
 
     _generate(_tutor(executor))
 
-    assert "Conteúdo do capítulo 1." in executor.received_content[0]
-    assert "Conteúdo do capítulo 1." not in executor.received_instructions[0]
+    assert "Conteúdo da seção 1." in executor.received_content[0]
+    assert "Conteúdo da seção 1." not in executor.received_instructions[0]
 
 
 def test_owner_work_context_travels_in_the_instruction() -> None:
@@ -291,7 +298,7 @@ def test_generate_returns_none_when_executor_fails(error: Exception) -> None:
     assert _generate(_tutor(_FakeExecutor(error=error))) is None
 
 
-def test_chapter_text_is_capped_before_reaching_the_provider(
+def test_section_text_is_capped_before_reaching_the_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """O conteúdo enviado respeita `_MAX_PROMPT_TEXT` e o corte é NO FIM.
@@ -306,7 +313,7 @@ def test_chapter_text_is_capped_before_reaching_the_provider(
 
     tutor.generate(
         entry_title="Aula 3",
-        chapters=_chapters(4, body="x" * 200),
+        sections=_sections(4, body="x" * 200),
         work_context=_WORK_CONTEXT,
         misses=[],
     )
@@ -323,3 +330,27 @@ def test_short_content_is_not_truncated() -> None:
     _generate(_tutor(executor))
 
     assert _TAIL in executor.received_content[0]
+
+
+def test_orphan_sections_with_chapter_seq_zero_are_skipped() -> None:
+    """Seção com chapter_seq == 0 (join falhou) não vai ao prompt — marcador (0, seq)
+    seria inválido para provenance (ge=1), e o tutor não deve ensinar de seção órfã."""
+    from dataclasses import replace as dc_replace
+
+    executor = _FakeExecutor(output=_lesson())
+    sections = _sections(2)
+    # Primeira seção órfã (chapter_seq=0), segunda normal.
+    sections[0] = dc_replace(sections[0], chapter_seq=0)
+
+    _tutor(executor).generate(
+        entry_title="Aula 3",
+        sections=sections,
+        work_context=_WORK_CONTEXT,
+        misses=[],
+    )
+
+    content = executor.received_content[0]
+    # A seção órfã não aparece no conteúdo.
+    assert "(0, 1)" not in content
+    # A seção válida aparece.
+    assert "(1, 2)" in content

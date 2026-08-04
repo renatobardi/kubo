@@ -1,11 +1,11 @@
-"""Persona `tutor` (ADR-0043, KUBO-137): capítulos → a lição do dia.
+"""Persona `tutor` (ADR-0043, KUBO-137; ADR-0048, KUBO-189): seções → a lição do dia.
 
 Molde de `kubo/study/planner.py` — classe fina sobre um `Executor`, sem flow e sem
 banco. A coerência do quiz é revalidada AQUI, em código: o LLM propõe, o sistema confere.
 
 De que lado cada dado viaja (revisão de segurança da pilha de Estudos):
 - `untrusted_content` (a cerca que o `ApiExecutor` demarca e anti-spoofa) leva TUDO que
-  nasceu do arquivo enviado: o texto dos capítulos, o TÍTULO DA LIÇÃO (derivado do
+  nasceu do arquivo enviado: o texto das seções, o TÍTULO DA LIÇÃO (derivado do
   sumário do epub — nada no caminho valida esse texto) e as QUESTÕES ERRADAS recentes
   (enunciados que a persona escreveu lendo o material: promovê-los a instrução deixaria
   o epub dirigir a lição seguinte por dois saltos);
@@ -22,12 +22,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError
 from kubo.executors.base import Executor
-from kubo.store.study import MaterialChapter
+from kubo.store.study import MaterialSection
 
 _log = structlog.get_logger(__name__)
 
-# Teto de caracteres do texto dos capítulos que vai ao prompt. Uma lição cobre poucos
-# capítulos, mas um material mal parseado pode trazer um "capítulo" com o livro inteiro:
+# Teto de caracteres do texto das seções que vai ao prompt. Uma lição cobre poucas
+# seções, mas um material mal parseado pode trazer uma "seção" com o livro inteiro:
 # sem cerca, o custo por lição fica refém do arquivo que o dono enviou.
 _MAX_PROMPT_TEXT = 60_000
 
@@ -46,13 +46,15 @@ class QuizItem(BaseModel):
 class ProvenanceItem(BaseModel):
     """Referência ao trecho do material que originou o conceito da lição.
 
-    `chapter_seq` é o seq do capítulo (visível para o LLM no conteúdo como `[seq]`),
-    e `quote` é uma citação curta do trecho — localizador, não reprodução.
+    O par `(chapter_seq, section_seq)` identifica a seção (visível para o LLM no
+    conteúdo como `[(chapter_seq, section_seq)]`), e `quote` é uma citação curta
+    do trecho — localizador, não reprodução.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     chapter_seq: int = Field(ge=1)
+    section_seq: int = Field(ge=1)
     quote: str = Field(min_length=1, max_length=300)
 
 
@@ -80,7 +82,7 @@ class Tutor:
         self,
         *,
         entry_title: str,
-        chapters: Sequence[MaterialChapter],
+        sections: Sequence[MaterialSection],
         work_context: str,
         misses: Sequence[str],
     ) -> LessonOutput | None:
@@ -95,11 +97,11 @@ class Tutor:
         bloco, e a pós-validação NÃO exige `recap`.
         """
         instruction = _instruction(self._prompt, work_context=work_context, has_misses=bool(misses))
-        content = _content(chapters, entry_title=entry_title, misses=misses)
+        content = _content(sections, entry_title=entry_title, misses=misses)
         try:
             lesson = self._executor.complete(instruction, content, LessonOutput)
         except (ExecutorError, ValidationError):
-            _log.info("study.tutor.failed", chapters=len(chapters))
+            _log.info("study.tutor.failed", sections=len(sections))
             return None
         if not _is_coherent(lesson):
             _log.info("study.tutor.incoherent", questions=len(lesson.quiz))
@@ -122,8 +124,9 @@ def _instruction(prompt: str, *, work_context: str, has_misses: bool) -> str:
     if work_context.strip():
         parts.append(f"Contexto de trabalho do aluno: {work_context}")
     parts.append(
-        "Cada conceito destilado deve trazer proveniência: indique o número do capítulo "
-        "(visível no conteúdo como [seq]) e uma citação curta (até 300 caracteres) do "
+        "Cada conceito destilado deve trazer proveniência: indique o par "
+        "(chapter_seq, section_seq) da seção (visível no conteúdo como "
+        "[(chapter_seq, section_seq)]) e uma citação curta (até 300 caracteres) do "
         "trecho que originou o conceito. A citação é localizador, não reprodução."
     )
     if has_misses:
@@ -137,12 +140,12 @@ def _instruction(prompt: str, *, work_context: str, has_misses: bool) -> str:
 
 
 def _content(
-    chapters: Sequence[MaterialChapter], *, entry_title: str, misses: Sequence[str]
+    sections: Sequence[MaterialSection], *, entry_title: str, misses: Sequence[str]
 ) -> str:
     """Todo o material NÃO confiável do prompt, com teto de volume.
 
-    Ordem deliberada: título e erros recentes primeiro, capítulos depois. O corte é no
-    FIM da string INTEIRA, então o que fica de fora é a cauda do texto dos capítulos — e
+    Ordem deliberada: título e erros recentes primeiro, seções depois. O corte é no
+    FIM da string INTEIRA, então o que fica de fora é a cauda do texto das seções — e
     nunca a lista de erros, de que a recapitulação depende.
 
     O teto vale para o bloco INTEIRO porque o que ele protege é o tamanho do que chega ao
@@ -155,7 +158,13 @@ def _content(
             "Questões que o aluno errou recentemente (para a recapitulação):\n"
             + "\n".join(f"- {miss}" for miss in misses)
         )
-    parts.extend(f"## [{chapter.seq}] {chapter.title}\n{chapter.content}" for chapter in chapters)
+    # chapter_seq == 0 significa que o join com material_chapter falhou (capítulo
+    # deletado?): o marcador (0, seq) seria inválido para provenance (ge=1), então
+    # a seção é pulada — o tutor não deve ensinar de uma seção órfã.
+    valid = [s for s in sections if s.chapter_seq >= 1]
+    if len(valid) < len(sections):
+        _log.warning("study.tutor.orphan_sections", skipped=len(sections) - len(valid))
+    parts.extend(f"## [({s.chapter_seq}, {s.seq})] {s.title}\n{s.content}" for s in valid)
     full = "\n\n".join(parts)
     if len(full) <= _MAX_PROMPT_TEXT:
         return full

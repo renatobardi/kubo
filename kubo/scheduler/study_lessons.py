@@ -9,9 +9,10 @@ Dois jobs separados:
   (registro + conteúdo com IA). Só gera na véspera do próximo dia de cadência.
 
 KUBO-168: a geração com IA chama a persona `tutor` para preencher
-`concept`, `scenario`, `application`, `quiz`, `provenance` a partir dos
-capítulos do `plan_entry`. Se o Tutor falha, a lição fica como placeholder
-(vazia) — o dono vê a lição agendada, e o próximo ciclo pode re-tentar.
+`concept`, `scenario`, `application`, `quiz`, `provenance` a partir das
+seções do `plan_entry` (KUBO-189: seções, não capítulos). Se o Tutor falha,
+a lição fica como placeholder (vazia) — o dono vê a lição agendada, e o
+próximo ciclo pode re-tentar.
 """
 
 from __future__ import annotations
@@ -67,21 +68,21 @@ def _generate_lesson_content(
     entry: study_store.PlanEntry,
     work_context: str,
 ) -> None:
-    """Gera conteúdo de IA para uma lição e preenche o registro (KUBO-168).
+    """Gera conteúdo de IA para uma lição e preenche o registro (KUBO-168, KUBO-189).
 
-    Busca os capítulos do plan_entry, chama o Tutor e preenche a lição.
-    Se o Tutor falha (None) ou não há capítulos, a lição fica como placeholder.
+    Busca as seções do plan_entry, chama o Tutor e preenche a lição.
+    Se o Tutor falha (None) ou não há seções, a lição fica como placeholder.
     """
-    chapters = study_store.get_chapters_for_entry(
+    sections = study_store.get_sections_for_entry(
         db, tenant_id=tenant_id, user_id=user_id, entry=entry
     )
-    if not chapters:
-        _log.warning("study.lesson.no_chapters", entry=str(entry.id))
+    if not sections:
+        _log.warning("study.lesson.no_sections", entry=str(entry.id))
         return
     tutor = _build_tutor(db, tenant_id, user_id)
     lesson = tutor.generate(
         entry_title=entry.title,
-        chapters=chapters,
+        sections=sections,
         work_context=work_context,
         misses=(),
     )
