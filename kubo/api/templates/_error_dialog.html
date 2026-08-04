@@ -1,8 +1,9 @@
-{# Dialog global de erro (KUBO-189): intercepta form POSTs via fetch e mostra
-   respostas 4xx/5xx num <dialog> nativo em vez de navegar para texto cru.
+{# Dialog global de erro: intercepta form POSTs via fetch e mostra respostas
+   4xx/5xx num <dialog> nativo em vez de navegar para texto cru.
    Padrão do design system: <dialog> como o GateSheet e o RSS wizard.
-   Incluído por base.html depois de _busy.html. #}
-<dialog id="kubo-error-dialog" class="m-0 max-w-[90vw] rounded-2xl bg-popover p-0 text-popover-foreground backdrop:bg-black/40 md:w-[420px]">
+   Incluído por base.html no final do <body>. #}
+<dialog id="kubo-error-dialog" aria-labelledby="kubo-error-title"
+        class="m-0 max-w-[90vw] rounded-2xl bg-popover p-0 text-popover-foreground backdrop:bg-black/40 md:w-[420px]">
   <div class="flex items-start gap-2.5 border-b border-border p-5">
     <span class="mt-0.5 text-primary">{{ macros.triangle_alert("size-4") }}</span>
     <div class="min-w-0 flex-1">
@@ -25,15 +26,20 @@
     var dialog = document.getElementById('kubo-error-dialog');
     var msgEl = document.getElementById('kubo-error-message');
 
+    function showError(text) {
+      msgEl.textContent = text || 'Erro inesperado.';
+      if (!dialog.open) dialog.showModal();
+    }
+
     // Intercepta form POST em bubble phase (depois do onsubmit confirm inline).
-    // Se ev.defaultPrevented (confirm.dismissed), limpa o busy do _busy.html e retorna.
+    // Pula forms HTMX (hx-post) — o HTMX gerencia o submit desses forms.
     document.addEventListener('submit', function (ev) {
       var form = ev.target;
       if (!(form instanceof HTMLFormElement)) return;
       if ((form.getAttribute('method') || '').toLowerCase() !== 'post') return;
-      if (form.dataset.noIntercept !== undefined) return;
+      if (form.hasAttribute('hx-post')) return;
       if (ev.defaultPrevented) {
-        // Confirm.dismissed — limpa o busy que _busy.html marcou no capture phase.
+        // Confirm dismissado — limpa o busy que _busy.html marcou no capture phase.
         var t = ev.submitter || form.querySelector('button, input[type=submit]');
         if (t && typeof _kuboClearBusy === 'function') _kuboClearBusy(t);
         delete form.dataset.submitting;
@@ -46,8 +52,10 @@
       if (ev.submitter && ev.submitter.name) {
         body.append(ev.submitter.name, ev.submitter.value);
       }
+      // formAction do botão sobrescreve o action do form.
+      var action = (ev.submitter && ev.submitter.formAction) || form.action;
 
-      fetch(form.action, {
+      fetch(action, {
         method: 'POST',
         body: body,
         redirect: 'follow',
@@ -58,18 +66,21 @@
           return;
         }
         if (resp.ok) {
-          // 200 inesperado (não-redirect) — recarrega a página atual.
+          // 200 não-redirect: recarrega para refletir mudança de estado.
           window.location.reload();
           return;
         }
-        // 4xx/5xx — mostra o dialog com a mensagem.
-        return resp.text().then(function (text) {
-          msgEl.textContent = text || 'Erro inesperado (' + resp.status + ').';
-          if (!dialog.open) dialog.showModal();
-        });
+        // 4xx/5xx — só mostra texto se for text/plain (mensagem curta da rota).
+        // JSON/HTML de handler de erro vira mensagem genérica.
+        var ct = resp.headers.get('content-type') || '';
+        if (ct.indexOf('text/plain') !== -1) {
+          return resp.text().then(function (text) {
+            showError(text || 'Erro inesperado (' + resp.status + ').');
+          });
+        }
+        showError('Erro inesperado (' + resp.status + ').');
       }).catch(function () {
-        msgEl.textContent = 'Falha de rede — verifique a conexão e tente novamente.';
-        if (!dialog.open) dialog.showModal();
+        showError('Falha de rede — verifique a conexão e tente novamente.');
       }).finally(function () {
         // Limpa o busy do _busy.html (o capture-phase listener já marcou o botão).
         var t = ev.submitter || form.querySelector('button, input[type=submit]');

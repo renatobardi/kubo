@@ -65,20 +65,6 @@
       // o browser omitir o name/value do botão, e as rotas que distinguem a ação
       // pelo valor do submit perderiam o dado.
       window.setTimeout(function () { target.disabled = true; }, 0);
-      // Cleanup: se um handler bubble-phase (ex.: onsubmit="return confirm(...)")
-      // cancelou o envio, o busy foi setado na capture mas o form não submete —
-      // o botão ficaria travado com spinner para sempre. Checa no próximo tick.
-      window.setTimeout(function () {
-        if (ev.defaultPrevented) {
-          delete target.dataset.busy;
-          target.removeAttribute("aria-busy");
-          target.removeAttribute("aria-live");
-          delete form.dataset.submitting;
-          target.style.minWidth = "";
-          target.style.minHeight = "";
-          target.disabled = false;
-        }
-      }, 0);
     }, true);
 
     // Indicador para botões HTMX soltos (`hx-post` fora de `form`).
