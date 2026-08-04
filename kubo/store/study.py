@@ -1344,56 +1344,6 @@ def get_sections_for_entry(
     return [by_id[str(sid)] for sid in entry.sections if str(sid) in by_id]
 
 
-def get_chapters_for_entry(
-    db: Any,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
-    entry: PlanEntry,
-) -> list[MaterialChapter]:
-    """Busca os MaterialChapter (com content) referenciados por um plan_entry.
-
-    KUBO-185 (compatibilidade): o plan_entry agora referencia seções, não
-    capítulos. Esta função deriva os capítulos das seções via FK
-    `material_section.material_chapter`, deduplicando capítulos que aparecem
-    em múltiplas seções. O tutor e o scheduler continuam chamando esta
-    função e ficam verdes enquanto a migração para seções não chega neles.
-    """
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    if not entry.sections:
-        return []
-    # Busca as seções para obter os material_chapter FKs.
-    sec_rows = db.query(
-        f"SELECT id, material_chapter FROM material_section WHERE id IN $sections "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE};",
-        {"sections": entry.sections, "tenant": tenant_id, "user": user_id},
-    )
-    # Map section_id → material_chapter, depois percorre entry.sections na ordem
-    # do plano (SELECT WHERE IN não garante ordem dos RecordIDs).
-    sec_chapter_by_id: dict[str, RecordID] = {str(r["id"]): r["material_chapter"] for r in sec_rows}
-    seen: set[str] = set()
-    chapter_ids: list[RecordID] = []
-    for sid in entry.sections:
-        cid = sec_chapter_by_id.get(str(sid))
-        if cid is None:
-            continue
-        key = str(cid)
-        if key not in seen:
-            seen.add(key)
-            chapter_ids.append(cid)
-    if not chapter_ids:
-        return []
-    # Busca os capítulos completos (com content).
-    rows = db.query(
-        f"SELECT * FROM material_chapter WHERE id IN $chapters "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE};",
-        {"chapters": chapter_ids, "tenant": tenant_id, "user": user_id},
-    )
-    by_id: dict[str, MaterialChapter] = {str(r["id"]): _chapter_from_row(r) for r in rows}
-    # Reordena conforme a ordem deduplicada.
-    return [by_id[str(cid)] for cid in chapter_ids if str(cid) in by_id]
-
-
 def count_lessons_for_plan(
     db: Any,
     *,

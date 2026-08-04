@@ -1,12 +1,13 @@
-"""KUBO-164/185 — Store de Plano: transição de estado, proposta, cadência.
+"""KUBO-164/185/189 — Store de Plano: transição de estado, proposta, cadência.
 
 Integração (SurrealDB real). Ao fechar um Tema, o planner propõe um Plano
 que é persistido em `study_plan` (status='proposed') + `plan_entry` (lições).
 A cadência (weekdays) é definida pelo dono e recalcula a data-alvo.
 
 KUBO-185: o átomo do plano é a seção (não o capítulo). `plan_entry.sections`
-é uma lista de RecordIDs de `material_section`. A compatibilidade
-`get_chapters_for_entry` deriva capítulos das seções (via FK `material_chapter`).
+é uma lista de RecordIDs de `material_section`. KUBO-189: o shim
+`get_chapters_for_entry` foi removido — tutor e scheduler agora usam
+`get_sections_for_entry` diretamente.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from kubo.store.study import (
     create_material,
     create_topic,
     deactivate_plan,
-    get_chapters_for_entry,
     get_plan_for_topic,
     get_sections_for_entry,
     get_topic,
@@ -534,7 +534,7 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
     assert updated_entries[0].title == "Tudo junto"
 
 
-# --- KUBO-185: get_sections_for_entry + get_chapters_for_entry (compatibility) -----------
+# --- KUBO-185: get_sections_for_entry ---------------------------------------------------
 
 
 def test_get_sections_for_entry_returns_sections_in_order(
@@ -558,55 +558,6 @@ def test_get_sections_for_entry_returns_sections_in_order(
     # Cada seção tem título e sumário.
     assert sections[0].title
     assert sections[0].summary
-
-
-def test_get_chapters_for_entry_derives_from_sections(
-    db: Any, tenant_id: RecordID, user_id: RecordID
-) -> None:
-    """get_chapters_for_entry (shim de compatibilidade) deriva capítulos das seções via FK.
-
-    O scheduler/tutor agora chamam get_sections_for_entry (KUBO-189); este shim
-    permanece para o tutor legacy e testes. Ele busca os material_chapter
-    referenciados pelas seções do plan_entry (via FK material_chapter),
-    deduplicando capítulos que aparecem em múltiplas seções.
-    """
-    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    sids = _section_ids(db, tenant_id, user_id, material_id)
-
-    _, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        topic_id=topic_id,
-        entries=[("L1", [sids[0], sids[1]])],  # 2 seções do mesmo capítulo (capítulo 1)
-    )
-
-    chapters = get_chapters_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
-    # 2 seções do capítulo 1 → 1 capítulo deduplicado.
-    assert len(chapters) == 1
-    assert chapters[0].title == "Capítulo 1"
-    assert chapters[0].content == "Conteúdo 1."
-
-
-def test_get_chapters_for_entry_deduplicates_across_sections(
-    db: Any, tenant_id: RecordID, user_id: RecordID
-) -> None:
-    """Múltiplas seções do mesmo capítulo → 1 capítulo na lista (deduplicado)."""
-    topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    sids = _section_ids(db, tenant_id, user_id, material_id)
-
-    _, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        topic_id=topic_id,
-        entries=[("L1", [sids[0], sids[1], sids[2], sids[3]])],  # 2 capítulos, 4 seções
-    )
-
-    chapters = get_chapters_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
-    # 4 seções de 2 capítulos → 2 capítulos deduplicados.
-    assert len(chapters) == 2
-    assert {ch.title for ch in chapters} == {"Capítulo 1", "Capítulo 2"}
 
 
 # --- KUBO-165: transição planning → draft -----------------------------------------------

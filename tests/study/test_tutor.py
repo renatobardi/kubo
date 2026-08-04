@@ -186,7 +186,7 @@ def test_provenance_quote_is_capped_to_prevent_reproduction() -> None:
 
 
 def test_section_pair_travels_in_the_content_for_the_tutor_to_reference() -> None:
-    """O par (chapter_seq, section_seq) vai no conteúdo (cercado) para o LLM referenciar na provenância."""
+    """O par (chapter_seq, section_seq) vai no conteúdo (cercado) para o LLM referenciar."""
     executor = _FakeExecutor(output=_lesson())
 
     _generate(_tutor(executor))

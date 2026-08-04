@@ -75,7 +75,7 @@ def _sections_map(chapters: list[ParsedChapter]) -> dict[int, list[SectionPart]]
 
 
 def test_generate_lesson_content_uses_sections_with_provenance(
-    db: Any, tenant_id: RecordID, user_id: RecordID
+    db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Flow completo: plan_entry com sections → _generate_lesson_content → fill_lesson.
 
@@ -161,25 +161,17 @@ def test_generate_lesson_content_uses_sections_with_provenance(
             return lesson_output
 
     # Mocka apenas a construção do Tutor e work_context — o store é real.
-    import kubo.scheduler.study_lessons as sl
+    monkeypatch.setattr(study_lessons, "_build_tutor", lambda db, tenant_id, user_id: _FakeTutor())
+    monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
-    original_build_tutor = sl._build_tutor
-    original_work_context = sl._work_context_for
-    sl._build_tutor = lambda db, tenant_id, user_id: _FakeTutor()  # type: ignore[method-assign]
-    sl._work_context_for = lambda db, user_id: ""  # type: ignore[method-assign]
-
-    try:
-        sl._generate_lesson_content(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            lesson_id=lesson_id,
-            entry=entry,
-            work_context="",
-        )
-    finally:
-        sl._build_tutor = original_build_tutor  # type: ignore[method-assign]
-        sl._work_context_for = original_work_context  # type: ignore[method-assign]
+    study_lessons._generate_lesson_content(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        lesson_id=lesson_id,
+        entry=entry,
+        work_context="",
+    )
 
     # 4. Verifica que a lição foi preenchida com a provenance de seções.
     rows: list[dict[str, Any]] = db.query(

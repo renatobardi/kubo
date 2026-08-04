@@ -19,9 +19,10 @@ KUBO-184 introduz uma persona `sectionizer` que particiona cada capítulo em
 "RAG e tool calling", "Orquestração"), não fatiamento arbitrário por
 tamanho. KUBO-185 (emenda 2026-08-03) faz a seção virar o átomo do plano:
 o planner agrupa seções em lições, permitindo múltiplas lições curtas
-diárias mesmo quando o material tem um único capítulo. Tutor e scheduler
-continuam operando em capítulos via shim de compatibilidade
-(`get_chapters_for_entry`), migrando no próximo ticket.
+diárias mesmo quando o material tem um único capítulo. KUBO-189 (emenda
+2026-08-04) migra tutor e scheduler para `get_sections_for_entry` e remove
+o shim `get_chapters_for_entry` — a seção é agora o átomo em todo o
+caminho (planner, tutor, scheduler).
 
 ## Decisão
 
@@ -62,9 +63,8 @@ continuam operando em capítulos via shim de compatibilidade
    agrupa seções em lições, a UI mostra seções por lição, e a rota
    `remove-chapter` vira `remove-section`. Migration destrutiva (0037) —
    recomeço limpo (ADR-0047 §7): nenhum `plan_entry` em `running` existia.
-   `get_chapters_for_entry` vira shim de compatibilidade: deriva capítulos
-   das seções via FK `material_section.material_chapter`, mantendo tutor e
-   scheduler verdes até migrarem no próximo ticket. Materiais pré-0036
+   KUBO-189 remove o shim `get_chapters_for_entry` — tutor e scheduler
+   agora chamam `get_sections_for_entry` diretamente. Materiais pré-0036
    recebem backfill de 1 seção por capítulo na migration 0037.
 
 ## Consequências
@@ -81,8 +81,6 @@ continuam operando em capítulos via shim de compatibilidade
 
 **Negativas:**
 - +1 chamada LLM por capítulo no upload (latência adicional).
-- `get_chapters_for_entry` vira shim temporário ( Middle Man) até tutor e
-  scheduler migrarem para `get_sections_for_entry` no próximo ticket.
 
 **Neutras:**
 - O `anchor_text` é derivado, não curado — serve como localizador
