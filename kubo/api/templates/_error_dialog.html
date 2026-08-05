@@ -90,5 +90,8 @@
         delete form.dataset.submitting;
       });
     }); // bubble phase (capture: false = default)
+
+    // Expõe showError para fetch cru (ex.: study-chat.js applySuggestion).
+    window._kuboShowError = showError;
   })();
 </script>

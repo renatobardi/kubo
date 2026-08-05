@@ -495,6 +495,54 @@ def test_remove_section_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
+# --- HTMX partial responses (C3) ---------------------------------------------------------
+
+
+def test_move_entry_htmx_returns_partial_fragment(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTMX request (HX-Request header) returns the _plan_entries partial, not 303."""
+    from kubo.api.routes import study as study_routes
+
+    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda db, ctx, topic_id: [])
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": _csrf(authed_client), "direction": "down"},
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert 'id="plan-entries"' in resp.text
+
+
+def test_move_entry_non_htmx_returns_redirect(authed_client: TestClient) -> None:
+    """Non-HTMX request returns 303 redirect (backward compat)."""
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e1/move",
+        data={"csrf": _csrf(authed_client), "direction": "down"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
+def test_remove_section_htmx_returns_partial_fragment(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTMX remove-section returns the partial, not 303."""
+    from kubo.api.routes import study as study_routes
+
+    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda db, ctx, topic_id: [])
+    resp = authed_client.post(
+        "/study/topics/abc123/plan/entries/e2/remove-section",
+        data={"csrf": _csrf(authed_client), "section_id": "material_section:s3"},
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert 'id="plan-entries"' in resp.text
+
+
 # --- POST /topics/{key}/plan/cadence -----------------------------------------------------
 
 

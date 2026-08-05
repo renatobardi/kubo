@@ -2,10 +2,48 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.store.knowledge import DashboardCounts, RunSummary
+from kubo.store.study import Lesson, Topic
+
+_TENANT = RecordID("tenant", "breakglass")
+_USER = RecordID("user", "breakglass-owner")
+
+
+def _lesson(*, is_placeholder: bool = False) -> Lesson:
+    """Lesson fake para testes do card D9."""
+    return Lesson(
+        id=RecordID("lesson", "l1"),
+        tenant_id=_TENANT,
+        user_id=_USER,
+        study_plan=RecordID("study_plan", "p1"),
+        plan_entry=RecordID("plan_entry", "e1"),
+        scheduled_for=datetime(2026, 8, 5, 9, 0, tzinfo=timezone.utc),
+        concept="",
+        scenario="",
+        application="",
+        recap=None,
+        quiz=[],
+        provenance=[],
+        is_placeholder=is_placeholder,
+    )
+
+
+def _topic(*, state: str = "running") -> Topic:
+    """Topic fake para testes do card D9."""
+    return Topic(
+        id=RecordID("topic", "t1"),
+        tenant_id=_TENANT,
+        user_id=_USER,
+        title="Estudo de Agentic Coding",
+        state=state,
+        created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+    )
 
 
 def test_dashboard_renders_counts_and_runs(
@@ -83,6 +121,46 @@ def test_dashboard_empty_state(authed_client: TestClient) -> None:
 def test_dashboard_requires_auth(client: TestClient) -> None:
     """Sem sessão, o Painel redireciona pro login (o guard atua antes do banco)."""
     assert client.get("/", follow_redirects=False).status_code == 303
+
+
+# --- Card "Lição de hoje" (D9) ----------------------------------------------------------
+
+
+def test_dashboard_today_lesson_card_present(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Com lesson_for_today retornando (lesson, topic), o card aparece no Painel."""
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.study_store.lesson_for_today",
+        lambda db, **kw: (_lesson(), _topic()),
+    )
+    html = authed_client.get("/").text
+    assert "Lição de hoje" in html
+    assert "Estudo de Agentic Coding" in html
+    assert "/study/topics/t1/lessons/l1" in html
+
+
+def test_dashboard_today_lesson_card_absent_when_none(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sem lesson_for_today (None), o card não aparece."""
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.study_store.lesson_for_today", lambda db, **kw: None
+    )
+    html = authed_client.get("/").text
+    assert "Lição de hoje" not in html
+
+
+def test_dashboard_today_lesson_card_placeholder(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lição placeholder mostra mensagem de scheduler em vez de data."""
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.study_store.lesson_for_today",
+        lambda db, **kw: (_lesson(is_placeholder=True), _topic(state="scheduled")),
+    )
+    html = authed_client.get("/").text
+    assert "Sendo gerada pelo scheduler" in html
 
 
 if __name__ == "__main__":

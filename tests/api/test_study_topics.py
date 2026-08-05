@@ -202,10 +202,11 @@ def test_topic_detail_shows_empty_draft_state(
 def test_topic_detail_404_for_missing_topic(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tema inexistente (ou de outro usuário) é 404, não 'negado'."""
+    """Tema inexistente (ou de outro usuário) é 404 HTML em GET."""
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
     resp = authed_client.get("/study/topics/naoexiste")
     assert resp.status_code == 404
+    assert "text/html" in resp.headers["content-type"]
 
 
 def test_topic_detail_planning_sr_only_inside_main(

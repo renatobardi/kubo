@@ -107,6 +107,7 @@ _OVER_LIMIT = "Limite de materiais por tema atingido."
 _OVERSIZE = "Arquivo muito grande."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
 _TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um tema em rascunho."
+_TOPIC_NOT_DRAFT_FIELDS = "Só é possível definir foco e profundidade em um tema em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
 # Chave do notice de auto-revert (query param no redirect) — o template mostra o banner.
 _AUTO_REVERT_NOTICE = "voltou-rascunho"
@@ -164,7 +165,13 @@ def _topic_of(db: Any, key: str, ctx: SessionContext) -> study_store.Topic | Non
 
 
 def _topic_missing(request: Request, key: str) -> Response:
-    """404 da tela do tema — tema de outro usuário é INEXISTENTE, não 'negado'."""
+    """404 da tela do tema — tema de outro usuário é INEXISTENTE, não 'negado'.
+
+    POST devolve `text/plain` (o `_error_dialog.html` só mostra texto plain);
+    GET devolve a página HTML 404 completa.
+    """
+    if request.method == "POST":
+        return PlainTextResponse("Tema não encontrado.", status_code=404)
     return templates.TemplateResponse(
         request, _TOPIC_NOT_FOUND_TEMPLATE, {"raw": key}, status_code=404
     )
@@ -173,6 +180,39 @@ def _topic_missing(request: Request, key: str) -> Response:
 def _topic_url(topic_id: RecordID) -> str:
     """URL da tela do tema."""
     return f"{_TOPICS_ROUTE}/{topic_id.id}"
+
+
+def _is_htmx(request: Request) -> bool:
+    """True se a request veio do HTMX (header HX-Request)."""
+    return request.headers.get("HX-Request") == "true"
+
+
+def _render_plan_entries(
+    request: Request,
+    ctx: SessionContext,
+    topic: study_store.Topic,
+) -> Response:
+    """Re-renderiza o partial da lista de lições (C3 — HTMX swap, não reload)."""
+    with client.connect() as db:
+        plan, entries = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        section_titles: dict[str, str] = {}
+        if plan is not None:
+            for sec in _collect_all_sections(db, ctx, topic.id):
+                section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
+    return templates.TemplateResponse(
+        request,
+        "study/_plan_entries.html",
+        {
+            "topic": topic,
+            "plan": plan,
+            "plan_entries": entries,
+            "section_titles": section_titles,
+            "csrf": csrf_token(request),
+            "topic_url": _topic_url(topic.id),
+        },
+    )
 
 
 def _materials_dir() -> Path:
@@ -224,10 +264,17 @@ def _save_upload(directory: Path, ctx: SessionContext, fmt: MaterialFormat, data
     return path
 
 
-def _summarizer(ctx: SessionContext) -> Summarizer:
-    """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo)."""
-    with client.connect() as db:
+def _summarizer(ctx: SessionContext, db: Any | None = None) -> Summarizer:
+    """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo).
+
+    Se `db` é passado (conexão já aberta pelo caller), reusa — evita conexão
+    aninhada (C4). Sem `db`, abre própria (backward compat).
+    """
+    if db is not None:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
+    else:
+        with client.connect() as db_conn:
+            persona = resolve_persona(db_conn, ctx.tenant_id, ctx.user_id, "summarizer")
     executor = ApiExecutor(
         ApiExecutorConfig(
             model=persona.model or _DEFAULT_MODEL,
@@ -548,6 +595,11 @@ def upload_material(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
     limit = _max_materials()
+    if limit <= 0:
+        return PlainTextResponse(
+            "Upload de materiais desabilitado por configuração (KUBO_TOPIC_MAX_MATERIALS).",
+            status_code=503,
+        )
     if count >= limit:
         return PlainTextResponse(_OVER_LIMIT, status_code=400)
 
@@ -597,10 +649,16 @@ def delete_material(
     if isinstance(material, Response):
         return material
     # Remove o arquivo do volume (best-effort: registro já foi removido do banco).
+    # Se o unlink falha, o arquivo fica órfão — o script de reconciliação
+    # (scripts/ops/) compara o volume vs banco e remove órfãos periodicamente.
     try:
         Path(material.file_path).unlink(missing_ok=True)
     except OSError:
-        _log.warning("study.material.file_unlink_failed", path=material.file_path)
+        _log.warning(
+            "study.material.file_unlink_failed",
+            path=material.file_path,
+            material=_log_key(mkey),
+        )
     _log.info("study.material.deleted", material=_log_key(mkey), topic=_log_key(key))
     # Auto-revert a draft se era o último Material em planning (ADR-0047 Emenda 7).
     auto = _auto_revert_if_empty(ctx, topic, key)
@@ -802,7 +860,7 @@ def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[t
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx, db))
 
 
 def _chat_precheck(
@@ -954,7 +1012,7 @@ def set_topic_fields(
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
-            return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
+            return PlainTextResponse(_TOPIC_NOT_DRAFT_FIELDS, status_code=400)
     kwargs: dict[str, str | None] = {field: value or None}
     try:
         with client.connect_rw() as db:
@@ -1138,8 +1196,6 @@ def close_topic(
         return PlainTextResponse(_REPROPOSE_NO_SECTIONS, status_code=400)
 
     # Propõe o plano (LLM ou fallback mecânico).
-    from kubo.study.planner import mechanical_proposal
-
     planner, _executor = _planner(ctx)
     proposal = planner.propose(
         sections,
@@ -1197,7 +1253,7 @@ def _planning_chat_history_of(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx, db))
 
 
 def _current_plan_as_tuples(
@@ -1518,6 +1574,39 @@ def _resolve_move(
     return idx, neighbor_idx
 
 
+def _do_move_entry(
+    ctx: SessionContext, topic: study_store.Topic, key: str, ekey: str, direction: str
+) -> Response | None:
+    """Executa o swap de entries. Devolve Response de erro, ou None se OK/no-op."""
+    with client.connect() as db:
+        plan, entries = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    if plan is None or not entries:
+        return PlainTextResponse("Plano não encontrado.", status_code=400)
+    try:
+        pair = _resolve_move(entries, ekey, direction)
+    except ValueError:
+        return PlainTextResponse("Lição não encontrada.", status_code=400)
+    if pair is None:
+        return None  # no-op (boundary)
+    idx, neighbor_idx = pair
+    try:
+        with client.connect_rw() as db:
+            study_store.swap_plan_entries(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                entry_a=entries[idx].id,
+                entry_b=entries[neighbor_idx].id,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.move.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return None
+
+
 @router.post("/topics/{key}/plan/entries/{ekey}/move")
 def move_entry(
     request: Request,
@@ -1540,31 +1629,11 @@ def move_entry(
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        plan, entries = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
-    if plan is None or not entries:
-        return PlainTextResponse("Plano não encontrado.", status_code=400)
-    try:
-        pair = _resolve_move(entries, ekey, direction)
-    except ValueError:
-        return PlainTextResponse("Lição não encontrada.", status_code=400)
-    if pair is None:
-        return RedirectResponse(_topic_url(topic.id), status_code=303)
-    idx, neighbor_idx = pair
-    try:
-        with client.connect_rw() as db:
-            study_store.swap_plan_entries(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                plan_id=plan.id,
-                entry_a=entries[idx].id,
-                entry_b=entries[neighbor_idx].id,
-            )
-    except (ConfigError, StoreError):
-        _log.warning("study.move.failed", topic=_log_key(key))
-        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    result = _do_move_entry(ctx, topic, key, ekey, direction)
+    if result is not None:
+        return result
+    if _is_htmx(request):
+        return _render_plan_entries(request, ctx, topic)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -1608,6 +1677,8 @@ def remove_section(
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     if not ok:
         return PlainTextResponse("Não é possível remover a última seção.", status_code=400)
+    if _is_htmx(request):
+        return _render_plan_entries(request, ctx, topic)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
