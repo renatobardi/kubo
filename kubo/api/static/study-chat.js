@@ -59,7 +59,9 @@
       fetch(topicUrl + "/rename", { method: "POST", body: fd }).then(function (r) {
         if (!r.ok) {
           titleInput.value = prevTitle;
-          console.error("rename failed", r.status);
+          if (typeof window._kuboShowError === "function") {
+            window._kuboShowError("Não foi possível renomear o tema (" + r.status + ").");
+          }
         } else {
           document.querySelectorAll("[data-page-title]").forEach(function (el) {
             el.textContent = value;
@@ -74,9 +76,13 @@
       fd2.append("value", value);
       fetch(topicUrl + "/fields", { method: "POST", body: fd2 }).then(function (r) {
         if (r.ok) {
-          location.reload();
+          // Atualiza o valor exibido in-place — sem reload (preserva a conversa).
+          var fieldEl = document.querySelector('[data-field="' + type + '"]');
+          if (fieldEl) fieldEl.textContent = value;
         } else {
-          console.error("fields update failed", r.status);
+          if (typeof window._kuboShowError === "function") {
+            window._kuboShowError("Não foi possível atualizar " + type + " (" + r.status + ").");
+          }
         }
       });
     }

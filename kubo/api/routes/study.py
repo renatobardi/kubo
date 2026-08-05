@@ -107,6 +107,7 @@ _OVER_LIMIT = "Limite de materiais por tema atingido."
 _OVERSIZE = "Arquivo muito grande."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
 _TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um tema em rascunho."
+_TOPIC_NOT_DRAFT_FIELDS = "Só é possível definir foco e profundidade em um tema em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
 # Chave do notice de auto-revert (query param no redirect) — o template mostra o banner.
 _AUTO_REVERT_NOTICE = "voltou-rascunho"
@@ -164,7 +165,13 @@ def _topic_of(db: Any, key: str, ctx: SessionContext) -> study_store.Topic | Non
 
 
 def _topic_missing(request: Request, key: str) -> Response:
-    """404 da tela do tema — tema de outro usuário é INEXISTENTE, não 'negado'."""
+    """404 da tela do tema — tema de outro usuário é INEXISTENTE, não 'negado'.
+
+    POST devolve `text/plain` (o `_error_dialog.html` só mostra texto plain);
+    GET devolve a página HTML 404 completa.
+    """
+    if request.method == "POST":
+        return PlainTextResponse("Tema não encontrado.", status_code=404)
     return templates.TemplateResponse(
         request, _TOPIC_NOT_FOUND_TEMPLATE, {"raw": key}, status_code=404
     )
@@ -548,6 +555,11 @@ def upload_material(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
     limit = _max_materials()
+    if limit <= 0:
+        return PlainTextResponse(
+            "Upload de materiais desabilitado por configuração (KUBO_TOPIC_MAX_MATERIALS).",
+            status_code=503,
+        )
     if count >= limit:
         return PlainTextResponse(_OVER_LIMIT, status_code=400)
 
@@ -954,7 +966,7 @@ def set_topic_fields(
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
-            return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
+            return PlainTextResponse(_TOPIC_NOT_DRAFT_FIELDS, status_code=400)
     kwargs: dict[str, str | None] = {field: value or None}
     try:
         with client.connect_rw() as db:
@@ -1138,8 +1150,6 @@ def close_topic(
         return PlainTextResponse(_REPROPOSE_NO_SECTIONS, status_code=400)
 
     # Propõe o plano (LLM ou fallback mecânico).
-    from kubo.study.planner import mechanical_proposal
-
     planner, _executor = _planner(ctx)
     proposal = planner.propose(
         sections,

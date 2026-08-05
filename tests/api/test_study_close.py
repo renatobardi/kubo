@@ -224,7 +224,7 @@ def test_close_topic_not_draft_returns_400(
 def test_close_topic_not_found_returns_404(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Tema inexistente devolve 404."""
+    """Tema inexistente devolve 404 text/plain em POST (dialog de erro mostra a mensagem)."""
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
     resp = authed_client.post(
         "/study/topics/abc123/close",
@@ -232,6 +232,8 @@ def test_close_topic_not_found_returns_404(
         follow_redirects=False,
     )
     assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "Tema não encontrado" in resp.text
 
 
 def test_close_topic_requires_csrf(authed_client: TestClient) -> None:
