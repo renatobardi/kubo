@@ -225,8 +225,8 @@ def test_topic_detail_state_badge_has_semantic_color(
     )
     html = authed_client.get("/study/topics/abc123").text
     assert "Em andamento" in html
-    # running = emerald
-    assert "bg-emerald-500/10" in html or "text-emerald-700" in html
+    # running = primary (design system)
+    assert "bg-primary/10" in html
 
 
 def test_topic_detail_includes_study_chat_js(

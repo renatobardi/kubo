@@ -47,7 +47,7 @@ def _plan() -> StudyPlan:
     )
 
 
-def _lesson(*, placeholder: bool = False, has_log: bool = False) -> Lesson:
+def _lesson(*, placeholder: bool = False) -> Lesson:
     return Lesson(
         id=_LESSON_ID,
         tenant_id=_TENANT,
@@ -172,7 +172,7 @@ def test_lesson_page_shows_placeholder(
 
     assert resp.status_code == 200
     assert "Q1?" not in body
-    assert "gerando" in body.lower() or "placeholder" in body.lower() or "a lição" in body.lower()
+    assert "sendo gerada pelo scheduler" in body.lower()
 
 
 def test_submit_quiz_requires_csrf(authed_client: TestClient) -> None:

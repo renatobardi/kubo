@@ -41,7 +41,7 @@ O épico KUBO-160 entregou o Tema como container de Materiais, as duas fases de 
 ### IV. Uma implementação de chat SSE, e a tela do Tema em partials por fase
 
 - O parser SSE vira **um** arquivo em `static/`, parametrizado por endpoint e rótulos; mentor e planner passam a consumi-lo. A Emenda 3 do ADR-0047 continua válida como exceção à invariante 7 (HTMX não cobre SSE multi-evento), mas passa a valer para **uma** cópia — três cópias divergem, e divergiram (o bug corrigido em `e573455` nasceu exatamente disso).
-- `topic.html` é quebrado em partials por fase (`_header`, `_draft`, `_planning`, `_readonly`, `_chat`). O critério não é estético: um template que cobre 5 estados torna toda mudança de uma fase um risco para as outras.
+- `topic.html` é quebrado em partials por fase (`_header`, `_draft`, `_planning`, `_readonly`), com `_state_badge` e `_materials` como partials compartilhados. O critério não é estético: um template que cobre 5 estados torna toda mudança de uma fase um risco para as outras. A lógica de chat SSE vive em `static/study-chat.js` (não em um partial `_chat`).
 - Confirmações destrutivas passam de `confirm()` nativo para `<dialog>` do design system — que já é o padrão do gate e do wizard de RSS.
 - Recusa por pré-condição aparece **antes** do clique (ex.: "Ativar" desabilitado com o motivo "defina a cadência"), não como 400 depois.
 

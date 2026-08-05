@@ -52,13 +52,14 @@
   </script>
 </section>
 
-{# Chat com mentor (KUBO-163): só em draft. Desabilitado até ≥1 Material. #}
+{# Chat com mentor (KUBO-163): só em draft. Exige ≥1 Material ready (ADR-0049 §III). #}
+{% set has_ready = materials | selectattr("status", "equalto", "ready") | list | length > 0 %}
 <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
   <h2 class="text-sm font-medium">Conversa com o mentor</h2>
   <p class="mt-1 text-xs text-muted-foreground">Converse para definir o que quer do estudo. O mentor sugere nome, foco e profundidade.</p>
 
-  {% if not materials %}
-  <p class="mt-3 text-sm text-muted-foreground">Adicione pelo menos um material para começar a conversar com o mentor.</p>
+  {% if not has_ready %}
+  <p class="mt-3 text-sm text-muted-foreground">Adicione pelo menos um material processado (pronto) para começar a conversar com o mentor.</p>
   {% else %}
 
   {# Histórico da conversa (persistido). #}
@@ -149,13 +150,13 @@
   {% endif %}
 </section>
 
-{# Botão Fechar estudo (KUBO-164): só em draft, exige ≥1 Material. #}
-{% if materials %}
+{# Botão Fechar estudo (KUBO-164): só em draft, exige ≥1 Material ready (ADR-0049 §III). #}
+{% if has_ready %}
 <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
   <h2 class="text-sm font-medium">Fechar tema</h2>
   <p class="mt-1 text-xs text-muted-foreground">Fecha o rascunho e o planner propõe um plano de estudo com base nos materiais e na conversa com o mentor.</p>
   <form method="post" action="{{ topic_url }}/close" class="mt-3"
-        onsubmit="return confirm('Fechar o tema e gerar o plano? Não será possível adicionar mais materiais.')">
+        data-confirm="Fechar o tema e gerar o plano? Não será possível adicionar mais materiais.">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button type="submit"
             class="h-9 rounded-4xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90">

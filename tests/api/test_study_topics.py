@@ -147,7 +147,7 @@ def test_topics_page_lists_topics_with_name_and_state(
 def test_topics_page_state_badge_has_semantic_color(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Badge de estado tem cor semântica (D2): draft=amber, running=emerald, archived=muted."""
+    """Badge de estado tem cor semântica (D2): ativos=primary, archived=muted."""
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_topics",
         lambda db, **kw: [
@@ -159,12 +159,10 @@ def test_topics_page_state_badge_has_semantic_color(
         ],
     )
     html = authed_client.get("/study/topics").text
-    # draft = amber (em análise)
-    assert "bg-amber-500/10" in html or "text-amber-700" in html
-    # running = emerald (ativo)
-    assert "bg-emerald-500/10" in html or "text-emerald-700" in html
+    # estados ativos (draft/planning/scheduled/running) = primary
+    assert "bg-primary/10" in html
     # archived = muted (neutro)
-    assert "text-muted-foreground" in html
+    assert "bg-muted" in html and "text-muted-foreground" in html
 
 
 # --- Criar Tema vazio --------------------------------------------------------------------

@@ -8,7 +8,7 @@
     <div class="flex flex-wrap gap-2">
       {% if topic.state != "archived" %}
       <form method="post" action="{{ topic_url }}/archive" class="inline"
-            onsubmit="return confirm('Arquivar este tema? O scheduler pausará até desarquivar.')">
+            data-confirm="Arquivar este tema? O scheduler pausará até desarquivar.">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
           Arquivar

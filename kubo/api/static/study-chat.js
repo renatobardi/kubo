@@ -72,10 +72,28 @@
       fd2.append("csrf", csrf);
       fd2.append("field", type);
       fd2.append("value", value);
-      fetch(topicUrl + "/fields", { method: "POST", body: fd2 }).then(function () {
-        location.reload();
+      fetch(topicUrl + "/fields", { method: "POST", body: fd2 }).then(function (r) {
+        if (r.ok) {
+          location.reload();
+        } else {
+          console.error("fields update failed", r.status);
+        }
       });
     }
+  }
+
+  function parseSSEFrame(frame) {
+    var ev = "";
+    var dataLines = [];
+    var lines = frame.split(/\r?\n/);
+    for (var line of lines) {
+      if (line.startsWith("event: ")) {
+        ev = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        dataLines.push(line.slice(6));
+      }
+    }
+    return { event: ev, data: dataLines.join("\n") };
   }
 
   async function streamSSE(resp, assistantP, fullTextRef, messagesEl, onDone, ctx) {
@@ -89,29 +107,19 @@
       var events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop();
       for (var i = 0; i < events.length; i++) {
-        var lines = events[i].split(/\r?\n/);
-        var ev = "";
-        var dataLines = [];
-        for (var j = 0; j < lines.length; j++) {
-          if (lines[j].indexOf("event: ") === 0) {
-            ev = lines[j].slice(7).trim();
-          } else if (lines[j].indexOf("data: ") === 0) {
-            dataLines.push(lines[j].slice(6));
-          }
-        }
-        var data = dataLines.join("\n");
-        if (ev === "chunk") {
-          fullTextRef.text += data;
+        var parsed = parseSSEFrame(events[i]);
+        if (parsed.event === "chunk") {
+          fullTextRef.text += parsed.data;
           assistantP.textContent = fullTextRef.text;
           messagesEl.scrollTop = messagesEl.scrollHeight;
-        } else if (ev === "error") {
-          assistantP.textContent = data || "Erro ao gerar resposta.";
-        } else if (ev === "done") {
+        } else if (parsed.event === "error") {
+          assistantP.textContent = parsed.data || "Erro ao gerar resposta.";
+        } else if (parsed.event === "done") {
           try {
-            var parsed = JSON.parse(data);
-            if (parsed.text !== undefined) fullTextRef.text = parsed.text;
+            var done = JSON.parse(parsed.data);
+            if (done.text !== undefined) fullTextRef.text = done.text;
             assistantP.textContent = fullTextRef.text || "";
-            if (onDone) onDone(parsed, ctx);
+            if (onDone) onDone(done, ctx);
           } catch (e) {
             console.error("SSE done parse failed:", e);
           }
@@ -127,9 +135,6 @@
       var input = document.getElementById(opts.inputId);
       var submit = document.getElementById(opts.submitId);
       var messages = document.getElementById(opts.messagesId);
-      var suggestions = opts.suggestionsId
-        ? document.getElementById(opts.suggestionsId)
-        : null;
       var suggestionButtons = opts.suggestionButtonsId
         ? document.getElementById(opts.suggestionButtonsId)
         : null;

@@ -16,21 +16,28 @@
       </form>
       {# Botão Repropor tudo. #}
       <form method="post" action="{{ topic_url }}/repropose" class="inline"
-            onsubmit="return confirm('Repropor o plano do zero? Suas edições manuais serão perdidas.')">
+            data-confirm="Repropor o plano do zero? Suas edições manuais serão perdidas.">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button type="submit" class="rounded-4xl px-3 py-1 text-xs ring-1 ring-foreground/10 transition-colors hover:bg-muted">
           Repropor tudo
         </button>
       </form>
-      {# Botão Ativar (planning → scheduled, KUBO-166). #}
+      {# Botão Ativar (planning → scheduled, KUBO-166). Desabilitado sem cadência (D3). #}
+      {% set has_cadence = plan.weekdays and plan.weekdays|length > 0 %}
+      {% if has_cadence %}
       <form method="post" action="{{ topic_url }}/activate" class="inline"
-            onsubmit="return confirm('Ativar o plano? O scheduler começará a gerar lições na véspera do primeiro dia de cadência.')">
+            data-confirm="Ativar o plano? O scheduler começará a gerar lições na véspera do primeiro dia de cadência.">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button type="submit"
                 class="rounded-4xl bg-primary px-4 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90">
           Ativar plano
         </button>
       </form>
+      {% else %}
+      <span class="inline-flex items-center rounded-4xl bg-muted px-4 py-1 text-xs text-muted-foreground" title="Defina a cadência antes de ativar">
+        Ativar plano (defina a cadência)
+      </span>
+      {% endif %}
       {% elif topic.state == "scheduled" %}
       {# Botão Editar plano (scheduled → planning, KUBO-166). #}
       <form method="post" action="{{ topic_url }}/edit-plan" class="inline">

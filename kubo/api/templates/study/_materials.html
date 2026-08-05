@@ -1,9 +1,11 @@
 {# Partial da lista de Materiais (KUBO-202, ADR-0049 §III).
    Incluído na tela do Tema e na rota de polling HTMX (hx-get).
-   Polling só enquanto houver pending — o hx-trigger some quando todos estão ready/failed. #}
+   Polling só enquanto houver pending E o tema não estiver arquivado —
+   o hx-trigger some quando todos estão ready/failed ou o tema é readonly. #}
 {% set has_pending = materials | selectattr("status", "equalto", "pending") | list | length > 0 %}
+{% set can_poll = has_pending and topic.state != "archived" %}
 <ul class="mt-3 space-y-2"
-    {% if has_pending %}
+    {% if can_poll %}
     hx-get="{{ topic_url }}/materials/partials"
     hx-trigger="every 5s"
     hx-swap="outerHTML"
@@ -14,19 +16,19 @@
     <div class="min-w-0 flex-1">
       <span class="font-medium">{{ m.title }}</span>
       <span class="ml-2 text-xs text-muted-foreground">{{ m.fmt|upper }} · {{ m.size_bytes|filesizeformat }}</span>
-      {# Badge de status de ingestão (ADR-0049 §III). #}
+      {# Badge de status de ingestão (ADR-0049 §III) — variantes semânticas do design system. #}
       {% if m.status == "pending" %}
-      <span class="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400">
-        <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"></span>
+      <span class="ml-2 inline-flex items-center gap-1 rounded-4xl bg-primary/10 px-2 py-0.5 text-xs text-primary">
+        <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary"></span>
         Processando
       </span>
       {% elif m.status == "ready" %}
-      <span class="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-400">
-        <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+      <span class="ml-2 inline-flex items-center gap-1 rounded-4xl bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+        <span class="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground"></span>
         Pronto
       </span>
       {% elif m.status == "failed" %}
-      <span class="ml-2 inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
+      <span class="ml-2 inline-flex items-center gap-1 rounded-4xl bg-destructive/10 px-2 py-0.5 text-xs text-destructive">
         Falhou
       </span>
       {% if m.error %}
@@ -37,14 +39,14 @@
     <div class="flex shrink-0 items-center gap-2">
       {% if m.status == "failed" and topic.state == "draft" %}
       <form method="post" action="{{ topic_url }}/materials/{{ m.id.id }}/retry" class="shrink-0"
-            onsubmit="return confirm('Tentar processar {{ m.title }} de novo?')">
+            data-confirm="Tentar processar este material de novo?">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button type="submit" class="text-xs text-primary hover:underline">Tentar de novo</button>
       </form>
       {% endif %}
       {% if topic.state == "draft" %}
       <form method="post" action="{{ topic_url }}/materials/{{ m.id.id }}/delete" class="shrink-0"
-            onsubmit="return confirm('Remover {{ m.title }}?')">
+            data-confirm="Remover este material?">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button type="submit" class="text-xs text-destructive hover:underline">Remover</button>
       </form>

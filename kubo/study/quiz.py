@@ -36,6 +36,26 @@ class QuizResult:
     wrong_questions: list[str]
 
 
+def _validate_question(item: Mapping[str, object], answer: int) -> int:
+    """Valida uma questão do quiz e a resposta correspondente.
+
+    Devolve o `answer_index` (gabarito) se válido; levanta `QuizAnswerError` se o
+    quiz estiver malformado (sem options, sem gabarito, gabarito fora da faixa) ou
+    se a resposta do dono apontar para alternativa inexistente.
+    """
+    options = item.get("options")
+    expected = item.get("answer_index")
+    if not isinstance(options, Sequence) or isinstance(options, str) or not options:
+        raise QuizAnswerError(_MALFORMED_QUIZ)
+    if not isinstance(expected, int) or isinstance(expected, bool):
+        raise QuizAnswerError(_MALFORMED_QUIZ)
+    if not 0 <= expected < len(options):
+        raise QuizAnswerError(_MALFORMED_QUIZ)
+    if not 0 <= answer < len(options):
+        raise QuizAnswerError(_ANSWER_OUT_OF_RANGE)
+    return expected
+
+
 def grade(quiz: Sequence[Mapping[str, object]], answers: Sequence[int]) -> QuizResult:
     """Corrige as respostas do dono contra o gabarito do quiz.
 
@@ -50,16 +70,7 @@ def grade(quiz: Sequence[Mapping[str, object]], answers: Sequence[int]) -> QuizR
     correct = 0
     wrong: list[str] = []
     for item, answer in zip(quiz, answers, strict=True):
-        options = item.get("options")
-        expected = item.get("answer_index")
-        if not isinstance(options, Sequence) or isinstance(options, str) or not options:
-            raise QuizAnswerError(_MALFORMED_QUIZ)
-        if not isinstance(expected, int) or isinstance(expected, bool):
-            raise QuizAnswerError(_MALFORMED_QUIZ)
-        if not 0 <= expected < len(options):
-            raise QuizAnswerError(_MALFORMED_QUIZ)
-        if not 0 <= answer < len(options):
-            raise QuizAnswerError(_ANSWER_OUT_OF_RANGE)
+        expected = _validate_question(item, answer)
         if answer == expected:
             correct += 1
         else:

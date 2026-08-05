@@ -1,0 +1,80 @@
+{# Dialog global de confirmação: intercepta forms com data-confirm e mostra
+   um <dialog> nativo em vez do confirm() do navegador.
+   Padrão do design system: <dialog> como o GateSheet e o _error_dialog.
+   Incluído por base.html após o _error_dialog. #}
+<dialog id="kubo-confirm-dialog" aria-labelledby="kubo-confirm-title"
+        class="m-0 max-w-[90vw] rounded-2xl bg-popover p-0 text-popover-foreground backdrop:bg-black/40 md:w-[420px]">
+  <div class="flex items-start gap-2.5 border-b border-border p-5">
+    <span class="mt-0.5 text-primary">{{ macros.triangle_alert("size-4") }}</span>
+    <div class="min-w-0 flex-1">
+      <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Confirmar</div>
+      <h3 id="kubo-confirm-title" class="mt-0.5 font-heading text-base font-semibold">Tem certeza?</h3>
+    </div>
+    <form method="dialog" class="shrink-0"><button class="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Fechar">
+      <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button></form>
+  </div>
+  <div class="p-5">
+    <p id="kubo-confirm-message" class="text-sm leading-relaxed text-muted-foreground"></p>
+  </div>
+  <div class="flex gap-3 border-t border-border p-5">
+    <button type="button" id="kubo-confirm-cancel"
+            class="flex-1 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+      Cancelar
+    </button>
+    <button type="button" id="kubo-confirm-ok"
+            class="flex-1 rounded-lg bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground hover:opacity-90">
+      Confirmar
+    </button>
+  </div>
+</dialog>
+<script>
+  (function () {
+    var dialog = document.getElementById('kubo-confirm-dialog');
+    var msgEl = document.getElementById('kubo-confirm-message');
+    var okBtn = document.getElementById('kubo-confirm-ok');
+    var cancelBtn = document.getElementById('kubo-confirm-cancel');
+    var pendingForm = null;
+
+    function showConfirm(message, form) {
+      msgEl.textContent = message || 'Confirma esta ação?';
+      pendingForm = form;
+      if (!dialog.open) dialog.showModal();
+    }
+
+    okBtn.addEventListener('click', function () {
+      dialog.close();
+      if (pendingForm) {
+        pendingForm.removeAttribute('data-confirm');
+        pendingForm.requestSubmit();
+        pendingForm = null;
+      }
+    });
+
+    cancelBtn.addEventListener('click', function () {
+      dialog.close();
+      pendingForm = null;
+    });
+
+    dialog.addEventListener('close', function () {
+      if (dialog.returnValue === '' && pendingForm) {
+        pendingForm = null;
+      }
+    });
+
+    // Intercepta submit de forms com data-confirm (capture phase, antes do _error_dialog).
+    document.addEventListener('submit', function (ev) {
+      var form = ev.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      var msg = form.getAttribute('data-confirm');
+      if (!msg) return;
+      if (form.dataset.confirmed === '1') {
+        delete form.dataset.confirmed;
+        return; // já confirmado — deixa o submit seguir
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      showConfirm(msg, form);
+    }, true); // capture: intercepta antes do bubble-phase listener do _error_dialog
+  })();
+</script>

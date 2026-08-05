@@ -47,6 +47,8 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
+from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat
@@ -110,8 +112,10 @@ _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o 
 _AUTO_REVERT_NOTICE = "voltou-rascunho"
 _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
 _INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
-_LESSON_NOT_FOUND = "Lição não encontrada."
 _TOPIC_FROZEN = "O plano já está em andamento; não é possível alterar a cadência."
+_LESSON_ALREADY_DONE = "Você já concluiu esta lição."
+_VALID_REACTIONS = frozenset({"facil", "ok", "dificil"})
+_INVALID_REACTION = "Reação inválida: use facil, ok ou dificil."
 _MENTOR_MAX_TOKENS = 2048
 _MENTOR_TIMEOUT = 60.0
 _PLANNER_MAX_TOKENS = 4096
@@ -124,8 +128,6 @@ _FORMATS: dict[str, MaterialFormat] = {".epub": "epub", ".pdf": "pdf"}
 _DEFAULT_MAX_MB = 50
 _DEFAULT_MAX_MATERIALS = 5
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
-_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
-_SUMMARY_MAX_TOKENS = 1024
 
 # Rótulos de estado do Tema (ADR-0047 §3) — a lista e o detalhe usam os mesmos.
 _STATE_LABELS: dict[str, str] = {
@@ -284,9 +286,6 @@ def _persist_pending_material(
                 file_path=str(path),
                 size_bytes=len(data),
             )
-    except (ConfigError, StoreError):
-        path.unlink(missing_ok=True)
-        raise
     except Exception:
         path.unlink(missing_ok=True)
         raise
@@ -682,11 +681,9 @@ def retry_material(
             study_store.retry_material_ingest(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
             )
-    except ConfigError:
+    except (ConfigError, StoreError):
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
-    except StoreError:
-        return PlainTextResponse("Material não encontrado.", status_code=404)
     _log.info("study.material.retry", material=_log_key(mkey), topic=_log_key(key))
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
@@ -822,10 +819,10 @@ def _chat_precheck(
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
-        count = study_store.count_materials_by_topic(
+        ready = study_store.count_ready_materials_by_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-        if count == 0:
+        if ready == 0:
             return PlainTextResponse(_TOPIC_NO_MATERIALS, status_code=400)
         summaries = _material_summaries_of(db, ctx, topic.id)
         history = _chat_history_of(db, ctx, topic.id)
@@ -1125,10 +1122,10 @@ def close_topic(
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CLOSE, status_code=400)
-        count = study_store.count_materials_by_topic(
+        ready = study_store.count_ready_materials_by_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-        if count == 0:
+        if ready == 0:
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
         sections = _collect_all_sections(db, ctx, topic.id)
@@ -1905,11 +1902,11 @@ def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
         plan, _ = study_store.get_plan_for_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-        lesson_id = RecordID("lesson", lesson_key)
+        lesson_id = RecordID("lesson", lesson_key.strip())
         lesson = study_store.get_lesson(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
         )
-        if lesson is None or (plan is not None and str(lesson.study_plan) != str(plan.id)):
+        if lesson is None or (plan is not None and lesson.study_plan != plan.id):
             return templates.TemplateResponse(
                 request,
                 _TOPIC_NOT_FOUND_TEMPLATE,
@@ -1931,6 +1928,62 @@ def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
     )
 
 
+@router.post("/topics/{key}/lessons/{lesson_key}/generate")
+def generate_lesson(
+    request: Request,
+    key: str,
+    lesson_key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Força a geração de uma lição placeholder (ADR-0049 §I — botão 'gerar agora')."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    try:
+        with client.connect_rw() as db:
+            topic = _topic_of(db, key, ctx)
+            if topic is None:
+                return _topic_missing(request, key)
+            plan, entries = study_store.get_plan_for_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+            lesson_id = RecordID("lesson", lesson_key.strip())
+            lesson = study_store.get_lesson(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+            )
+            if lesson is None or (plan is not None and lesson.study_plan != plan.id):
+                return templates.TemplateResponse(
+                    request,
+                    _TOPIC_NOT_FOUND_TEMPLATE,
+                    {"raw": f"{key}/lessons/{lesson_key}"},
+                    status_code=404,
+                )
+            if not lesson.is_placeholder:
+                return PlainTextResponse("Lição já gerada.", status_code=400)
+            if plan is None or not entries:
+                return PlainTextResponse("Plano não encontrado.", status_code=400)
+            entry = next((e for e in entries if e.id == lesson.plan_entry), None)
+            if entry is None:
+                return PlainTextResponse("Entrada do plano não encontrada.", status_code=400)
+            from kubo.scheduler.study_lessons import _generate_lesson_content
+
+            _generate_lesson_content(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                lesson_id=lesson_id,
+                entry=entry,
+                work_context=topic.title,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.lesson.generate_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id) + f"/lessons/{lesson_key}", status_code=303)
+
+
 @router.post("/topics/{key}/lessons/{lesson_key}/submit")
 def submit_quiz(
     request: Request,
@@ -1947,6 +2000,8 @@ def submit_quiz(
     ctx = _session_of(request)
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
+    if reaction is not None and reaction not in _VALID_REACTIONS:
+        return PlainTextResponse(_INVALID_REACTION, status_code=400)
     try:
         with client.connect_rw() as db:
             topic = _topic_of(db, key, ctx)
@@ -1955,11 +2010,11 @@ def submit_quiz(
             plan, _ = study_store.get_plan_for_topic(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
             )
-            lesson_id = RecordID("lesson", lesson_key)
+            lesson_id = RecordID("lesson", lesson_key.strip())
             lesson = study_store.get_lesson(
                 db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
             )
-            if lesson is None or (plan is not None and str(lesson.study_plan) != str(plan.id)):
+            if lesson is None or (plan is not None and lesson.study_plan != plan.id):
                 return templates.TemplateResponse(
                     request,
                     _TOPIC_NOT_FOUND_TEMPLATE,
@@ -1984,7 +2039,12 @@ def submit_quiz(
             )
     except QuizAnswerError as exc:
         return PlainTextResponse(str(exc), status_code=400)
-    except (ConfigError, StoreError):
+    except StoreError as exc:
+        if "already exists" in str(exc):
+            return PlainTextResponse(_LESSON_ALREADY_DONE, status_code=400)
+        _log.warning("study.lesson.submit_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
         _log.warning("study.lesson.submit_failed", lesson=lesson_key)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     return RedirectResponse(_topic_url(topic.id), status_code=303)

@@ -132,6 +132,7 @@ def _filled_lesson(
     entry_id: RecordID,
     *,
     day: int = 4,
+    quiz: list[dict[str, Any]] | None = None,
 ) -> RecordID:
     """Cria e preenche uma lição (como o scheduler faz com o Tutor)."""
     lesson_id = create_lesson(
@@ -151,7 +152,7 @@ def _filled_lesson(
         scenario="Cenário.",
         application="Aplicação.",
         recap=None,
-        quiz=_quiz(),
+        quiz=quiz if quiz is not None else _quiz(),
         provenance=[{"chapter_seq": 1, "section_seq": 1, "quote": "trecho"}],
     )
     return lesson_id
@@ -474,7 +475,21 @@ def test_recent_misses_prefers_recent_and_caps(
     """Erros mais recentes primeiro, com teto — a recapitulação é da lição do dia."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     older = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
-    newer = _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=6)
+    newer_quiz = [
+        {
+            "question": "O que é um Plano?",
+            "options": ["Cronograma", "Arquivo"],
+            "answer_index": 0,
+            "explanation": "Plano é o cronograma.",
+        },
+        {
+            "question": "O que é uma Lição?",
+            "options": ["Unidade", "Container"],
+            "answer_index": 0,
+            "explanation": "Lição é a unidade.",
+        },
+    ]
+    newer = _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=6, quiz=newer_quiz)
     for lesson_id in (older, newer):
         create_study_log(
             db,
@@ -489,5 +504,5 @@ def test_recent_misses_prefers_recent_and_caps(
         db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id, limit=3
     )
     assert len(misses) == 3  # 4 erros, teto de 3
-    # A lição mais recente (day=6) contribui primeiro.
-    assert misses[0] == "O que é um Tema?"
+    # A lição mais recente (day=6) contribui primeiro — prompt distinto.
+    assert misses[0] == "O que é um Plano?"

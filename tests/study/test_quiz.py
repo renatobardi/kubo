@@ -81,13 +81,26 @@ def test_empty_quiz_is_rejected() -> None:
         grade([], [])
 
 
-def test_malformed_answer_index_is_rejected() -> None:
+@pytest.mark.parametrize(
+    "quiz,answers",
+    [
+        # answer_index ausente (lição gravada por versão anterior)
+        ([{"question": "Sem gabarito", "options": ["a", "b"]}], [0]),
+        # answer_index fora da faixa das opções
+        ([{"question": "Fora da faixa", "options": ["a", "b"], "answer_index": 5}], [0]),
+        # answer_index negativo
+        ([{"question": "Negativo", "options": ["a", "b"], "answer_index": -1}], [0]),
+    ],
+    ids=["missing", "out_of_range", "negative"],
+)
+def test_malformed_answer_index_is_rejected(
+    quiz: list[dict[str, object]], answers: list[int]
+) -> None:
     """`answer_index` ausente ou fora da faixa vinda do banco não vira 500.
 
     O quiz é objeto FLEXIBLE no schema: uma lição gravada por versão anterior
     pode não ter o campo. A recusa é explícita (o dono vê a lição como
     inconsultável) em vez de KeyError.
     """
-    quiz: list[dict[str, object]] = [{"question": "Sem gabarito", "options": ["a", "b"]}]
     with pytest.raises(QuizAnswerError):
-        grade(quiz, [0])
+        grade(quiz, answers)

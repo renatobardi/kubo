@@ -6,7 +6,7 @@
 -- `ready`:   ingestão completa — chapters, sections e summary disponíveis.
 -- `failed`:  ingestão falhou; `error` tem o motivo.
 -- `ingested_at`: timestamp do fim da ingestão (ready) ou None.
-DEFINE FIELD OVERWRITE status       ON material TYPE string DEFAULT "ready";
+DEFINE FIELD OVERWRITE status       ON material TYPE string DEFAULT "ready" ASSERT $value IN ["pending", "ready", "failed"];
 DEFINE FIELD OVERWRITE error        ON material TYPE option<string>;
 DEFINE FIELD OVERWRITE ingested_at  ON material TYPE option<datetime>;
 
