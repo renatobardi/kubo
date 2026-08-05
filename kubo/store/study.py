@@ -1509,38 +1509,58 @@ def lesson_for_today(
     """Próxima lição não-concluída do dia (ou a mais próxima) entre todos os
     planos ativos (scheduled/running) do user. Para o card do Painel (D9).
 
-    Retorna (lesson, topic) ou None se não há plano ativo ou todas concluídas.
+    SurrealDB v3 não suporta JOIN — usa 3 queries: topics ativos → plan_ids
+    → próxima lesson sem study_log. Retorna (lesson, topic) ou None.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    # Busca lições sem study_log, dos planos ativos, ordenadas por scheduled_for.
-    rows = db.query(
-        "SELECT lesson.*, lesson.study_plan AS plan_id, "  # noqa: S608
-        "study_plan.topic AS topic_id, topic.title AS topic_title, "
-        "topic.state AS topic_state, topic.created_at AS topic_created_at "
-        "FROM lesson "
-        "JOIN study_plan ON lesson.study_plan = study_plan.id "
-        "JOIN topic ON study_plan.topic = topic.id "
-        f"WHERE topic.state IN ['scheduled', 'running'] AND {_USER_SCOPE} "
-        "AND lesson.id NOT IN (SELECT lesson FROM study_log WHERE "
-        f"{_USER_SCOPE}) "
-        "ORDER BY lesson.scheduled_for ASC LIMIT 1;",
-        {"tenant": tenant_id, "user": user_id},
+    base = {"tenant": tenant_id, "user": user_id}
+    # 1. Topics ativos (scheduled/running).
+    active_topics = list_topics_by_state(
+        db, tenant_id=tenant_id, user_id=user_id, state="scheduled"
     )
-    if not rows:
+    active_topics += list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="running")
+    if not active_topics:
         return None
-    row = rows[0]
-    lesson = _lesson_from_row(row)
-    topic = Topic(
-        id=row["topic_id"],
-        tenant_id=tenant_id,
-        user_id=user_id,
-        title=row["topic_title"],
-        state=row["topic_state"],
-        created_at=row["topic_created_at"],
-        focus=None,
-        depth=None,
+    topic_ids = [t.id for t in active_topics]
+    topic_by_id = {str(t.id): t for t in active_topics}
+    # 2. Planos desses topics.
+    plan_rows = db.query(
+        f"SELECT id, topic FROM study_plan WHERE topic IN $topics "  # noqa: S608
+        f"AND {_USER_SCOPE};",
+        {**base, "topics": topic_ids},
     )
-    return lesson, topic
+    if not plan_rows:
+        return None
+    plan_to_topic: dict[str, Topic] = {}
+    plan_ids: list[RecordID] = []
+    for r in plan_rows:
+        plan_id = r["id"]
+        topic = topic_by_id.get(str(r["topic"]))
+        if topic is not None:
+            plan_to_topic[str(plan_id)] = topic
+            plan_ids.append(plan_id)
+    if not plan_ids:
+        return None
+    # 3. Study logs (set em memória).
+    log_rows = db.query(
+        f"SELECT lesson FROM study_log WHERE {_USER_SCOPE};",  # noqa: S608
+        base,
+    )
+    done_ids = {str(r["lesson"]) for r in log_rows}
+    # 4. Lessons desses planos, ordenadas por scheduled_for.
+    lesson_rows = db.query(
+        f"SELECT * FROM lesson WHERE study_plan IN $plans "  # noqa: S608
+        f"AND {_USER_SCOPE} ORDER BY scheduled_for;",
+        {**base, "plans": plan_ids},
+    )
+    for row in lesson_rows:
+        if str(row["id"]) in done_ids:
+            continue
+        lesson = _lesson_from_row(row)
+        topic = plan_to_topic.get(str(row["study_plan"]))
+        if topic is not None:
+            return lesson, topic
+    return None
 
 
 def create_study_log(
