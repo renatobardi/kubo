@@ -36,11 +36,12 @@ item pendente:
    curadoria só por workspace. Ver Nota de compatibilidade abaixo sobre por que a
    granularidade é o tenant e não o usuário.
 2. Persistir a nota como uma relação `(item, tenant) → nota`, com o momento em que
-   foi atribuída. **Isto é a 5ª tabela extra-spec** (run: ADR-0002; chunk: ADR-0008;
-   dispatch: ADR-0015; destination: ADR-0027, que re-armou a cláusula de contenção
-   do ADR-0002 pela última vez) — este ADR **re-arma de novo** (uma 6ª reabriria).
-   A reabertura consciente: a nota é o mecanismo do funil invertido (item I), não
-   cabe como campo em `item` porque é por `(item, tenant)`, não por `item` sozinho.
+   foi atribuída. **Isto é a 6ª tabela extra-spec** (run: ADR-0002; chunk: ADR-0008;
+   dispatch: ADR-0015; destination: ADR-0027; settings: ADR-0027/#119, que re-armou
+   a cláusula de contenção do ADR-0002 pela última vez, contando 4ª e 5ª no mesmo
+   ADR) — este ADR **re-arma de novo** (uma 7ª reabriria). A reabertura consciente:
+   a nota é o mecanismo do funil invertido (item I), não cabe como campo em `item`
+   porque é por `(item, tenant)`, não por `item` sozinho.
 3. **Só destilar o que passa uma nota mínima de corte.** Quem não passa vira item
    cru: gravado (sempre — ver item II), buscável por texto literal, invisível
    para a busca semântica (sem destilado não há chunk nem `mentions`).
