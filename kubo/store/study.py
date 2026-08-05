@@ -2165,50 +2165,73 @@ def get_topics_progress_batch(
     user_id: RecordID,
     topic_ids: list[RecordID],
 ) -> dict[str, TopicProgress]:
-    """Progresso em lote para a lista de temas — reutiliza o set de study_logs
-    (1 query global) em vez de N queries por tema. Retorna dict indexado por
-    str(topic_id) → TopicProgress.
+    """Progresso em lote para a lista de temas — 4 queries totais (não N+1).
+
+    1 query de study_logs + 1 de planos + 1 de counts de entries + 1 de lessons.
+    Agregação em memória. Retorna dict indexado por str(topic_id) → TopicProgress.
     """
     if not topic_ids:
         return {}
-    # Busca study_logs do tenant/user uma vez (set em memória).
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    base = {"tenant": tenant_id, "user": user_id}
+    # 1. Study logs globais (set em memória).
     log_rows = db.query(
         f"SELECT lesson FROM study_log WHERE {_USER_SCOPE};",  # noqa: S608
-        {"tenant": tenant_id, "user": user_id},
+        base,
     )
     done_ids = {str(r["lesson"]) for r in log_rows}
+    # 2. Planos dos topic_ids (1 query).
+    plan_rows = db.query(
+        f"SELECT id, topic FROM study_plan WHERE topic IN $topics "  # noqa: S608
+        f"AND {_USER_SCOPE};",
+        {**base, "topics": topic_ids},
+    )
+    topic_to_plan: dict[str, RecordID] = {}
+    plan_ids: list[RecordID] = []
+    for row in plan_rows:
+        plan_id = row["id"]
+        topic_to_plan[str(row["topic"])] = plan_id
+        plan_ids.append(plan_id)
+    if not plan_ids:
+        return {str(tid): TopicProgress(done=0, total=0) for tid in topic_ids}
+    # 3. Counts de entries por plano (1 query).
+    entry_rows = db.query(
+        f"SELECT count() FROM plan_entry WHERE study_plan IN $plans "  # noqa: S608
+        f"AND {_USER_SCOPE} GROUP BY study_plan;",
+        {**base, "plans": plan_ids},
+    )
+    plan_to_total: dict[str, int] = {}
+    for row in entry_rows:
+        plan_to_total[str(row["study_plan"])] = row["count"]
+    # 4. Lessons de todos os planos (1 query, ordenadas por scheduled_for).
+    lesson_rows = db.query(
+        f"SELECT id, study_plan, scheduled_for FROM lesson WHERE study_plan IN $plans "  # noqa: S608
+        f"AND {_USER_SCOPE} ORDER BY scheduled_for;",
+        {**base, "plans": plan_ids},
+    )
+    plan_to_lessons: dict[str, list[dict[str, Any]]] = {}
+    for row in lesson_rows:
+        plan_to_lessons.setdefault(str(row["study_plan"]), []).append(row)
+    # Agrega em memória.
     result: dict[str, TopicProgress] = {}
     for tid in topic_ids:
-        # Busca o plano do tema (1:1).
-        plan_rows = db.query(
-            f"SELECT id FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
-            {"topic": tid, "tenant": tenant_id, "user": user_id},
-        )
-        if not plan_rows:
-            result[str(tid)] = TopicProgress(done=0, total=0)
+        key = str(tid)
+        plan_id = topic_to_plan.get(key)
+        if plan_id is None:
+            result[key] = TopicProgress(done=0, total=0)
             continue
-        plan_id = plan_rows[0]["id"]
-        entry_rows = db.query(
-            f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_USER_SCOPE} GROUP ALL;",
-            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
-        )
-        total = entry_rows[0]["count"] if entry_rows else 0
+        total = plan_to_total.get(str(plan_id), 0)
         if total == 0:
-            result[str(tid)] = TopicProgress(done=0, total=0)
+            result[key] = TopicProgress(done=0, total=0)
             continue
-        lessons = db.query(
-            f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_USER_SCOPE} ORDER BY scheduled_for;",
-            {"plan": plan_id, "tenant": tenant_id, "user": user_id},
-        )
+        lessons = plan_to_lessons.get(str(plan_id), [])
         if not lessons:
-            result[str(tid)] = TopicProgress(done=0, total=total)
+            result[key] = TopicProgress(done=0, total=total)
             continue
         lesson_ids = [r["id"] for r in lessons]
         done = sum(1 for lid in lesson_ids if str(lid) in done_ids)
         next_row = next((r for r in lessons if str(r["id"]) not in done_ids), None)
-        result[str(tid)] = TopicProgress(
+        result[key] = TopicProgress(
             done=done,
             total=total,
             next_lesson_id=next_row["id"] if next_row else None,

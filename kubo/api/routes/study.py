@@ -182,6 +182,39 @@ def _topic_url(topic_id: RecordID) -> str:
     return f"{_TOPICS_ROUTE}/{topic_id.id}"
 
 
+def _is_htmx(request: Request) -> bool:
+    """True se a request veio do HTMX (header HX-Request)."""
+    return request.headers.get("HX-Request") == "true"
+
+
+def _render_plan_entries(
+    request: Request,
+    ctx: SessionContext,
+    topic: study_store.Topic,
+) -> Response:
+    """Re-renderiza o partial da lista de lições (C3 — HTMX swap, não reload)."""
+    with client.connect() as db:
+        plan, entries = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        section_titles: dict[str, str] = {}
+        if plan is not None:
+            for sec in _collect_all_sections(db, ctx, topic.id):
+                section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
+    return templates.TemplateResponse(
+        request,
+        "study/_plan_entries.html",
+        {
+            "topic": topic,
+            "plan": plan,
+            "plan_entries": entries,
+            "section_titles": section_titles,
+            "csrf": csrf_token(request),
+            "topic_url": _topic_url(topic.id),
+        },
+    )
+
+
 def _materials_dir() -> Path:
     """Diretório do volume de materiais (`KUBO_MATERIALS_DIR`); sem ele, não há escrita."""
     raw = os.environ.get("KUBO_MATERIALS_DIR", "").strip()
@@ -231,10 +264,17 @@ def _save_upload(directory: Path, ctx: SessionContext, fmt: MaterialFormat, data
     return path
 
 
-def _summarizer(ctx: SessionContext) -> Summarizer:
-    """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo)."""
-    with client.connect() as db:
+def _summarizer(ctx: SessionContext, db: Any | None = None) -> Summarizer:
+    """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo).
+
+    Se `db` é passado (conexão já aberta pelo caller), reusa — evita conexão
+    aninhada (C4). Sem `db`, abre própria (backward compat).
+    """
+    if db is not None:
         persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
+    else:
+        with client.connect() as db_conn:
+            persona = resolve_persona(db_conn, ctx.tenant_id, ctx.user_id, "summarizer")
     executor = ApiExecutor(
         ApiExecutorConfig(
             model=persona.model or _DEFAULT_MODEL,
@@ -814,7 +854,7 @@ def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[t
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx, db))
 
 
 def _chat_precheck(
@@ -1207,7 +1247,7 @@ def _planning_chat_history_of(
         db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
     )
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx))
+    return sliding_window_history(history, lambda: _summarizer(ctx, db))
 
 
 def _current_plan_as_tuples(
@@ -1528,6 +1568,39 @@ def _resolve_move(
     return idx, neighbor_idx
 
 
+def _do_move_entry(
+    ctx: SessionContext, topic: study_store.Topic, key: str, ekey: str, direction: str
+) -> Response | None:
+    """Executa o swap de entries. Devolve Response de erro, ou None se OK/no-op."""
+    with client.connect() as db:
+        plan, entries = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    if plan is None or not entries:
+        return PlainTextResponse("Plano não encontrado.", status_code=400)
+    try:
+        pair = _resolve_move(entries, ekey, direction)
+    except ValueError:
+        return PlainTextResponse("Lição não encontrada.", status_code=400)
+    if pair is None:
+        return None  # no-op (boundary)
+    idx, neighbor_idx = pair
+    try:
+        with client.connect_rw() as db:
+            study_store.swap_plan_entries(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                entry_a=entries[idx].id,
+                entry_b=entries[neighbor_idx].id,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.move.failed", topic=_log_key(key))
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return None
+
+
 @router.post("/topics/{key}/plan/entries/{ekey}/move")
 def move_entry(
     request: Request,
@@ -1550,31 +1623,11 @@ def move_entry(
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        plan, entries = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
-    if plan is None or not entries:
-        return PlainTextResponse("Plano não encontrado.", status_code=400)
-    try:
-        pair = _resolve_move(entries, ekey, direction)
-    except ValueError:
-        return PlainTextResponse("Lição não encontrada.", status_code=400)
-    if pair is None:
-        return RedirectResponse(_topic_url(topic.id), status_code=303)
-    idx, neighbor_idx = pair
-    try:
-        with client.connect_rw() as db:
-            study_store.swap_plan_entries(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                plan_id=plan.id,
-                entry_a=entries[idx].id,
-                entry_b=entries[neighbor_idx].id,
-            )
-    except (ConfigError, StoreError):
-        _log.warning("study.move.failed", topic=_log_key(key))
-        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    result = _do_move_entry(ctx, topic, key, ekey, direction)
+    if result is not None:
+        return result
+    if _is_htmx(request):
+        return _render_plan_entries(request, ctx, topic)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -1618,6 +1671,8 @@ def remove_section(
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
     if not ok:
         return PlainTextResponse("Não é possível remover a última seção.", status_code=400)
+    if _is_htmx(request):
+        return _render_plan_entries(request, ctx, topic)
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
