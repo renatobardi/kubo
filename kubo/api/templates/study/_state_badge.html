@@ -1,0 +1,15 @@
+{# Badge de estado com cor semântica (D2, ADR-0047 §3).
+   Usado na lista e no detalhe do Tema. Segue o design system: variantes
+   semânticas (primary/destructive/muted) com rounded-4xl, sem invenção de cores.
+   draft/planning = primary (em construção), scheduled = primary (agendado),
+   running = primary (ativo), archived = muted (neutro). #}
+{% set _state_classes = {
+  "draft": "bg-primary/10 text-primary",
+  "planning": "bg-primary/10 text-primary",
+  "scheduled": "bg-primary/10 text-primary",
+  "running": "bg-primary/10 text-primary",
+  "archived": "bg-muted text-muted-foreground",
+} %}
+<span class="inline-flex items-center gap-1 rounded-4xl px-2.5 py-0.5 text-xs {{ _state_classes.get(topic.state, _state_classes['archived']) }}">
+  {{ state_label }}
+</span>

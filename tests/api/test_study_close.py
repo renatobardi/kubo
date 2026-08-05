@@ -104,7 +104,7 @@ def stub_close_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic())
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 1
+        "kubo.api.routes.study.study_store.count_ready_materials_by_topic", lambda db, **kw: 1
     )
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_materials_by_topic",
@@ -195,7 +195,7 @@ def test_close_topic_without_materials_returns_400(
 ) -> None:
     """Fechar tema sem materiais devolve 400."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
+        "kubo.api.routes.study.study_store.count_ready_materials_by_topic", lambda db, **kw: 0
     )
     resp = authed_client.post(
         "/study/topics/abc123/close",

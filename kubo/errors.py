@@ -255,6 +255,16 @@ class ContractError(KuboError):
     """
 
 
+class QuizAnswerError(KuboError):
+    """Envio de quiz recusado: contagem de respostas errada, índice fora da faixa
+    ou lição sem quiz (placeholder).
+
+    Levantada por `kubo.study.quiz.grade` (ADR-0049 §I). O registro de estudo é
+    ÚNICO por lição, então um envio parcial ou inválido não pode ser gravado "mais
+    ou menos" — não haveria segunda chance de corrigir o desempenho que alimenta a
+    recapitulação. A rota traduz em 400 com a mensagem para o dono."""
+
+
 class UploadRejectionError(KuboError):
     """Motivo tipado de rejeição de upload de Material (formato/tamanho/parse).
 

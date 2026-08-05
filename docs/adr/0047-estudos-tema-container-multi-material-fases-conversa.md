@@ -132,4 +132,12 @@ A Emenda 6 permitia deletar Material em `planning` e delegava ao dono a regenera
 
 O grupo da sidebar `Estudos` (domínio) tinha um único item também rotulado `Estudos` (entidade), criando a repetição `ESTUDOS / Estudos` na sidebar. Os outros grupos seguem o padrão domínio → entidades (`Conhecimento` → Destilados/Entidades/Fontes; `Trabalho` → Fluxos/Execuções; `Distribuição` → Destinos/Envios).
 
-**Decisão:** o item de nav passa a se chamar `Temas` (a entidade listada na tela, per `CONTEXT.md`), enquanto o grupo permanece `Estudos` (o domínio). O rename se propaga aos textos da UI que referenciam a entidade: H1 da lista, botão "Novo tema", "Deletar tema", "Fechar tema", "Nome do tema", mensagens de erro das rotas. Permanece "estudo" onde é domínio/atividade: "Plano de estudo" (termo canônico do glossário), "o que quer do estudo" (atividade), `_NOT_A_MEMBER = "Estudos é pessoal..."` (domínio).
+**Decisão (Emenda 8):** o item de nav passa a se chamar `Temas` (a entidade listada na tela, per `CONTEXT.md`), enquanto o grupo permanece `Estudos` (o domínio). O rename se propaga aos textos da UI que referenciam a entidade: H1 da lista, botão "Novo tema", "Deletar tema", "Fechar tema", "Nome do tema", mensagens de erro das rotas. Permanece "estudo" onde é domínio/atividade: "Plano de estudo" (termo canônico do glossário), "o que quer do estudo" (atividade), `_NOT_A_MEMBER = "Estudos é pessoal..."` (domínio).
+
+### Emenda 9 — Emendado por ADR-0049 (2026-08-04)
+
+A revisão do módulo (épico KUBO-199) emendou três pontos deste ADR pelo **ADR-0049**:
+
+- **§5 (UX) e Emenda 3 (JS artesanal para SSE):** a exceção de "~120 linhas de JS artesanal" continua válida, mas passa a valer para **uma** implementação compartilhada em `static/`. Havia três cópias do parser SSE em `topic.html` — a divergência entre elas causou o bug corrigido em `e573455`. `topic.html` é quebrado em partials por fase.
+- **§5 (gates de fase):** o gate do chat do `mentor` e do fechamento do Tema passa de "≥1 Material" para "≥1 Material `ready`" (ver ADR-0049 §III, ciclo de ingestão).
+- **Fechamento do ciclo:** a Lição ganha UI e `study_log` passa a ser escrito (ADR-0049 §I/§II). Antes disso, o Tema em `running` era um beco sem saída na interface e o progresso era permanentemente `0/N`.

@@ -23,7 +23,6 @@ from kubo.errors import StoreError
 from kubo.store import client, migrations, tenancy
 from kubo.store.study import (
     activate_plan,
-    count_lessons_for_plan,
     create_lesson,
     create_material,
     create_topic,
@@ -32,6 +31,7 @@ from kubo.store.study import (
     get_sections_for_entry,
     get_topic,
     list_all_sections,
+    list_lessons_for_plan,
     list_topics_by_state,
     remove_section_from_entry,
     replace_plan_entries,
@@ -656,7 +656,9 @@ def test_create_lesson_persists_lesson(db: Any, tenant_id: RecordID, user_id: Re
         plan_entry_id=entries[0].id,
         scheduled_for=datetime(lesson_date.year, lesson_date.month, lesson_date.day),
     )
-    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1
+    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    assert len(lessons) == 1
+    assert lessons[0].is_placeholder is True
 
 
 def test_create_lesson_unique_per_day(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
@@ -758,7 +760,9 @@ def test_transition_to_running_atomic(db: Any, tenant_id: RecordID, user_id: Rec
     topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
     assert topic is not None
     assert topic.state == "running"
-    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1
+    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    assert len(lessons) == 1
+    assert lessons[0].is_placeholder is True
 
 
 def test_transition_to_running_cas_idempotent(
@@ -790,4 +794,5 @@ def test_transition_to_running_cas_idempotent(
         plan_entry_id=entries[0].id,
         scheduled_for=datetime(2026, 8, 4),
     )
-    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1
+    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    assert len(lessons) == 1

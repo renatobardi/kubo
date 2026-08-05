@@ -64,14 +64,16 @@ def _generate_lesson_content(
     *,
     tenant_id: RecordID,
     user_id: RecordID,
+    plan_id: RecordID,
     lesson_id: RecordID,
     entry: study_store.PlanEntry,
     work_context: str,
 ) -> None:
     """Gera conteúdo de IA para uma lição e preenche o registro (KUBO-168, KUBO-189).
 
-    Busca as seções do plan_entry, chama o Tutor e preenche a lição.
-    Se o Tutor falha (None) ou não há seções, a lição fica como placeholder.
+    Busca as seções do plan_entry, chama o Tutor com os erros recentes do plano
+    e preenche a lição. Se o Tutor falha (None) ou não há seções, a lição fica
+    como placeholder.
     """
     sections = study_store.get_sections_for_entry(
         db, tenant_id=tenant_id, user_id=user_id, entry=entry
@@ -79,12 +81,15 @@ def _generate_lesson_content(
     if not sections:
         _log.warning("study.lesson.no_sections", entry=str(entry.id))
         return
+    misses = study_store.recent_misses_for_plan(
+        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id
+    )
     tutor = _build_tutor(db, tenant_id, user_id)
     lesson = tutor.generate(
         entry_title=entry.title,
         sections=sections,
         work_context=work_context,
-        misses=(),
+        misses=misses,
     )
     if lesson is None:
         _log.info("study.lesson.tutor_failed", entry=str(entry.id))
@@ -168,6 +173,7 @@ def execute_study_transition_job(
                     db,
                     tenant_id=tenant_id,
                     user_id=user_id,
+                    plan_id=plan.id,
                     lesson_id=lesson_id,
                     entry=first_entry,
                     work_context=work_context,
@@ -256,6 +262,7 @@ def execute_study_lesson_job(
                 db,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                plan_id=plan.id,
                 lesson_id=lesson_id,
                 entry=next_entry,
                 work_context=work_context,

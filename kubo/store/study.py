@@ -26,13 +26,13 @@ _log = structlog.get_logger(__name__)
 # Teto de página das leituras (mesmo valor de `knowledge._MAX_PAGE`): a UI pede 50/100.
 _MAX_PAGE = 100
 
-_MATERIAL_SCOPE = "tenant_id = $tenant AND user_id = $user"
+_USER_SCOPE = "tenant_id = $tenant AND user_id = $user"
 _TOPIC_NOT_FOUND_MSG = "tema não encontrado"
 
 # Sentinel: caller omitted a field → preserve the existing value.
 # `None` means "clear"; `_UNSET` means "don't touch" (same pattern as tenancy).
 _UNSET: object = object()
-_CHAPTER_SCOPE = f"material = $material AND {_MATERIAL_SCOPE}"
+_CHAPTER_SCOPE = f"material = $material AND {_USER_SCOPE}"
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,11 @@ class Material:
     """Material de estudo ingerido pelo dono (epub/PDF), com o arquivo original no volume.
 
     Exclusivo a um Tema (N:1, ADR-0047): `topic` aponta para o Tema que o contém.
-    `summary` é gerado síncrono no upload (consumido por `mentor` e `planner`).
+    `summary` é gerado pelo job de ingestão (consumido por `mentor` e `planner`).
+
+    Ciclo de vida de ingestão (ADR-0049 §III): `status` é `pending` no upload,
+    vira `ready` após parse+summary+sections, ou `failed` com `error` se a
+    ingestão falhar. `ingested_at` marca o fim da ingestão bem-sucedida.
     """
 
     id: RecordID
@@ -55,6 +59,9 @@ class Material:
     chapter_count: int
     summary: str | None
     created_at: datetime
+    status: str = "ready"
+    error: str | None = None
+    ingested_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +124,9 @@ def _material_from_row(row: dict[str, Any]) -> Material:
         chapter_count=int(row["chapter_count"]),
         summary=row.get("summary"),
         created_at=_as_datetime(row["created_at"]),
+        status=row.get("status", "ready"),
+        error=row.get("error"),
+        ingested_at=_as_datetime(row["ingested_at"]) if row.get("ingested_at") else None,
     )
 
 
@@ -168,18 +178,17 @@ def create_material(
 ) -> Material:
     """Persiste material + capítulos + seções atomicamente e devolve o material.
 
-    Exclusivo a um Tema (N:1, ADR-0047): `topic_id` é obrigatório. `summary` é
-    gerado síncrono no upload (consumido por `mentor` e `planner`). `sections`
-    mapeia `chapter.seq` → lista de `SectionPart` (particionamento do
-    sectionizer, ADR-0048). `sectionize()` garante entrada para todo capítulo;
-    capítulos sem entrada no dict recebem fallback via `fallback_part`.
+    Legado (ingestão síncrona, ADR-0048 §6): cria com `status=ready`. O upload
+    novo usa `create_pending_material` + `ingest_material` (ADR-0049 §III).
+    Mantido para testes que precisam de um material já pronto sem rodar o job.
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     material_id = _fresh("material")
     statements = [
         "CREATE $material SET tenant_id = $tenant, user_id = $user, topic = $topic, "
         "title = $title, fmt = $fmt, original_filename = $filename, file_path = $path, "
-        "size_bytes = $size, chapter_count = $count, summary = $summary"
+        "size_bytes = $size, chapter_count = $count, summary = $summary, "
+        "status = 'ready', ingested_at = time::now()"
     ]
     params: dict[str, Any] = {
         "material": material_id,
@@ -194,6 +203,33 @@ def create_material(
         "count": len(chapters),
         "summary": summary,
     }
+    section_idx = _append_chapters_and_sections(statements, params, chapters, sections)
+    transaction.run_transaction(db, statements, params)
+
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during creation")
+    _log.info(
+        "store.material.created",
+        material=str(material_id),
+        fmt=fmt,
+        chapters=len(chapters),
+        sections=section_idx,
+    )
+    return material
+
+
+def _append_chapters_and_sections(
+    statements: list[str],
+    params: dict[str, Any],
+    chapters: Sequence[ParsedChapter],
+    sections: Mapping[int, Sequence[SectionPart]] | None,
+) -> int:
+    """Acrescenta CREATE de chapters + sections aos statements/params.
+
+    Devolve o total de sections criadas. Usa $material, $tenant, $user já
+    presentes em `params` (inseridos pela função chamadora).
+    """
     section_idx = 0
     for i, chapter in enumerate(chapters):
         chapter_id = _fresh("material_chapter")
@@ -208,7 +244,6 @@ def create_material(
             f"cp{i}": chapter.part,
             f"cc{i}": chapter.content,
         }
-        # Sections do capítulo: dict entry ou fallback (1 section = capítulo inteiro).
         parts = (sections or {}).get(chapter.seq) or [fallback_part(chapter)]
         for j, part in enumerate(parts, start=1):
             statements.append(
@@ -227,26 +262,172 @@ def create_material(
                 f"sm{section_idx}": part.summary,
             }
             section_idx += 1
+    return section_idx
+
+
+def create_pending_material(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    title: str,
+    fmt: str,
+    original_filename: str,
+    file_path: str,
+    size_bytes: int,
+) -> Material:
+    """Cria um Material `pending` — arquivo gravado, ingestão pendente (ADR-0049 §III).
+
+    Zero chapters/sections/summary: esses virão do job de ingestão (`ingest_material`).
+    O upload chama isto depois de gravar o arquivo no volume; o scheduler consome
+    `list_pending_materials` e processa cada um.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    material_id = _fresh("material")
+    db.query(
+        "CREATE $material SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+        "title = $title, fmt = $fmt, original_filename = $filename, file_path = $path, "
+        "size_bytes = $size, chapter_count = 0, summary = NONE, "
+        "status = 'pending', error = NONE, ingested_at = NONE;",
+        {
+            "material": material_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "topic": topic_id,
+            "title": title,
+            "fmt": fmt,
+            "filename": original_filename,
+            "path": file_path,
+            "size": size_bytes,
+        },
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during creation")
+    _log.info("store.material.pending", material=str(material_id), fmt=fmt)
+    return material
+
+
+def ingest_material(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+    chapters: Sequence[ParsedChapter],
+    sections: Mapping[int, Sequence[SectionPart]] | None,
+    summary: str | None,
+) -> Material:
+    """Processa um Material `pending`: cria chapters + sections + summary, marca `ready`.
+
+    Idempotente: se já `ready`, remove chapters/sections antigos e recria (não
+    duplica). O scheduler chama isto após parse + sumário + sectionizer.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    statements: list[str] = [
+        f"DELETE FROM material_section WHERE material = $material AND {_USER_SCOPE};",  # noqa: S608
+        f"DELETE FROM material_chapter WHERE material = $material AND {_USER_SCOPE};",  # noqa: S608
+    ]
+    params: dict[str, Any] = {
+        "material": material_id,
+        "tenant": tenant_id,
+        "user": user_id,
+    }
+    section_idx = _append_chapters_and_sections(statements, params, chapters, sections)
+    statements.append(
+        "UPDATE $material SET chapter_count = $count, summary = $summary, "
+        "status = 'ready', error = NONE, ingested_at = time::now()"
+    )
+    params["count"] = len(chapters)
+    params["summary"] = summary
     transaction.run_transaction(db, statements, params)
 
     material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
     if material is None:
-        raise StoreError("material vanished during creation")
+        raise StoreError("material vanished during ingest")
     _log.info(
-        "store.material.created",
+        "store.material.ingested",
         material=str(material_id),
-        fmt=fmt,
         chapters=len(chapters),
         sections=section_idx,
     )
     return material
 
 
+def mark_material_failed(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+    error: str,
+) -> Material:
+    """Marca um Material como `failed` com motivo (ingestão falhou)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    db.query(
+        f"UPDATE $material SET status = 'failed', error = $error WHERE {_USER_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id, "error": error},
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during mark_failed")
+    _log.warning("store.material.failed", material=str(material_id), error=error)
+    return material
+
+
+def retry_material_ingest(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    material_id: RecordID,
+) -> Material:
+    """Volta um Material `failed` para `pending` (retry manual ou backoff do scheduler)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    db.query(
+        f"UPDATE $material SET status = 'pending', error = NONE WHERE {_USER_SCOPE};",  # noqa: S608
+        {"material": material_id, "tenant": tenant_id, "user": user_id},
+    )
+    material = get_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    if material is None:
+        raise StoreError("material vanished during retry")
+    _log.info("store.material.retry", material=str(material_id))
+    return material
+
+
+def list_pending_materials(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Material]:
+    """Lista materiais `pending` para o job de ingestão do scheduler.
+
+    Exclui materiais de Temas arquivados (ADR-0049 §III — archived não ingesta).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM material WHERE {_USER_SCOPE} AND status = 'pending' "  # noqa: S608
+        "AND topic.state != 'archived' ORDER BY created_at ASC;",
+        {"tenant": tenant_id, "user": user_id},
+    )
+    return [_material_from_row(row) for row in rows]
+
+
+def count_ready_materials_by_topic(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, topic_id: RecordID
+) -> int:
+    """Conta materiais `ready` de um Tema — gate para chat do mentor e fechar tema."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT count() FROM material WHERE {_USER_SCOPE} AND topic = $topic "  # noqa: S608
+        "AND status = 'ready' GROUP ALL;",
+        {"tenant": tenant_id, "user": user_id, "topic": topic_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
 def list_materials(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Material]:
     """Lista os materiais do usuário no tenant, mais recentes primeiro."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM material WHERE {_MATERIAL_SCOPE} ORDER BY created_at DESC;",  # noqa: S608
+        f"SELECT * FROM material WHERE {_USER_SCOPE} ORDER BY created_at DESC;",  # noqa: S608
         {"tenant": tenant_id, "user": user_id},
     )
     return [_material_from_row(row) for row in rows]
@@ -258,7 +439,7 @@ def get_material(
     """Lê um material do usuário; None se não existe ou é de outro usuário."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM material WHERE id = $material AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        f"SELECT * FROM material WHERE id = $material AND {_USER_SCOPE} LIMIT 1;",  # noqa: S608
         {"material": material_id, "tenant": tenant_id, "user": user_id},
     )
     return _material_from_row(rows[0]) if rows else None
@@ -500,7 +681,7 @@ def set_topic_name(
         raise StoreError("tema arquivado não pode ser renomeado")
     transaction.run_transaction(
         db,
-        [f"UPDATE $topic SET title = $title WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
+        [f"UPDATE $topic SET title = $title WHERE {_USER_SCOPE}"],  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "title": title},
     )
 
@@ -511,7 +692,7 @@ def get_topic(
     """Lê um tema do usuário; None se não existe ou é de outro usuário."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM topic WHERE id = $topic AND {_MATERIAL_SCOPE} LIMIT 1;",  # noqa: S608
+        f"SELECT * FROM topic WHERE id = $topic AND {_USER_SCOPE} LIMIT 1;",  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     return _topic_from_row(rows[0]) if rows else None
@@ -521,7 +702,7 @@ def list_topics(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Topi
     """Lista os temas ATIVOS do usuário (não-arquivados), mais recentes primeiro."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM topic WHERE {_MATERIAL_SCOPE} AND state != 'archived' "  # noqa: S608
+        f"SELECT * FROM topic WHERE {_USER_SCOPE} AND state != 'archived' "  # noqa: S608
         "ORDER BY created_at DESC;",
         {"tenant": tenant_id, "user": user_id},
     )
@@ -541,7 +722,7 @@ def list_materials_by_topic(
     """Lista os materiais de um Tema, mais recentes primeiro."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} "  # noqa: S608
+        f"SELECT * FROM material WHERE topic = $topic AND {_USER_SCOPE} "  # noqa: S608
         "ORDER BY created_at DESC;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
@@ -558,7 +739,7 @@ def count_materials_by_topic(
     """Total de materiais de um Tema (para validação de limite)."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT count() FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        f"SELECT count() FROM material WHERE topic = $topic AND {_USER_SCOPE} GROUP ALL;",  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     return int(rows[0]["count"]) if rows else 0
@@ -584,7 +765,7 @@ def delete_material(
         [
             f"DELETE FROM material_section WHERE {_CHAPTER_SCOPE}",  # noqa: S608
             f"DELETE FROM material_chapter WHERE {_CHAPTER_SCOPE}",  # noqa: S608
-            f"DELETE FROM material WHERE id = $material AND {_MATERIAL_SCOPE}",  # noqa: S608
+            f"DELETE FROM material WHERE id = $material AND {_USER_SCOPE}",  # noqa: S608
         ],
         {"material": material_id, "tenant": tenant_id, "user": user_id},
     )
@@ -622,7 +803,7 @@ def _chat_from_row(row: dict[str, Any]) -> ChatMessage:
     )
 
 
-_CHAT_SCOPE = f"topic = $topic AND phase = $phase AND {_MATERIAL_SCOPE}"
+_CHAT_SCOPE = f"topic = $topic AND phase = $phase AND {_USER_SCOPE}"
 
 
 def create_chat_message(
@@ -714,7 +895,7 @@ def set_topic_fields(
     set_clause = ", ".join(sets)
     transaction.run_transaction(
         db,
-        [f"UPDATE $topic SET {set_clause} WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
+        [f"UPDATE $topic SET {set_clause} WHERE {_USER_SCOPE}"],  # noqa: S608
         params,
     )
 
@@ -741,7 +922,7 @@ def set_topic_state(
         raise StoreError(_TOPIC_NOT_FOUND_MSG)
     transaction.run_transaction(
         db,
-        [f"UPDATE $topic SET state = $state WHERE {_MATERIAL_SCOPE}"],  # noqa: S608
+        [f"UPDATE $topic SET state = $state WHERE {_USER_SCOPE}"],  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "state": state},
     )
     _log.info("store.topic.state_changed", topic=str(topic_id), state=state)
@@ -766,7 +947,7 @@ def revert_to_draft_if_planning(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     result = db.query(
         f"UPDATE $topic SET state = 'draft' "  # noqa: S608
-        f"WHERE {_MATERIAL_SCOPE} AND state = 'planning' RETURN id;",
+        f"WHERE {_USER_SCOPE} AND state = 'planning' RETURN id;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     if not result:
@@ -835,7 +1016,7 @@ def _entry_from_row(row: dict[str, Any]) -> PlanEntry:
     )
 
 
-_PLAN_SCOPE = f"topic = $topic AND {_MATERIAL_SCOPE}"
+_PLAN_SCOPE = f"topic = $topic AND {_USER_SCOPE}"
 
 _CREATE_LESSON_SQL = (
     "CREATE $lesson SET tenant_id = $tenant, user_id = $user, "
@@ -942,7 +1123,7 @@ def set_plan_cadence(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     # Valida dias e calcula data-alvo a partir de hoje.
     entry_rows = db.query(
-        f"SELECT count() FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE} "  # noqa: S608
+        f"SELECT count() FROM plan_entry WHERE study_plan = $plan AND {_USER_SCOPE} "  # noqa: S608
         "GROUP ALL;",
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
@@ -954,7 +1135,7 @@ def set_plan_cadence(
         db,
         [
             f"UPDATE $plan SET weekdays = $weekdays, target_date = $target "  # noqa: S608
-            f"WHERE {_MATERIAL_SCOPE}"
+            f"WHERE {_USER_SCOPE}"
         ],
         {
             "plan": plan_id,
@@ -994,7 +1175,7 @@ def replace_plan_entries(
     # Sem cadência (weekdays=[]), não há data-alvo para calcular — deixa None.
     # O dono define cadência depois via set_plan_cadence, que recalcula target.
     stmts: list[str] = [
-        f"DELETE FROM plan_entry WHERE study_plan = $plan AND {_MATERIAL_SCOPE}",  # noqa: S608
+        f"DELETE FROM plan_entry WHERE study_plan = $plan AND {_USER_SCOPE}",  # noqa: S608
     ]
     params: dict[str, Any] = {
         "plan": plan.id,
@@ -1007,10 +1188,10 @@ def replace_plan_entries(
         target = compute_target_date(
             start=date.today(), weekdays=list(plan.weekdays), lesson_count=len(entries)
         )
-        stmts.append(f"UPDATE $plan SET target_date = $target WHERE {_MATERIAL_SCOPE}")  # noqa: S608
+        stmts.append(f"UPDATE $plan SET target_date = $target WHERE {_USER_SCOPE}")  # noqa: S608
         params["target"] = datetime(target.year, target.month, target.day)
     else:
-        stmts.append(f"UPDATE $plan SET target_date = NONE WHERE {_MATERIAL_SCOPE}")  # noqa: S608
+        stmts.append(f"UPDATE $plan SET target_date = NONE WHERE {_USER_SCOPE}")  # noqa: S608
     for i, (title, section_ids) in enumerate(entries, start=1):
         entry_id = _fresh("plan_entry")
         stmts.append(
@@ -1047,7 +1228,7 @@ def swap_plan_entries(
     # Lê os seqs atuais (valida ownership via scope).
     rows = db.query(
         f"SELECT id, seq FROM plan_entry WHERE (id = $a OR id = $b) "  # noqa: S608
-        f"AND study_plan = $plan AND {_MATERIAL_SCOPE};",
+        f"AND study_plan = $plan AND {_USER_SCOPE};",
         {"a": entry_a, "b": entry_b, "plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
     if len(rows) != 2:
@@ -1059,11 +1240,11 @@ def swap_plan_entries(
         db,
         [
             f"UPDATE $a SET seq = seq + 1000 WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE};",
+            f"AND {_USER_SCOPE};",
             f"UPDATE $b SET seq = $seq_a WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE};",
+            f"AND {_USER_SCOPE};",
             f"UPDATE $a SET seq = $seq_b WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE};",
+            f"AND {_USER_SCOPE};",
         ],
         {
             "a": entry_a,
@@ -1095,7 +1276,7 @@ def remove_section_from_entry(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT array::len(sections) AS n FROM plan_entry WHERE id = $entry "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE};",
+        f"AND {_USER_SCOPE};",
         {"entry": entry_id, "tenant": tenant_id, "user": user_id},
     )
     if not rows:
@@ -1108,7 +1289,7 @@ def remove_section_from_entry(
         db,
         [
             f"UPDATE $entry SET sections = array::complement(sections, [$sec]) "  # noqa: S608
-            f"WHERE {_MATERIAL_SCOPE};"
+            f"WHERE {_USER_SCOPE};"
         ],
         {"entry": entry_id, "sec": section_id, "tenant": tenant_id, "user": user_id},
     )
@@ -1144,7 +1325,7 @@ def activate_plan(
         [
             f"UPDATE $plan SET status = 'active', activated_at = time::now() "  # noqa: S608
             f"WHERE {_PLAN_SCOPE};",
-            f"UPDATE $topic SET state = 'scheduled' WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+            f"UPDATE $topic SET state = 'scheduled' WHERE {_USER_SCOPE};",  # noqa: S608
         ],
         {
             "plan": plan.id,
@@ -1184,7 +1365,7 @@ def deactivate_plan(
         [
             f"UPDATE $plan SET status = 'proposed', activated_at = NONE "  # noqa: S608
             f"WHERE {_PLAN_SCOPE} AND status = 'active';",
-            f"UPDATE $topic SET state = 'planning' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"UPDATE $topic SET state = 'planning' WHERE {_USER_SCOPE} "  # noqa: S608
             f"AND state = 'scheduled';",
         ],
         {
@@ -1210,10 +1391,256 @@ def list_topics_by_state(
     """
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM topic WHERE state = $state AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT * FROM topic WHERE state = $state AND {_USER_SCOPE};",  # noqa: S608
         {"state": state, "tenant": tenant_id, "user": user_id},
     )
     return [_topic_from_row(r) for r in rows]
+
+
+# --- Lição e registro de estudo (KUBO-201, ADR-0049 §I/§II) -------------------------------
+
+
+@dataclass(frozen=True)
+class Lesson:
+    """Lição do dia gerada pelo Tutor para uma entrada do plano."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    study_plan: RecordID
+    plan_entry: RecordID
+    scheduled_for: datetime
+    concept: str
+    scenario: str
+    application: str
+    recap: str | None
+    quiz: list[dict[str, Any]]
+    provenance: list[dict[str, Any]]
+    is_placeholder: bool
+
+
+@dataclass(frozen=True)
+class StudyLog:
+    """Registro de estudo do dono para uma lição concluída."""
+
+    id: RecordID
+    tenant_id: RecordID
+    user_id: RecordID
+    lesson: RecordID
+    answers: list[int]
+    correct_count: int
+    reaction: str | None
+    completed_at: datetime
+
+
+def _lesson_from_row(row: dict[str, Any]) -> Lesson:
+    """Constrói uma `Lesson` a partir de uma linha do banco."""
+    concept = row.get("concept", "")
+    return Lesson(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        study_plan=row["study_plan"],
+        plan_entry=row["plan_entry"],
+        scheduled_for=_as_datetime(row["scheduled_for"]),
+        concept=concept,
+        scenario=row.get("scenario", ""),
+        application=row.get("application", ""),
+        recap=row.get("recap"),
+        quiz=list(row.get("quiz") or []),
+        provenance=list(row.get("provenance") or []),
+        is_placeholder=concept == "",
+    )
+
+
+def _study_log_from_row(row: dict[str, Any]) -> StudyLog:
+    """Constrói um `StudyLog` a partir de uma linha do banco."""
+    return StudyLog(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        lesson=row["lesson"],
+        answers=list(row.get("answers") or []),
+        correct_count=int(row.get("correct_count", 0)),
+        reaction=row.get("reaction"),
+        completed_at=_as_datetime(row["completed_at"]),
+    )
+
+
+def get_lesson(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+) -> Lesson | None:
+    """Lê uma lição do usuário; None se não existe ou é de outro usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE id = $lesson AND {_USER_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _lesson_from_row(rows[0]) if rows else None
+
+
+def list_lessons_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> list[Lesson]:
+    """Lista as lições de um plano na ordem de estudo (scheduled_for crescente)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM lesson WHERE study_plan = $plan AND {_USER_SCOPE} "  # noqa: S608
+        "ORDER BY scheduled_for;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    return [_lesson_from_row(row) for row in rows]
+
+
+def create_study_log(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+    answers: list[int],
+    correct_count: int,
+    reaction: str | None,
+) -> StudyLog:
+    """Persiste o registro de estudo do dono para uma lição.
+
+    Um registro por lição: a UNIQUE `study_log_lesson` impede reescrita do
+    desempenho já usado na recapitulação. O dono só registra estudo em lições
+    que lhe pertencem.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id FROM lesson WHERE id = $lesson AND {_USER_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        raise StoreError("lesson not found or not owned by user")
+    existing = db.query(
+        "SELECT id FROM study_log WHERE lesson = $lesson LIMIT 1;",
+        {"lesson": lesson_id},
+    )
+    if existing:
+        raise StoreError("study log already exists for this lesson")
+    log_id = _fresh("study_log")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $log SET tenant_id = $tenant, user_id = $user, lesson = $lesson, "
+            "answers = $answers, correct_count = $correct, reaction = $reaction"
+        ],
+        {
+            "log": log_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "lesson": lesson_id,
+            "answers": answers,
+            "correct": correct_count,
+            "reaction": reaction,
+        },
+    )
+    log = get_study_log(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    if log is None:
+        raise StoreError("study log vanished during creation")
+    _log.info("store.study_log.created", log=str(log_id), lesson=str(lesson_id))
+    return log
+
+
+def get_study_log(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    lesson_id: RecordID,
+) -> StudyLog | None:
+    """Lê o registro de estudo de uma lição do usuário."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        f"SELECT * FROM study_log WHERE lesson = $lesson AND {_USER_SCOPE} LIMIT 1;",  # noqa: S608
+        {"lesson": lesson_id, "tenant": tenant_id, "user": user_id},
+    )
+    return _study_log_from_row(rows[0]) if rows else None
+
+
+def list_study_logs_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+) -> dict[str, StudyLog]:
+    """Devolve os registros de estudo de um plano indexados por `str(lesson_id)`.
+
+    A timeline do tema precisa saber, numa leitura, quais lições do plano já
+    foram concluídas.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id FROM lesson WHERE study_plan = $plan AND {_USER_SCOPE};",  # noqa: S608
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        return {}
+    lesson_ids = [r["id"] for r in lesson_rows]
+    rows = db.query(
+        f"SELECT * FROM study_log WHERE lesson IN $lessons AND {_USER_SCOPE};",  # noqa: S608
+        {"lessons": lesson_ids, "tenant": tenant_id, "user": user_id},
+    )
+    return {str(row["lesson"]): _study_log_from_row(row) for row in rows}
+
+
+def recent_misses_for_plan(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    plan_id: RecordID,
+    limit: int = 10,
+) -> list[str]:
+    """Devolve os enunciados das questões erradas nos estudos recentes.
+
+    Ordena do mais recente para o mais antigo (por scheduled_for da lição) e
+    aplica `limit`. Usado pelo Tutor para recapitular na lição seguinte
+    (ADR-0049 §II).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    lesson_rows = db.query(
+        f"SELECT id, quiz, scheduled_for FROM lesson "  # noqa: S608
+        f"WHERE study_plan = $plan AND concept != '' AND {_USER_SCOPE} "
+        "ORDER BY scheduled_for DESC;",
+        {"plan": plan_id, "tenant": tenant_id, "user": user_id},
+    )
+    if not lesson_rows:
+        return []
+    lesson_ids = [r["id"] for r in lesson_rows]
+    log_rows = db.query(
+        f"SELECT lesson, answers FROM study_log "  # noqa: S608
+        f"WHERE lesson IN $lessons AND {_USER_SCOPE};",
+        {"lessons": lesson_ids, "tenant": tenant_id, "user": user_id},
+    )
+    answers_by_lesson = {str(r["lesson"]): list(r.get("answers") or []) for r in log_rows}
+    misses: list[str] = []
+    cap = max(1, int(limit))
+    for row in lesson_rows:
+        lesson_id = str(row["id"])
+        answers = answers_by_lesson.get(lesson_id, [])
+        quiz = list(row.get("quiz") or [])
+        if not answers or not quiz:
+            continue
+        for item, answer in zip(quiz, answers, strict=False):
+            if len(misses) >= cap:
+                return misses
+            expected = item.get("answer_index")
+            if expected is not None and answer != expected:
+                misses.append(str(item.get("question", "")))
+    return misses
 
 
 def create_lesson(
@@ -1277,7 +1704,7 @@ def fill_lesson(
     result = db.query(
         f"UPDATE $lesson SET concept = $concept, scenario = $scenario, "  # noqa: S608
         f"application = $application, recap = $recap, quiz = $quiz, "
-        f"provenance = $provenance WHERE id = $lesson AND {_MATERIAL_SCOPE} RETURN id;",
+        f"provenance = $provenance WHERE id = $lesson AND {_USER_SCOPE} RETURN id;",
         {
             "lesson": lesson_id,
             "tenant": tenant_id,
@@ -1314,7 +1741,7 @@ def get_sections_for_entry(
         return []
     rows = db.query(
         f"SELECT * FROM material_section WHERE id IN $sections "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE};",
+        f"AND {_USER_SCOPE};",
         {"sections": entry.sections, "tenant": tenant_id, "user": user_id},
     )
     if not rows:
@@ -1360,7 +1787,7 @@ def count_lessons_for_plan(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT count() FROM lesson WHERE study_plan = $plan "  # noqa: S608
-        f"AND concept != NONE AND {_MATERIAL_SCOPE} GROUP ALL;",
+        f"AND concept != '' AND {_USER_SCOPE} GROUP ALL;",
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
     return rows[0]["count"] if rows else 0
@@ -1374,7 +1801,7 @@ def get_pending_lesson_for_entry(
     plan_id: RecordID,
     plan_entry_id: RecordID,
 ) -> RecordID | None:
-    """Busca uma lição placeholder (sem concept) para re-tentar o fill.
+    """Busca uma lição placeholder (concept = '') para re-tentar o fill.
 
     Se o Tutor falhou e deixou uma lição vazia, o scheduler re-tenta: em vez
     de criar nova (bateria na UNIQUE), busca a existente e chama fill_lesson
@@ -1383,8 +1810,8 @@ def get_pending_lesson_for_entry(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         f"SELECT id FROM lesson WHERE study_plan = $plan "  # noqa: S608
-        f"AND plan_entry = $entry AND concept = NONE "
-        f"AND {_MATERIAL_SCOPE} LIMIT 1;",
+        f"AND plan_entry = $entry AND concept = '' "
+        f"AND {_USER_SCOPE} LIMIT 1;",
         {"plan": plan_id, "entry": plan_entry_id, "tenant": tenant_id, "user": user_id},
     )
     return rows[0]["id"] if rows else None
@@ -1424,7 +1851,7 @@ def transition_to_running(
             _CREATE_LESSON_SQL,
             f"UPDATE $plan SET status = 'running' WHERE {_PLAN_SCOPE} "  # noqa: S608
             f"AND status = 'active';",
-            f"UPDATE $topic SET state = 'running' WHERE {_MATERIAL_SCOPE} "  # noqa: S608
+            f"UPDATE $topic SET state = 'running' WHERE {_USER_SCOPE} "  # noqa: S608
             f"AND state = 'scheduled';",
         ],
         {
@@ -1493,7 +1920,7 @@ def archive_topic(
         raise StoreError("tema já está arquivado")
     result = db.query(
         f"UPDATE $topic SET state = 'archived', archived_from = $prev "  # noqa: S608
-        f"WHERE {_MATERIAL_SCOPE} AND state = $prev RETURN id;",
+        f"WHERE {_USER_SCOPE} AND state = $prev RETURN id;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": topic.state},
     )
     if not result:
@@ -1521,13 +1948,13 @@ def unarchive_topic(
         raise StoreError("tema não está arquivado")
     # Lê archived_from do banco (não está no dataclass Topic).
     rows = db.query(
-        f"SELECT archived_from FROM topic WHERE id = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT archived_from FROM topic WHERE id = $topic AND {_USER_SCOPE};",  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     prev = rows[0]["archived_from"] if rows and rows[0]["archived_from"] else "draft"
     result = db.query(
         f"UPDATE $topic SET state = $prev, archived_from = NONE "  # noqa: S608
-        f"WHERE {_MATERIAL_SCOPE} AND state = 'archived' RETURN id;",
+        f"WHERE {_USER_SCOPE} AND state = 'archived' RETURN id;",
         {"topic": topic_id, "tenant": tenant_id, "user": user_id, "prev": prev},
     )
     if not result:
@@ -1544,7 +1971,7 @@ def list_archived_topics(
     """Lista os temas ARQUIVADOS do usuário, mais recentes primeiro."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
-        f"SELECT * FROM topic WHERE {_MATERIAL_SCOPE} AND state = 'archived' "  # noqa: S608
+        f"SELECT * FROM topic WHERE {_USER_SCOPE} AND state = 'archived' "  # noqa: S608
         "ORDER BY created_at DESC;",
         {"tenant": tenant_id, "user": user_id},
     )
@@ -1572,19 +1999,19 @@ def delete_topic(
     # Busca IDs de materials, plans e lessons antes da transação (subqueries em
     # transação SurrealDB não veem estado intermediário corretamente).
     mat_rows = db.query(
-        f"SELECT id FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT id FROM material WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     material_ids = [r["id"] for r in mat_rows]
     plan_rows = db.query(
-        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
         {"topic": topic_id, "tenant": tenant_id, "user": user_id},
     )
     plan_ids = [r["id"] for r in plan_rows]
     lesson_ids: list[RecordID] = []
     for pid in plan_ids:
         l_rows = db.query(
-            f"SELECT id FROM lesson WHERE study_plan = $plan AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"SELECT id FROM lesson WHERE study_plan = $plan AND {_USER_SCOPE};",  # noqa: S608
             {"plan": pid, "tenant": tenant_id, "user": user_id},
         )
         lesson_ids.extend(r["id"] for r in l_rows)
@@ -1602,10 +2029,10 @@ def delete_topic(
         stmts.append(f"DELETE FROM study_log WHERE lesson = $l_{i};")  # noqa: S608
     stmts.extend(
         [
-            f"DELETE FROM study_chat WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
-            f"DELETE FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
-            f"DELETE FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
-            f"DELETE FROM topic WHERE id = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"DELETE FROM study_chat WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
+            f"DELETE FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
+            f"DELETE FROM material WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
+            f"DELETE FROM topic WHERE id = $topic AND {_USER_SCOPE};",  # noqa: S608
         ]
     )
     params: dict[str, Any] = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
@@ -1630,12 +2057,12 @@ def get_topic_delete_summary(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     params = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
     mat_rows = db.query(
-        f"SELECT count() FROM material WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        f"SELECT count() FROM material WHERE topic = $topic AND {_USER_SCOPE} GROUP ALL;",  # noqa: S608
         params,
     )
     # Busca plan_ids antes (subquery em SurrealDB não funciona).
     plan_rows = db.query(
-        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
         params,
     )
     plan_ids = [r["id"] for r in plan_rows]
@@ -1646,18 +2073,18 @@ def get_topic_delete_summary(
         pid = plan_ids[0]
         e_rows = db.query(
             f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            f"AND {_USER_SCOPE} GROUP ALL;",
             {"plan": pid, "tenant": tenant_id, "user": user_id},
         )
         entry_count = e_rows[0]["count"] if e_rows else 0
         l_rows = db.query(
             f"SELECT count() FROM lesson WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            f"AND {_USER_SCOPE} GROUP ALL;",
             {"plan": pid, "tenant": tenant_id, "user": user_id},
         )
         lesson_count = l_rows[0]["count"] if l_rows else 0
     chat_rows = db.query(
-        f"SELECT count() FROM study_chat WHERE topic = $topic AND {_MATERIAL_SCOPE} GROUP ALL;",  # noqa: S608
+        f"SELECT count() FROM study_chat WHERE topic = $topic AND {_USER_SCOPE} GROUP ALL;",  # noqa: S608
         params,
     )
     return TopicDeleteSummary(
@@ -1688,7 +2115,7 @@ def get_topic_progress(
     params = {"topic": topic_id, "tenant": tenant_id, "user": user_id}
     # Busca o plano do tema (1:1) + total de entries.
     plan_rows = db.query(
-        f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT id FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
         params,
     )
     if not plan_rows:
@@ -1696,7 +2123,7 @@ def get_topic_progress(
     plan_id = plan_rows[0]["id"]
     entry_rows = db.query(
         f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+        f"AND {_USER_SCOPE} GROUP ALL;",
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
     total = entry_rows[0]["count"] if entry_rows else 0
@@ -1705,7 +2132,7 @@ def get_topic_progress(
     # Lessons do plano (ordenadas por scheduled_for) + study_logs (batch).
     lessons = db.query(
         f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
-        f"AND {_MATERIAL_SCOPE} ORDER BY scheduled_for;",
+        f"AND {_USER_SCOPE} ORDER BY scheduled_for;",
         {"plan": plan_id, "tenant": tenant_id, "user": user_id},
     )
     if not lessons:
@@ -1715,7 +2142,7 @@ def get_topic_progress(
     # `lid in done_ids` só conta lições deste plano (lesson_ids), então logs de
     # outros temas não afetam o resultado — apenas evita N+1 por lição.
     log_rows = db.query(
-        f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT lesson FROM study_log WHERE {_USER_SCOPE};",  # noqa: S608
         {"tenant": tenant_id, "user": user_id},
     )
     done_ids = {str(r["lesson"]) for r in log_rows}
@@ -1746,7 +2173,7 @@ def get_topics_progress_batch(
         return {}
     # Busca study_logs do tenant/user uma vez (set em memória).
     log_rows = db.query(
-        f"SELECT lesson FROM study_log WHERE {_MATERIAL_SCOPE};",  # noqa: S608
+        f"SELECT lesson FROM study_log WHERE {_USER_SCOPE};",  # noqa: S608
         {"tenant": tenant_id, "user": user_id},
     )
     done_ids = {str(r["lesson"]) for r in log_rows}
@@ -1754,7 +2181,7 @@ def get_topics_progress_batch(
     for tid in topic_ids:
         # Busca o plano do tema (1:1).
         plan_rows = db.query(
-            f"SELECT id FROM study_plan WHERE topic = $topic AND {_MATERIAL_SCOPE};",  # noqa: S608
+            f"SELECT id FROM study_plan WHERE topic = $topic AND {_USER_SCOPE};",  # noqa: S608
             {"topic": tid, "tenant": tenant_id, "user": user_id},
         )
         if not plan_rows:
@@ -1763,7 +2190,7 @@ def get_topics_progress_batch(
         plan_id = plan_rows[0]["id"]
         entry_rows = db.query(
             f"SELECT count() FROM plan_entry WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE} GROUP ALL;",
+            f"AND {_USER_SCOPE} GROUP ALL;",
             {"plan": plan_id, "tenant": tenant_id, "user": user_id},
         )
         total = entry_rows[0]["count"] if entry_rows else 0
@@ -1772,7 +2199,7 @@ def get_topics_progress_batch(
             continue
         lessons = db.query(
             f"SELECT id, scheduled_for FROM lesson WHERE study_plan = $plan "  # noqa: S608
-            f"AND {_MATERIAL_SCOPE} ORDER BY scheduled_for;",
+            f"AND {_USER_SCOPE} ORDER BY scheduled_for;",
             {"plan": plan_id, "tenant": tenant_id, "user": user_id},
         )
         if not lessons:

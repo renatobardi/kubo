@@ -39,7 +39,6 @@ from kubo.api.session import SessionContext, resolve_session
 from kubo.errors import (
     ConfigError,
     ExecutorError,
-    MaterialParseError,
     MembershipRequiredError,
     StoreError,
     UploadRejectionError,
@@ -48,16 +47,18 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
+from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
-from kubo.study.parsing import MaterialFormat, ParsedMaterial, SectionPart, parse_material
+from kubo.study.parsing import MaterialFormat
 from kubo.study.planner import (
     Planner,
     PlannerChatReply,
     extract_planner_reply,
     mechanical_proposal,
 )
-from kubo.study.sectionizer import sectionize
+from kubo.study.quiz import QuizAnswerError, grade
 from kubo.study.summarizer import Summarizer
 
 _log = structlog.get_logger(__name__)
@@ -91,6 +92,7 @@ router = APIRouter(route_class=_MembershipAwareRoute)
 
 _TOPICS_LIST_TEMPLATE = "study/topics.html"
 _TOPIC_TEMPLATE = "study/topic.html"
+_LESSON_TEMPLATE = "study/lesson.html"
 _TOPIC_NOT_FOUND_TEMPLATE = "study/topic_not_found.html"
 _TOPICS_ROUTE = "/study/topics"
 _TOPIC_TABLE = "topic"
@@ -103,7 +105,6 @@ _BAD_FORMAT = "Formato não suportado: envie um arquivo .epub ou .pdf."
 _TOPIC_NOT_DRAFT = "Só é possível adicionar materiais a um tema em rascunho."
 _OVER_LIMIT = "Limite de materiais por tema atingido."
 _OVERSIZE = "Arquivo muito grande."
-_PARSE_FAILED = "Não foi possível ler o arquivo: epub/PDF inválido ou corrompido."
 _STORE_FAILED = "Não foi possível registrar o material. Nada foi guardado — tente de novo."
 _TOPIC_NOT_DRAFT_CHAT = "Só é possível conversar com o mentor em um tema em rascunho."
 _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o mentor."
@@ -111,6 +112,10 @@ _TOPIC_NO_MATERIALS = "Adicione pelo menos um material antes de conversar com o 
 _AUTO_REVERT_NOTICE = "voltou-rascunho"
 _EMPTY_MESSAGE = "A mensagem não pode ser vazia."
 _INVALID_DEPTH = f"Profundidade inválida: use {', '.join(VALID_DEPTHS)}."
+_TOPIC_FROZEN = "O plano já está em andamento; não é possível alterar a cadência."
+_LESSON_ALREADY_DONE = "Você já concluiu esta lição."
+_VALID_REACTIONS = frozenset({"facil", "ok", "dificil"})
+_INVALID_REACTION = "Reação inválida: use facil, ok ou dificil."
 _MENTOR_MAX_TOKENS = 2048
 _MENTOR_TIMEOUT = 60.0
 _PLANNER_MAX_TOKENS = 4096
@@ -123,9 +128,6 @@ _FORMATS: dict[str, MaterialFormat] = {".epub": "epub", ".pdf": "pdf"}
 _DEFAULT_MAX_MB = 50
 _DEFAULT_MAX_MATERIALS = 5
 _SAFE_KEY = string.ascii_letters + string.digits + "-_"
-_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
-_SUMMARY_MAX_TOKENS = 1024
-_SECTIONIZER_MAX_TOKENS = 8192
 
 # Rótulos de estado do Tema (ADR-0047 §3) — a lista e o detalhe usam os mesmos.
 _STATE_LABELS: dict[str, str] = {
@@ -237,29 +239,15 @@ def _summarizer(ctx: SessionContext) -> Summarizer:
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
-def _sectionizer_executor(ctx: SessionContext) -> tuple[ApiExecutor, str]:
-    """Constrói o executor + prompt da persona `sectionizer` (KUBO-184, ADR-0048).
-
-    Devolve (executor, prompt) para passar a `sectionize`. Setup pode falhar
-    (persona ausente, config de API) — quem chama decide o fallback.
-    """
-    with client.connect() as db:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "sectionizer")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_SECTIONIZER_MAX_TOKENS,
-            timeout=30.0,
-        ),
-        max_attempts=1,
-    )
-    return executor, persona.prompt
-
-
-def _validated_upload(
+def _validated_upload_pending(
     file: UploadFile | None,
-) -> tuple[MaterialFormat, bytes, ParsedMaterial]:
-    """Valida extensão → tamanho → parse; levanta `UploadRejectionError` se recusado."""
+) -> tuple[MaterialFormat, bytes]:
+    """Valida extensão → tamanho; levanta `UploadRejectionError` se recusado.
+
+    Sem parse (ADR-0049 §III): o parse roda no job de ingestão do scheduler.
+    O dono perde o feedback imediato de "epub inválido", mas ganha upload
+    sem timeout de proxy — o trade-off está registrado no ADR.
+    """
     fmt = _format_of(file)
     if file is None or fmt is None:
         raise UploadRejectionError(_BAD_FORMAT)
@@ -267,45 +255,37 @@ def _validated_upload(
     data = file.file.read(limit + 1)
     if len(data) > limit:
         raise UploadRejectionError(_OVERSIZE)
-    try:
-        parsed = parse_material(data, fmt)
-    except MaterialParseError as exc:
-        raise UploadRejectionError(_PARSE_FAILED) from exc
-    return fmt, data, parsed
+    return fmt, data
 
 
-def _persist_material(
+def _persist_pending_material(
     ctx: SessionContext,
     topic: study_store.Topic,
     fmt: MaterialFormat,
     data: bytes,
-    parsed: ParsedMaterial,
-    summary: str | None,
-    sections: dict[int, list[SectionPart]] | None,
     original: str,
 ) -> study_store.Material:
-    """Grava arquivo + persiste material; levanta ConfigError/StoreError se falhar."""
+    """Grava arquivo + cria Material `pending`; levanta ConfigError/StoreError se falhar.
+
+    Zero LLM no request (ADR-0049 §III): o processamento (parse + sumário +
+    sectionizer) roda no job `study_ingest` do scheduler. O título vem do
+    nome do arquivo — o scheduler pode refiná-lo após o parse.
+    """
     directory = _materials_dir()  # levanta ConfigError se faltar config
     path = _save_upload(directory, ctx, fmt, data)
     try:
         with client.connect_rw() as db:
-            return study_store.create_material(
+            return study_store.create_pending_material(
                 db,
                 tenant_id=ctx.tenant_id,
                 user_id=ctx.user_id,
                 topic_id=topic.id,
-                title=parsed.title or original or "Material sem título",
+                title=Path(original).stem or original or "Material sem título",
                 fmt=fmt,
                 original_filename=original,
                 file_path=str(path),
                 size_bytes=len(data),
-                chapters=parsed.chapters,
-                sections=sections,
-                summary=summary,
             )
-    except (ConfigError, StoreError):
-        path.unlink(missing_ok=True)
-        raise
     except Exception:
         path.unlink(missing_ok=True)
         raise
@@ -423,9 +403,18 @@ def topic_detail(request: Request, key: str) -> Response:
         )
         # Mapa section_id → título para exibir nomes legíveis no plano (KUBO-185).
         section_titles: dict[str, str] = {}
+        lessons: list[study_store.Lesson] = []
+        logs: dict[str, study_store.StudyLog] = {}
         if topic.state in ("planning", "scheduled", "running"):
             for sec in _collect_all_sections(db, ctx, topic.id):
                 section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
+        if topic.state in ("scheduled", "running") and plan is not None:
+            lessons = study_store.list_lessons_for_plan(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
+            )
+            logs = study_store.list_study_logs_for_plan(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
+            )
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -441,6 +430,8 @@ def topic_detail(request: Request, key: str) -> Response:
             "plan": plan,
             "plan_entries": plan_entries,
             "section_titles": section_titles,
+            "lessons": lessons,
+            "logs": logs,
             "notice": notice,
         },
     )
@@ -496,17 +487,12 @@ def _process_uploads(
 ) -> tuple[int, list[str]]:
     """Processa cada arquivo do lote; devolve (criados, rejeições).
 
-    Arquivo inválido (formato/tamanho/parse) é pulado com motivo, não aborta o lote.
+    Arquivo inválido (formato/tamanho) é pulado com motivo, não aborta o lote.
     Respeita o limite: para de criar quando atinge `limit - existing`.
+
+    Zero LLM no request (ADR-0049 §III): cada arquivo vira Material `pending`;
+    o job `study_ingest` do scheduler faz parse + sumário + sectionizer.
     """
-    summarizer = _summarizer(ctx)
-    # Sectionizer setup: pode falhar (persona ausente, config de API) — fallback.
-    sectionizer_executor: tuple[ApiExecutor, str] | None
-    try:
-        sectionizer_executor = _sectionizer_executor(ctx)
-    except (ConfigError, StoreError, MembershipRequiredError):
-        _log.warning("study.upload.sectionizer_setup_failed", exc_info=True)
-        sectionizer_executor = None
     created = 0
     rejections: list[str] = []
     for upload in uploads:
@@ -514,26 +500,17 @@ def _process_uploads(
             rejections.append(_OVER_LIMIT)
             break
         try:
-            fmt, data, parsed = _validated_upload(upload)
+            fmt, data = _validated_upload_pending(upload)
         except UploadRejectionError as exc:
             rejections.append(str(exc))
             continue
-        summary = summarizer.generate(parsed)
-        # Sectionização síncrona (ADR-0048): 1 chamada LLM por capítulo.
-        # Falha vira fallback (1 section por capítulo) dentro de `sectionize`.
-        sections_map: dict[int, list[SectionPart]] | None = None
-        if sectionizer_executor is not None:
-            executor, prompt = sectionizer_executor
-            sections_map = sectionize(executor=executor, prompt=prompt, chapters=parsed.chapters)
         original = Path(upload.filename or "").name if upload is not None else ""
         try:
-            material = _persist_material(
-                ctx, topic, fmt, data, parsed, summary, sections_map, original
-            )
+            material = _persist_pending_material(ctx, topic, fmt, data, original)
         except (ConfigError, StoreError):
             rejections.append(_STORE_FAILED)
             continue
-        _log.info("study.material.uploaded", material=str(material.id))
+        _log.info("study.material.uploaded_pending", material=str(material.id))
         created += 1
     return created, rejections
 
@@ -629,6 +606,85 @@ def delete_material(
     auto = _auto_revert_if_empty(ctx, topic, key)
     if auto is not None:
         return auto
+    return RedirectResponse(_topic_url(topic.id), status_code=303)
+
+
+@router.get("/topics/{key}/materials/partials")
+def materials_partial(
+    request: Request,
+    key: str,
+) -> Response:
+    """Devolve só a lista de Materiais (partial para polling HTMX, ADR-0049 §III).
+
+    O polling (`hx-trigger="every 5s"`) só existe no partial enquanto há
+    `pending` — quando todos estão ready/failed, o `hx-trigger` some e o
+    polling para naturalmente.
+    """
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        materials = study_store.list_materials_by_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+    return templates.TemplateResponse(
+        request,
+        "study/_materials.html",
+        {
+            "topic": topic,
+            "materials": materials,
+            "csrf": csrf_token(request),
+            "topic_url": _topic_url(topic.id),
+        },
+    )
+
+
+@router.post("/topics/{key}/materials/{mkey}/retry")
+def retry_material(
+    request: Request,
+    key: str,
+    mkey: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Volta um Material `failed` para `pending` (retry manual, ADR-0049 §III).
+
+    O scheduler consome `pending` no próximo ciclo do job `study_ingest`.
+    """
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    with client.connect() as db:
+        topic = _topic_of(db, key, ctx)
+    if topic is None:
+        return _topic_missing(request, key)
+    if topic.state in ("scheduled", "running", "archived"):
+        msg = _TOPIC_ARCHIVED_READONLY if topic.state == "archived" else _TOPIC_FROZEN_MATERIAL
+        return PlainTextResponse(msg, status_code=400)
+    material_id = RecordID("material", mkey.strip())
+    try:
+        with client.connect() as db:
+            material = study_store.get_material(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
+            )
+        if material is None or material.topic != topic.id:
+            return PlainTextResponse("Material não encontrado.", status_code=404)
+        if material.status != "failed":
+            return PlainTextResponse(
+                "Só é possível tentar de novo um material que falhou.", status_code=400
+            )
+        with client.connect_rw() as db:
+            study_store.retry_material_ingest(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.write_unavailable")
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    _log.info("study.material.retry", material=_log_key(mkey), topic=_log_key(key))
     return RedirectResponse(_topic_url(topic.id), status_code=303)
 
 
@@ -763,10 +819,10 @@ def _chat_precheck(
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
-        count = study_store.count_materials_by_topic(
+        ready = study_store.count_ready_materials_by_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-        if count == 0:
+        if ready == 0:
             return PlainTextResponse(_TOPIC_NO_MATERIALS, status_code=400)
         summaries = _material_summaries_of(db, ctx, topic.id)
         history = _chat_history_of(db, ctx, topic.id)
@@ -1066,10 +1122,10 @@ def close_topic(
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CLOSE, status_code=400)
-        count = study_store.count_materials_by_topic(
+        ready = study_store.count_ready_materials_by_topic(
             db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
         )
-        if count == 0:
+        if ready == 0:
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
         sections = _collect_all_sections(db, ctx, topic.id)
@@ -1828,3 +1884,167 @@ def delete_topic(
             _log.warning("study.material.file_unlink_failed", path=mat.file_path)
     _log.info("study.topic.deleted", topic=_log_key(key))
     return RedirectResponse(_TOPICS_ROUTE, status_code=303)
+
+
+# --- Tela da Lição (KUBO-201, ADR-0049 §I) ------------------------------------------------
+
+
+@router.get("/topics/{key}/lessons/{lesson_key}")
+def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
+    """Tela da lição do dia: concept, scenario, application e quiz."""
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        topic = _topic_of(db, key, ctx)
+        if topic is None:
+            return _topic_missing(request, key)
+        plan, _ = study_store.get_plan_for_topic(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+        )
+        lesson_id = RecordID("lesson", lesson_key.strip())
+        lesson = study_store.get_lesson(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+        )
+        if lesson is None or (plan is not None and lesson.study_plan != plan.id):
+            return templates.TemplateResponse(
+                request,
+                _TOPIC_NOT_FOUND_TEMPLATE,
+                {"raw": f"{key}/lessons/{lesson_key}"},
+                status_code=404,
+            )
+        study_log = study_store.get_study_log(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+        )
+    return templates.TemplateResponse(
+        request,
+        _LESSON_TEMPLATE,
+        {
+            "topic": topic,
+            "lesson": lesson,
+            "study_log": study_log,
+            "csrf": csrf_token(request),
+        },
+    )
+
+
+@router.post("/topics/{key}/lessons/{lesson_key}/generate")
+def generate_lesson(
+    request: Request,
+    key: str,
+    lesson_key: str,
+    csrf: Annotated[str, Form()] = "",
+) -> Response:
+    """Força a geração de uma lição placeholder (ADR-0049 §I — botão 'gerar agora')."""
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    try:
+        with client.connect_rw() as db:
+            topic = _topic_of(db, key, ctx)
+            if topic is None:
+                return _topic_missing(request, key)
+            plan, entries = study_store.get_plan_for_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+            lesson_id = RecordID("lesson", lesson_key.strip())
+            lesson = study_store.get_lesson(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+            )
+            if lesson is None or (plan is not None and lesson.study_plan != plan.id):
+                return templates.TemplateResponse(
+                    request,
+                    _TOPIC_NOT_FOUND_TEMPLATE,
+                    {"raw": f"{key}/lessons/{lesson_key}"},
+                    status_code=404,
+                )
+            if not lesson.is_placeholder:
+                return PlainTextResponse("Lição já gerada.", status_code=400)
+            if plan is None or not entries:
+                return PlainTextResponse("Plano não encontrado.", status_code=400)
+            entry = next((e for e in entries if e.id == lesson.plan_entry), None)
+            if entry is None:
+                return PlainTextResponse("Entrada do plano não encontrada.", status_code=400)
+            from kubo.scheduler.study_lessons import _generate_lesson_content
+
+            _generate_lesson_content(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                plan_id=plan.id,
+                lesson_id=lesson_id,
+                entry=entry,
+                work_context=topic.title,
+            )
+    except (ConfigError, StoreError):
+        _log.warning("study.lesson.generate_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id) + f"/lessons/{lesson_key}", status_code=303)
+
+
+@router.post("/topics/{key}/lessons/{lesson_key}/submit")
+def submit_quiz(
+    request: Request,
+    key: str,
+    lesson_key: str,
+    csrf: Annotated[str, Form()] = "",
+    answers: Annotated[list[int] | None, Form()] = None,
+    reaction: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Corrige o quiz e persiste o registro de estudo do dono."""
+    answers = answers or []
+    if not verify_csrf(request, csrf):
+        return PlainTextResponse(_CSRF_INVALID, status_code=403)
+    ctx = _session_of(request)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    if reaction is not None and reaction not in _VALID_REACTIONS:
+        return PlainTextResponse(_INVALID_REACTION, status_code=400)
+    try:
+        with client.connect_rw() as db:
+            topic = _topic_of(db, key, ctx)
+            if topic is None:
+                return _topic_missing(request, key)
+            plan, _ = study_store.get_plan_for_topic(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
+            )
+            lesson_id = RecordID("lesson", lesson_key.strip())
+            lesson = study_store.get_lesson(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
+            )
+            if lesson is None or (plan is not None and lesson.study_plan != plan.id):
+                return templates.TemplateResponse(
+                    request,
+                    _TOPIC_NOT_FOUND_TEMPLATE,
+                    {"raw": f"{key}/lessons/{lesson_key}"},
+                    status_code=404,
+                )
+            result = grade(lesson.quiz, answers)
+            study_store.create_study_log(
+                db,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                lesson_id=lesson_id,
+                answers=answers,
+                correct_count=result.correct_count,
+                reaction=reaction,
+            )
+            _log.info(
+                "study.lesson.completed",
+                lesson=lesson_key,
+                topic=key,
+                correct=result.correct_count,
+            )
+    except QuizAnswerError as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    except StoreError as exc:
+        if "already exists" in str(exc):
+            return PlainTextResponse(_LESSON_ALREADY_DONE, status_code=400)
+        _log.warning("study.lesson.submit_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    except ConfigError:
+        _log.warning("study.lesson.submit_failed", lesson=lesson_key)
+        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
+    return RedirectResponse(_topic_url(topic.id), status_code=303)

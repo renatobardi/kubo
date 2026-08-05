@@ -269,8 +269,10 @@ class _FakeTutor:
 
     def __init__(self, output: object | None) -> None:
         self._output = output
+        self.calls: list[dict[str, object]] = []
 
     def generate(self, **kw: object) -> object | None:
+        self.calls.append(kw)
         return self._output
 
 
@@ -421,3 +423,64 @@ def test_transition_job_skips_fill_when_sections_empty(
         mock_db, tenant_id=_TENANT, user_id=_USER, today=today
     )
     assert filled == []  # placeholder, não preencheu
+
+
+def test_lesson_job_passes_recent_misses_to_tutor(
+    mock_db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O Tutor recebe os erros recentes do plano para recapitular (ADR-0049 §II)."""
+    from kubo.scheduler import study_lessons
+
+    today = date(2026, 8, 4)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "list_topics_by_state",
+        lambda db, **kw: [_topic(state="running")],
+    )
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_plan_for_topic",
+        lambda db, **kw: (_plan(), _entries(1)),
+    )
+    monkeypatch.setattr(study_lessons.study_store, "count_lessons_for_plan", lambda db, **kw: 0)
+    monkeypatch.setattr(
+        study_lessons.study_store, "get_pending_lesson_for_entry", lambda db, **kw: None
+    )
+    monkeypatch.setattr(study_lessons.study_store, "create_lesson", lambda db, **kw: _LESSON_ID)
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "get_sections_for_entry",
+        lambda db, **kw: [_SECTION],
+    )
+    misses = ["Erro recente"]
+    monkeypatch.setattr(
+        study_lessons.study_store,
+        "recent_misses_for_plan",
+        lambda db, **kw: misses,
+    )
+
+    from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
+
+    lesson_output = LessonOutput(
+        concept="Conceito",
+        scenario="Cenário",
+        application="Aplicação",
+        recap=None,
+        provenance=[ProvenanceItem(chapter_seq=1, section_seq=1, quote="trecho")],
+        quiz=[
+            QuizItem(question="Q1?", options=["A", "B"], explanation="E1", answer_index=0),
+            QuizItem(question="Q2?", options=["C", "D"], explanation="E2", answer_index=1),
+        ],
+    )
+    fake_tutor = _FakeTutor(lesson_output)
+    monkeypatch.setattr(
+        study_lessons,
+        "_build_tutor",
+        lambda db, tenant_id, user_id: fake_tutor,
+    )
+    monkeypatch.setattr(study_lessons.study_store, "fill_lesson", lambda db, **kw: None)
+    monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
+
+    study_lessons.execute_study_lesson_job(mock_db, tenant_id=_TENANT, user_id=_USER, today=today)
+    assert len(fake_tutor.calls) == 1
+    assert fake_tutor.calls[0]["misses"] == misses

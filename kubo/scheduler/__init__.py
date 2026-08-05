@@ -28,6 +28,7 @@ from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
+from kubo.scheduler.study_ingest import execute_study_ingest_job
 from kubo.scheduler.study_lessons import (
     execute_study_lesson_job,
     execute_study_transition_job,
@@ -413,14 +414,19 @@ def _add_digest_poll_job(
 # schedules.yaml: é operação do scheduler de Estudos, não catálogo de workers.
 _STUDY_TRANSITION_CRON = "0 6 * * *"  # 06:00 — véspera do 1º dia
 _STUDY_LESSON_CRON = "0 7 * * *"  # 07:00 — geração diária
+# Job de ingestão de Material em background (KUBO-202, ADR-0049 §III): a cada
+# 5 min, consome materiais `pending` (upload gravou o arquivo, zero LLM no
+# request) e roda parse → sumário → sectionizer → ready/failed.
+_STUDY_INGEST_INTERVAL_MINUTES = 5
 
 
 def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
-    """Registra os jobs de Estudos: transição scheduled→running + geração de lição.
+    """Registra os jobs de Estudos: transição + geração de lição + ingestão de Material.
 
     Job de transição roda às 06:00 (antes do job de lição) — busca temas em
     `scheduled` e transiciona para `running` na véspera do 1º dia de cadência.
     Job de lição roda às 07:00 — busca temas em `running` e gera a próxima lição.
+    Job de ingestão roda a cada 5 min — consome materiais `pending` (KUBO-202).
     Ambos resolvem tenant/user via `resolve_scheduler_tenant_and_user` (uso
     pessoal, usuário único). KUBO-168 traz a geração de lição com IA.
     """
@@ -443,6 +449,14 @@ def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
         except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
             _log.exception("study_lesson_job_failed")
 
+    def _ingest() -> None:
+        try:
+            with client.connect(client.config()) as db:
+                tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+                execute_study_ingest_job(db, tenant_id=tenant_id, user_id=user_id)
+        except Exception:  # noqa: BLE001 — job nunca derruba o scheduler
+            _log.exception("study_ingest_job_failed")
+
     scheduler.add_job(
         _transition,
         trigger=_cron_trigger(_STUDY_TRANSITION_CRON, tz, label="study_transition"),
@@ -452,6 +466,11 @@ def _add_study_jobs(scheduler: BlockingScheduler, tz: ZoneInfo) -> None:
         _lesson,
         trigger=_cron_trigger(_STUDY_LESSON_CRON, tz, label="study_lesson"),
         id="study_lesson",
+    )
+    scheduler.add_job(
+        _ingest,
+        trigger=IntervalTrigger(minutes=_STUDY_INGEST_INTERVAL_MINUTES),
+        id="study_ingest",
     )
 
 

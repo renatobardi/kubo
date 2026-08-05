@@ -144,6 +144,27 @@ def test_topics_page_lists_topics_with_name_and_state(
     assert "Em andamento" in html  # estado running
 
 
+def test_topics_page_state_badge_has_semantic_color(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Badge de estado tem cor semântica (D2): ativos=primary, archived=muted."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics",
+        lambda db, **kw: [
+            _topic(title="Rascunho", state="draft"),
+            _topic(title="Planejando", state="planning"),
+            _topic(title="Agendado", state="scheduled"),
+            _topic(title="Em andamento", state="running"),
+            _topic(title="Arquivado", state="archived"),
+        ],
+    )
+    html = authed_client.get("/study/topics").text
+    # estados ativos (draft/planning/scheduled/running) = primary
+    assert "bg-primary/10" in html
+    # archived = muted (neutro)
+    assert "bg-muted" in html and "text-muted-foreground" in html
+
+
 # --- Criar Tema vazio --------------------------------------------------------------------
 
 

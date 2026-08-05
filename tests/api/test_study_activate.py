@@ -121,6 +121,12 @@ def stub_activate_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_all_sections_light", lambda db, **kw: []
     )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_lessons_for_plan", lambda db, **kw: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_study_logs_for_plan", lambda db, **kw: {}
+    )
 
 
 # --- GET /topics/{key} (scheduled/running mostram plano) --------------------------------

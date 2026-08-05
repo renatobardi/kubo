@@ -34,7 +34,9 @@
         <span class="shrink-0 text-xs text-muted-foreground">próx. {{ row.progress.next_lesson_date.strftime("%d/%m") }}</span>
         {% endif %}
         {% endif %}
-        <span class="shrink-0 rounded-4xl px-2 py-0.5 text-xs text-muted-foreground ring-1 ring-foreground/10">{{ row.state_label }}</span>
+        <span class="shrink-0">
+          {% with topic = row.topic, state_label = row.state_label %}{% include "study/_state_badge.html" %}{% endwith %}
+        </span>
       </a>
     {% endfor %}
   </div>

@@ -47,6 +47,14 @@ toda [[Lição]] tem proveniência num trecho do material. **Exclusivo a um Tema
 biblioteca global de Materiais. Código: `material`. _Evite_: "livro", "arquivo", "fonte"
 (fonte é da coleta).
 
+**Estado de ingestão**:
+Em que pé está o processamento de um [[Material]]: `pending` = arquivo guardado, ainda sem
+capítulos/seções/sumário; `ready` = ingestão completa, o Material pode alimentar [[mentor]] e
+[[Plano de estudo|planner]]; `failed` = a ingestão falhou e o motivo está registrado (o dono
+retenta). É o que separa "o arquivo chegou" de "o Kubo entendeu o arquivo" — o upload responde
+no primeiro, o estudo só anda no segundo. Código: `status` no `material`. Ver ADR-0049 §III.
+_Evite_: "upload" como sinônimo de ingestão; "processado" sem dizer se deu certo.
+
 **Tema**:
 O **container** do estudo: nasce vazio (`draft`) e o dono adiciona N [[Material|Materiais]]
 dentro dele. O nome é sugerido por [[mentor]] e editável inline em todos os estados
@@ -93,7 +101,10 @@ geração da lição seguinte. Código: `quiz`.
 
 **Registro de estudo**:
 O rastro de uma [[Lição]] estudada: conclusão, respostas do quiz e reação opcional
-(fácil/ok/difícil). É o dado que torna o estudo adaptativo. Código: `study_log`.
+(fácil/ok/difícil). É o dado que torna o estudo adaptativo. **Nasce do envio do [[Quiz]]** —
+não existe "marcar como lida" separado, para não haver duas fontes de verdade sobre o que
+foi estudado. Um por Lição (o segundo envio é recusado, não sobrescreve o desempenho que já
+alimentou a recapitulação). Código: `study_log`. Ver ADR-0049 §I.
 _Evite_: "progresso" para o registro individual (progresso é o agregado derivado).
 
 **Perfil de contexto de trabalho**:

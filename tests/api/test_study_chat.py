@@ -82,7 +82,7 @@ def stub_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda db, **kw: [_material()],
     )
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.count_materials_by_topic",
+        "kubo.api.routes.study.study_store.count_ready_materials_by_topic",
         lambda db, **kw: 1,
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
@@ -185,9 +185,9 @@ def test_chat_requires_draft_state(
 def test_chat_requires_at_least_one_material(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Chat sem materiais no Tema devolve 400 (chat desabilitado até ≥1 Material)."""
+    """Chat sem materiais no Tema devolve 400 (chat desabilitado até ≥1 Material ready)."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 0
+        "kubo.api.routes.study.study_store.count_ready_materials_by_topic", lambda db, **kw: 0
     )
     resp = authed_client.post(
         "/study/topics/abc123/chat",

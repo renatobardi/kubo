@@ -1,0 +1,12 @@
+{# Fase scheduled/running/archived: materiais só leitura (D1).
+   Sem dropzone, sem chat, sem edição. Materiais continuam visíveis. #}
+
+{# Materiais do Tema (só leitura — sem botão de remover). #}
+<section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+  <h2 class="text-sm font-medium">Materiais</h2>
+  {% if materials %}
+  {% include "study/_materials.html" %}
+  {% else %}
+  <p class="mt-3 text-sm text-muted-foreground">Nenhum material adicionado.</p>
+  {% endif %}
+</section>
