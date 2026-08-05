@@ -76,8 +76,8 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       {% for item in lesson.quiz %}
       <fieldset class="space-y-2">
-        <legend class="text-sm font-medium">{{ item.question }}</legend>
-        <select name="answers" required
+        <label for="quiz-q{{ loop.index0 }}" class="text-sm font-medium">{{ item.question }}</label>
+        <select id="quiz-q{{ loop.index0 }}" name="answers" required
                 class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
           <option value="" disabled selected>Escolha uma alternativa</option>
           {% for option in item.options %}
