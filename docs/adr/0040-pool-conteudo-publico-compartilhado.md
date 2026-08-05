@@ -59,3 +59,18 @@ Espelhando o princípio do ADR-0039 (autorização via `membership`, não só fi
 - **Sem dedup no scheduler, só no armazenamento** — resolveria duplicação de linha mas não de custo de coleta/rede, que era a motivação original.
 - **Sem backfill pro tenant novo** — mais simples e preserva a semântica atual do `since`, mas joga fora o ganho principal do pool compartilhado.
 - **Pool aberto a qualquer `kind`** — mais simples de implementar (sem allowlist), mas vazaria fonte privada/autenticada futura entre tenants. Allowlist explícita foi a escolha.
+
+## Nota de compatibilidade (2026-08-04, ADR-0050/0051 — não muda a decisão deste ADR)
+
+Os ADR-0050 e ADR-0051 introduzem duas relações novas ancoradas em `item`: a
+**nota de relevância** e o **parecer**, ambas por `(item, tenant)`. Este ADR ainda
+não foi implementado — `item` continua sem `tenant_id` na prática (é, na leitura
+de código de 2026-08-03, pool de fato: só `distilled` e `derived_from` carregam
+`tenant_id`), o que já é a direção que este ADR formaliza.
+
+Registro para quando a migração deste ADR for executada: nota e parecer, sendo
+relações `(item, tenant)` e não campos do próprio `item`, **sobrevivem à migração
+para `pool_item` sem redesenho** — continuam apontando para o mesmo `item` (que
+vira `pool_item`), só a tabela de origem do `item` muda de nome. Nenhuma ação
+necessária além de garantir que o migrador de dados não perca essas duas
+relações no cutover.
