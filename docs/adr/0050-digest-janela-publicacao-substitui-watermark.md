@@ -1,6 +1,6 @@
 # ADR-0050 — Digest por janela de publicação substitui o watermark posicional
 
-> Status: **proposto** · Data: 2026-08-04
+> Status: **aceito** · Data: 2026-08-04
 > **Substitui o núcleo do ADR-0015 §III e §V** (mecânica de watermark; só-se-novidade) —
 > ver "O que sobrevive do ADR-0015 / ADR-0027" abaixo. **§IV permanece intacto** exceto
 > pela mudança de chave descrita em VI. Resolve o mapa wayfinder KUBO-169

@@ -1,6 +1,6 @@
 # ADR-0052 — Parecer por item e resumo do dia: onde vivem, quem escreve
 
-> Status: **proposto** · Data: 2026-08-04
+> Status: **aceito** · Data: 2026-08-04
 > **Emenda o ADR-0028** (a premissa de independência total entre sweeps agendados)
 > e o **ADR-0029** (os workers de digest passam a ler, e um deles a escrever, um
 > artefato que não é mais só o `dispatch` de si mesmo). Depende do ADR-0050

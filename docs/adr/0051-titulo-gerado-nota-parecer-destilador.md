@@ -1,6 +1,6 @@
 # ADR-0051 — Destilador vira portão: nota de relevância, título gerado sob proveniência, prosa limpa
 
-> Status: **proposto** · Data: 2026-08-04
+> Status: **aceito** · Data: 2026-08-04
 > **Emenda o ADR-0013 §III** (contrato do destilador — acrescenta um passo antes
 > da destilação e um caso de proveniência que o ADR original não previa).
 > Resolve o mapa wayfinder KUBO-169 (KUBO-172, KUBO-174, KUBO-182), ticket de
