@@ -8,6 +8,28 @@
 <div class="space-y-6">
   {{ macros.page_header("Painel", "Seu ateliê de agentes — coleta, conhecimento e distribuição num relance.") }}
 
+  {# Card "Lição de hoje" (D9) — porta de entrada para o estudo diário. #}
+  {% if today_lesson %}
+  {% set lesson = today_lesson[0] %}
+  {% set topic = today_lesson[1] %}
+  <a href="/study/topics/{{ topic.id.id }}/lessons/{{ lesson.id.id }}"
+     class="flex items-center gap-4 rounded-2xl bg-primary/5 p-4 ring-1 ring-primary/20 transition-colors hover:ring-primary/40">
+    <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+    </span>
+    <div class="min-w-0 flex-1">
+      <div class="text-xs font-semibold uppercase tracking-wide text-primary">Lição de hoje</div>
+      <div class="mt-0.5 truncate text-sm font-medium">{{ topic.title }}</div>
+      {% if lesson.is_placeholder %}
+      <div class="text-xs text-muted-foreground">Sendo gerada pelo scheduler</div>
+      {% else %}
+      <div class="text-xs text-muted-foreground">{{ lesson.scheduled_for | short_datetime }}</div>
+      {% endif %}
+    </div>
+    <span class="shrink-0 text-primary">&rarr;</span>
+  </a>
+  {% endif %}
+
   {# StatTiles inline (sem macro e sem filtro safe: a proibição vale em toda tela — E1). #}
   <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
     <a href="/sources" class="flex flex-col gap-2 rounded-2xl bg-card p-4 ring-1 ring-foreground/10 transition-colors hover:ring-foreground/20">

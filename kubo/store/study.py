@@ -1500,6 +1500,49 @@ def list_lessons_for_plan(
     return [_lesson_from_row(row) for row in rows]
 
 
+def lesson_for_today(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> tuple[Lesson, Topic] | None:
+    """Próxima lição não-concluída do dia (ou a mais próxima) entre todos os
+    planos ativos (scheduled/running) do user. Para o card do Painel (D9).
+
+    Retorna (lesson, topic) ou None se não há plano ativo ou todas concluídas.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Busca lições sem study_log, dos planos ativos, ordenadas por scheduled_for.
+    rows = db.query(
+        "SELECT lesson.*, lesson.study_plan AS plan_id, "  # noqa: S608
+        "study_plan.topic AS topic_id, topic.title AS topic_title, "
+        "topic.state AS topic_state, topic.created_at AS topic_created_at "
+        "FROM lesson "
+        "JOIN study_plan ON lesson.study_plan = study_plan.id "
+        "JOIN topic ON study_plan.topic = topic.id "
+        f"WHERE topic.state IN ['scheduled', 'running'] AND {_USER_SCOPE} "
+        "AND lesson.id NOT IN (SELECT lesson FROM study_log WHERE "
+        f"{_USER_SCOPE}) "
+        "ORDER BY lesson.scheduled_for ASC LIMIT 1;",
+        {"tenant": tenant_id, "user": user_id},
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    lesson = _lesson_from_row(row)
+    topic = Topic(
+        id=row["topic_id"],
+        tenant_id=tenant_id,
+        user_id=user_id,
+        title=row["topic_title"],
+        state=row["topic_state"],
+        created_at=row["topic_created_at"],
+        focus=None,
+        depth=None,
+    )
+    return lesson, topic
+
+
 def create_study_log(
     db: Any,
     *,

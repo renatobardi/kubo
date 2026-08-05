@@ -13,6 +13,7 @@ from starlette.responses import Response
 from kubo.api.rendering import templates
 from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
+from kubo.store import study as study_store
 from kubo.store import tenancy as tenancy_store
 
 router = APIRouter()
@@ -72,6 +73,9 @@ def dashboard(request: Request) -> Response:
         )
         runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
+        today_lesson = study_store.lesson_for_today(
+            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+        )
 
     return templates.TemplateResponse(
         request,
@@ -82,5 +86,6 @@ def dashboard(request: Request) -> Response:
             "workspaces": workspaces,
             "current_tenant_id": current_tenant_id,
             "role": role,
+            "today_lesson": today_lesson,
         },
     )

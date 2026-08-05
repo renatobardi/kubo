@@ -649,10 +649,16 @@ def delete_material(
     if isinstance(material, Response):
         return material
     # Remove o arquivo do volume (best-effort: registro já foi removido do banco).
+    # Se o unlink falha, o arquivo fica órfão — o script de reconciliação
+    # (scripts/ops/) compara o volume vs banco e remove órfãos periodicamente.
     try:
         Path(material.file_path).unlink(missing_ok=True)
     except OSError:
-        _log.warning("study.material.file_unlink_failed", path=material.file_path)
+        _log.warning(
+            "study.material.file_unlink_failed",
+            path=material.file_path,
+            material=_log_key(mkey),
+        )
     _log.info("study.material.deleted", material=_log_key(mkey), topic=_log_key(key))
     # Auto-revert a draft se era o último Material em planning (ADR-0047 Emenda 7).
     auto = _auto_revert_if_empty(ctx, topic, key)

@@ -68,6 +68,9 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda db, **kw: DashboardCounts(distilled=0, items=0, sources=0, entities=0),
     )
     monkeypatch.setattr("kubo.api.routes.dashboard.knowledge.recent_runs", lambda db, **kw: [])
+    monkeypatch.setattr(
+        "kubo.api.routes.dashboard.study_store.lesson_for_today", lambda db, **kw: None
+    )
     _breakglass_user = SimpleNamespace(
         id=RecordID("user", "breakglass-owner"),
         firebase_uid="user:breakglass-owner",
