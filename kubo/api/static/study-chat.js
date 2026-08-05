@@ -56,35 +56,51 @@
       var fd = new FormData();
       fd.append("csrf", csrf);
       fd.append("title", value);
-      fetch(topicUrl + "/rename", { method: "POST", body: fd }).then(function (r) {
-        if (!r.ok) {
-          titleInput.value = prevTitle;
-          if (typeof window._kuboShowError === "function") {
-            window._kuboShowError("Não foi possível renomear o tema (" + r.status + ").");
+      fetch(topicUrl + "/rename", { method: "POST", body: fd })
+        .then(function (r) {
+          if (!r.ok) {
+            titleInput.value = prevTitle;
+            return r.text().then(function (text) {
+              if (typeof window._kuboShowError === "function") {
+                window._kuboShowError(text || "Não foi possível renomear o tema (" + r.status + ").");
+              }
+            });
           }
-        } else {
           document.querySelectorAll("[data-page-title]").forEach(function (el) {
             el.textContent = value;
           });
           document.title = value + " · Temas · Kubo";
-        }
-      });
+        })
+        .catch(function () {
+          titleInput.value = prevTitle;
+          if (typeof window._kuboShowError === "function") {
+            window._kuboShowError("Falha de rede ao renomear o tema.");
+          }
+        });
     } else if (type === "focus" || type === "depth") {
       var fd2 = new FormData();
       fd2.append("csrf", csrf);
       fd2.append("field", type);
       fd2.append("value", value);
-      fetch(topicUrl + "/fields", { method: "POST", body: fd2 }).then(function (r) {
-        if (r.ok) {
-          // Atualiza o valor exibido in-place — sem reload (preserva a conversa).
-          var fieldEl = document.querySelector('[data-field="' + type + '"]');
-          if (fieldEl) fieldEl.textContent = value;
-        } else {
-          if (typeof window._kuboShowError === "function") {
-            window._kuboShowError("Não foi possível atualizar " + type + " (" + r.status + ").");
+      fetch(topicUrl + "/fields", { method: "POST", body: fd2 })
+        .then(function (r) {
+          if (r.ok) {
+            // Atualiza o valor exibido in-place — sem reload (preserva a conversa).
+            var fieldEl = document.querySelector('[data-field="' + type + '"]');
+            if (fieldEl) fieldEl.textContent = value;
+          } else {
+            return r.text().then(function (text) {
+              if (typeof window._kuboShowError === "function") {
+                window._kuboShowError(text || "Não foi possível atualizar " + type + " (" + r.status + ").");
+              }
+            });
           }
-        }
-      });
+        })
+        .catch(function () {
+          if (typeof window._kuboShowError === "function") {
+            window._kuboShowError("Falha de rede ao atualizar " + type + ".");
+          }
+        });
     }
   }
 

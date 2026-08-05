@@ -47,17 +47,15 @@
 </section>
 {% endif %}
 
-{# Foco/Profundidade — visíveis em todos os estados não-arquivados (D4). #}
-{% if topic.state != "archived" and (topic.focus or topic.depth) %}
+{# Foco/Profundidade — visíveis em todos os estados não-arquivados (D4).
+   Spans data-field sempre renderizados (CR4): mesmo vazios, o JS encontra
+   o target para atualizar in-place após applySuggestion. #}
+{% if topic.state != "archived" %}
 <section class="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
   <h2 class="text-sm font-medium">Foco e profundidade</h2>
   <div class="mt-2 flex flex-wrap gap-3 text-sm">
-    {% if topic.focus %}
-    <span class="text-muted-foreground">Foco: <span data-field="focus" class="font-medium text-foreground">{{ topic.focus }}</span></span>
-    {% endif %}
-    {% if topic.depth %}
-    <span class="text-muted-foreground">Profundidade: <span data-field="depth" class="font-medium text-foreground">{{ topic.depth }}</span></span>
-    {% endif %}
+    <span class="text-muted-foreground">Foco: <span data-field="focus" class="font-medium text-foreground">{{ topic.focus or "—" }}</span></span>
+    <span class="text-muted-foreground">Profundidade: <span data-field="depth" class="font-medium text-foreground">{{ topic.depth or "—" }}</span></span>
   </div>
 </section>
 {% endif %}

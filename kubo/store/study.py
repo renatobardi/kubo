@@ -2237,9 +2237,10 @@ def get_topics_progress_batch(
         plan_ids.append(plan_id)
     if not plan_ids:
         return {str(tid): TopicProgress(done=0, total=0) for tid in topic_ids}
-    # 3. Counts de entries por plano (1 query).
+    # 3. Counts de entries por plano (1 query). Projeta study_plan para que
+    # o GROUP BY retorne o campo (SurrealDB não retorna campos não-projetados).
     entry_rows = db.query(
-        f"SELECT count() FROM plan_entry WHERE study_plan IN $plans "  # noqa: S608
+        f"SELECT study_plan, count() FROM plan_entry WHERE study_plan IN $plans "  # noqa: S608
         f"AND {_USER_SCOPE} GROUP BY study_plan;",
         {**base, "plans": plan_ids},
     )

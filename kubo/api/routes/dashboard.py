@@ -73,9 +73,16 @@ def dashboard(request: Request) -> Response:
         )
         runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
-        today_lesson = study_store.lesson_for_today(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
-        )
+        # Superadmin pode acessar tenant sem membership — lesson_for_today chama
+        # assert_membership, então omitimos o card nesse caso (CR1).
+        today_lesson = None
+        if not is_superadmin:
+            try:
+                today_lesson = study_store.lesson_for_today(
+                    db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+                )
+            except Exception:
+                today_lesson = None
 
     return templates.TemplateResponse(
         request,

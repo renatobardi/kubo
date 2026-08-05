@@ -23,7 +23,7 @@
       {% if lesson.is_placeholder %}
       <div class="text-xs text-muted-foreground">Sendo gerada pelo scheduler</div>
       {% else %}
-      <div class="text-xs text-muted-foreground">{{ lesson.scheduled_for | short_datetime }}</div>
+      <div class="text-xs text-muted-foreground">{{ lesson.scheduled_for.strftime("%d/%m %H:%M") }}</div>
       {% endif %}
     </div>
     <span class="shrink-0 text-primary">&rarr;</span>

@@ -35,11 +35,14 @@ from kubo.store.study import (
     get_pending_lesson_for_entry,
     get_study_log,
     get_topic_progress,
+    get_topics_progress_batch,
+    lesson_for_today,
     list_all_sections,
     list_lessons_for_plan,
     list_study_logs_for_plan,
     recent_misses_for_plan,
     save_plan_proposal,
+    set_topic_state,
 )
 from kubo.study.parsing import ParsedChapter, SectionPart
 
@@ -506,3 +509,143 @@ def test_recent_misses_prefers_recent_and_caps(
     assert len(misses) == 3  # 4 erros, teto de 3
     # A lição mais recente (day=6) contribui primeiro — prompt distinto.
     assert misses[0] == "O que é um Plano?"
+
+
+# --- lesson_for_today (D9) ---------------------------------------------------------------
+
+
+def test_lesson_for_today_returns_first_undone(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """lesson_for_today devolve a primeira lição não-concluída de plano ativo."""
+    plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=2)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=5)
+    from kubo.store.study import list_topics_by_state
+
+    # O _plan_with_entries cria o topic em draft; precisamos ativar o plano.
+    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    assert len(topics) == 1
+    set_topic_state(
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+    )
+    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    assert result is not None
+    lesson, topic = result
+    assert topic.title == "Estudo"
+    # Primeira lição (day=4) é a próxima não-concluída.
+    assert lesson.scheduled_for.day == 4
+
+
+def test_lesson_for_today_skips_done_lessons(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Lição com study_log é pulada — lesson_for_today devolve a próxima."""
+    plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=2)
+    lid1 = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=5)
+    create_study_log(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        lesson_id=lid1,
+        answers=[0, 1],
+        correct_count=2,
+        reaction=None,
+    )
+    from kubo.store.study import list_topics_by_state
+
+    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    set_topic_state(
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+    )
+    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    assert result is not None
+    lesson, _topic = result
+    assert lesson.scheduled_for.day == 5  # segunda lição (primeira concluída)
+
+
+def test_lesson_for_today_none_when_all_done(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Todas concluídas → None."""
+    plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=1)
+    lid = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
+    create_study_log(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        lesson_id=lid,
+        answers=[0, 1],
+        correct_count=2,
+        reaction=None,
+    )
+    from kubo.store.study import list_topics_by_state
+
+    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    set_topic_state(
+        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+    )
+    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    assert result is None
+
+
+def test_lesson_for_today_none_without_active_plan(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Sem plano ativo (draft only) → None."""
+    _plan_with_entries(db, tenant_id, user_id, lessons=1)  # topic fica em draft
+    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    assert result is None
+
+
+# --- get_topics_progress_batch (C1) ------------------------------------------------------
+
+
+def test_get_topics_progress_batch_matches_single(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Batch de 1 tema bate com get_topic_progress individual."""
+    plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=2)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=5)
+    from kubo.store.study import list_topics_by_state
+
+    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topic_id = topics[0].id
+    single = get_topic_progress(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    batch = get_topics_progress_batch(
+        db, tenant_id=tenant_id, user_id=user_id, topic_ids=[topic_id]
+    )
+    key = str(topic_id)
+    assert key in batch
+    assert batch[key].done == single.done
+    assert batch[key].total == single.total
+
+
+def test_get_topics_progress_batch_multiple_plans(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Batch com 2 temas (1 com plano, 1 sem) — sem plano devolve (0, 0)."""
+    plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=1)
+    _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
+    # Segundo tema sem plano.
+    topic2 = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Sem plano")
+    from kubo.store.study import list_topics_by_state
+
+    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topic1_id = next(t.id for t in topics if t.title == "Estudo")
+    batch = get_topics_progress_batch(
+        db, tenant_id=tenant_id, user_id=user_id, topic_ids=[topic1_id, topic2.id]
+    )
+    assert batch[str(topic1_id)].total == 1
+    assert batch[str(topic2.id)].total == 0
+    assert batch[str(topic2.id)].done == 0
+
+
+def test_get_topics_progress_batch_empty_list(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Lista vazia → dict vazio."""
+    batch = get_topics_progress_batch(db, tenant_id=tenant_id, user_id=user_id, topic_ids=[])
+    assert batch == {}
