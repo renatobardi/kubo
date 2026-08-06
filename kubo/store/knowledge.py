@@ -864,7 +864,10 @@ class RunListItem:
     atalho para o badge que discrimina `quota` de falha real, SEM reclassificar o
     `status` armazenado. `items` vem de `stats` (fallback gracioso). `repos_total`/
     `repos_discovered` (D57): contadores de descoberta do github-releases, None pros
-    demais workers. Sem coluna de fluxo (desvio E6: `flow` não existe na fase 1)."""
+    demais workers. `scored`/`approved` (KUBO-193, ADR-0051 §I): contadores do
+    destilador — `items` continua vindo de `distilled` (via `_STATS_ITEM_KEYS`), os
+    dois novos completam o funil (pontuado → aprovado → destilado) visível no card.
+    Sem coluna de fluxo (desvio E6: `flow` não existe na fase 1)."""
 
     worker: str
     status: str
@@ -873,6 +876,8 @@ class RunListItem:
     items: int | None
     repos_total: int | None
     repos_discovered: int | None
+    scored: int | None
+    approved: int | None
     started_at: str
     finished_at: str | None
 
@@ -931,6 +936,8 @@ def list_runs(
             items=_run_items(r.get("stats") or {}),
             repos_total=_stat_int(r.get("stats") or {}, "repos_total"),
             repos_discovered=_stat_int(r.get("stats") or {}, "repos_discovered"),
+            scored=_stat_int(r.get("stats") or {}, "scored"),
+            approved=_stat_int(r.get("stats") or {}, "approved"),
             started_at=str(r["started_at"]),
             finished_at=str(r["finished_at"]) if r.get("finished_at") is not None else None,
         )

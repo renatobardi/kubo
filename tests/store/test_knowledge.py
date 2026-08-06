@@ -2370,6 +2370,42 @@ def test_list_runs_repo_counts_are_none_when_absent(
     assert result.repos_discovered is None
 
 
+def test_list_runs_derives_scored_and_approved_from_distiller_stats(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """KUBO-193 (ADR-0051 §I): `scored`/`approved` do destilador aparecem no card de
+    run — o funil invertido precisa dos 3 contadores (pontuados/aprovados/destilados)
+    visíveis em Execuções, não só o `items` (que já mostra `distilled`)."""
+    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    knowledge.finish_run(
+        db,
+        run,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        stats={"scored": 10, "approved": 3, "distilled": 3},
+    )
+
+    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+
+    assert result.scored == 10
+    assert result.approved == 3
+    assert result.items == 3  # distilled continua alimentando "N itens"
+
+
+def test_list_runs_scored_and_approved_are_none_when_absent(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Workers que não pontuam (feed, github-releases) não têm `scored`/`approved`
+    em stats -- fallback gracioso pra None, mesmo padrão de `repos_total`."""
+    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    knowledge.finish_run(db, run, tenant_id=tenant_id, user_id=user_id, stats={"items": 3})
+
+    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+
+    assert result.scored is None
+    assert result.approved is None
+
+
 def test_list_runs_pagination_start_skips(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """start pula as N execuções mais recentes — paginação estável."""
     for i in range(3):
