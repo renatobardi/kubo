@@ -152,9 +152,11 @@ class DistillerConfig(BaseModel):
 
     `max_score_items` / `max_distill_items` — dois limites DISTINTOS desde que o
     funil inverteu (KUBO-193): quantos itens pontuar por run vs. quantos, dos
-    aprovados, efetivamente destilar por run. `min_score` — nota mínima de corte
-    (ADR-0051 §I.3), inclusive (score == min_score aprova). `input_char_cap` —
-    teto de caracteres do conteúdo enviado ao LLM de destilação por item
+    aprovados, efetivamente destilar por run. `min_score` — nota mínima de corte,
+    inclusive (score == min_score aprova); a ESCALA (0-10) e o valor default são
+    decisão de BUILD (ADR-0051 §I nomeia a existência do corte, mas deixa a
+    "desambiguação de build" pro código — não é um número do ADR). `input_char_cap`
+    — teto de caracteres do conteúdo enviado ao LLM de destilação por item
     (advisor h3): item hostil/gigante não vira prompt sem limite.
     """
 
