@@ -416,6 +416,17 @@ def get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
     return rows[0]["user"]
 
 
+def get_tenant_work_context(db: Any, tenant_id: RecordID) -> str:
+    """Contexto de trabalho do DONO do tenant (ADR-0051 §I.1/Nota de compatibilidade)
+    — a nota de relevância do destilador é do tenant inteiro, ancorada em quem
+    administra o workspace, não em cada membro. Sem perfil ou sem work_context
+    preenchido: string vazia — a pontuação roda de qualquer forma, só sem
+    alavanca de curadoria."""
+    owner = get_tenant_owner(db, tenant_id)
+    profile = get_user_profile(db, owner)
+    return (profile.work_context if profile else None) or ""
+
+
 def get_or_create_user_and_tenant(
     db: Any, *, firebase_uid: str, email: str | None = None
 ) -> tuple[User, Tenant]:

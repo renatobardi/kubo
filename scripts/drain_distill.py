@@ -108,12 +108,17 @@ def drain(
     """Roda até `max_batches` batches; devolve `(inicial, final, drenados, motivo)`.
 
     Cada batch é um `run_worker` normal (proveniência de graça). Entre batches faz
-    pacing. Para cedo em erro sistêmico, backlog vazio ou stall (via `evaluate_batch`)."""
+    pacing. Para cedo em erro sistêmico, backlog vazio ou stall (via `evaluate_batch`).
+
+    Progresso medido por `count_items_to_score` (KUBO-193, achado CodeRabbit no PR
+    #223) — não `count_items_without_distilled`: pós-funil invertido, um item
+    REJEITADO sai da fila de pontuação (reprovação definitiva) sem nunca ganhar
+    `derived_from`, então a métrica antiga o leria como "sem progresso" pra sempre.
+    `drained` conta pendentes-a-menos por batch: itens que saíram da fila, seja
+    porque destilaram, seja porque foram reprovados — os dois são progresso real."""
     worker = _build_worker()
     embedder = GeminiEmbedder.from_env()
-    initial = pending = knowledge.count_items_without_distilled(
-        db, tenant_id=tenant_id, user_id=user_id
-    )
+    initial = pending = knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id)
     drained = batches = 0
     reason = "max_batches"
     for _ in range(max_batches):
@@ -122,13 +127,13 @@ def drain(
         run_id = run_worker(
             db,
             worker,
-            config={"max_items": batch_size},
+            config={"max_score_items": batch_size, "max_distill_items": batch_size},
             embedder=embedder,
             tenant_id=tenant_id,
             user_id=user_id,
         )
         status = knowledge.run_status(db, run_id, tenant_id=tenant_id, user_id=user_id)
-        after = knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id)
+        after = knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id)
         outcome = evaluate_batch(status, pending, after)
         drained += max(outcome.distilled, 0)
         batches += 1

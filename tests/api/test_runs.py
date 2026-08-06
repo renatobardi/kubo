@@ -20,6 +20,8 @@ def _run(**kw: object) -> RunListItem:
         "items": None,
         "repos_total": None,
         "repos_discovered": None,
+        "scored": None,
+        "approved": None,
         "started_at": "2026-07-12T09:00:00+00:00",
         "finished_at": "2026-07-12T09:00:05+00:00",
     }
@@ -81,6 +83,34 @@ def test_runs_omits_repo_discovery_counts_when_absent(
     html = authed_client.get("/runs").text
     assert "5 itens" in html
     assert "repos" not in html
+
+
+def test_runs_renders_scored_and_approved_counts(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-193 (ADR-0051 §I): `scored`/`approved` do destilador aparecem no card
+    como 'N pontuados, M aprovados' — os 3 contadores do funil invertido (pontuado
+    → aprovado → destilado) precisam estar visíveis em Execuções, não só `items`."""
+    monkeypatch.setattr(
+        "kubo.api.routes.runs.knowledge.list_runs",
+        lambda db, **kw: [_run(worker="distiller", status="ok", items=3, scored=10, approved=3)],
+    )
+    html = authed_client.get("/runs").text
+    assert "3 itens" in html
+    assert "10 pontuados, 3 aprovados" in html
+
+
+def test_runs_omits_scored_and_approved_when_absent(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Workers que não pontuam (feed) não têm `scored` em stats -- o card não
+    mostra 'None pontuados' nem qualquer contagem de nota (fallback gracioso)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.runs.knowledge.list_runs",
+        lambda db, **kw: [_run(worker="feed", status="ok", items=5)],
+    )
+    html = authed_client.get("/runs").text
+    assert "pontuados" not in html
 
 
 def test_runs_quota_badge_does_not_reclassify_error(

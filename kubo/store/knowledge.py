@@ -864,7 +864,10 @@ class RunListItem:
     atalho para o badge que discrimina `quota` de falha real, SEM reclassificar o
     `status` armazenado. `items` vem de `stats` (fallback gracioso). `repos_total`/
     `repos_discovered` (D57): contadores de descoberta do github-releases, None pros
-    demais workers. Sem coluna de fluxo (desvio E6: `flow` não existe na fase 1)."""
+    demais workers. `scored`/`approved` (KUBO-193, ADR-0051 §I): contadores do
+    destilador — `items` continua vindo de `distilled` (via `_STATS_ITEM_KEYS`), os
+    dois novos completam o funil (pontuado → aprovado → destilado) visível no card.
+    Sem coluna de fluxo (desvio E6: `flow` não existe na fase 1)."""
 
     worker: str
     status: str
@@ -873,6 +876,8 @@ class RunListItem:
     items: int | None
     repos_total: int | None
     repos_discovered: int | None
+    scored: int | None
+    approved: int | None
     started_at: str
     finished_at: str | None
 
@@ -931,6 +936,8 @@ def list_runs(
             items=_run_items(r.get("stats") or {}),
             repos_total=_stat_int(r.get("stats") or {}, "repos_total"),
             repos_discovered=_stat_int(r.get("stats") or {}, "repos_discovered"),
+            scored=_stat_int(r.get("stats") or {}, "scored"),
+            approved=_stat_int(r.get("stats") or {}, "approved"),
             started_at=str(r["started_at"]),
             finished_at=str(r["finished_at"]) if r.get("finished_at") is not None else None,
         )
@@ -1502,6 +1509,77 @@ def count_items_without_distilled(db: Any, *, tenant_id: RecordID, user_id: Reco
         "SELECT count() FROM item "
         'WHERE string::trim(content) != "" '
         "AND id NOT IN (SELECT VALUE out FROM derived_from WHERE tenant_id = $tenant) "
+        "GROUP ALL;",
+        {"tenant": tenant_id},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
+def items_to_score(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, limit: int
+) -> list[tuple[RecordID, str | None, str | None, str]]:
+    """Lista `(item_id, title, url, content)` dos candidatos à PONTUAÇÃO nova
+    (ADR-0051 §I): todo `item` SEM aresta `scored_for` do tenant ainda E com
+    `content` não-vazio — mesmo piso de proveniência de `items_without_distilled`
+    (ADR-0013 §III.1/§III.7, ADR-0051 §IV.3).
+
+    Par de leitura de `items_without_distilled`, mas população DIFERENTE desde
+    que o funil inverteu: aqui a exclusão é por `scored_for` (já pontuado, passe
+    ou não o corte), não por `derived_from` (já destilado). Um item reprovado
+    nunca mais aparece aqui — reprovação é definitiva (ADR-0051 §I.4)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        "SELECT id, title, url, content FROM item "
+        'WHERE string::trim(content) != "" '
+        "AND id NOT IN (SELECT VALUE in FROM scored_for WHERE out = $tenant) "
+        "ORDER BY id LIMIT $limit;",
+        {"limit": limit, "tenant": tenant_id},
+    )
+    return [(r["id"], r.get("title"), r.get("url"), r["content"]) for r in rows]
+
+
+def apply_score(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    item: RecordID,
+    score: int,
+    generated_title: str | None = None,
+) -> None:
+    """Grava a nota de relevância do item (ADR-0051 §I.2, aresta `scored_for`
+    item->tenant) e, se houver título gerado, o campo próprio `item.generated_title`
+    — NUNCA `item.title` (ADR-0051 §IV.1, campo próprio que nunca sobrescreve o
+    original). `DELETE $item->scored_for` + `RELATE` (last-wins, espelha
+    `upsert_item`/`from_source`): fecha o retry duplo — um run que persistiu o
+    parcial e falhou depois não duplica a aresta ao reprocessar o mesmo item.
+    Mesma transação: a nota nunca fica gravada sem o título gerado (ou vice-versa)
+    se a escrita falhar no meio."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    statements = [
+        "DELETE $item->scored_for",
+        "RELATE $item->scored_for->$tenant SET score = $score, assigned_at = time::now()",
+    ]
+    params: dict[str, Any] = {"item": item, "tenant": tenant_id, "score": score}
+    if generated_title is not None:
+        statements.append("UPDATE $item SET generated_title = $generated_title")
+        params["generated_title"] = generated_title
+    run_transaction(db, statements, params)
+
+
+def count_items_to_score(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
+    """Conta os candidatos à pontuação nova (mesmo filtro de `items_to_score`: sem
+    `scored_for` do tenant + content não-vazio) — métrica de progresso do dreno
+    (KUBO-193): pós-funil invertido, `count_items_without_distilled` fica FALSO
+    como sinal de progresso — item rejeitado sai da fila de pontuação (reprovação
+    definitiva) mas nunca ganha `derived_from`, então parece "travado" pra
+    sempre num dreno medido pela métrica antiga. Esta conta o que o worker
+    realmente ainda vai processar."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        "SELECT count() FROM item "
+        'WHERE string::trim(content) != "" '
+        "AND id NOT IN (SELECT VALUE in FROM scored_for WHERE out = $tenant) "
         "GROUP ALL;",
         {"tenant": tenant_id},
     )

@@ -23,18 +23,21 @@ from kubo.store.knowledge import (
     DistilledListItem,
     DistilledView,
     distilled_for_digest,
-    items_without_distilled,
     list_distilled,
     read_distilled,
     search_distilled,
 )
+from kubo.store.knowledge import (
+    items_to_score as store_items_to_score,
+)
+from kubo.store.tenancy import get_tenant_work_context
 
 
 class GraphKnowledge:
     """Adaptador read-only que o runner injeta no ctx (ADR-0013 §III.2).
 
     Guarda o mapa ref (opaco, int) -> RecordID de todo item entregue via
-    `items_to_distill`. `resolve` fica FORA do Protocol `KnowledgeReader` — o
+    `items_to_score`. `resolve` fica FORA do Protocol `KnowledgeReader` — o
     worker nunca o vê; só o runner (na hora de persistir `DistilledPayload`,
     Peça 6) o chama. Nasce POR RUN: cada `run_worker` cria uma instância nova,
     o que mata estado compartilhado entre execuções.
@@ -54,22 +57,28 @@ class GraphKnowledge:
         self._ref_map: dict[int, RecordID] = {}
         self._counter = 0
 
-    def items_to_distill(self, limit: int) -> list[ItemView]:
-        """Lê itens pendentes via store e atribui a cada um um `ref` opaco,
-        sequencial e MONOTÔNICO por-instância (nunca reseta entre chamadas)."""
-        rows = items_without_distilled(
+    def items_to_score(self, limit: int) -> list[ItemView]:
+        """Lê itens pendentes de pontuação via store (ADR-0051 §I) e atribui a
+        cada um um `ref` opaco, sequencial e MONOTÔNICO por-instância (nunca
+        reseta entre chamadas)."""
+        rows = store_items_to_score(
             self._db,
             tenant_id=self._tenant_id,
             user_id=self._user_id,
             limit=limit,
         )
         views: list[ItemView] = []
-        for rid, title, content in rows:
+        for rid, title, url, content in rows:
             ref = self._counter
             self._counter += 1
             self._ref_map[ref] = rid
-            views.append(ItemView(ref=ref, title=title, content=content))
+            views.append(ItemView(ref=ref, title=title, url=url, content=content))
         return views
+
+    def work_context(self) -> str:
+        """Contexto de trabalho do dono do tenant desta instância (ADR-0051 §I.1) —
+        delega à store, o worker nunca vê o RecordID do tenant."""
+        return get_tenant_work_context(self._db, self._tenant_id)
 
     def search_distilled(self, embedding: Sequence[float], k: int) -> list[RetrievedView]:
         """Busca semântica no acervo para a analista (ADR-0016 §III): delega à store

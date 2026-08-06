@@ -1778,6 +1778,113 @@ def test_items_without_distilled_excludes_empty_and_whitespace_content(
     assert content == "conteúdo real"
 
 
+# ── KUBO-193 (ADR-0051 §I): funil invertido — items_to_score/apply_score ────
+
+
+def test_items_to_score_filters_and_limits(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """items_to_score devolve (id, title, url, content) de cada item SEM aresta
+    scored_for ainda — candidatos à pontuação NOVA (ADR-0051 §I). Um item já
+    pontuado (C) NÃO aparece na lista, mesmo sem nunca ter sido destilado."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_a = knowledge.upsert_item(
+        db,
+        source=source_id,
+        external_id="a",
+        content="conteúdo A",
+        title="Título A",
+        url="https://x/a",
+    )
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo B")
+    item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo C")
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_c, score=8)
+
+    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+
+    assert len(pending) == 2
+    assert {str(rid) for rid, _, _, _ in pending} == {str(item_a), str(item_b)}
+    by_id = {str(rid): (title, url, content) for rid, title, url, content in pending}
+    assert by_id[str(item_a)] == ("Título A", "https://x/a", "conteúdo A")
+    assert by_id[str(item_b)] == (None, None, "conteúdo B")
+
+
+def test_items_to_score_excludes_empty_content(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Mesmo piso de proveniência de items_without_distilled (ADR-0013 §III.1/§III.7,
+    ADR-0051 §IV.3): item com content vazio nunca é candidato à pontuação."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo real")
+
+    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+
+    assert len(pending) == 1
+    assert pending[0][0] == item_b
+
+
+def test_apply_score_creates_scored_for_edge_with_score(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """apply_score grava a aresta item -[scored_for]-> tenant com o score dado
+    (ADR-0051 §I.2) — sem título gerado, item.generated_title continua None."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=7)
+
+    row = db.query("SELECT ->scored_for.score AS s, generated_title FROM $i;", {"i": item_id})[0]
+    assert row["s"] == [7]
+    assert row["generated_title"] is None
+
+
+def test_apply_score_with_generated_title_sets_item_field_not_title(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """apply_score(generated_title=...) grava em item.generated_title — NUNCA em
+    item.title (ADR-0051 §IV.1: campo próprio, nunca sobrescreve o título original)."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_id,
+        score=9,
+        generated_title="Título Gerado pelo Kubo",
+    )
+
+    row = db.query("SELECT title, generated_title FROM $i;", {"i": item_id})[0]
+    assert row["title"] is None
+    assert row["generated_title"] == "Título Gerado pelo Kubo"
+
+
+def test_apply_score_twice_does_not_duplicate_edge(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Reaplicar apply_score no mesmo item (retry após falha parcial) reescreve a
+    aresta — DELETE+RELATE, o mesmo padrão last-wins de upsert_item/from_source —
+    nunca duas arestas scored_for pro mesmo item."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=3)
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=9)
+
+    row = db.query("SELECT ->scored_for.score AS s FROM $i;", {"i": item_id})[0]
+    assert row["s"] == [9]
+
+
 def test_insert_distilled_mentions_are_atomic_no_orphan_on_late_failure(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
@@ -2263,6 +2370,42 @@ def test_list_runs_repo_counts_are_none_when_absent(
     assert result.repos_discovered is None
 
 
+def test_list_runs_derives_scored_and_approved_from_distiller_stats(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """KUBO-193 (ADR-0051 §I): `scored`/`approved` do destilador aparecem no card de
+    run — o funil invertido precisa dos 3 contadores (pontuados/aprovados/destilados)
+    visíveis em Execuções, não só o `items` (que já mostra `distilled`)."""
+    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    knowledge.finish_run(
+        db,
+        run,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        stats={"scored": 10, "approved": 3, "distilled": 3},
+    )
+
+    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+
+    assert result.scored == 10
+    assert result.approved == 3
+    assert result.items == 3  # distilled continua alimentando "N itens"
+
+
+def test_list_runs_scored_and_approved_are_none_when_absent(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Workers que não pontuam (feed, github-releases) não têm `scored`/`approved`
+    em stats -- fallback gracioso pra None, mesmo padrão de `repos_total`."""
+    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    knowledge.finish_run(db, run, tenant_id=tenant_id, user_id=user_id, stats={"items": 3})
+
+    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+
+    assert result.scored is None
+    assert result.approved is None
+
+
 def test_list_runs_pagination_start_skips(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """start pula as N execuções mais recentes — paginação estável."""
     for i in range(3):
@@ -2523,3 +2666,29 @@ def test_count_items_without_distilled_zero_when_none_pending(
 ) -> None:
     """Banco sem candidato pendente conta 0 (não None, não erro)."""
     assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0
+
+
+def test_count_items_to_score_matches_the_filter(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """count_items_to_score conta os MESMOS candidatos de items_to_score (KUBO-193,
+    achado CodeRabbit no PR #223): métrica de progresso do dreno pós-funil invertido
+    — item REJEITADO (nota abaixo do corte) sai da contagem (reprovação é definitiva,
+    não é "travado"); item aprovado-mas-não-destilado nunca chega a ter nota
+    persistida (fix do PR #223), então continua contando como pendente."""
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A")
+    knowledge.upsert_item(db, source=src, external_id="empty", content="   ")  # vazio: fora
+    item_rejected = knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_rejected, score=2)
+
+    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 1
+
+
+def test_count_items_to_score_zero_when_none_pending(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Banco sem candidato pendente de pontuação conta 0 (não None, não erro)."""
+    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 0

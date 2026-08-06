@@ -195,10 +195,11 @@ def test_load_schedules_reads_real_repo_config() -> None:
     assert rss.cron == "0 8 * * *"
 
     # O destilador foi REATIVADO (entry descomentado, mini-sessão 0008 pós-filtro de
-    # content vazio); `max_items` subiu de 20 para 50 (D56) pro funil não represar.
+    # content vazio); `max_items` (subiu de 20 para 50, D56) virou dois limites
+    # distintos com o funil invertido (KUBO-193): max_score_items/max_distill_items.
     distiller_entries = [e for e in worker_entries if e.worker == "distiller"]
     assert len(distiller_entries) == 1
-    assert distiller_entries[0].config == {"max_items": 50}
+    assert distiller_entries[0].config == {"max_score_items": 50, "max_distill_items": 50}
 
     # O digest diário saiu do schedules.yaml no KUBO-44 (horário vem do settings no DB).
     digest_entries = [e for e in worker_entries if e.worker == "digest"]
@@ -211,13 +212,17 @@ def test_load_schedules_reads_real_repo_config() -> None:
 
 
 def test_distiller_entry_config_validates() -> None:
-    """O entry ATIVO do destilador (`max_items: 50`, D56) valida contra o schema do
-    DistillerWorker — o config declarado no schedules.yaml casa com o contrato do
-    worker, então o scheduler o instancia sem surpresa em runtime."""
+    """O entry ATIVO do destilador (max_score_items/max_distill_items: 50, KUBO-193)
+    valida contra o schema do DistillerWorker — o config declarado no schedules.yaml
+    casa com o contrato do worker, então o scheduler o instancia sem surpresa em runtime."""
     from kubo.scheduler import WorkerEntry
     from kubo.workers.distiller import DistillerConfig, DistillerWorker
 
-    entry = WorkerEntry(worker="distiller", cron="0 9 * * *", config={"max_items": 50})
+    entry = WorkerEntry(
+        worker="distiller",
+        cron="0 9 * * *",
+        config={"max_score_items": 50, "max_distill_items": 50},
+    )
 
     assert DistillerWorker.manifest.config is DistillerConfig
     DistillerWorker.manifest.config.model_validate(entry.config)  # não levanta = válido

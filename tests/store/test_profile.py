@@ -279,3 +279,41 @@ def test_update_membership_theme_rejects_non_member(db: Any) -> None:
 
     with pytest.raises(MembershipRequiredError):
         tenancy.update_membership_theme(db, user_id=user.id, tenant_id=tenant.id, theme="dark")
+
+
+def test_get_tenant_work_context_reads_owner_profile(db: Any) -> None:
+    """get_tenant_work_context lê o work_context do DONO do tenant (ADR-0051 §I.1/
+    Nota de compatibilidade) — a nota é do tenant, ancorada em quem administra o
+    workspace, não em cada membro."""
+    owner = tenancy.create_user(db, firebase_uid="uid-wc-owner", email="wc@example.com")
+    tenant = tenancy.create_tenant(db, name="WC Tenant", owner_user_id=owner.id)
+    tenancy.update_user_profile(
+        db,
+        user_id=owner.id,
+        display_name="Dono",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="Curte IA aplicada e infra.",
+    )
+
+    assert tenancy.get_tenant_work_context(db, tenant.id) == "Curte IA aplicada e infra."
+
+
+def test_get_tenant_work_context_empty_when_owner_has_no_profile(db: Any) -> None:
+    """Dono sem perfil ainda: contexto vazio, não erro — a nota roda com ou sem
+    alavanca de curadoria (ADR-0051 §I.1)."""
+    owner = tenancy.create_user(db, firebase_uid="uid-wc-noprofile", email="np@example.com")
+    tenant = tenancy.create_tenant(db, name="No Profile Tenant", owner_user_id=owner.id)
+
+    assert tenancy.get_tenant_work_context(db, tenant.id) == ""
+
+
+def test_get_tenant_work_context_empty_when_work_context_unset(db: Any) -> None:
+    """Dono com perfil mas sem work_context preenchido: contexto vazio."""
+    owner = tenancy.create_user(db, firebase_uid="uid-wc-unset", email="unset@example.com")
+    tenant = tenancy.create_tenant(db, name="Unset Tenant", owner_user_id=owner.id)
+    tenancy.update_user_profile(
+        db, user_id=owner.id, display_name="Dono", language="pt-BR", timezone="UTC"
+    )
+
+    assert tenancy.get_tenant_work_context(db, tenant.id) == ""

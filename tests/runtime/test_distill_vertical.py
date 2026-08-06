@@ -2,7 +2,7 @@
 plano 0008 Marco 8.6 Peça 6/6.5.
 
 `run_worker` completo com `DistillerWorker` (executor + embedder FAKE) contra o
-banco real: prova o encanamento `items_to_distill` -> executor -> chunk/embed ->
+banco real: prova o encanamento `items_to_score` -> executor -> chunk/embed ->
 `_persist` resolve ref -> `insert_distilled` com `mentions`. ZERO rede/quota —
 `_FakeExecutor`/`_FakeEmbedder` nunca chamam LiteLLM/Gemini (CLAUDE.md: "LLMs em
 testes sempre mockados").
@@ -29,7 +29,7 @@ from kubo.errors import MalformedOutputError, RateLimitExhausted
 from kubo.runtime.runner import run_worker
 from kubo.store import client, migrations
 from kubo.store.knowledge import distilled_for, upsert_item, upsert_source
-from kubo.workers.distiller import DistillerConfig, DistillerWorker, DistillOutput
+from kubo.workers.distiller import DistillerConfig, DistillerWorker, DistillOutput, ScoreOutput
 
 pytestmark = pytest.mark.integration
 
@@ -67,15 +67,17 @@ def _count(db: Any, table: str) -> int:
 
 class _FakeExecutor:
     """Fake de `Executor` (ADR-0013 §IV): consome `results` EM ORDEM a cada
-    chamada de `complete` — cada elemento é um `DistillOutput` (devolvido) ou
-    uma `Exception` (`MalformedOutputError`/`RateLimitExhausted`, levantada).
+    chamada de `complete` — cada elemento é um `ScoreOutput`/`DistillOutput`
+    (devolvido) ou uma `Exception` (`MalformedOutputError`/`RateLimitExhausted`,
+    levantada). Desde o funil invertido (ADR-0051 §I), cada item consome 2
+    chamadas em sequência: pontuação, depois destilação (se aprovado).
 
     ZERO rede: nenhuma chamada real a LiteLLM/provider (CLAUDE.md). Mesmo
     padrão de fila do fake em tests/workers/test_distiller.py, mas indexado
     por lista em vez de dict — mais direto para descrever "1ª chamada, 2ª
     chamada, ..." na ordem em que o worker consome os itens pendentes."""
 
-    def __init__(self, results: Sequence[DistillOutput | Exception]) -> None:
+    def __init__(self, results: Sequence[ScoreOutput | DistillOutput | Exception]) -> None:
         self._results = list(results)
         self.call_count = 0
 
@@ -101,7 +103,7 @@ class _FakeEmbedder:
 
 class _SyntheticRefWorker:
     """Worker sintético (defensivo, ADR-0013 §III.6): devolve um `DistilledPayload`
-    com `ref` BOGUS (9999), nunca atribuído por nenhum `items_to_distill` desta
+    com `ref` BOGUS (9999), nunca atribuído por nenhum `items_to_score` desta
     run. Este caminho NÃO acontece pelo `DistillerWorker` real — o `ref` sempre
     vem ecoado de um `ItemView` genuíno; existe só para provar que `_persist`
     trata um ref não-resolvível como erro estruturado do run, nunca como crash
@@ -157,10 +159,13 @@ def test_run_worker_distills_pending_items_into_graph(
     # os pendentes não é determinística (hash do record id, ver docstring abaixo),
     # então qualquer um dos dois pode receber o DistillOutput com a entidade —
     # o filtro verbatim (ADR-0013 §V emenda) só mantém a entidade se ela estiver
-    # no content do item que efetivamente a recebeu.
+    # no content do item que efetivamente a recebeu. Cada item passa por 2
+    # chamadas (pontuação aprovada, depois destilação — ADR-0051 §I).
     executor = _FakeExecutor(
         [
+            ScoreOutput(score=9),
             DistillOutput(summary="resumo A", entities=[EntityRef(name="Anthropic", kind="org")]),
+            ScoreOutput(score=9),
             DistillOutput(summary="resumo B", entities=[]),
         ]
     )
@@ -168,7 +173,7 @@ def test_run_worker_distills_pending_items_into_graph(
     run_id = run_worker(
         db,
         DistillerWorker(executor),
-        config={"max_items": 10},
+        config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
         user_id=user_id,
@@ -182,6 +187,11 @@ def test_run_worker_distills_pending_items_into_graph(
     assert _count(db, "mentions") == 1
     assert _count(db, "produced_by") == 2
     assert _run_status(db, run_id)["status"] == "ok"
+    # score persistido via aresta scored_for (achado CodeRabbit no PR #223) —
+    # prova que _persist realmente grava ScorePayload, não só DistilledPayload.
+    assert _count(db, "scored_for") == 2
+    score_a = db.query("SELECT ->scored_for.score AS s FROM $i;", {"i": item_a})[0]["s"]
+    assert score_a == [9]
 
 
 def test_run_worker_skips_malformed_item_persists_the_rest(
@@ -202,7 +212,8 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
 
     executor = _FakeExecutor(
         [
-            MalformedOutputError("saída não valida contra o schema"),
+            MalformedOutputError("saída não valida contra o schema"),  # pontuação do 1º item
+            ScoreOutput(score=9),
             DistillOutput(summary="resumo B", entities=[]),
         ]
     )
@@ -210,7 +221,7 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
     run_id = run_worker(
         db,
         DistillerWorker(executor),
-        config={"max_items": 10},
+        config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
         user_id=user_id,
@@ -240,15 +251,16 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
 
     executor = _FakeExecutor(
         [
-            DistillOutput(summary="resumo primeiro", entities=[]),
-            RateLimitExhausted("quota esgotada após N tentativas"),
+            ScoreOutput(score=9),  # pontuação do 1º item, aprovado
+            DistillOutput(summary="resumo primeiro", entities=[]),  # destilação do 1º
+            RateLimitExhausted("quota esgotada após N tentativas"),  # pontuação do 2º
         ]
     )
 
     run_id = run_worker(
         db,
         DistillerWorker(executor),
-        config={"max_items": 10},
+        config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
         user_id=user_id,
@@ -258,20 +270,20 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
     row = _run_status(db, run_id)
     assert row["status"] == "error"
     assert row["error"]["kind"] == "rate_limit_exhausted"
-    assert executor.call_count == 2  # nunca alcançou o 3º item
+    assert executor.call_count == 3  # 2 chamadas do 1º item + pontuação do 2º; nunca alcançou o 3º
 
 
 def test_run_worker_unresolvable_ref_skips_and_marks_error(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Defensivo (§III.6): um payload com `ref` que NUNCA foi atribuído por
-    `items_to_distill` (worker sintético, não o DistillerWorker real) não pode
+    `items_to_score` (worker sintético, não o DistillerWorker real) não pode
     ser gravado nem crashar o runtime — `_persist` pula o payload órfão e o
     run fecha em 'error' com kind 'unresolvable_ref'; nada é persistido."""
     run_id = run_worker(
         db,
         _SyntheticRefWorker(),
-        config={"max_items": 10},
+        config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
         user_id=user_id,
