@@ -30,6 +30,7 @@ def _card(rid: str = "d1", title: str = "Post A") -> DistilledListItem:
         source_canonical="https://x/feed",
         source_kind="rss",
         created_at="2026-07-12T09:00:00+00:00",
+        published_at="2026-07-11T09:00:00+00:00",
     )
 
 

@@ -288,6 +288,7 @@ def _release_to_payload(
             "repo": f"{owner}/{repo}",
             "published_at": _clean(raw_published_at, _TITLE_CAP),
         },
+        published_at=published_at,  # KUBO-192: campo próprio, não só dentro de metadata
     )
     return payload, False
 

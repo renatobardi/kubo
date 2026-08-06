@@ -21,6 +21,7 @@ import threading
 import time
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -236,6 +237,10 @@ def test_external_id_fallback_chain_and_skip_when_nothing_identifiable() -> None
         expected_hash = _expected_hash_id("Title B", "Mon, 01 Jan 2001 00:00:00 GMT")
         assert expected_hash in by_id  # fallback por hash(title+published_raw)
         assert len(expected_hash) == 64
+        # entry A não tem pubDate -> published_at None (cai na collected_at na store);
+        # entry B tem pubDate parseável -> published_at é a data da entry (KUBO-192).
+        assert by_id["https://example.com/a"].published_at is None
+        assert by_id[expected_hash].published_at == datetime(2001, 1, 1, tzinfo=timezone.utc)
         stats = result.stats.model_dump()
         assert stats["entries_seen"] == 3
         assert stats["items"] == 2
@@ -294,6 +299,7 @@ def test_malformed_pubdate_is_collected_without_error() -> None:
     items = [p for p in result.payloads if isinstance(p, ItemPayload)]
     assert len(items) == 1
     assert items[0].external_id == "guid-baddate"
+    assert items[0].published_at is None  # ilegível -> None; store cai na collected_at
 
 
 @respx.mock

@@ -140,6 +140,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0037_plan_entry_sections.surql",
         # 0038 (KUBO-202, ADR-0049 §III): material.status (pending|ready|failed).
         "0038_material_status.surql",
+        # 0039 (KUBO-192, ADR-0050 item I): item.published_at.
+        "0039_item_published_at.surql",
     }
 
 
