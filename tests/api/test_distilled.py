@@ -13,6 +13,7 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.api.rendering import short_datetime
 from kubo.errors import ConfigError, EmbeddingError
 from kubo.store.knowledge import (
     DistilledListItem,
@@ -106,6 +107,9 @@ def test_list_card_shows_title_source_and_date(
     html = authed_client.get("/distilled").text
     assert "Título do Post" in html
     assert "https://x/feed" in html  # fonte (canonical)
+    # published_at renderizado (KUBO-192, achado CodeRabbit no PR #222): o filtro
+    # short_datetime é o que a UI de fato mostra, não o created_at do destilado.
+    assert short_datetime("2026-07-11T00:00:00Z") in html
 
 
 def test_list_escapes_title(

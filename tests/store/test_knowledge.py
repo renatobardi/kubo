@@ -217,6 +217,24 @@ def test_upsert_item_persists_published_at(db: Any, tenant_id: RecordID, user_id
     assert row["published_at"] == published
 
 
+def test_upsert_item_naive_published_at_is_normalized_to_utc(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """`published_at` sem tzinfo (achado CodeRabbit no PR #222) é normalizado pra
+    UTC, não descartado — preserva o mesmo horário de parede."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    naive = datetime(2020, 1, 1, 12, 0)  # sem tzinfo, no passado
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", published_at=naive
+    )
+
+    row = db.query("SELECT published_at FROM $i;", {"i": item_id})[0]
+    assert row["published_at"] == naive.replace(tzinfo=timezone.utc)
+
+
 def test_upsert_item_without_published_at_falls_back_to_collected_at(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -218,6 +219,36 @@ def test_created_at_is_readonly_across_upsert(db: Any) -> None:
     )
     second = db.query("SELECT created_at FROM source:s;")[0]["created_at"]
     assert first == second
+
+
+# ── 0039: published_at do item — VALUE clampa futuro, não só DEFAULT ────────
+# (achado CodeRabbit no PR #222): DEFAULT só cobre campo OMITIDO; escrita DIRETA
+# de item com published_at futuro (fora do upsert_item, que já resolve em Python)
+# precisa da mesma regra na DDL — testado aqui, não na store.
+
+
+def test_published_at_value_clamps_future_on_direct_write(db: Any) -> None:
+    """CREATE direto (fora do upsert_item) com published_at FUTURO é clampado pra
+    time::now() pela cláusula VALUE — não só o helper Python da store."""
+    db.query("CREATE item:i SET external_id='e', content='c', published_at = time::now() + 1d;")
+    row = db.query("SELECT published_at FROM item:i;")[0]
+    assert row["published_at"] <= datetime.now(timezone.utc)
+
+
+def test_published_at_value_preserves_valid_past_on_direct_write(db: Any) -> None:
+    """CREATE direto com published_at PASSADO válido é preservado tal qual."""
+    past = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    db.query("CREATE item:i SET external_id='e', content='c', published_at = $p;", {"p": past})
+    row = db.query("SELECT published_at FROM item:i;")[0]
+    assert row["published_at"] == past
+
+
+def test_published_at_value_defaults_to_now_when_omitted(db: Any) -> None:
+    """CREATE direto SEM published_at (campo omitido) cai em time::now() — o VALUE
+    também cobre o caso que DEFAULT cobriria sozinho."""
+    db.query("CREATE item:i SET external_id='e', content='c';")
+    row = db.query("SELECT published_at FROM item:i;")[0]
+    assert abs((row["published_at"] - datetime.now(timezone.utc)).total_seconds()) < 5
 
 
 # ── 0009: source vira Cadastro (ADR-0025, ticket #104) ──────────────────────
