@@ -309,6 +309,8 @@ def test_qualifying_release_metadata_includes_published_at() -> None:
     assert len(items) == 1
     assert items[0].metadata is not None
     assert items[0].metadata["published_at"] == "2026-03-15T10:00:00Z"
+    # KUBO-192: campo próprio, não só dentro de metadata.
+    assert items[0].published_at == datetime(2026, 3, 15, 10, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

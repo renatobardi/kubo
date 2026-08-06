@@ -16,7 +16,7 @@ import secrets
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, cast
 
 import structlog
@@ -229,6 +229,17 @@ def upsert_seed_source(
     return rid
 
 
+def _resolve_published_at(published_at: datetime | None) -> datetime:
+    """Data de publicação sem fonte OU futura cai na data de coleta (KUBO-192,
+    ADR-0050 item I): fonte que anuncia amanhã não pode furar a janela de hoje."""
+    now = datetime.now(timezone.utc)
+    if published_at is None:
+        return now
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    return now if published_at > now else published_at
+
+
 def upsert_item(
     db: Any,
     *,
@@ -240,11 +251,15 @@ def upsert_item(
     url: str | None = None,
     title: str | None = None,
     metadata: dict[str, Any] | None = None,
+    published_at: datetime | None = None,
     run: RecordID | None = None,
 ) -> RecordID:
     """Cria/atualiza um item (chave natural: source + external_id, D4) e a aresta
     `item -[from_source]-> source`. Idempotente (2x = no-op): a aresta é reescrita
     (DELETE + RELATE) para não duplicar; tudo numa transação atômica.
+
+    `published_at` (KUBO-192): sem data na fonte, ou data futura, cai na data de
+    coleta (`_resolve_published_at`) — nunca fica sem valor.
 
     `run` (opcional) registra a proveniência de execução `item -[collected_by]-> run`
     (ADR-0008 §VI): quem coletou o item. Semântica de re-coleta = last-wins (DELETE +
@@ -254,7 +269,7 @@ def upsert_item(
     rid = _rid("item", f"{source}|{external_id}")
     statements = [
         "UPSERT $r SET external_id = $external_id, content = $content, "
-        "url = $url, title = $title, metadata = $metadata",
+        "url = $url, title = $title, metadata = $metadata, published_at = $published_at",
         "DELETE $r->from_source",
         "RELATE $r->from_source->$source",
     ]
@@ -265,6 +280,7 @@ def upsert_item(
         "url": url,
         "title": title,
         "metadata": metadata,
+        "published_at": _resolve_published_at(published_at),
         "source": source,
     }
     if run is not None:
@@ -515,7 +531,11 @@ class DistilledListItem:
     """Card do browse de destilados (UI fase 2): id, summary e — desde a sessão 0010
     (E3) — o título do item (via `derived_from`, com fallback na 1ª linha do summary
     quando o item não tem título), a fonte (a 2 hops) e a data. A cadeia de
-    proveniência completa continua vindo de `read_distilled`."""
+    proveniência completa continua vindo de `read_distilled`.
+
+    `published_at` (KUBO-192): data de PUBLICAÇÃO do item, não de criação do
+    destilado — sempre presente (a store nunca deixa `item.published_at` vazio,
+    ver `upsert_item`)."""
 
     id: RecordID
     summary: str
@@ -523,6 +543,7 @@ class DistilledListItem:
     source_canonical: str | None
     source_kind: str | None
     created_at: str
+    published_at: str
 
 
 # Colunas do card resolvidas numa projeção (probe 0010: 1-hop p/ título, 2-hop
@@ -531,6 +552,7 @@ class DistilledListItem:
 _CARD_COLS = (
     "id, summary, created_at, "
     "->derived_from->item.title AS item_title, "
+    "->derived_from->item.published_at AS item_published_at, "
     "->derived_from->item->from_source->source.canonical AS src_canonical, "
     "->derived_from->item->from_source->source.kind AS src_kind"
 )
@@ -556,6 +578,7 @@ def _unwrap(values: Any) -> Any | None:
 def _card(row: dict[str, Any]) -> DistilledListItem:
     """Monta um `DistilledListItem` a partir de uma linha projetada com `_CARD_COLS`."""
     item_title = _unwrap(row.get("item_title"))
+    item_published_at = _unwrap(row.get("item_published_at"))
     return DistilledListItem(
         id=row["id"],
         summary=row["summary"],
@@ -563,6 +586,10 @@ def _card(row: dict[str, Any]) -> DistilledListItem:
         source_canonical=_unwrap(row.get("src_canonical")),
         source_kind=_unwrap(row.get("src_kind")),
         created_at=str(row["created_at"]),
+        # item sem `published_at` explícito nunca ocorre (upsert_item cai na
+        # collected_at) — fallback ao created_at só cobre destilado legado cujo
+        # item foi gravado ANTES da migração 0039 (sem o campo ainda).
+        published_at=str(item_published_at) if item_published_at else str(row["created_at"]),
     )
 
 

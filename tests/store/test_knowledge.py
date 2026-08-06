@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -198,6 +199,73 @@ def test_upsert_item_without_run_creates_no_collected_by_edge(
 
     runs = db.query("SELECT ->collected_by->run AS runs FROM $i;", {"i": item_id})[0]["runs"]
     assert runs == []
+
+
+def test_upsert_item_persists_published_at(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """`published_at` explícito (passado) é gravado tal qual — campo próprio (KUBO-192),
+    não derivado de `collected_at`."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    published = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", published_at=published
+    )
+
+    row = db.query("SELECT published_at FROM $i;", {"i": item_id})[0]
+    assert row["published_at"] == published
+
+
+def test_upsert_item_naive_published_at_is_normalized_to_utc(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """`published_at` sem tzinfo (achado CodeRabbit no PR #222) é normalizado pra
+    UTC, não descartado — preserva o mesmo horário de parede."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    naive = datetime(2020, 1, 1, 12, 0)  # sem tzinfo, no passado
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", published_at=naive
+    )
+
+    row = db.query("SELECT published_at FROM $i;", {"i": item_id})[0]
+    assert row["published_at"] == naive.replace(tzinfo=timezone.utc)
+
+
+def test_upsert_item_without_published_at_falls_back_to_collected_at(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Sem `published_at` na fonte (caminho dormente do RSS, KUBO-192): o item usa a
+    data de coleta como valor — nunca fica sem data de publicação."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
+
+    row = db.query("SELECT published_at, collected_at FROM $i;", {"i": item_id})[0]
+    assert abs((row["published_at"] - row["collected_at"]).total_seconds()) < 1
+
+
+def test_upsert_item_future_published_at_falls_back_to_collected_at(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Data futura é rejeitada e cai no mesmo fallback (KUBO-192) — fonte que anuncia
+    amanhã não pode furar a janela de hoje (ADR-0050 item I)."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+
+    item_id = knowledge.upsert_item(
+        db, source=source_id, external_id="ep-1", content="bruto", published_at=future
+    )
+
+    row = db.query("SELECT published_at, collected_at FROM $i;", {"i": item_id})[0]
+    assert abs((row["published_at"] - row["collected_at"]).total_seconds()) < 1
 
 
 def test_get_or_create_entity_dedups_by_normalized_name(
@@ -1946,6 +2014,29 @@ def test_list_distilled_card_carries_title_source_and_date(
     assert card.source_kind == "youtube"
     assert card.summary == "resumo curto"
     assert card.created_at  # carimbo presente (string)
+    assert card.published_at  # KUBO-192: carimbo presente (string) — item sem data
+    # explícita cai na collected_at na store (upsert_item), então nunca é vazio.
+
+
+def test_list_distilled_card_published_at_reflects_item_date(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """`card.published_at` reflete a data de PUBLICAÇÃO do item (KUBO-192), não a
+    data de criação do destilado — os dois podem divergir (destilação atrasada)."""
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    published = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    item = knowledge.upsert_item(
+        db, source=src, external_id="v1", content="c", published_at=published
+    )
+    knowledge.insert_distilled(
+        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="resumo", chunks=[]
+    )
+
+    card = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+
+    assert card.published_at == str(published)
 
 
 def test_list_distilled_title_falls_back_to_summary_first_line(

@@ -76,6 +76,9 @@ class ItemPayload(BaseModel):
     url: str | None = None
     title: str | None = None
     metadata: dict[str, Any] | None = None
+    published_at: datetime | None = None
+    """Data de publicação na fonte (KUBO-192). Sem data, ou data futura, a store
+    (`upsert_item`) cai na data de coleta — regra centralizada lá, não aqui."""
 
 
 class EntityRef(BaseModel):

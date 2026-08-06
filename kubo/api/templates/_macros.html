@@ -245,7 +245,7 @@
     <div class="flex min-w-0 flex-1 flex-col gap-1.5">
       <div class="flex items-baseline gap-2">
         <span class="flex-1 truncate text-sm font-semibold">{{ card.title }}</span>
-        <span class="shrink-0 text-xs text-muted-foreground">{{ card.created_at | short_datetime }}</span>
+        <span class="shrink-0 text-xs text-muted-foreground">{{ card.published_at | short_datetime }}</span>
       </div>
       <p class="line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">{{ card.summary }}</p>
       {% if card.source_canonical %}

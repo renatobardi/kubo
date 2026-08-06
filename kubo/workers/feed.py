@@ -25,6 +25,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -98,6 +99,16 @@ def _entry_link(entry: Any) -> str | None:
     if link and urlsplit(str(link)).scheme.lower() in _ALLOWED_SCHEMES:
         return str(link)
     return None
+
+
+def _entry_published_at(entry: Any) -> datetime | None:
+    """Data de publicação da entry (KUBO-192), a partir de `published_parsed`
+    (struct_time UTC já normalizado pelo feedparser) — None quando ausente/ilegível
+    (`MALFORMED_DATE`); a store cai na data de coleta nesse caso."""
+    struct = entry.get("published_parsed")
+    if struct is None:
+        return None
+    return datetime(*struct[:6], tzinfo=timezone.utc)
 
 
 def _external_id(entry: Any) -> str | None:
@@ -335,6 +346,7 @@ def _entry_to_payload(
         url=_entry_link(entry),
         title=_clean(raw_title, _TITLE_CAP) if raw_title else None,
         metadata=metadata,
+        published_at=_entry_published_at(entry),
     )
 
 

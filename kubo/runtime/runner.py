@@ -148,6 +148,7 @@ def _persist(
                 url=payload.url,
                 title=payload.title,
                 metadata=payload.metadata,
+                published_at=payload.published_at,
                 run=run_id,
             )
         elif isinstance(payload, DistilledPayload):
