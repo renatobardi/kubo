@@ -1508,6 +1508,58 @@ def count_items_without_distilled(db: Any, *, tenant_id: RecordID, user_id: Reco
     return int(rows[0]["count"]) if rows else 0
 
 
+def items_to_score(
+    db: Any, *, tenant_id: RecordID, user_id: RecordID, limit: int
+) -> list[tuple[RecordID, str | None, str | None, str]]:
+    """Lista `(item_id, title, url, content)` dos candidatos à PONTUAÇÃO nova
+    (ADR-0051 §I): todo `item` SEM aresta `scored_for` do tenant ainda E com
+    `content` não-vazio — mesmo piso de proveniência de `items_without_distilled`
+    (ADR-0013 §III.1/§III.7, ADR-0051 §IV.3).
+
+    Par de leitura de `items_without_distilled`, mas população DIFERENTE desde
+    que o funil inverteu: aqui a exclusão é por `scored_for` (já pontuado, passe
+    ou não o corte), não por `derived_from` (já destilado). Um item reprovado
+    nunca mais aparece aqui — reprovação é definitiva (ADR-0051 §I.4)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    rows = db.query(
+        "SELECT id, title, url, content FROM item "
+        'WHERE string::trim(content) != "" '
+        "AND id NOT IN (SELECT VALUE in FROM scored_for WHERE out = $tenant) "
+        "ORDER BY id LIMIT $limit;",
+        {"limit": limit, "tenant": tenant_id},
+    )
+    return [(r["id"], r.get("title"), r.get("url"), r["content"]) for r in rows]
+
+
+def apply_score(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    item: RecordID,
+    score: int,
+    generated_title: str | None = None,
+) -> None:
+    """Grava a nota de relevância do item (ADR-0051 §I.2, aresta `scored_for`
+    item->tenant) e, se houver título gerado, o campo próprio `item.generated_title`
+    — NUNCA `item.title` (ADR-0051 §IV.1, campo próprio que nunca sobrescreve o
+    original). `DELETE $item->scored_for` + `RELATE` (last-wins, espelha
+    `upsert_item`/`from_source`): fecha o retry duplo — um run que persistiu o
+    parcial e falhou depois não duplica a aresta ao reprocessar o mesmo item.
+    Mesma transação: a nota nunca fica gravada sem o título gerado (ou vice-versa)
+    se a escrita falhar no meio."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    statements = [
+        "DELETE $item->scored_for",
+        "RELATE $item->scored_for->$tenant SET score = $score, assigned_at = time::now()",
+    ]
+    params: dict[str, Any] = {"item": item, "tenant": tenant_id, "score": score}
+    if generated_title is not None:
+        statements.append("UPDATE $item SET generated_title = $generated_title")
+        params["generated_title"] = generated_title
+    run_transaction(db, statements, params)
+
+
 # Teto do scan de auditoria (0014 A4): a auditoria do dreno varre o corpus INTEIRO
 # de destilados (escala pessoal, ~1k) para estratificar recente/legado — não é uma
 # página de UI, então o clamp é folgado, não _MAX_PAGE.

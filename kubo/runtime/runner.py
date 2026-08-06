@@ -26,6 +26,7 @@ from kubo.contracts.models import (
     PrPayload,
     ReportPayload,
     RunResult,
+    ScorePayload,
     WorkerManifest,
 )
 from kubo.contracts.worker import validate_worker
@@ -37,6 +38,7 @@ from kubo.store.destinations import record_id_from_destination
 from kubo.store.flows import insert_deliverable
 from kubo.store.knowledge import (
     Chunk,
+    apply_score,
     fail_run,
     finish_run,
     get_or_create_entity,
@@ -182,6 +184,19 @@ def _persist(
                 chunks=chunks,
                 run=run_id,
                 entities=entities,
+            )
+        elif isinstance(payload, ScorePayload):
+            item = knowledge.resolve(payload.ref)
+            if item is None:
+                unresolved += 1
+                continue
+            apply_score(
+                db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                item=item,
+                score=payload.score,
+                generated_title=payload.generated_title,
             )
         elif isinstance(payload, DispatchPayload):
             # `items` (strings validated by pydantic boundary) → RecordID for the store.

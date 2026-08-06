@@ -55,8 +55,11 @@ class _FakeKnowledge:
         self._per_dest = per_dest
         self.calls: list[tuple[str, int]] = []
 
-    def items_to_distill(self, limit: int) -> list[Any]:
+    def items_to_score(self, limit: int) -> list[Any]:
         return []
+
+    def work_context(self) -> str:
+        return ""
 
     def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
         self.calls.append((destination, limit))

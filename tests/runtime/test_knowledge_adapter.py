@@ -1,7 +1,7 @@
 """Comportamento do adaptador concreto de knowledge que o runner injeta em todo
-run (ADR-0013 §III). `GraphKnowledge` lê itens pendentes via store, atribui
-refs OPACOS int (o worker nunca vê RecordID) e resolve ref->RecordID FORA do
-Protocol `KnowledgeReader` — só o runner (ou o teste, aqui) chama `resolve`.
+run (ADR-0013 §III, ADR-0051 §I). `GraphKnowledge` lê itens pendentes via store,
+atribui refs OPACOS int (o worker nunca vê RecordID) e resolve ref->RecordID FORA
+do Protocol `KnowledgeReader` — só o runner (ou o teste, aqui) chama `resolve`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.runtime.context import GraphKnowledge
-from kubo.store import client, knowledge, migrations
+from kubo.store import client, knowledge, migrations, tenancy
 
 pytestmark = pytest.mark.integration
 
@@ -33,10 +33,10 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_ADAPTER_DB};")
 
 
-def test_items_to_distill_assigns_sequential_refs_and_resolves(
+def test_items_to_score_assigns_sequential_refs_and_resolves(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """2 itens pendentes -> items_to_distill(limit=10) devolve 2 ItemViews com
+    """2 itens pendentes -> items_to_score(limit=10) devolve 2 ItemViews com
     refs 0 e 1; gk.resolve(0)/gk.resolve(1) devolvem os RecordIDs corretos."""
     source_id = knowledge.upsert_source(
         db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
@@ -49,7 +49,7 @@ def test_items_to_distill_assigns_sequential_refs_and_resolves(
     )
 
     gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
-    views = gk.items_to_distill(limit=10)
+    views = gk.items_to_score(limit=10)
 
     assert len(views) == 2
     refs = {v.ref for v in views}
@@ -70,6 +70,21 @@ def test_items_to_distill_assigns_sequential_refs_and_resolves(
         assert by_ref[1].content == "conteúdo A"
 
 
+def test_items_to_score_carries_url(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """A pontuação (ADR-0051 §I.1) roda sobre título E URL — o ItemView precisa
+    carregar a url, não só title/content."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="c", url="https://x/a")
+
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
+    views = gk.items_to_score(limit=10)
+
+    assert len(views) == 1
+    assert views[0].url == "https://x/a"
+
+
 def test_resolve_unknown_ref_returns_none(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """resolve de um ref nunca atribuído devolve None — nunca levanta."""
     gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
@@ -81,8 +96,8 @@ def test_refs_are_monotonic_across_two_calls(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Com 3 itens pendentes e limit=2: a 1a chamada dá refs 0,1; a 2a dá refs
-    2,3 (NUNCA reseta o contador). `items_to_distill` não consome/marca itens
-    como destilados — como nada muda entre as chamadas, a 2a lê de novo os
+    2,3 (NUNCA reseta o contador). `items_to_score` não consome/marca itens
+    como pontuados — como nada muda entre as chamadas, a 2a lê de novo os
     MESMOS 2 itens (ordem determinística por id), só que com refs novos; prova
     que o contador é por-instância e monotônico, não que o lote muda sozinho."""
     source_id = knowledge.upsert_source(
@@ -93,8 +108,8 @@ def test_refs_are_monotonic_across_two_calls(
     knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
 
     gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
-    first_batch = gk.items_to_distill(limit=2)
-    second_batch = gk.items_to_distill(limit=2)
+    first_batch = gk.items_to_score(limit=2)
+    second_batch = gk.items_to_score(limit=2)
 
     assert {v.ref for v in first_batch} == {0, 1}
     assert {v.ref for v in second_batch} == {2, 3}  # monotônico: NÃO reseta pra 0
@@ -109,26 +124,43 @@ def test_refs_are_monotonic_across_two_calls(
     assert gk.resolve(first_sorted[1].ref) is not None
 
 
-def test_items_to_distill_excludes_already_distilled(
+def test_items_to_score_excludes_already_scored(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
-    """Um item COM destilado não aparece em items_to_distill — o filtro vem de
-    items_without_distilled; confirma a integração ponta a ponta."""
+    """Um item já pontuado (passe ou não o corte) não aparece em items_to_score —
+    reprovação é definitiva (ADR-0051 §I.4); confirma a integração ponta a ponta."""
     source_id = knowledge.upsert_source(
         db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
     )
     pending_item = knowledge.upsert_item(
         db, source=source_id, external_id="pending", content="pendente"
     )
-    distilled_item = knowledge.upsert_item(
-        db, source=source_id, external_id="distilled", content="já destilado"
+    scored_item = knowledge.upsert_item(
+        db, source=source_id, external_id="scored", content="já pontuado"
     )
-    knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=distilled_item, summary="resumo", chunks=[]
-    )
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=scored_item, score=2)
 
     gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
-    views = gk.items_to_distill(limit=10)
+    views = gk.items_to_score(limit=10)
 
     assert len(views) == 1
     assert gk.resolve(views[0].ref) == pending_item
+
+
+def test_work_context_reads_tenant_owner_profile(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """work_context() (ADR-0051 §I.1) delega à store, ancorado no tenant da
+    instância — o worker nunca vê o RecordID do tenant."""
+    tenancy.update_user_profile(
+        db,
+        user_id=user_id,
+        display_name="Dono",
+        language="pt-BR",
+        timezone="America/Sao_Paulo",
+        work_context="Curte IA aplicada.",
+    )
+
+    gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
+
+    assert gk.work_context() == "Curte IA aplicada."

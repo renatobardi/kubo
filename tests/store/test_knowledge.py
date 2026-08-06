@@ -1778,6 +1778,113 @@ def test_items_without_distilled_excludes_empty_and_whitespace_content(
     assert content == "conteúdo real"
 
 
+# ── KUBO-193 (ADR-0051 §I): funil invertido — items_to_score/apply_score ────
+
+
+def test_items_to_score_filters_and_limits(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
+    """items_to_score devolve (id, title, url, content) de cada item SEM aresta
+    scored_for ainda — candidatos à pontuação NOVA (ADR-0051 §I). Um item já
+    pontuado (C) NÃO aparece na lista, mesmo sem nunca ter sido destilado."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_a = knowledge.upsert_item(
+        db,
+        source=source_id,
+        external_id="a",
+        content="conteúdo A",
+        title="Título A",
+        url="https://x/a",
+    )
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo B")
+    item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo C")
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_c, score=8)
+
+    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+
+    assert len(pending) == 2
+    assert {str(rid) for rid, _, _, _ in pending} == {str(item_a), str(item_b)}
+    by_id = {str(rid): (title, url, content) for rid, title, url, content in pending}
+    assert by_id[str(item_a)] == ("Título A", "https://x/a", "conteúdo A")
+    assert by_id[str(item_b)] == (None, None, "conteúdo B")
+
+
+def test_items_to_score_excludes_empty_content(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Mesmo piso de proveniência de items_without_distilled (ADR-0013 §III.1/§III.7,
+    ADR-0051 §IV.3): item com content vazio nunca é candidato à pontuação."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=source_id, external_id="a", content="")
+    item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo real")
+
+    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+
+    assert len(pending) == 1
+    assert pending[0][0] == item_b
+
+
+def test_apply_score_creates_scored_for_edge_with_score(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """apply_score grava a aresta item -[scored_for]-> tenant com o score dado
+    (ADR-0051 §I.2) — sem título gerado, item.generated_title continua None."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=7)
+
+    row = db.query("SELECT ->scored_for.score AS s, generated_title FROM $i;", {"i": item_id})[0]
+    assert row["s"] == [7]
+    assert row["generated_title"] is None
+
+
+def test_apply_score_with_generated_title_sets_item_field_not_title(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """apply_score(generated_title=...) grava em item.generated_title — NUNCA em
+    item.title (ADR-0051 §IV.1: campo próprio, nunca sobrescreve o título original)."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item_id,
+        score=9,
+        generated_title="Título Gerado pelo Kubo",
+    )
+
+    row = db.query("SELECT title, generated_title FROM $i;", {"i": item_id})[0]
+    assert row["title"] is None
+    assert row["generated_title"] == "Título Gerado pelo Kubo"
+
+
+def test_apply_score_twice_does_not_duplicate_edge(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Reaplicar apply_score no mesmo item (retry após falha parcial) reescreve a
+    aresta — DELETE+RELATE, o mesmo padrão last-wins de upsert_item/from_source —
+    nunca duas arestas scored_for pro mesmo item."""
+    source_id = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
+
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=3)
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=9)
+
+    row = db.query("SELECT ->scored_for.score AS s FROM $i;", {"i": item_id})[0]
+    assert row["s"] == [9]
+
+
 def test_insert_distilled_mentions_are_atomic_no_orphan_on_late_failure(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:

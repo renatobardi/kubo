@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import EntityRef
 from kubo.store import knowledge
-from kubo.workers.distiller import DistillerWorker, DistillOutput
+from kubo.workers.distiller import DistillerWorker, DistillOutput, ScoreOutput
 from scripts import drain_distill as dd
 
 T = TypeVar("T", bound=BaseModel)
@@ -60,9 +60,11 @@ def test_drain_model_is_paid_never_groq_free() -> None:
 
 
 class _FakeExecutor:
-    """Fake de Executor: devolve DistillOutput em ordem, ZERO rede (CLAUDE.md)."""
+    """Fake de Executor: devolve outputs em ordem, ZERO rede (CLAUDE.md). Desde o
+    funil invertido (ADR-0051 §I), cada item consome 2 chamadas: pontuação (o
+    dreno quer aprovar tudo — score alto) e depois destilação."""
 
-    def __init__(self, outputs: Sequence[DistillOutput]) -> None:
+    def __init__(self, outputs: Sequence[ScoreOutput | DistillOutput]) -> None:
         self._outputs = list(outputs)
         self.calls = 0
 
@@ -97,7 +99,9 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
 
     executor = _FakeExecutor(
         [
+            ScoreOutput(score=9),
             DistillOutput(summary="resumo A", entities=[EntityRef(name="Anthropic", kind="org")]),
+            ScoreOutput(score=9),
             DistillOutput(summary="resumo B", entities=[]),
         ]
     )

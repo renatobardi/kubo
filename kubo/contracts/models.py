@@ -129,7 +129,7 @@ class ChunkPayload(BaseModel):
 class DistilledPayload(BaseModel):
     """Resultado da destilação de um item (ADR-0013 §III.2).
 
-    `ref` é o ref OPACO que `items_to_distill` devolveu — o runner resolve
+    `ref` é o ref OPACO que `items_to_score` devolveu — o runner resolve
     ref→RecordID e chama `insert_distilled`; o worker nunca vê RecordID (item 2/3).
     Cercas de volume em `summary`/`entities` por tipo (advisor); `claims` fica
     de fora por design — sem consumidor ainda (D23). `chunks` não tem teto:
@@ -144,6 +144,28 @@ class DistilledPayload(BaseModel):
     summary: str = Field(min_length=1, max_length=8000)
     entities: list[EntityRef] = Field(default_factory=lambda: [], max_length=20)
     chunks: list[ChunkPayload] = Field(default_factory=lambda: [])
+
+
+class ScorePayload(BaseModel):
+    """Nota de relevância de um item, computada pelo destilador ANTES de destilar
+    (ADR-0051 §I) — o schema fica em inglês (`score`); "nota" é o termo do ADR
+    (PT-BR, prosa de decisão), não o nome no código. `ref` é o ref OPACO que
+    `items_to_score` devolveu — mesmo mecanismo do `DistilledPayload.ref`; o
+    runner resolve ref→RecordID e grava a aresta `scored_for`.
+
+    `generated_title` (ADR-0051 §IV) é a exceção NOMEADA à disciplina D6 de nunca
+    fabricar: só populado quando o item chegou sem título na fonte, NUNCA
+    sobrescreve `item.title` — campo próprio, marcado como gerado. A marcação
+    VISÍVEL na UI/e-mail (cerca 2 do ADR-0051 §IV) é responsabilidade de quem
+    RENDERIZA este campo depois — fora do escopo deste payload, que só grava o
+    dado."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["score"] = "score"
+    ref: int
+    score: int = Field(ge=0, le=10)
+    generated_title: str | None = Field(default=None, max_length=500)
 
 
 class ErrorInfo(BaseModel):
@@ -261,7 +283,13 @@ class PrPayload(BaseModel):
 
 
 Payload: TypeAlias = Annotated[
-    SourcePayload | ItemPayload | DistilledPayload | DispatchPayload | ReportPayload | PrPayload,
+    SourcePayload
+    | ItemPayload
+    | DistilledPayload
+    | ScorePayload
+    | DispatchPayload
+    | ReportPayload
+    | PrPayload,
     Field(discriminator="type"),
 ]
 

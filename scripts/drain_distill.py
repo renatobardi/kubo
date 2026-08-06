@@ -122,7 +122,7 @@ def drain(
         run_id = run_worker(
             db,
             worker,
-            config={"max_items": batch_size},
+            config={"max_score_items": batch_size, "max_distill_items": batch_size},
             embedder=embedder,
             tenant_id=tenant_id,
             user_id=user_id,

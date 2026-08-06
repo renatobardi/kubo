@@ -40,6 +40,7 @@ class ItemView:
 
     ref: int
     title: str | None
+    url: str | None
     content: str
 
 
@@ -81,9 +82,14 @@ class KnowledgeReader(Protocol):
     justifique — não se especula agora.
     """
 
-    def items_to_distill(self, limit: int) -> list[ItemView]:
-        """Devolve até `limit` itens pendentes de destilação (§III.1), com
+    def items_to_score(self, limit: int) -> list[ItemView]:
+        """Devolve até `limit` itens pendentes de PONTUAÇÃO (ADR-0051 §I), com
         `ref` opaco atribuído pelo runtime — nunca o RecordID real."""
+        ...
+
+    def work_context(self) -> str:
+        """Contexto de trabalho do dono do TENANT ativo (ADR-0051 §I.1/Nota de
+        compatibilidade) — string vazia se não houver. Nunca logado (PII)."""
         ...
 
     def search_distilled(self, embedding: Sequence[float], k: int) -> list[RetrievedView]:

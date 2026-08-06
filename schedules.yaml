@@ -24,16 +24,18 @@ schedules:
     cron: "0 8 * * *"
   # ── DESTILADOR DIÁRIO — ATIVO (reativado na mini-sessão 0008) ─────────────────
   # Precondição cumprida: o filtro de itens `content=""` está em
-  # kubo.store.knowledge.items_without_distilled (link-posts sem corpo nunca vão
-  # ao LLM). 09:00 = após a coleta dos feeds (08:00-08:50); ADR-0013 §VIII: itens
-  # que chegam depois esperam o dia seguinte, idempotente. `max_items` subiu de
-  # 20 para 50 (D56, sessão 0021): o pipeline abaixo soma 7-15 releases/dia ao
-  # funil — sem o teto mais folgado, o funil represaria por motivo estrutural,
-  # não pelo pipeline em si.
+  # kubo.store.knowledge.items_to_score (link-posts sem corpo nunca vão ao LLM).
+  # 09:00 = após a coleta dos feeds (08:00-08:50); ADR-0013 §VIII: itens que
+  # chegam depois esperam o dia seguinte, idempotente. `max_items` (D56, sessão
+  # 0021: 20→50, o pipeline soma 7-15 releases/dia ao funil) virou dois limites
+  # distintos com o funil invertido (KUBO-193, ADR-0051 §I): `max_score_items`
+  # (quantos pontuar) e `max_distill_items` (quantos, dos aprovados, destilar) —
+  # ambos herdam o teto de 50, preservando o teto de operação de antes.
   - worker: distiller
     cron: "0 9 * * *"
     config:
-      max_items: 50
+      max_score_items: 50
+      max_distill_items: 50
   # ── SWEEP github-repo — releases dos Cadastros github-repo (#110, ADR-0025 §5) ──
   # Fora do trem 08:00-09:30 (feeds + destilador + digest) — 07:00, antes de tudo.
   # Varre os Cadastros github-repo ATIVOS e dispara um run por repo (simétrico ao sweep
