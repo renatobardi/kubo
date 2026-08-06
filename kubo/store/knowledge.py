@@ -1570,11 +1570,11 @@ def apply_score(
 def count_items_to_score(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
     """Conta os candidatos à pontuação nova (mesmo filtro de `items_to_score`: sem
     `scored_for` do tenant + content não-vazio) — métrica de progresso do dreno
-    (KUBO-193, achado CodeRabbit no PR #223): pós-funil invertido,
-    `count_items_without_distilled` fica FALSO como sinal de progresso — item
-    rejeitado sai da fila de pontuação (reprovação definitiva) mas nunca ganha
-    `derived_from`, então parece "travado" pra sempre num dreno medido pela
-    métrica antiga. Esta conta o que o worker realmente ainda vai processar."""
+    (KUBO-193): pós-funil invertido, `count_items_without_distilled` fica FALSO
+    como sinal de progresso — item rejeitado sai da fila de pontuação (reprovação
+    definitiva) mas nunca ganha `derived_from`, então parece "travado" pra
+    sempre num dreno medido pela métrica antiga. Esta conta o que o worker
+    realmente ainda vai processar."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     rows = db.query(
         "SELECT count() FROM item "

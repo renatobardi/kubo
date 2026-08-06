@@ -108,7 +108,14 @@ def _score_content(title: str | None, url: str | None) -> str:
 @dataclass
 class _Counters:
     """Contadores mutáveis acumulados ao longo do `run` — um por estágio do
-    funil (AC: "contadores separados de pontuados, aprovados e destilados")."""
+    funil (AC: "contadores separados de pontuados, aprovados e destilados").
+
+    `approved` é telemetria DO RUN (visibilidade em Execuções), não o registro
+    durável: conta todo item que passou o corte, mesmo que sua nota não seja
+    persistida por a destilação ter falhado depois (ver `_process_item`). Pode
+    legitimamente ser MAIOR que a contagem de arestas `scored_for` com
+    `score >= min_score` no banco — os dois medem coisas diferentes de
+    propósito (funil deste run vs. estado durável)."""
 
     scored: int = 0
     approved: int = 0
@@ -279,10 +286,10 @@ class DistillerWorker:
         if not approved:
             return _ItemOutcome([score_payload])  # reprovado — nota permanente (ADR-0051 §I.4)
 
-        # Aprovado: a nota só é PERSISTIDA se a destilação também suceder (achado
-        # CodeRabbit no PR #223). Se persistíssemos a nota aqui incondicionalmente,
-        # um item aprovado que falha na destilação (malformado, embedding, rate
-        # limit) ficaria com `scored_for` gravado para sempre — `items_to_score`
+        # Aprovado: a nota só é PERSISTIDA se a destilação também suceder. Se
+        # persistíssemos a nota aqui incondicionalmente, um item aprovado que
+        # falha na destilação (malformado, embedding, rate limit) ficaria com
+        # `scored_for` gravado para sempre — `items_to_score`
         # o excluiria de toda run futura, sem NENHUMA fila de retry pra
         # aprovado-mas-nunca-destilado (o mesmo estrangulamento que o `break` do
         # orçamento de destilação já evita para itens NEM pontuados). Malformado/
