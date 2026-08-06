@@ -2666,3 +2666,29 @@ def test_count_items_without_distilled_zero_when_none_pending(
 ) -> None:
     """Banco sem candidato pendente conta 0 (não None, não erro)."""
     assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0
+
+
+def test_count_items_to_score_matches_the_filter(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """count_items_to_score conta os MESMOS candidatos de items_to_score (KUBO-193,
+    achado CodeRabbit no PR #223): métrica de progresso do dreno pós-funil invertido
+    — item REJEITADO (nota abaixo do corte) sai da contagem (reprovação é definitiva,
+    não é "travado"); item aprovado-mas-não-destilado nunca chega a ter nota
+    persistida (fix do PR #223), então continua contando como pendente."""
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A")
+    knowledge.upsert_item(db, source=src, external_id="empty", content="   ")  # vazio: fora
+    item_rejected = knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")
+    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_rejected, score=2)
+
+    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 1
+
+
+def test_count_items_to_score_zero_when_none_pending(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Banco sem candidato pendente de pontuação conta 0 (não None, não erro)."""
+    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 0

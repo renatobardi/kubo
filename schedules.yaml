@@ -30,7 +30,10 @@ schedules:
   # 0021: 20→50, o pipeline soma 7-15 releases/dia ao funil) virou dois limites
   # distintos com o funil invertido (KUBO-193, ADR-0051 §I): `max_score_items`
   # (quantos pontuar) e `max_distill_items` (quantos, dos aprovados, destilar) —
-  # ambos herdam o teto de 50, preservando o teto de operação de antes.
+  # ambos herdam o teto de 50 ITENS. Atenção ao custo: o teto de CHAMADAS ao LLM
+  # por run passa de 50 (só destilação, antes) para até 100 (50 pontuações + até
+  # 50 destilações dos aprovados) — reveja se a quota do free tier acomoda
+  # (achado CodeRabbit, PR #223).
   - worker: distiller
     cron: "0 9 * * *"
     config:

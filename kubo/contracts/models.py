@@ -163,6 +163,7 @@ class ScorePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     type: Literal["score"] = "score"
+    schema_version: Literal[1] = 1
     ref: int
     score: int = Field(ge=0, le=10)
     generated_title: str | None = Field(default=None, max_length=500)

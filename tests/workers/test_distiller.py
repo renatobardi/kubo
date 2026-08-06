@@ -60,6 +60,7 @@ class _FakeExecutor:
         self._errors = errors or {}
         self.received_content: list[str] = []
         self.received_instructions: list[str] = []
+        self.received_models: list[type[BaseModel]] = []
         self.call_count = 0
 
     def complete(self, instruction: str, untrusted_content: str, response_model: type[T]) -> T:
@@ -67,6 +68,7 @@ class _FakeExecutor:
         self.call_count += 1
         self.received_content.append(untrusted_content)
         self.received_instructions.append(instruction)
+        self.received_models.append(response_model)
         if idx in self._errors:
             raise self._errors[idx]
         return cast(T, self._outputs[idx])
@@ -201,6 +203,8 @@ def test_score_call_receives_title_and_url_not_content() -> None:
     assert "Meu Título" in score_call_content
     assert "https://x/y" in score_call_content
     assert "CONTEUDO_SECRETO" not in score_call_content
+    # defesa contra troca de schema entre as 2 chamadas (achado CodeRabbit no PR #223)
+    assert executor.received_models == [ScoreOutput, DistillOutput]
 
 
 def test_score_instruction_carries_tenant_work_context() -> None:
@@ -217,6 +221,22 @@ def test_score_instruction_carries_tenant_work_context() -> None:
     DistillerWorker(executor).run(ctx)
 
     assert "Adora Rust." in executor.received_instructions[0]
+
+
+def test_score_instruction_falls_back_when_work_context_is_empty() -> None:
+    """Tenant sem work_context (`get_tenant_work_context` devolve ""): a pontuação
+    roda com o marcador de contexto ausente, nunca com string vazia colada na
+    instrução (achado CodeRabbit no PR #223 — cenário real: dono sem perfil)."""
+    items = [ItemView(ref=0, title="t", url=None, content="c")]
+    executor = _FakeExecutor(
+        outputs={0: _approve(9), 1: DistillOutput(summary="resumo", entities=[])}
+    )
+    ctx = _ctx(DistillerConfig(), _FakeKnowledge(items, work_context=""), _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    assert result.error is None
+    assert "(sem contexto definido)" in executor.received_instructions[0]
 
 
 def test_item_below_cutoff_gets_scored_but_never_distilled() -> None:
@@ -341,9 +361,13 @@ def test_run_skips_malformed_item_and_counts_it_without_failing_the_run() -> Non
     assert stats["distilled"] == 1
 
 
-def test_run_skips_malformed_distill_call_but_keeps_the_score() -> None:
-    """Malformado NA DESTILAÇÃO (não na pontuação): a nota já foi gravada — só a
-    destilação falha e é contada; o item fica cru (nota existe, sem distilled)."""
+def test_run_skips_malformed_distill_call_and_does_not_persist_the_score() -> None:
+    """Malformado NA DESTILAÇÃO (não na pontuação, achado CodeRabbit no PR #223):
+    a nota NÃO é persistida — só vira ScorePayload se a destilação também
+    suceder. Persistir a nota aqui estrangularia o item pra sempre: `scored_for`
+    gravado o excluiria de `items_to_score` em todo run futuro, sem fila de
+    retry pra aprovado-mas-nunca-destilado. Sem nota, o item é repontuado do
+    zero no próximo run — retry natural."""
     items = [ItemView(ref=0, title=None, url=None, content="c0")]
     executor = _FakeExecutor(
         outputs={0: _approve(9)},
@@ -354,11 +378,10 @@ def test_run_skips_malformed_distill_call_but_keeps_the_score() -> None:
     result = DistillerWorker(executor).run(ctx)
 
     assert result.error is None
-    assert len(result.payloads) == 1
-    assert isinstance(result.payloads[0], ScorePayload)
+    assert result.payloads == []
     stats = result.stats.model_dump()
     assert stats["malformed"] == 1
-    assert stats["approved"] == 1
+    assert stats["approved"] == 1  # visibilidade do funil, independente da persistência
     assert stats["distilled"] == 0
 
 
@@ -385,8 +408,9 @@ def test_run_stops_on_rate_limit_exhausted_during_scoring() -> None:
 
 
 def test_run_stops_on_rate_limit_exhausted_during_distillation() -> None:
-    """Rate limit esgotado NA DESTILAÇÃO também para o loop e devolve o parcial
-    (a nota do item que estourou já foi gravada — só a destilação some)."""
+    """Rate limit esgotado NA DESTILAÇÃO também para o loop e devolve o parcial —
+    a nota do item que estourou NÃO é persistida (mesma regra do malformado):
+    sem destilado confirmado, sem scored_for, retry do zero no próximo run."""
     items = [
         ItemView(ref=0, title=None, url=None, content="c0"),
         ItemView(ref=1, title=None, url=None, content="c1"),
@@ -401,8 +425,7 @@ def test_run_stops_on_rate_limit_exhausted_during_distillation() -> None:
 
     assert result.error is not None
     assert result.error.kind == "rate_limit_exhausted"
-    assert len(result.payloads) == 1
-    assert isinstance(result.payloads[0], ScorePayload)
+    assert result.payloads == []
     assert executor.call_count == 2  # nunca chegou a pontuar o item 1
 
 
@@ -472,8 +495,12 @@ def test_run_stops_on_embedding_error_and_returns_partial_with_error() -> None:
     result = DistillerWorker(executor).run(ctx)
 
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
+    scores = [p for p in result.payloads if isinstance(p, ScorePayload)]
     assert len(distilled) == 1  # só o 1º item, já destilado, sobrevive
     assert _as_distilled(distilled[0]).ref == 0
+    # item 1 pontuou mas o embedding falhou — nota NÃO persiste (mesma regra do
+    # malformado/rate-limit): sem destilado confirmado, sem scored_for.
+    assert {s.ref for s in scores} == {0}
     assert result.error is not None
     assert result.error.kind == "embedding_failed"
 
@@ -595,8 +622,12 @@ def test_run_skips_item_with_whitespace_only_summary_and_counts_empty_summary() 
 
     assert result.error is None
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
+    scores = [p for p in result.payloads if isinstance(p, ScorePayload)]
     assert len(distilled) == 1
     assert _as_distilled(distilled[0]).ref == 1
+    # item 0 (summary vazio pós-limpeza) não vira nota — mesma regra do malformado:
+    # sem destilado confirmado, sem scored_for, retry do zero no próximo run.
+    assert {s.ref for s in scores} == {1}
     stats = result.stats.model_dump()
     assert stats["empty_summary"] >= 1
     assert stats["distilled"] == 1

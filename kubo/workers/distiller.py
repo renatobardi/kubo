@@ -4,14 +4,17 @@ ADR-0051 §I: KUBO-193).
 Para cada item pendente, o worker roda até DUAS chamadas de LLM:
 
 1. **Pontuação** — sobre título+URL (nunca o content bruto) contra o
-   `work_context` do tenant. Sempre vira um `ScorePayload` (a nota é gravada
-   passe ou não o corte — reprovação é definitiva, ADR-0051 §I.3/4). Sem título
-   na fonte, a MESMA chamada pode gerar um título (ADR-0051 §IV), sob a cerca de
+   `work_context` do tenant. Reprovado (score abaixo do corte) vira `ScorePayload`
+   IMEDIATAMENTE — reprovação é definitiva (ADR-0051 §I.3/4). Sem título na
+   fonte, a MESMA chamada pode gerar um título (ADR-0051 §IV), sob a cerca de
    nunca sobrescrever `item.title`.
 2. **Destilação** — só roda se a nota passou `config.min_score`. Igual a antes
    (resumo + entidades + chunks embeddados), mais a defesa de prosa limpa
    (ADR-0051 §III): markdown estrutural que vazar do LLM é removido ANTES de
-   persistir, não só pedido no prompt.
+   persistir, não só pedido no prompt. **Aprovado só vira `ScorePayload` se a
+   destilação também suceder** — falha técnica na destilação (malformado,
+   embedding, rate limit) NÃO persiste a nota, item é repontuado do zero no
+   próximo run (retry natural, sem fila separada).
 
 Um item por chamada de LLM (§III.3): o pareamento ref→resposta é programático
 (o `ref` vem do `ItemView` de origem, nunca ecoado pelo LLM), o que fecha o
@@ -68,7 +71,7 @@ _INSTRUCTION = (
 # Cabeçalho markdown (##, ###...) que vaza da saída do LLM apesar da instrução
 # pedir prosa (ADR-0051 §III) — o schema pydantic não impede `##` dentro de um
 # campo str, então a defesa é NA GRAVAÇÃO, determinística, não só no prompt.
-_STRUCTURAL_MARKDOWN_LINE = re.compile(r"^#{1,6}[ \t].*\n?", re.MULTILINE)
+_STRUCTURAL_MARKDOWN_LINE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t].*\n?", re.MULTILINE)
 
 
 def _strip_structural_markdown(text: str) -> str:
@@ -162,10 +165,10 @@ class DistillerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_score_items: int = 10
-    max_distill_items: int = 10
+    max_score_items: int = Field(default=10, ge=1)
+    max_distill_items: int = Field(default=10, ge=1)
     min_score: int = Field(default=6, ge=0, le=10)
-    input_char_cap: int = 20000
+    input_char_cap: int = Field(default=20000, ge=1)
 
 
 class ScoreOutput(BaseModel):
@@ -274,18 +277,28 @@ class DistillerWorker:
         if score_payload is None:
             return _ItemOutcome([])  # malformado — já contado
         if not approved:
-            return _ItemOutcome([score_payload])
+            return _ItemOutcome([score_payload])  # reprovado — nota permanente (ADR-0051 §I.4)
 
+        # Aprovado: a nota só é PERSISTIDA se a destilação também suceder (achado
+        # CodeRabbit no PR #223). Se persistíssemos a nota aqui incondicionalmente,
+        # um item aprovado que falha na destilação (malformado, embedding, rate
+        # limit) ficaria com `scored_for` gravado para sempre — `items_to_score`
+        # o excluiria de toda run futura, sem NENHUMA fila de retry pra
+        # aprovado-mas-nunca-destilado (o mesmo estrangulamento que o `break` do
+        # orçamento de destilação já evita para itens NEM pontuados). Malformado/
+        # embedding/rate-limit não são REPROVAÇÃO (ADR-0051 §I.4 fala de nota
+        # abaixo do corte) — são falha técnica, e a semântica de retry natural
+        # (item some do `items_to_score` só quando tem nota OU destilado) exige
+        # que nenhum dos dois exista até a destilação de fato terminar bem.
         try:
             distilled_payload = self._distill_item(ctx, item, config, embedder, counters)
         except RateLimitExhausted as exc:
-            return _ItemOutcome([score_payload], _rate_limit_error(exc.scope))
+            return _ItemOutcome([], _rate_limit_error(exc.scope))
         except EmbeddingError:
-            return _ItemOutcome([score_payload], _EMBEDDING_FAILED_ERROR)
-        payloads: list[Payload] = [score_payload]
-        if distilled_payload is not None:
-            payloads.append(distilled_payload)
-        return _ItemOutcome(payloads)
+            return _ItemOutcome([], _EMBEDDING_FAILED_ERROR)
+        if distilled_payload is None:
+            return _ItemOutcome([])  # malformado/summary vazio — retry do zero no próximo run
+        return _ItemOutcome([score_payload, distilled_payload])
 
     def _score_item(
         self,

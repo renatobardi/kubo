@@ -123,3 +123,38 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
     assert drained == 2
     assert reason == "done"
     assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0
+
+
+@pytest.mark.integration
+def test_drain_treats_rejected_item_as_progress_not_stuck(
+    db, tenant_id, user_id, monkeypatch
+) -> None:
+    """Item REPROVADO (nota abaixo do corte) conta como progresso do dreno, não
+    'stuck' (KUBO-193, achado CodeRabbit no PR #223) — reprovação é definitiva
+    (ADR-0051 §I.4): o item sai da fila de pontuação de vez, mesmo sem nunca
+    ganhar `derived_from`. A métrica antiga (`count_items_without_distilled`)
+    leria isso como "sem progresso" e pararia o dreno com `reason='stuck'`
+    mesmo o item tendo sido corretamente processado."""
+    src = knowledge.upsert_source(
+        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+    )
+    knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo irrelevante")
+
+    executor = _FakeExecutor([ScoreOutput(score=1)])  # abaixo do min_score default (6)
+    monkeypatch.setattr(dd, "_build_worker", lambda: DistillerWorker(executor))
+    monkeypatch.setattr(dd.GeminiEmbedder, "from_env", staticmethod(lambda: _FakeEmbedder()))
+
+    initial, final, drained, reason = dd.drain(
+        db,
+        batch_size=10,
+        max_batches=3,
+        delay=0.0,
+        sleep=lambda _: None,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    assert initial == 1
+    assert final == 0
+    assert drained == 1
+    assert reason == "done"  # NÃO 'stuck' — a reprovação é progresso real

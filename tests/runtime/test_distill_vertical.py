@@ -187,6 +187,11 @@ def test_run_worker_distills_pending_items_into_graph(
     assert _count(db, "mentions") == 1
     assert _count(db, "produced_by") == 2
     assert _run_status(db, run_id)["status"] == "ok"
+    # score persistido via aresta scored_for (achado CodeRabbit no PR #223) —
+    # prova que _persist realmente grava ScorePayload, não só DistilledPayload.
+    assert _count(db, "scored_for") == 2
+    score_a = db.query("SELECT ->scored_for.score AS s FROM $i;", {"i": item_a})[0]["s"]
+    assert score_a == [9]
 
 
 def test_run_worker_skips_malformed_item_persists_the_rest(
