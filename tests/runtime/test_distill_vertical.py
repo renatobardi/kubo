@@ -29,7 +29,13 @@ from kubo.errors import MalformedOutputError, RateLimitExhausted
 from kubo.runtime.runner import run_worker
 from kubo.store import client, migrations
 from kubo.store.knowledge import distilled_for, upsert_item, upsert_source
-from kubo.workers.distiller import DistillerConfig, DistillerWorker, DistillOutput, ScoreOutput
+from kubo.workers.distiller import (
+    DaySummaryOutput,
+    DistillerConfig,
+    DistillerWorker,
+    DistillOutput,
+    ScoreOutput,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -82,8 +88,13 @@ class _FakeExecutor:
         self.call_count = 0
 
     def complete(self, instruction: str, untrusted_content: str, response_model: type[T]) -> T:
-        result = self._results[self.call_count]
+        idx = self.call_count
         self.call_count += 1
+        # ADR-0052 §III: o distiller faz uma chamada extra de resumo do dia ao
+        # terminar. Os testes verticais não se importam com o resumo — default.
+        if idx >= len(self._results) and response_model is DaySummaryOutput:
+            return cast(T, DaySummaryOutput(summary="resumo do dia vertical default"))
+        result = self._results[idx]
         if isinstance(result, Exception):
             raise result
         return cast(T, result)

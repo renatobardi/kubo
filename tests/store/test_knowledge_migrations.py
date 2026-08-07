@@ -47,6 +47,8 @@ _TABLES = {
     "task",
     "persona",
     "deliverable",
+    # 0042 (KUBO-195, ADR-0052): resumo do dia por (dia, tenant).
+    "day_summary",
 }
 _EDGES = {
     "from_source",
@@ -61,6 +63,10 @@ _EDGES = {
     "assigned_to",
     "produces",
     "consults",
+    # 0040 (KUBO-193, ADR-0051): aresta de pontuação item->tenant.
+    "scored_for",
+    # 0042 (KUBO-195, ADR-0052): aresta de parecer item->tenant.
+    "opinion_for",
 }
 
 
@@ -147,6 +153,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0040_item_scored_for_tenant.surql",
         # 0041 (KUBO-194, ADR-0050 §V): dispatch.items aceita record<item> e record<distilled>.
         "0041_dispatch_items_record_item.surql",
+        # 0042 (KUBO-195, ADR-0052): opinion_for edge + day_summary table.
+        "0042_opinion_day_summary.surql",
     }
 
 

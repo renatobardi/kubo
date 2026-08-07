@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel
@@ -20,12 +21,19 @@ from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
 from kubo.store.destinations import record_id_from_destination
 from kubo.store.knowledge import (
+    DaySummaryView,
     DistilledListItem,
     DistilledView,
     items_for_digest,
     list_distilled,
     read_distilled,
     search_distilled,
+)
+from kubo.store.knowledge import (
+    get_day_summary as store_get_day_summary,
+)
+from kubo.store.knowledge import (
+    get_opinions as store_get_opinions,
 )
 from kubo.store.knowledge import (
     items_to_score as store_items_to_score,
@@ -157,6 +165,26 @@ class GraphKnowledge:
             watermark=selection.watermark,
             total_publications=selection.total_publications,
         )
+
+    def get_opinions(self, item_ids: list[str]) -> dict[str, str]:
+        """Lê pareceres persistidos por (item, tenant) em lote (ADR-0052 §I).
+        Converte cada `item:<hex>` string de volta para RecordID e delega à
+        store. Itens sem parecer não aparecem no dict."""
+        rids: list[RecordID] = []
+        for sid in item_ids:
+            table, _, key = sid.partition(":")
+            if not table or not key:
+                continue
+            rids.append(RecordID(table, key))
+        return store_get_opinions(db=self._db, tenant_id=self._tenant_id, items=rids)
+
+    def get_day_summary(self, day: date) -> str | None:
+        """Lê o resumo do dia para o tenant (ADR-0052 §II). Retorna `None` se
+        não existe — o chamador computa via LLM e devolve `DaySummaryPayload`."""
+        result: DaySummaryView | None = store_get_day_summary(
+            self._db, tenant_id=self._tenant_id, day=day
+        )
+        return result.summary if result is not None else None
 
 
 @dataclass(frozen=True)

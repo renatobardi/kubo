@@ -238,6 +238,19 @@ def execute_digest_sweep_job() -> None:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(list_db)
             destination_list = destination_store.active_destinations(list_db)
 
+        # Executor LLM para enriquecimento editorial (ADR-0052, KUBO-195) —
+        # mesmo modelo do destilador. Criado uma vez por sweep, compartilhado
+        # entre destinos (stateless). Se a construção falhar (config inválida,
+        # env faltando), o sweep aborta com log estruturado — sem executor não
+        # há enriquecimento, mas os destinos ainda recebem o digest sem parecer.
+        try:
+            digest_executor = ApiExecutor(
+                ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
+            )
+        except Exception:  # noqa: BLE001 — setup failure, log and abort
+            _log.exception("digest_sweep_executor_setup_failed")
+            return
+
         dispatched = 0
         failed = 0
         for destination in destination_list:
@@ -251,7 +264,7 @@ def execute_digest_sweep_job() -> None:
                 failed += 1
                 continue
             try:
-                worker = factory(destination, base_url)
+                worker = factory(destination, base_url, digest_executor)
                 max_items = _DIGEST_MAX_ITEMS_BY_CHANNEL[destination.channel]
                 with client.connect(client.config()) as run_db:
                     run_worker(

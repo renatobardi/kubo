@@ -54,6 +54,12 @@ class _FakeWindowKnowledge:
     def search_distilled(self, embedding: Any, k: int) -> list[Any]:
         return []
 
+    def get_opinions(self, item_ids: list[str]) -> dict[str, str]:
+        return {}
+
+    def get_day_summary(self, day: Any) -> str | None:
+        return None
+
 
 @dataclass
 class _FakeCtx:

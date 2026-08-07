@@ -14,7 +14,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ValidationError
@@ -46,7 +46,8 @@ class ItemView:
 
 @dataclass(frozen=True)
 class DigestView:
-    """View read-only de um item a incluir num digest (ADR-0015 §IV, ADR-0050 §V).
+    """View read-only de um item a incluir num digest (ADR-0015 §IV, ADR-0050 §V,
+    ADR-0052 §I).
 
     `id` é a forma STRING do RecordID do ITEM (`item:<hex>`) — exceção nomeada à
     disciplina de ref opaco: o digest worker é MECÂNICO (sem LLM no circuito), a
@@ -56,7 +57,10 @@ class DigestView:
     distilled novo e reentraria como inédito se a chave fosse o destilado (ADR-0050
     §III). `score` é a nota de relevância (aresta `scored_for`). `published_at` é a
     data de publicação na fonte. `url` é o link do item na fonte. `title`/`summary`/
-    `entities` são conteúdo derivado de dado HOSTIL — o builder os escapa sempre."""
+    `entities` são conteúdo derivado de dado HOSTIL — o builder os escapa sempre.
+    `opinion` é o parecer editorial (ADR-0052 §I) — computado no envio, persistido
+    por (item, tenant), compartilhado entre canais. `None` quando ainda não
+    computado ou nas formas de aviso (empty_window/none_passed)."""
 
     id: str
     title: str | None
@@ -65,6 +69,7 @@ class DigestView:
     published_at: datetime
     url: str | None
     entities: list[str]
+    opinion: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,7 +88,10 @@ class DigestSelectionView:
     `total_publications` é o total de itens publicados na janela inteira (para
     a forma 3); na forma 4 (recovery), os itens vêm só do dia mais recente, mas
     `total_publications` cobre o período inteiro — essa assimetria é intencional:
-    o número é sinal de calibragem do corte, não contagem do que foi enviado."""
+    o número é sinal de calibragem do corte, não contagem do que foi enviado.
+    `day_summary` é o resumo editorial do dia (ADR-0052 §II) — mesmo texto nos
+    dois canais. `None` nas formas de aviso (empty_window/none_passed) ou quando
+    não houve tempo de computar (destilador falhou e fallback ainda não rodou)."""
 
     form: Literal["normal", "empty_window", "none_passed", "recovery"]
     items: list[DigestView]
@@ -91,6 +99,7 @@ class DigestSelectionView:
     window_end: datetime | None
     watermark: datetime | None
     total_publications: int
+    day_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +144,20 @@ class KnowledgeReader(Protocol):
         7 dias. Exclui já-enviados, deduplica por URL, ordena por nota, corta em
         `limit`. Devolve `DigestSelectionView` com a forma (normal/empty/none_passed/
         recovery), os itens, a janela e o watermark (último dia coberto)."""
+        ...
+
+    def get_opinions(self, item_ids: list[str]) -> dict[str, str]:
+        """Lê pareceres persistidos por (item, tenant) em lote (ADR-0052 §I).
+        Chave = forma string do item id (`item:<hex>`), valor = texto do parecer.
+        Itens sem parecer não aparecem no dict — o chamador detecta ausência por
+        `key not in result` e computa o que falta via LLM."""
+        ...
+
+    def get_day_summary(self, day: date) -> str | None:
+        """Lê o resumo do dia para o tenant (ADR-0052 §II). `day` é o dia de
+        calendário no fuso do tenant. Retorna `None` se não existe — o chamador
+        computa via LLM e devolve `DaySummaryPayload` para o runner persistir
+        (caminho de fallback, ADR-0052 §III)."""
         ...
 
 

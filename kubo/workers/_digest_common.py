@@ -12,10 +12,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from kubo.contracts.models import DispatchPayload, ErrorInfo, RunResult, Stats
+from kubo.contracts.models import DispatchPayload, ErrorInfo, Payload, RunResult, Stats
 from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.errors import ContractError, SenderError
+from kubo.executors.base import Executor
 from kubo.store.destinations import Destination
+from kubo.workers._digest_editorial import enrich_with_editorial
 
 _MSG_CAP = 500  # teto da mensagem de erro (ADR-0009 §VIII) — sem vazar conteúdo/segredo
 
@@ -40,19 +42,32 @@ class _DigestWorker:
     _error_kind: str
     _config_class: type[BaseModel]
 
-    def __init__(self, *, destination: Destination, base_url: str) -> None:
+    def __init__(
+        self,
+        *,
+        destination: Destination,
+        base_url: str,
+        executor: Executor | None = None,
+    ) -> None:
         self._destination = destination
         self._base_url = base_url
+        self._executor = executor
 
     def run(self, ctx: RunContext) -> RunResult:
         """Para o destino configurado, seleciona itens por janela de publicação,
-        monta e envia o digest (ou aviso), e devolve um DispatchPayload ok ou error.
+        enriquece com parecer e resumo do dia (ADR-0052), monta e envia o digest
+        (ou aviso), e devolve um DispatchPayload ok ou error.
 
         As quatro formas de mensagem (ADR-0050 §VI) são tratadas aqui:
         - normal/recovery: envia o digest com os itens selecionados.
         - empty_window/none_passed: envia um aviso curto (item_count=0).
         Todas produzem DispatchPayload com status=ok e watermark=window_end.
-        O só-se-novidade (ADR-0015 §V) é revogado: Kubo nunca fica em silêncio."""
+        O só-se-novidade (ADR-0015 §V) é revogado: Kubo nunca fica em silêncio.
+
+        O enriquecimento editorial (parecer + resumo do dia) só roda se o
+        executor estiver presente (injetado pelo scheduler em produção). Sem
+        executor, o digest sai sem parecer/resumo — compatível com testes
+        que só testam o envio mecânico."""
         config = ctx.config
         expected = self._config_class.__name__
         if not isinstance(config, self._config_class):
@@ -65,13 +80,25 @@ class _DigestWorker:
             destination_id,
             config.max_items,  # type: ignore[attr-defined]
         )
+
+        editorial_payloads: list[Payload] = []
+        if self._executor is not None:
+            result = enrich_with_editorial(ctx, selection, self._executor)
+            selection = result.selection
+            editorial_payloads = result.payloads
+
         items = [v.id for v in selection.items]
         watermark = selection.watermark
 
         try:
             self._deliver(ctx, selection)
             payload = _payload(self._destination, self._channel, watermark, items, status="ok")
-            return _run_result(payload, failed=False, new_distilled=len(selection.items))
+            return _run_result(
+                payload,
+                editorial_payloads,
+                failed=False,
+                new_distilled=len(selection.items),
+            )
         except SenderError as exc:
             payload = _payload(
                 self._destination,
@@ -81,7 +108,12 @@ class _DigestWorker:
                 status="error",
                 error=ErrorInfo(kind=self._error_kind, message=str(exc)[:_MSG_CAP]),
             )
-            return _run_result(payload, failed=True, new_distilled=len(selection.items))
+            return _run_result(
+                payload,
+                editorial_payloads,
+                failed=True,
+                new_distilled=len(selection.items),
+            )
 
     def _deliver(self, ctx: RunContext, selection: DigestSelectionView) -> None:
         """Manda o digest (ou aviso) pelo canal; levanta SenderError se não puder
@@ -116,8 +148,15 @@ def _payload(
     )
 
 
-def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -> RunResult:
-    """Envelope de RunResult com o payload único e stats."""
+def _run_result(
+    payload: DispatchPayload,
+    editorial_payloads: list[Payload],
+    *,
+    failed: bool,
+    new_distilled: int,
+) -> RunResult:
+    """Envelope de RunResult com o payload de dispatch + payloads editoriais
+    (opiniões + resumo do dia, ADR-0052) e stats."""
     stats = Stats.model_validate(
         {
             "new_distilled": new_distilled,
@@ -125,4 +164,8 @@ def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -
             "failed": 1 if failed else 0,
         }
     )
-    return RunResult(payloads=[payload], stats=stats, error=payload.error)
+    return RunResult(
+        payloads=[payload, *editorial_payloads],
+        stats=stats,
+        error=payload.error,
+    )

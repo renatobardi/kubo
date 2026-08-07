@@ -14,6 +14,7 @@ from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.distribution.digest_email import build_email_digest
 from kubo.distribution.email import SmtpConfig, send_email
 from kubo.errors import SenderError
+from kubo.executors.base import Executor
 from kubo.store.destinations import Destination
 from kubo.workers._digest_common import DigestConfig, _DigestWorker
 
@@ -49,8 +50,9 @@ class EmailDigestWorker(_DigestWorker):
         base_url: str,
         smtp_config: SmtpConfig | None,
         email_sender: EmailSender | None = None,
+        executor: Executor | None = None,
     ) -> None:
-        super().__init__(destination=destination, base_url=base_url)
+        super().__init__(destination=destination, base_url=base_url, executor=executor)
         self._smtp_config = smtp_config
         self._email_sender: EmailSender = email_sender or send_email
 
