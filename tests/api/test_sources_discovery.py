@@ -1,4 +1,5 @@
-"""Descoberta e validação assistida de fonte RSS (KUBO-50) — testes unitários.
+"""Descoberta e validação assistida de fonte (KUBO-50 RSS; KUBO-197 github-repo) —
+testes unitários.
 
 Mockam HTTP com respx, o LLM com um finder fake e o guard SSRF com monkeypatch.
 Não tocam SurrealDB (testes de UI/escrita em test_sources*.py)."""
@@ -255,3 +256,164 @@ def test_test_empty_value_returns_validation_error(authed_client: TestClient) ->
 
     assert resp.status_code == 200
     assert "Entrada inválida" in resp.text
+
+
+# ── KUBO-197: teste de coleta pra github-repo (reaproveita o padrão do KUBO-50) ────
+
+
+_GH_RELEASES = [
+    {
+        "id": 1,
+        "tag_name": "v1.0.0",
+        "name": "Release One",
+        "body": "corpo",
+        "draft": False,
+        "prerelease": False,
+        "html_url": "https://github.com/acme/widget/releases/tag/v1.0.0",
+        "published_at": "2026-06-01T00:00:00Z",
+    }
+]
+
+
+def _set_github_readonly(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    token: str | None = "gh-token",  # noqa: S107
+) -> None:
+    """Substitui a resolução da integração github-readonly por um par fixo (ou
+    ConfigError se `token` for None) — sem tocar catálogo/store real."""
+    from kubo.errors import ConfigError
+
+    def _fake(
+        db: object, *, tenant_id: object, user_id: object, name: str, default_base_url: str
+    ) -> tuple[str, str]:
+        if token is None:
+            raise ConfigError("integração 'github-readonly' sem token resolvido")
+        return "https://api.github.com", token
+
+    monkeypatch.setattr("kubo.api.routes.sources.resolve_readonly_secret", _fake)
+
+
+@respx.mock
+def test_test_repo_valid_returns_preview(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modo repo: owner/name válido retorna preview com a canonical descoberta e a
+    release mais recente — mesmo snippet HTMX do teste de RSS."""
+    _set_github_readonly(monkeypatch)
+    respx.get("https://api.github.com/repos/acme/widget/releases").mock(
+        return_value=httpx.Response(200, json=_GH_RELEASES)
+    )
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "acme/widget", "csrf": csrf},
+    )
+
+    assert resp.status_code == 200
+    assert "Repositório encontrado" in resp.text
+    assert "https://github.com/acme/widget" in resp.text
+    assert "Release One" in resp.text
+
+
+@respx.mock
+def test_test_repo_http_error_returns_failure(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modo repo: erro HTTP do GitHub vira falha soft, mensagem clara — não erro cru."""
+    _set_github_readonly(monkeypatch)
+    respx.get("https://api.github.com/repos/acme/widget/releases").mock(
+        return_value=httpx.Response(404)
+    )
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "acme/widget", "csrf": csrf},
+    )
+
+    assert resp.status_code == 200
+    assert "Repositório" in resp.text
+    assert "Traceback" not in resp.text
+
+
+def test_test_repo_malformed_shape_returns_failure(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modo repo: entrada fora do shape owner/name falha ANTES de qualquer fetch."""
+    _set_github_readonly(monkeypatch)
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "https://evil.com/x", "csrf": csrf},
+    )
+
+    assert resp.status_code == 200
+    assert "Repositório" in resp.text
+
+
+def test_test_repo_missing_integration_returns_clear_failure(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modo repo: integração github-readonly sem token resolvido vira falha clara,
+    não 500 cru."""
+    _set_github_readonly(monkeypatch, token=None)
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "acme/widget", "csrf": csrf},
+    )
+
+    assert resp.status_code == 200
+    assert "integração" in resp.text.lower() or "github-readonly" in resp.text
+
+
+@respx.mock
+def test_test_repo_never_persists_anything(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Teste de coleta é validação de tela — nunca grava item, run nem fonte,
+    mesmo no caminho feliz (achado central do KUBO-197)."""
+    _set_github_readonly(monkeypatch)
+    respx.get("https://api.github.com/repos/acme/widget/releases").mock(
+        return_value=httpx.Response(200, json=_GH_RELEASES)
+    )
+    calls: list[str] = []
+    for name in ("create_source", "upsert_item", "upsert_source", "start_run"):
+        monkeypatch.setattr(
+            f"kubo.api.routes.sources.knowledge.{name}",
+            lambda *a, _n=name, **kw: calls.append(_n),
+        )
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "acme/widget", "csrf": csrf},
+    )
+
+    assert resp.status_code == 200
+    assert calls == []
+
+
+@respx.mock
+def test_test_repo_content_is_escaped(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Título de release hostil (XSS) vem escapado na renderização (autoescape Jinja)."""
+    _set_github_readonly(monkeypatch)
+    hostile = [{**_GH_RELEASES[0], "name": "<script>alert(1)</script>"}]
+    respx.get("https://api.github.com/repos/acme/widget/releases").mock(
+        return_value=httpx.Response(200, json=hostile)
+    )
+    csrf = _csrf(authed_client)
+
+    resp = authed_client.post(
+        "/sources/test",
+        data={"mode": "repo", "canonical": "acme/widget", "csrf": csrf},
+    )
+
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text

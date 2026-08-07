@@ -29,7 +29,11 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
 from kubo.executors.cli import CliExecutor, CliExecutorConfig, CliRunner
 from kubo.runtime.flow_templates import FlowTemplate, load_flow_templates
-from kubo.runtime.integrations import load_integrations, resolve_integrations
+from kubo.runtime.integrations import (
+    load_integrations,
+    resolve_integrations,
+    resolve_readonly_secret,
+)
 from kubo.runtime.personas import Persona, load_personas
 from kubo.runtime.runner import FlowCtx, run_worker
 from kubo.store.destinations import Destination
@@ -660,16 +664,18 @@ def _forge_readonly_integration(
     user_id: RecordID,
 ) -> tuple[str, str]:
     """Resolve (base_url, token) da integração `github-readonly` (E12/E13) — SEPARADA do
-    `github` de escrita: o Confirmar promoção só LÊ o merge, nunca mescla/comenta/fecha."""
-    catalog = load_integrations(db, tenant_id, user_id)
-    resolved = resolve_integrations(["github-readonly"], catalog, db=db, tenant_id=tenant_id)[
-        "github-readonly"
-    ]
-    if not resolved.secret:
-        raise ConfigError(
-            "integração 'github-readonly' sem token resolvido (env GITHUB_TOKEN_READONLY)"
-        )
-    return resolved.base_url or "https://api.github.com", resolved.secret
+    `github` de escrita: o Confirmar promoção só LÊ o merge, nunca mescla/comenta/fecha.
+
+    Delega a `resolve_readonly_secret` (KUBO-197, achado de code-review): o mesmo par
+    load+resolve+checa-secret vive agora só ali — `sources._test_repo_mode` usa a
+    MESMA função pra resolver a MESMA integração, sem duplicar a lógica de erro."""
+    return resolve_readonly_secret(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        name="github-readonly",
+        default_base_url="https://api.github.com",
+    )
 
 
 def _write_integration(

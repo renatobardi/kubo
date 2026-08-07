@@ -637,3 +637,79 @@ def test_missing_integration_secret_raises_config_error() -> None:
 
     with pytest.raises(ConfigError):
         GithubReleasesWorker().run(_ctx(_config(), token=None))
+
+
+# ---------------------------------------------------------------------------
+# preview_releases (KUBO-197): dry-run de teste de cadastro, sem persistir nada —
+# espelha `preview_feed` do FeedWorker (mesmo padrão de KUBO-50, reaproveitado).
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_preview_releases_returns_qualifying_releases() -> None:
+    """Preview devolve título owner/repo + até max_entries releases qualificadas
+    (draft/prerelease pulados, mesmo filtro do worker real) — sem tocar a store."""
+    from kubo.workers.github_releases import preview_releases
+
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release(1, name="Release One", html_url="https://github.com/acme/widget/r/1"),
+                _release(2, draft=True),
+                _release(3, prerelease=True),
+                _release(4, name="Release Four", html_url="https://github.com/acme/widget/r/4"),
+            ],
+        )
+    )
+
+    preview = preview_releases("acme/widget", base_url=_BASE_URL, token=_TOKEN, max_entries=3)
+
+    assert preview.title == "acme/widget"
+    assert [e["title"] for e in preview.entries] == ["Release One", "Release Four"]
+    assert preview.entries[0]["url"] == "https://github.com/acme/widget/r/1"
+
+
+@respx.mock
+def test_preview_releases_caps_at_max_entries() -> None:
+    """max_entries limita a amostra — não devolve a página inteira."""
+    from kubo.workers.github_releases import preview_releases
+
+    respx.get(_releases_url("acme", "widget")).mock(
+        return_value=httpx.Response(200, json=[_release(i) for i in range(5)])
+    )
+
+    preview = preview_releases("acme/widget", base_url=_BASE_URL, token=_TOKEN, max_entries=2)
+
+    assert len(preview.entries) == 2
+
+
+@respx.mock
+def test_preview_releases_empty_list_succeeds_with_no_entries() -> None:
+    """Repo sem release ainda: sucesso com lista vazia — não é malformado."""
+    from kubo.workers.github_releases import preview_releases
+
+    respx.get(_releases_url("acme", "widget")).mock(return_value=httpx.Response(200, json=[]))
+
+    preview = preview_releases("acme/widget", base_url=_BASE_URL, token=_TOKEN)
+
+    assert preview.entries == []
+
+
+def test_preview_releases_rejects_malformed_repo_shape() -> None:
+    """Shape inválido de repo (não owner/name) levanta ValueError antes de qualquer fetch."""
+    from kubo.workers.github_releases import preview_releases
+
+    with pytest.raises(ValueError, match="owner/name"):
+        preview_releases("not-a-valid-repo", base_url=_BASE_URL, token=_TOKEN)
+
+
+@respx.mock
+def test_preview_releases_http_error_raises_fetch_error() -> None:
+    """Erro de transporte/HTTP vira `FetchError` (alias público) — nunca crash cru."""
+    from kubo.workers.github_releases import FetchError, preview_releases
+
+    respx.get(_releases_url("acme", "widget")).mock(return_value=httpx.Response(503))
+
+    with pytest.raises(FetchError):
+        preview_releases("acme/widget", base_url=_BASE_URL, token=_TOKEN)
