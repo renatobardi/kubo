@@ -98,7 +98,7 @@ class _FakeKnowledge:
     def work_context(self) -> str:
         return self._work_context
 
-    def distilled_for_digest(self, destination: str, limit: int) -> list[Any]:
+    def items_for_digest(self, destination: str, limit: int) -> Any:
         """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
         return []
 

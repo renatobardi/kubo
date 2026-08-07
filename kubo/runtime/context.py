@@ -15,14 +15,14 @@ from typing import Any
 from pydantic import BaseModel
 from surrealdb import RecordID
 
-from kubo.contracts.worker import DigestView, ItemView, RetrievedView
+from kubo.contracts.worker import DigestSelectionView, DigestView, ItemView, RetrievedView
 from kubo.embedding import Embedder
 from kubo.runtime.integrations import ResolvedIntegration
 from kubo.store.destinations import record_id_from_destination
 from kubo.store.knowledge import (
     DistilledListItem,
     DistilledView,
-    distilled_for_digest,
+    items_for_digest,
     list_distilled,
     read_distilled,
     search_distilled,
@@ -123,29 +123,40 @@ class GraphKnowledge:
             start=start,
         )
 
-    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
-        """Digest selection (ADR-0015 §IV): delegates to the store (which resolves watermark +
-        bootstrap) and maps each `DigestRow` to `DigestView` — the id becomes an opaque STRING
-        (`distilled:<hex>`), the only id exposure to the digest worker.
+    def items_for_digest(self, destination: str, limit: int) -> DigestSelectionView:
+        """Digest selection by publication window (ADR-0050): delegates to the store
+        (which resolves the window, exclusion, dedup, ordering and cut) and maps each
+        `DigestItemView` to `DigestView` — the id becomes an opaque STRING
+        (`item:<hex>`), the only id exposure to the digest worker.
 
-        `destination` arrives as a `destination:<key>` string from the worker; convert it to a
-        `RecordID` before calling the store (KUBO-48 cutover)."""
-        return [
-            DigestView(
-                id=str(row.id),
-                title=row.title,
-                summary=row.summary,
-                created_at=row.created_at,
-                entities=row.entities,
-            )
-            for row in distilled_for_digest(
-                self._db,
-                tenant_id=self._tenant_id,
-                user_id=self._user_id,
-                destination=record_id_from_destination(destination),
-                limit=limit,
-            )
-        ]
+        `destination` arrives as a `destination:<key>` string from the worker; convert
+        it to a `RecordID` before calling the store (KUBO-48 cutover)."""
+        selection = items_for_digest(
+            self._db,
+            tenant_id=self._tenant_id,
+            user_id=self._user_id,
+            destination=record_id_from_destination(destination),
+            limit=limit,
+        )
+        return DigestSelectionView(
+            form=selection.form,
+            items=[
+                DigestView(
+                    id=str(item.id),
+                    title=item.title,
+                    summary=item.summary,
+                    score=item.score,
+                    published_at=item.published_at,
+                    url=item.url,
+                    entities=item.entities,
+                )
+                for item in selection.items
+            ],
+            window_start=selection.window_start,
+            window_end=selection.window_end,
+            watermark=selection.watermark,
+            total_publications=selection.total_publications,
+        )
 
 
 @dataclass(frozen=True)

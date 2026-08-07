@@ -145,6 +145,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0039_item_published_at.surql",
         # 0040 (KUBO-193, ADR-0051 §I): item.generated_title + aresta scored_for.
         "0040_item_scored_for_tenant.surql",
+        # 0041 (KUBO-194, ADR-0050 §V): dispatch.items aceita record<item> e record<distilled>.
+        "0041_dispatch_items_record_item.surql",
     }
 
 

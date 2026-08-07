@@ -49,10 +49,12 @@ _log = structlog.get_logger()
 # Intervalo de polling da config do digest — 5 minutos (ADR-0028 §4).
 _DIGEST_POLL_MINUTES = 5
 
-# Teto de destilados por digest — constante pinada no scheduler (ADR-0028 §2), espelho
-# de `_DISTILLER_MODEL`. O worker ainda carrega o default 50, mas o scheduler passa
-# o valor explicitamente para não depender de default oculto.
-_DIGEST_MAX_ITEMS = 50
+# Teto de itens por digest — constante pinada no scheduler (ADR-0028 §2, ADR-0050 §V).
+# Por canal: Telegram = 5, e-mail = 10 (ADR-0050 §V). O worker ainda carrega o default
+# 50, mas o scheduler passa o valor explicitamente para não depender de default oculto.
+# Dict único: canal novo sem limite declarado falha com KeyError (explícito), não
+# cai silenciosamente no limite do Telegram.
+_DIGEST_MAX_ITEMS_BY_CHANNEL = {"telegram": 5, "email": 10}
 
 # Modelo do destilador PINADO no código: trocar = editar aqui + PR (gate humano,
 # ADR-0010) — nunca fica configurável em schedules.yaml (evitaria o gate).
@@ -250,11 +252,12 @@ def execute_digest_sweep_job() -> None:
                 continue
             try:
                 worker = factory(destination, base_url)
+                max_items = _DIGEST_MAX_ITEMS_BY_CHANNEL[destination.channel]
                 with client.connect(client.config()) as run_db:
                     run_worker(
                         run_db,
                         worker,
-                        config={"max_items": _DIGEST_MAX_ITEMS},
+                        config={"max_items": max_items},
                         embedder=None,
                         tenant_id=tenant_id,
                         user_id=user_id,

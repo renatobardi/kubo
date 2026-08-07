@@ -252,29 +252,63 @@ def _dispatch(**kw: object) -> dict[str, object]:
         "artifact": "digest",
         "watermark": _WM,
         "item_count": 1,
-        "items": ["distilled:abc123"],
+        "items": ["item:abc123"],
     }
     base.update(kw)
     return base
 
 
 def test_dispatch_payload_accepts_valid() -> None:
-    """Um dispatch bem formado valida, com items em forma `distilled:<hex>`."""
+    """Um dispatch bem formado valida, com items em forma `item:<hex>`."""
     d = DispatchPayload.model_validate(_dispatch())
-    assert d.items == ["distilled:abc123"]
+    assert d.items == ["item:abc123"]
     assert d.error is None
 
 
 def test_dispatch_payload_rejects_unicode_item_id() -> None:
     """Item com id não-ASCII (borda contra id forjado) é rejeitado."""
     with pytest.raises(ValidationError):
-        DispatchPayload.model_validate(_dispatch(items=["distilled:café"]))
+        DispatchPayload.model_validate(_dispatch(items=["item:café"]))
 
 
-def test_dispatch_payload_rejects_non_distilled_item() -> None:
-    """Item que não é id de distilled é rejeitado."""
+def test_dispatch_payload_rejects_non_item_id() -> None:
+    """Item que não é id de item é rejeitado para digest (ADR-0050 §V: items são item IDs)."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(_dispatch(items=["distilled:abc123"]))
     with pytest.raises(ValidationError):
         DispatchPayload.model_validate(_dispatch(items=["run:abc123"]))
+
+
+def test_dispatch_report_accepts_distilled_ids() -> None:
+    """Report aceita ids de distilled (fontes consultadas, ADR-0016 §V)."""
+    d = DispatchPayload.model_validate(
+        _dispatch(artifact="report", watermark=None, items=["distilled:abc123"])
+    )
+    assert d.items == ["distilled:abc123"]
+    assert d.artifact == "report"
+
+
+def test_dispatch_report_rejects_item_ids() -> None:
+    """Report rejeita ids de item (só distilled para auditoria de fontes consultadas)."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(
+            _dispatch(artifact="report", watermark=None, items=["item:abc123"])
+        )
+
+
+def test_dispatch_gate_rejects_arbitrary_ids() -> None:
+    """Gate não carrega items — id de tabela arbitrária é rejeitado na borda."""
+    with pytest.raises(ValidationError):
+        DispatchPayload.model_validate(
+            _dispatch(artifact="gate", watermark=None, items=["run:abc123"])
+        )
+
+
+def test_dispatch_gate_accepts_empty_items() -> None:
+    """Gate valida com items vazio (não entrega conteúdo)."""
+    d = DispatchPayload.model_validate(_dispatch(artifact="gate", watermark=None, items=[]))
+    assert d.items == []
+    assert d.artifact == "gate"
 
 
 def test_dispatch_payload_error_is_structured() -> None:

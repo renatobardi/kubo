@@ -213,7 +213,7 @@ def _persist(
                 artifact=payload.artifact,
                 watermark=payload.watermark,
                 item_count=payload.item_count,
-                items=[_parse_distilled_id(s) for s in payload.items],
+                items=[_parse_item_id(s) for s in payload.items],
                 error=payload.error.model_dump() if payload.error else None,
             )
         elif isinstance(payload, ReportPayload):
@@ -257,7 +257,7 @@ def _persist_report(
         task=flow_ctx.task,
         kind="report",
         content=payload.content,
-        consulted=[_parse_distilled_id(s) for s in payload.consulted],
+        consulted=[_parse_item_id(s) for s in payload.consulted],
     )
 
 
@@ -292,11 +292,12 @@ def _persist_pr(
     )
 
 
-def _parse_distilled_id(raw: str) -> RecordID:
-    """Converte a forma string `distilled:<id>` (validada na borda pydantic) em RecordID.
+def _parse_item_id(raw: str) -> RecordID:
+    """Converte a forma string `<table>:<id>` (validada na borda pydantic) em RecordID.
 
-    Não revalida o formato: `DispatchPayload._items_are_distilled_ids` já é a fronteira
-    (os payloads chegam ao `_persist` já validados por `RunResult.model_validate`)."""
+    Não revalida o formato: `DispatchPayload._items_are_valid_ids` já é a fronteira
+    (os payloads chegam ao `_persist` já validados por `RunResult.model_validate`).
+    ADR-0050 §V: digest registra ids de `item`, report registra ids de `distilled`."""
     table, _, key = raw.partition(":")
     return RecordID(table, key)
 

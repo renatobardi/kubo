@@ -9,12 +9,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from surrealdb import RecordID
 
 from kubo.contracts.models import DispatchPayload
-from kubo.contracts.worker import DigestView
+from kubo.contracts.worker import DigestSelectionView, DigestView
 from kubo.errors import SenderError
 from kubo.store.destinations import Channel, Destination
 from kubo.workers._digest_common import DigestConfig
@@ -23,13 +23,33 @@ _NOW = datetime(2026, 7, 13, 9, 30, tzinfo=timezone.utc)
 _BASE = "https://kubo.test:3900"
 
 
-def _view(key: str = "abc", minutes: int = 0) -> DigestView:
+def _view(key: str = "abc", score: int = 7) -> DigestView:
     return DigestView(
-        id=f"distilled:{key}",
+        id=f"item:{key}",
         title=f"Titulo {key}",
         summary=f"resumo {key}",
-        created_at=_NOW + timedelta(minutes=minutes),
+        score=score,
+        published_at=_NOW,
+        url=f"https://example.com/{key}",
         entities=["OpenAI"],
+    )
+
+
+def _selection(
+    items: list[DigestView] | None = None,
+    *,
+    form: Literal["normal", "empty_window", "none_passed", "recovery"] = "normal",
+    total_publications: int | None = None,
+    watermark: datetime | None = _NOW,
+) -> DigestSelectionView:
+    views = items if items is not None else [_view("a"), _view("b"), _view("c")]
+    return DigestSelectionView(
+        form=form,
+        items=views,
+        window_start=_NOW - timedelta(days=1),
+        window_end=_NOW,
+        watermark=watermark,
+        total_publications=total_publications if total_publications is not None else len(views),
     )
 
 
@@ -51,7 +71,7 @@ def _destination(
 
 
 class _FakeKnowledge:
-    def __init__(self, per_dest: dict[str, list[DigestView]]) -> None:
+    def __init__(self, per_dest: dict[str, DigestSelectionView]) -> None:
         self._per_dest = per_dest
         self.calls: list[tuple[str, int]] = []
 
@@ -61,9 +81,9 @@ class _FakeKnowledge:
     def work_context(self) -> str:
         return ""
 
-    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
+    def items_for_digest(self, destination: str, limit: int) -> DigestSelectionView:
         self.calls.append((destination, limit))
-        return list(self._per_dest.get(destination, []))
+        return self._per_dest.get(destination, _selection(items=[], form="empty_window"))
 
     def search_distilled(self, embedding: Sequence[float], k: int) -> list[Any]:
         return []
@@ -117,13 +137,6 @@ def _assert_sends_digest(
     if expected_call:
         for key, value in expected_call.items():
             assert sender.calls[0][key] == value
-
-
-def _assert_no_novelty(result: Any, sender: _FakeSender) -> None:
-    assert result.payloads == []
-    assert sender.calls == []
-    assert result.error is None
-    assert result.stats.model_dump()["new_distilled"] == 0
 
 
 def _assert_send_failure(

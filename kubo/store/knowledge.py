@@ -16,13 +16,16 @@ import secrets
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, cast
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Any, Literal, cast
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 from surrealdb import RecordID
 
 from kubo.errors import (
+    ConfigError,
     DuplicateSourceError,
     SourceHasHistoryError,
     StaleSourceError,
@@ -38,6 +41,46 @@ _KNN_SELECT = "SELECT id, vector::distance::knn() AS dist, ->chunk_of->distilled
 _MAX_K = 100  # teto de resultados por busca — clamp anti-DoS na borda (escala pessoal, folgado).
 # teto de itens por página de browse — start/limit vêm de query param (hostis na borda).
 _MAX_PAGE = 100
+
+# Parâmetros de rastreamento removidos na normalização de URL para dedup do digest
+# (ADR-0050 §III). Lista não-exaustiva: o caso fácil que resolve a maioria.
+_TRACKING_PARAMS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "ref",
+        "source",
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+    }
+)
+
+
+def normalize_url(url: str | None) -> str | None:
+    """Normaliza URL para dedup do digest (ADR-0050 §III).
+
+    Pega o caso fácil: trailing slash, http→https, parâmetros de rastreamento,
+    scheme/host em minúsculas. NÃO pega republicação com URL genuinamente
+    diferente — limite aceito no ADR.
+    """
+    if not url or not url.strip():
+        return None
+    parsed = urlparse(url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    # Só converte http→https; outros schemes (ftp, etc) preservam
+    scheme = "https" if parsed.scheme.lower() in ("http", "https") else parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    # Filtra parâmetros de rastreamento, ordena os restantes (ordem não afeta dedup)
+    params = [(k, v) for k, v in parse_qsl(parsed.query) if k.lower() not in _TRACKING_PARAMS]
+    query = urlencode(sorted(params))
+    return urlunparse((scheme, netloc, path, parsed.params, query, ""))
 
 
 @dataclass(frozen=True)
@@ -1824,22 +1867,6 @@ _BOOTSTRAP_WINDOW = "24h"
 _FLOOR_CREATED = "time::floor(created_at, 1us)"
 
 
-@dataclass(frozen=True)
-class DigestRow:
-    """Linha de seleção para o digest (ADR-0015 §IV): o distilled + o que o
-    template precisa (título via `derived_from`→item, entidades via `mentions`).
-
-    `created_at` é `datetime` (não string de exibição): alimenta o `max()` do
-    watermark no worker e volta ao banco como bind. `id` é `RecordID`; o seam
-    (`GraphKnowledge`) o converte à forma string opaca antes de entregar ao worker."""
-
-    id: RecordID
-    title: str | None
-    summary: str
-    created_at: datetime  # do SDK (surrealdb 2.0.0), sempre μs — round-trip validado por integração
-    entities: list[str]
-
-
 def insert_dispatch(
     db: Any,
     *,
@@ -1854,9 +1881,12 @@ def insert_dispatch(
     artifact: str = "digest",
     error: dict[str, Any] | None = None,
 ) -> RecordID:
-    """Grava um fato de entrega (ADR-0015 §II). `sent_at` é DEFAULT do schema (relógio
-    do servidor). `items` são record<distilled> para AUDITORIA — não é aresta (sem
-    consumidor de drill-down). `destination` é `record<destination>` (cutover KUBO-48).
+    """Grava um fato de entrega (ADR-0015 §II, ADR-0050 §V). `sent_at` é DEFAULT do schema
+    (relógio do servidor). `items` são records para AUDITORIA — não é aresta (sem
+    consumidor de drill-down). Para `artifact="digest"`, items são `record<item>` (a chave
+    de identidade é o item, não o distilled — ADR-0050 §III). Para `artifact="report"`,
+    items são `record<distilled>` (fontes consultadas pelo analyst). `destination` é
+    `record<destination>` (cutover KUBO-48).
 
     Membership checada. Grava `tenant_id` no record (KUBO-128).
 
@@ -1912,67 +1942,6 @@ def last_dispatch_watermark(
     return rows[0]["watermark"] if rows else None
 
 
-def distilled_for_digest(
-    db: Any,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
-    destination: RecordID,
-    limit: int,
-) -> list[DigestRow]:
-    """Seleciona os destilados NOVOS para o digest de um destino (ADR-0015 §IV).
-
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e a seleção é
-    filtrada pelo tenant ativo (KUBO-123).
-
-    Encapsula a mecânica inteira do watermark num lugar (testável por integração):
-    lê o watermark do último dispatch `ok` daquele destino e devolve os distilled com
-    `created_at > watermark`; sem dispatch anterior, cai no bootstrap `now - 24h`
-    (relógio do servidor). O worker fica burro — recebe a lista e computa
-    `watermark = max(created_at)` das linhas; nunca conhece o watermark anterior.
-
-    Ordena por `created_at` ascendente (o mais antigo primeiro — leitura cronológica
-    do digest) e limita por `limit` (int interpolado como literal: LIMIT não aceita
-    bind nesta versão; o valor vem da config do worker, não de conteúdo coletado).
-    Título via `derived_from`→item; entidades via `mentions`→entity.name."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    watermark = last_dispatch_watermark(db, destination, tenant_id=tenant_id, user_id=user_id)
-    projection = (
-        "SELECT id, summary, created_at, "
-        "->derived_from->item.title AS titles, "
-        "->mentions->entity.name AS entity_names FROM distilled"
-    )
-    # limit é int (não conteúdo coletado); LIMIT não aceita bind param neste SurrealDB.
-    order = f"ORDER BY created_at LIMIT {int(limit)};"  # noqa: S608
-    tenant_filter = "tenant_id = $tenant AND "
-    params: dict[str, Any] = (
-        {"tenant": tenant_id, "since": watermark}
-        if watermark is not None
-        else {"tenant": tenant_id}
-    )
-    if watermark is None:
-        rows = db.query(
-            f"{projection} WHERE {tenant_filter}{_FLOOR_CREATED} > "
-            f"time::now() - {_BOOTSTRAP_WINDOW} {order}",
-            params,
-        )
-    else:
-        rows = db.query(
-            f"{projection} WHERE {tenant_filter}{_FLOOR_CREATED} > $since {order}",
-            params,
-        )
-    return [
-        DigestRow(
-            id=r["id"],
-            title=_first_title(r.get("titles")),
-            summary=r["summary"],
-            created_at=r["created_at"],
-            entities=[str(name) for name in _as_list(r.get("entity_names"))],
-        )
-        for r in rows
-    ]
-
-
 def _as_list(value: Any) -> list[Any]:
     """Coage o valor de um campo de projeção (Any do SDK) a lista — [] se ausente."""
     return cast("list[Any]", value) if isinstance(value, list) else []
@@ -1984,6 +1953,340 @@ def _first_title(titles: Any) -> str | None:
         if title:
             return str(title)
     return None
+
+
+# ── digest por janela de publicação (ADR-0050, KUBO-194) ───────────────────────
+
+_DIGEST_WINDOW_CAP_DAYS = 7
+_DIGEST_MIN_SCORE = 6  # mesmo default do DistillerConfig (ADR-0051 §I)
+_DIGEST_QUERY_LIMIT = 500  # teto de segurança contra volume anômalo de coleta
+
+DigestForm = Literal["normal", "empty_window", "none_passed", "recovery"]
+
+
+@dataclass(frozen=True)
+class DigestItemView:
+    """Item selecionado para o digest (ADR-0050): o item + o que o template precisa.
+
+    `id` é `RecordID` do ITEM (não do distilled) — a chave de identidade do dedup
+    de envio é o item (ADR-0050 §III). `score` é a nota de relevância (aresta
+    `scored_for`). `published_at` é a data de publicação na fonte. `summary` vem
+    do distilled via `derived_from`. `url` é o link do item na fonte."""
+
+    id: RecordID
+    title: str | None
+    summary: str
+    score: int
+    published_at: datetime
+    url: str | None
+    entities: list[str]
+
+
+@dataclass(frozen=True)
+class DigestSelection:
+    """Resultado da seleção do digest por janela de publicação (ADR-0050).
+
+    `form` discrimina as quatro formas de mensagem (§VI):
+    - "normal": houve conteúdo aprovado, o digest sai com as notícias.
+    - "empty_window": a janela de publicação estava vazia na origem.
+    - "none_passed": N publicações, nenhuma passou o corte (com o número).
+    - "recovery": o dispatch cobre mais de um dia (janela elástica ativa).
+
+    `items` são os itens selecionados (vazio nas formas 2/3). `window_start`/
+    `window_end` são as fronteiras da janela de calendário. `watermark` é o
+    último dia coberto pela janela (ADR-0050 §IV) — independe de haver itens.
+    `total_publications` é o total de itens publicados na janela inteira (para
+    a forma 3); na forma 4 (recovery), os itens vêm só do dia mais recente, mas
+    `total_publications` cobre o período inteiro — essa assimetria é intencional:
+    o número é sinal de calibragem do corte, não contagem do que foi enviado."""
+
+    form: DigestForm
+    items: list[DigestItemView]
+    window_start: datetime | None
+    window_end: datetime | None
+    watermark: datetime | None
+    total_publications: int
+
+
+def items_for_digest(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    destination: RecordID,
+    limit: int,
+    min_score: int = _DIGEST_MIN_SCORE,
+) -> DigestSelection:
+    """Seleciona itens para o digest de um destino por janela de publicação (ADR-0050).
+
+    Substitui `distilled_for_digest` (watermark posicional) pela mecânica de janela:
+    do dia seguinte ao último dispatch `ok` daquele destino até ontem, com teto de
+    7 dias. Exclui itens já enviados àquele destino nos últimos 7 dias (chave = item,
+    não distilled). Deduplica por URL normalizada. Ordena por nota decrescente, corta
+    em `limit` do período inteiro.
+
+    As quatro formas de mensagem (§VI) são determinadas aqui:
+    - "empty_window": nenhum item publicado na janela.
+    - "none_passed": itens publicados mas nenhum passou o corte (score >= min_score).
+    - "recovery": janela cobre mais de um dia.
+    - "normal": o resto.
+
+    Membership checada. Filtra pelo tenant ativo (KUBO-128)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+
+    # 1. Computa a janela de calendário no fuso do tenant.
+    tz = _tenant_timezone(db, tenant_id)
+    window_start, window_end, is_recovery = _compute_window(db, destination, tenant_id, user_id, tz)
+
+    # 2. Conta publicações na janela (todos os itens com published_at na janela).
+    total_publications = _count_publications_in_window(db, tenant_id, window_start, window_end)
+
+    if total_publications == 0:
+        return DigestSelection(
+            form="empty_window",
+            items=[],
+            window_start=window_start,
+            window_end=window_end,
+            watermark=window_end,
+            total_publications=0,
+        )
+
+    # 3. Seleciona itens aprovados (score >= min_score) com distilled, na janela,
+    #    excluindo já-enviados àquele destino nos últimos 7 dias.
+    raw_items = _select_approved_items(
+        db, tenant_id, destination, window_start, window_end, min_score
+    )
+
+    if not raw_items:
+        return DigestSelection(
+            form="none_passed",
+            items=[],
+            window_start=window_start,
+            window_end=window_end,
+            watermark=window_end,
+            total_publications=total_publications,
+        )
+
+    # 4. Deduplica por URL normalizada (em Python — SurrealDB não tem função pronta).
+    deduped = _dedup_by_url(raw_items)
+
+    # 5. Na forma recovery, só leva os itens do dia mais recente do período
+    #    (KUBO-179, ADR-0050 §VI forma 4): a janela elástica recupera o watermark,
+    #    mas o digest só mostra o dia mais recente — os dias intermediários
+    #    ficam visíveis na UI, não no canal de entrega.
+    if is_recovery:
+        latest_day = _day_of(window_end, tz)
+        deduped = [v for v in deduped if _day_of(v.published_at, tz) == latest_day]
+
+    # Se o filtro do dia mais recente zerou a lista, cai na forma de aviso
+    # (none_passed), não numa "recuperação" sem conteúdo — o watermark avança
+    # mesmo assim (window_end), mas o dono recebe aviso, não digest vazio.
+    if not deduped:
+        return DigestSelection(
+            form="none_passed",
+            items=[],
+            window_start=window_start,
+            window_end=window_end,
+            watermark=window_end,
+            total_publications=total_publications,
+        )
+
+    # 6. Ordena por nota decrescente, corta em limit.
+    deduped.sort(key=lambda v: v.score, reverse=True)
+    cut = deduped[:limit]
+
+    form: DigestForm = "recovery" if is_recovery else "normal"
+    return DigestSelection(
+        form=form,
+        items=cut,
+        window_start=window_start,
+        window_end=window_end,
+        watermark=window_end,
+        total_publications=total_publications,
+    )
+
+
+def _tenant_timezone(db: Any, tenant_id: RecordID) -> ZoneInfo:
+    """Fuso horário do DONO do tenant (ADR-0050 §I: dia de calendário no fuso do tenant).
+    Default UTC se não houver perfil ou timezone."""
+    try:
+        owner = tenancy.get_tenant_owner(db, tenant_id)
+        profile = tenancy.get_user_profile(db, owner)
+        tz_name = profile.timezone if profile else "UTC"
+    except (ConfigError, StoreError, KeyError) as exc:
+        _log.warning("digest_tenant_timezone_fallback", tenant_id=str(tenant_id), error=str(exc))
+        tz_name = "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except (KeyError, ValueError, ZoneInfoNotFoundError) as exc:
+        _log.warning(
+            "digest_tenant_timezone_invalid",
+            tenant_id=str(tenant_id),
+            tz=tz_name,
+            error=str(exc),
+        )
+        return ZoneInfo("UTC")
+
+
+def _day_of(dt: datetime, tz: ZoneInfo) -> date:
+    """Extrai o dia de calendário de um datetime no fuso do tenant."""
+    dt_tz = dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(tz)
+    return dt_tz.date()
+
+
+def _compute_window(
+    db: Any, destination: RecordID, tenant_id: RecordID, user_id: RecordID, tz: ZoneInfo
+) -> tuple[datetime, datetime, bool]:
+    """Computa a janela de calendário (ADR-0050 §II): do dia seguinte ao último
+    dispatch `ok` daquele destino até ontem, com teto de 7 dias.
+
+    Retorna (window_start, window_end, is_recovery). `window_start` é o início
+    do dia seguinte ao coberto pelo último dispatch ok; `window_end` é o final
+    de ontem. `is_recovery` é True se a janela cobre mais de 1 dia.
+
+    Opera em `date` e recombinando com o fuso para evitar deslizes de DST
+    (subtrair `timedelta(days=1)` de um datetime aware pega 24h absolutas,
+    não o dia de calendário local em transição de horário de verão)."""
+    watermark = last_dispatch_watermark(db, destination, tenant_id=tenant_id, user_id=user_id)
+
+    # Hoje e ontem no fuso do tenant — via date + combine para respeitar DST
+    now_tz = datetime.now(tz)
+    today_date = now_tz.date()
+    yesterday_date = today_date - timedelta(days=1)
+    yesterday_start = datetime.combine(yesterday_date, time.min, tzinfo=tz)
+    yesterday_end = datetime.combine(yesterday_date, time.max, tzinfo=tz)
+
+    if watermark is None:
+        # Destino novo: janela é só ontem (equivalente ao bootstrap 24h, ADR-0050 §II)
+        return yesterday_start, yesterday_end, False
+
+    # O watermark é o último dia coberto. O dia seguinte é o início da janela.
+    # Converte o watermark (UTC) para o fuso do tenant para extrair o dia de calendário.
+    if watermark.tzinfo:
+        wm_tz = watermark.astimezone(tz)
+    else:
+        wm_tz = watermark.replace(tzinfo=timezone.utc).astimezone(tz)
+    wm_date = wm_tz.date()
+    day_after_wm_date = wm_date + timedelta(days=1)
+    day_after_wm = datetime.combine(day_after_wm_date, time.min, tzinfo=tz)
+
+    # Se o watermark já cobre ontem ou hoje, a janela seria invertida
+    # (start > end). Trata como "janela já coberta" — devolve janela vazia
+    # que resulta em empty_window, sem inverter.
+    if day_after_wm > yesterday_end:
+        return yesterday_end, yesterday_end, False
+
+    # Teto de 7 dias: se a janela excede 7 dias, recua o start
+    max_start_date = yesterday_date - timedelta(days=_DIGEST_WINDOW_CAP_DAYS - 1)
+    max_start = datetime.combine(max_start_date, time.min, tzinfo=tz)
+    if day_after_wm < max_start:
+        day_after_wm = max_start
+
+    is_recovery = (yesterday_date - day_after_wm_date).days >= 1
+    return day_after_wm, yesterday_end, is_recovery
+
+
+def _count_publications_in_window(
+    db: Any, tenant_id: RecordID, window_start: datetime, window_end: datetime
+) -> int:
+    """Conta itens publicados na janela (todos, independente de score/distilled).
+    Filtra por tenant via `->from_source->source.tenant_id` (item não tem tenant_id)."""
+    rows = db.query(
+        "SELECT count() AS n FROM item "
+        "WHERE $tenant IN ->from_source->source.tenant_id "
+        "AND published_at >= $start AND published_at <= $end GROUP ALL;",
+        {"tenant": tenant_id, "start": window_start, "end": window_end},
+    )
+    if not rows:
+        return 0
+    return int(rows[0].get("n", 0))
+
+
+def _select_approved_items(
+    db: Any,
+    tenant_id: RecordID,
+    destination: RecordID,
+    window_start: datetime,
+    window_end: datetime,
+    min_score: int,
+) -> list[DigestItemView]:
+    """Seleciona itens aprovados (score >= min_score) com distilled, na janela,
+    excluindo já-enviados àquele destino nos últimos 7 dias."""
+    # Itens já enviados a este destino nos últimos 7 dias (chave = item, ADR-0050 §III)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_DIGEST_WINDOW_CAP_DAYS)
+    sent_rows = db.query(
+        "SELECT VALUE items FROM dispatch WHERE destination = $d "
+        "AND tenant_id = $tenant AND status = 'ok' AND artifact = 'digest' "
+        "AND sent_at >= $cutoff;",
+        {"d": destination, "tenant": tenant_id, "cutoff": cutoff},
+    )
+    sent_ids: set[str] = set()
+    for row in sent_rows:
+        items = cast("list[Any]", row) if isinstance(row, list) else []
+        for item_id in items:
+            sent_ids.add(str(item_id))
+
+    # Seleciona itens na janela. LIMIT de segurança contra volume anômalo de
+    # coleta — o filtro de score fica em Python (sintaxe de indexação de aresta
+    # varia entre versões do SurrealDB; defesa em profundidade).
+    limit = int(_DIGEST_QUERY_LIMIT)  # int pinado, não conteúdo coletado
+    query = (
+        "SELECT id, title, generated_title, url, published_at, "
+        "->scored_for.score AS scores, "
+        "<-derived_from<-distilled.summary AS summaries, "
+        "<-derived_from<-distilled->mentions->entity.name AS entity_names "
+        "FROM item WHERE $tenant IN ->from_source->source.tenant_id "
+        "AND published_at >= $start AND published_at <= $end LIMIT " + str(limit) + ";"
+    )
+    rows = db.query(
+        query,
+        {"tenant": tenant_id, "start": window_start, "end": window_end},
+    )
+
+    result: list[DigestItemView] = []
+    for r in rows:
+        item_id = r["id"]
+        if str(item_id) in sent_ids:
+            continue
+        scores = _as_list(r.get("scores"))
+        # max(scores) em vez de scores[0]: apply_score faz DELETE+RELATE (last-wins),
+        # mas defesa contra múltiplas arestas é barata e segura.
+        score = max(int(s) for s in scores if s is not None) if scores else 0
+        if score < min_score:
+            continue
+        summaries = _as_list(r.get("summaries"))
+        if not summaries:
+            continue  # sem distilled → não passa no corte (não foi destilado)
+        title = r.get("title") or r.get("generated_title")
+        entity_names = _as_list(r.get("entity_names"))
+        result.append(
+            DigestItemView(
+                id=item_id,
+                title=str(title) if title else None,
+                summary=str(summaries[0]),
+                score=score,
+                published_at=r["published_at"],
+                url=r.get("url"),
+                entities=[str(name) for name in entity_names],
+            )
+        )
+    return result
+
+
+def _dedup_by_url(items: list[DigestItemView]) -> list[DigestItemView]:
+    """Deduplica por URL normalizada (ADR-0050 §III). Entre duplicatas, mantém o de
+    maior score. Item sem URL normalizável nunca é deduplicado — segue direto."""
+    best: dict[str, DigestItemView] = {}
+    no_url: list[DigestItemView] = []
+    for item in items:
+        norm = normalize_url(item.url)
+        if norm is None:
+            no_url.append(item)
+            continue
+        current = best.get(norm)
+        if current is None or item.score > current.score:
+            best[norm] = item
+    return [*best.values(), *no_url]
 
 
 @dataclass(frozen=True)

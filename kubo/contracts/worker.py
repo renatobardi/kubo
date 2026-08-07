@@ -15,7 +15,7 @@ import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -46,20 +46,51 @@ class ItemView:
 
 @dataclass(frozen=True)
 class DigestView:
-    """View read-only de um destilado a incluir num digest (ADR-0015 §IV).
+    """View read-only de um item a incluir num digest (ADR-0015 §IV, ADR-0050 §V).
 
-    `id` é a forma STRING do RecordID (`distilled:<hex>`) — exceção nomeada à
+    `id` é a forma STRING do RecordID do ITEM (`item:<hex>`) — exceção nomeada à
     disciplina de ref opaco: o digest worker é MECÂNICO (sem LLM no circuito), a
     razão do ref opaco (LLM forjando alvos de escrita) não existe aqui. O id é
-    leitura display-only (link da UI + auditoria em `dispatch.items`). `created_at`
-    é `datetime` (não string): alimenta o `max()` do watermark. `title`/`summary`/
+    leitura display-only (link da UI + auditoria em `dispatch.items`). A chave de
+    identidade é o `item` (não o `distilled`): um item redestilado ganha id de
+    distilled novo e reentraria como inédito se a chave fosse o destilado (ADR-0050
+    §III). `score` é a nota de relevância (aresta `scored_for`). `published_at` é a
+    data de publicação na fonte. `url` é o link do item na fonte. `title`/`summary`/
     `entities` são conteúdo derivado de dado HOSTIL — o builder os escapa sempre."""
 
     id: str
     title: str | None
     summary: str
-    created_at: datetime
+    score: int
+    published_at: datetime
+    url: str | None
     entities: list[str]
+
+
+@dataclass(frozen=True)
+class DigestSelectionView:
+    """Resultado da seleção do digest por janela de publicação (ADR-0050).
+
+    `form` discrimina as quatro formas de mensagem (§VI):
+    - "normal": houve conteúdo aprovado, o digest sai com as notícias.
+    - "empty_window": a janela de publicação estava vazia na origem.
+    - "none_passed": N publicações, nenhuma passou o corte (com o número).
+    - "recovery": o dispatch cobre mais de um dia (janela elástica ativa).
+
+    `items` são os itens selecionados (vazio nas formas 2/3). `window_start`/
+    `window_end` são as fronteiras da janela de calendário. `watermark` é o
+    último dia coberto pela janela (ADR-0050 §IV) — independe de haver itens.
+    `total_publications` é o total de itens publicados na janela inteira (para
+    a forma 3); na forma 4 (recovery), os itens vêm só do dia mais recente, mas
+    `total_publications` cobre o período inteiro — essa assimetria é intencional:
+    o número é sinal de calibragem do corte, não contagem do que foi enviado."""
+
+    form: Literal["normal", "empty_window", "none_passed", "recovery"]
+    items: list[DigestView]
+    window_start: datetime | None
+    window_end: datetime | None
+    watermark: datetime | None
+    total_publications: int
 
 
 @dataclass(frozen=True)
@@ -98,11 +129,12 @@ class KnowledgeReader(Protocol):
         RecordIDs — só a forma string do id (display/citação/`consulted`)."""
         ...
 
-    def distilled_for_digest(self, destination: str, limit: int) -> list[DigestView]:
-        """Devolve os destilados novos para o digest de `destination` (ADR-0015 §IV):
-        a store lê o watermark do último dispatch `ok` (bootstrap now-24h se não há)
-        e seleciona `created_at > watermark`. O worker computa o novo watermark do
-        conjunto devolvido — nunca conhece o anterior."""
+    def items_for_digest(self, destination: str, limit: int) -> DigestSelectionView:
+        """Seleciona itens para o digest de `destination` por janela de publicação
+        (ADR-0050): do dia seguinte ao último dispatch `ok` até ontem, com teto de
+        7 dias. Exclui já-enviados, deduplica por URL, ordena por nota, corta em
+        `limit`. Devolve `DigestSelectionView` com a forma (normal/empty/none_passed/
+        recovery), os itens, a janela e o watermark (último dia coberto)."""
         ...
 
 

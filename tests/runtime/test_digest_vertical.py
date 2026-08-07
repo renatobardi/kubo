@@ -1,18 +1,20 @@
-"""Vertical do digest ponta a ponta (integração, SurrealDB) — ADR-0015 §IV/§V.
+"""Vertical do digest ponta a ponta (integração, SurrealDB) — ADR-0015 §IV, ADR-0050.
 
 `run_worker` completo com `TelegramDigestWorker` (sender FAKE, destino injetado)
-contra o banco real: prova o encanamento `distilled_for_digest` (watermark +
-bootstrap) → builder → sender → `DispatchPayload` → `_persist` (parse
-`distilled:<id>` → RecordID + `insert_dispatch`). Cobre o ramo `DispatchPayload`
+contra o banco real: prova o encanamento `items_for_digest` (janela de publicação
++ score + distilled) → builder → sender → `DispatchPayload` → `_persist` (parse
+`item:<id>` → RecordID + `insert_dispatch`). Cobre o ramo `DispatchPayload`
 do runner e o critério físico do plano em unit: enviar cria dispatch(ok);
-re-rodar sem novidade não envia nada.
+re-rodar sem novidade envia aviso (não silêncio — ADR-0050 revoga só-se-novidade).
 ZERO rede — o sender fake nunca toca o Bot API.
 """
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -51,23 +53,9 @@ class _RecordingSender:
         self.calls.append({"token": token, "chat_id": chat_id, "text": text})
 
 
-def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, summaries: list[str]) -> None:
-    """Insere destilados (created_at≈now, sequencial → strictly crescente) via a store."""
-    for summary in summaries:
-        knowledge.insert_distilled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            item=_orphan_item(db, tenant_id, user_id),
-            summary=summary,
-            chunks=[],
-        )
-
-
-def _orphan_item(db: Any, tenant_id: RecordID, user_id: RecordID) -> Any:
-    """Cria um item mínimo para o distilled derivar (derived_from exige endpoint)."""
-    import secrets
-
+def _seed_items(db: Any, tenant_id: RecordID, user_id: RecordID, summaries: list[str]) -> None:
+    """Cria itens com published_at=ontem, score=8 e distilled — prontos para o digest."""
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     src = knowledge.upsert_source(
         db,
         tenant_id=tenant_id,
@@ -75,9 +63,25 @@ def _orphan_item(db: Any, tenant_id: RecordID, user_id: RecordID) -> Any:
         kind="rss",
         canonical=f"src::{secrets.token_hex(4)}",
     )
-    return knowledge.upsert_item(
-        db, source=src, external_id=secrets.token_hex(4), content="x", title="T"
-    )
+    for summary in summaries:
+        item = knowledge.upsert_item(
+            db,
+            source=src,
+            external_id=secrets.token_hex(4),
+            content="x",
+            title=f"Title {summary}",
+            url=f"https://example.com/{secrets.token_hex(4)}",
+            published_at=yesterday,
+        )
+        knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item, score=8)
+        knowledge.insert_distilled(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            item=item,
+            summary=summary,
+            chunks=[],
+        )
 
 
 def _worker(sender: _RecordingSender) -> TelegramDigestWorker:
@@ -99,16 +103,16 @@ def _worker(sender: _RecordingSender) -> TelegramDigestWorker:
 
 
 def _dispatch_rows(db: Any) -> list[dict[str, Any]]:
-    return list(db.query("SELECT * FROM dispatch;") or [])
+    return list(db.query("SELECT * FROM dispatch ORDER BY sent_at ASC;") or [])
 
 
 def test_digest_vertical_sends_and_persists_dispatch(
     db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Feliz: 3 destilados novos → sender chamado 1x, 1 dispatch(ok) persistido com
-    item_count=3 e watermark, o token resolvido do env chega ao sender."""
+    """Feliz: 3 itens aprovados na janela → sender chamado 1x, 1 dispatch(ok)
+    persistido com item_count=3 e watermark, o token resolvido do env chega ao sender."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _CHAT_TOKEN)
-    _seed_distilled(db, tenant_id, user_id, ["a", "b", "c"])
+    _seed_items(db, tenant_id, user_id, ["a", "b", "c"])
     sender = _RecordingSender()
 
     run_worker(db, _worker(sender), config={"max_items": 50}, tenant_id=tenant_id, user_id=user_id)
@@ -124,14 +128,14 @@ def test_digest_vertical_sends_and_persists_dispatch(
     assert rows[0]["watermark"] is not None
 
 
-def test_digest_vertical_rerun_without_novelty_is_noop(
+def test_digest_vertical_rerun_sends_warning_not_silence(
     db: Any, tenant_id: RecordID, user_id: RecordID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Re-rodar após um dispatch ok, sem destilado novo → nenhum envio, nenhum
-    dispatch novo (só-se-novidade + watermark, ADR-0015 §V). O critério físico do
-    plano, provado em unit."""
+    """Re-rodar após um dispatch ok, sem itens novos → envia AVISO (não silêncio),
+    e persiste um segundo dispatch(ok) com item_count=0 (ADR-0050 revoga
+    só-se-novidade). O critério físico do plano, provado em unit."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _CHAT_TOKEN)
-    _seed_distilled(db, tenant_id, user_id, ["a", "b"])
+    _seed_items(db, tenant_id, user_id, ["a", "b"])
     run_worker(
         db,
         _worker(_RecordingSender()),
@@ -144,5 +148,9 @@ def test_digest_vertical_rerun_without_novelty_is_noop(
     second = _RecordingSender()
     run_worker(db, _worker(second), config={"max_items": 50}, tenant_id=tenant_id, user_id=user_id)
 
-    assert second.calls == []  # nada novo → nada enviado
-    assert len(_dispatch_rows(db)) == 1  # nenhum dispatch novo
+    assert len(second.calls) == 1  # aviso enviado, não silêncio
+    assert len(_dispatch_rows(db)) == 2  # segundo dispatch(ok) com item_count=0
+    row = _dispatch_rows(db)[1]
+    assert row["item_count"] == 0
+    assert row["status"] == "ok"
+    assert row["items"] == []

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from kubo.contracts.models import WorkerManifest
-from kubo.contracts.worker import DigestView, RunContext
+from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.distribution.digest import build_telegram_digest
 from kubo.distribution.telegram import send_telegram
 from kubo.errors import SenderError
@@ -50,15 +50,15 @@ class TelegramDigestWorker(_DigestWorker):
         super().__init__(destination=destination, base_url=base_url)
         self._sender: Sender = sender or send_telegram
 
-    def _deliver(self, ctx: RunContext, views: list[DigestView]) -> None:
-        """Monta a mensagem do Telegram e envia; levanta SenderError se não puder
-        entregar."""
+    def _deliver(self, ctx: RunContext, selection: DigestSelectionView) -> None:
+        """Monta a mensagem do Telegram (digest ou aviso) e envia; levanta
+        SenderError se não puder entregar."""
         if self._destination.channel != "telegram":
             raise SenderError(
                 f"canal {self._destination.channel!r} não suportado por TelegramDigestWorker"
             )
         token = _integration_secret(ctx, "telegram")
-        text = build_telegram_digest(views, self._base_url)
+        text = build_telegram_digest(selection, self._base_url)
         self._sender(token=token, chat_id=self._destination.address, text=text)
 
 

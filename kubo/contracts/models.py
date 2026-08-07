@@ -23,12 +23,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 def _is_distilled_id(item: str) -> bool:
     """True se `item` é um id de distilled em forma string (`distilled:<alfanum ASCII>`).
 
-    Borda contra id forjado, compartilhada por `DispatchPayload.items` e
-    `ReportPayload.consulted` — os dois só aceitam referências a distilled em forma
-    string (ADR-0015 §IV / ADR-0016 §VI). ASCII (não Unicode): os ids reais são
-    hex/base-alfanumérica ASCII."""
+    Borda contra id forjado, compartilhada por `ReportPayload.consulted` — só
+    aceita referências a distilled em forma string (ADR-0016 §VI). ASCII (não
+    Unicode): os ids reais são hex/base-alfanumérica ASCII."""
     head, sep, key = item.partition(":")
     return head == "distilled" and bool(sep) and key.isascii() and key.isalnum()
+
+
+def _is_item_id(item: str) -> bool:
+    """True se `item` é um id de item em forma string (`item:<alfanum ASCII>`).
+
+    Borda contra id forjado para `DispatchPayload.items` (ADR-0050 §V: o payload
+    passa a registrar ids de item, não de distilled). Mesma disciplina ASCII do
+    `_is_distilled_id` — os ids reais são hex/base-alfanumérica ASCII."""
+    head, sep, key = item.partition(":")
+    return head == "item" and bool(sep) and key.isascii() and key.isalnum()
 
 
 class WorkerManifest(BaseModel):
@@ -186,14 +195,19 @@ class ErrorInfo(BaseModel):
 
 
 class DispatchPayload(BaseModel):
-    """Fato de entrega de um digest (ADR-0015 §IV) — espelha `insert_dispatch` da store.
+    """Fato de entrega de um digest ou report (ADR-0015 §IV, ADR-0050 §V, ADR-0016 §V).
 
-    `items` são ids de distilled em forma STRING (`distilled:<hex>`) validados por
-    pattern na borda; a store os converte para RecordID. Exceção NOMEADA à disciplina
-    de ref opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão
-    do ref opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
-    `watermark` = `max(created_at)` do conjunto selecionado (o worker computa; ADR-0015
-    §III). `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009).
+    `items` são ids em forma STRING validados por pattern na borda; a store os converte
+    para RecordID. Para `artifact="digest"`, ids de ITEM (`item:<hex>`) — a chave de
+    identidade é o item, não o distilled (ADR-0050 §III): um item redestilado ganha id
+    de distilled novo e reentraria como inédito se a chave fosse o destilado. Para
+    `artifact="report"`, ids de DISTILLED (`distilled:<hex>`) — o analyst registra as
+    fontes consultadas (retrieval) para auditoria. Exceção NOMEADA à disciplina de ref
+    opaco (ADR-0013): o digest worker é mecânico (sem LLM no circuito), a razão do ref
+    opaco não se aplica; ids expostos são leitura display-only (link + auditoria).
+    `watermark` = último dia de calendário coberto pela janela (ADR-0050 §IV), não
+    `max(created_at)` do conjunto — independe de haver ou não itens aprovados.
+    `error` estruturado quando `status="error"` (falha parcial, §VII do ADR-0009).
 
     `artifact` (ADR-0016 §V, fix E1) discrimina `digest` de `report`. Sem default de
     propósito: `extra="forbid"` força cada call site a declarar — omitir num dispatch de
@@ -212,8 +226,8 @@ class DispatchPayload(BaseModel):
     # default None deixa o report omitir; o validador cruza artifact↔watermark.
     watermark: datetime | None = None
     item_count: int = Field(ge=0)
-    # Cada item é um id de distilled em forma string; pattern fecha a borda contra
-    # qualquer coisa que não seja um record id de distilled (defesa, não vem de LLM).
+    # Ids em forma string. O formato aceito depende de `artifact` e é validado
+    # em `_items_are_valid_ids` (defesa de borda, não vem de LLM).
     items: list[str] = Field(default_factory=lambda: [], max_length=1000)
     # ErrorInfo (não dict solto): mesmo boundary estruturado do resto do contrato
     # (extra="forbid", message<=500) — fecha o vazamento de conteúdo/segredo que um
@@ -221,11 +235,26 @@ class DispatchPayload(BaseModel):
     error: ErrorInfo | None = None
 
     @model_validator(mode="after")
-    def _items_are_distilled_ids(self) -> Self:
-        """Todo item deve ser um id de distilled em forma string — borda contra id forjado."""
+    def _items_are_valid_ids(self) -> Self:
+        """Valida os ids de items conforme o artifact (ADR-0050 §III):
+
+        - `artifact="digest"`: ids de ITEM (`item:<hex>`) — a chave de identidade é
+          o item, não o distilled (um item redestilado ganha id de distilled novo e
+          reentraria como inédito se a chave fosse o destilado).
+        - `artifact="report"`: ids de DISTILLED (`distilled:<hex>`) — o analyst
+          registra as fontes consultadas (retrieval) para auditoria, e a chave lá é
+          o distilled mesmo.
+        - `artifact="gate"`: não carrega items — `items` deve ser vazio (gate não
+          entrega conteúdo, só registra a decisão de promoção)."""
         for item in self.items:
-            if not _is_distilled_id(item):
-                raise ValueError("item de dispatch deve ser um id de distilled (distilled:<id>)")
+            if self.artifact == "digest":
+                if not _is_item_id(item):
+                    raise ValueError("item de dispatch de digest deve ser item:<id>")
+            elif self.artifact == "report":
+                if not _is_distilled_id(item):
+                    raise ValueError("item de dispatch de report deve ser distilled:<id>")
+            elif self.artifact == "gate":
+                raise ValueError("dispatch de gate não carrega items")
         return self
 
     @model_validator(mode="after")

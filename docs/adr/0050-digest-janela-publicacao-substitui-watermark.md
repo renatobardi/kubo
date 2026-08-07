@@ -131,9 +131,13 @@ valendo (worker de digest é mecânico, sem LLM no circuito).
 **A migração inclui a DDL, não só o código.** `dispatch.items` é
 `option<array<record<distilled>>>` (SCHEMAFULL) — grava `record<item>` sob esse
 tipo falha na escrita, não só na validação pydantic. A migração troca o tipo do
-campo via `DEFINE FIELD OVERWRITE items ON dispatch TYPE option<array<record<item>>>`
-— nunca `DEFINE TABLE OVERWRITE dispatch` (ADR-0027 §6 já avisa contra isso, perderia
-o resto do schema da tabela).
+campo via `DEFINE FIELD OVERWRITE items ON dispatch TYPE option<array<record>>`
+— o tipo genérico `record` (em vez de `record<item>`) acomoda o caso do
+`artifact="report"` (ADR-0016 §V), onde `items` continua registrando ids de
+`distilled` (fontes consultadas pelo analyst para auditoria). A validação
+pydantic na borda discrimina por `artifact`: digest exige `item:<hex>`, report
+exige `distilled:<hex>`. Nunca `DEFINE TABLE OVERWRITE dispatch` (ADR-0027 §6
+já avisa contra isso, perderia o resto do schema da tabela).
 
 ### VI. Revogação do §V — o Kubo nunca fica calado
 
@@ -148,8 +152,10 @@ mensagem, em uma de quatro formas:
    janela. É o único sinal disponível para saber se o corte de relevância
    (ancorado no `work_context` do tenant, KUBO-174) está calibrado longe demais.
 4. **Recuperação** — o dispatch cobre mais de um dia (janela elástica ativa);
-   identifica-se como tal e informa o período coberto. Leva só o resumo do dia
-   mais recente do período (decisão do wayfinder, não deste ADR — ver KUBO-179).
+   identifica-se como tal e informa o período coberto. Leva só os itens do dia
+   mais recente do período (KUBO-179): a janela elástica recupera o watermark,
+   mas o digest só mostra o dia mais recente — os dias intermediários ficam
+   visíveis na UI, não no canal de entrega.
 
 **O aviso das formas 2 e 3 conta como dispatch `status='ok'`, `item_count=0`**,
 com `watermark` = o dia mais recente da janela que estava vazia/sem aprovados.

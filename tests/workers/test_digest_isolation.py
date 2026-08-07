@@ -19,6 +19,7 @@ from tests.workers._digest_fixtures import (
     _destination,
     _dispatch,
     _FakeKnowledge,
+    _selection,
     _view,
 )
 
@@ -55,11 +56,11 @@ class _FakeCtx:
 
 def test_email_failure_does_not_stop_telegram_delivery() -> None:
     """Falha de envio de e-mail (SenderError) não prejudica o Telegram."""
-    views = {
-        "destination:telegram1": [_view("a", 0), _view("b", 5)],
-        "destination:email1": [_view("c", 3)],
+    selections = {
+        "destination:telegram1": _selection([_view("a"), _view("b")]),
+        "destination:email1": _selection([_view("c")]),
     }
-    knowledge = _FakeKnowledge(views)
+    knowledge = _FakeKnowledge(selections)
 
     telegram_worker = TelegramDigestWorker(
         destination=_destination(key="telegram1", channel="telegram", address="42"),
