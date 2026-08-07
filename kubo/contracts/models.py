@@ -14,7 +14,7 @@ design, mas com um validador que rejeita valor extra não-numérico.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -178,6 +178,41 @@ class ScorePayload(BaseModel):
     generated_title: str | None = Field(default=None, max_length=500)
 
 
+class OpinionPayload(BaseModel):
+    """Parecer editorial de um item para o tenant (ADR-0052 §I, KUBO-195).
+    Computado no envio do digest, para os itens selecionados pela janela, e
+    persistido por (item, tenant) — compartilhado entre canais sem recomputar.
+    `item_id` é a forma STRING do RecordID do item (`item:<hex>`) — mesma chave
+    de identidade do `DigestView.id` e do `dispatch.items`. `opinion` é prosa
+    limpa (sem markdown estrutural, ADR-0051 §III). O runner resolve o RecordID
+    e grava a aresta `opinion_for` (last-wins, idempotente)."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["opinion"] = "opinion"
+    schema_version: Literal[1] = 1
+    item_id: str
+    opinion: str = Field(min_length=1, max_length=500)
+
+
+class DaySummaryPayload(BaseModel):
+    """Resumo editorial do dia para o tenant (ADR-0052 §II, KUBO-195). Mesmo
+    texto nos dois canais — artefato compartilhado. Escrita híbrida (ADR-0052
+    §III): o destilador escreve eager ao terminar o run; se não existir na hora
+    do envio, o primeiro digest computa e grava (fallback). `day` é o dia de
+    calendário no fuso do tenant. `summary` é prosa limpa. `publication_count`
+    é o total de publicações relevantes daquele dia (não só as que couberam no
+    envio). O runner grava na tabela `day_summary` (upsert por (tenant, day))."""
+
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    type: Literal["day_summary"] = "day_summary"
+    schema_version: Literal[1] = 1
+    day: date
+    summary: str = Field(min_length=1, max_length=1000)
+    publication_count: int = Field(ge=0)
+
+
 class ErrorInfo(BaseModel):
     """Erro estruturado que fecha `run.error` (ADR-0009 item IV).
 
@@ -319,7 +354,9 @@ Payload: TypeAlias = Annotated[
     | ScorePayload
     | DispatchPayload
     | ReportPayload
-    | PrPayload,
+    | PrPayload
+    | OpinionPayload
+    | DaySummaryPayload,
     Field(discriminator="type"),
 ]
 

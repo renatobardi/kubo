@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kubo.distribution.email import email_smtp_config
+from kubo.executors.base import Executor
 from kubo.store.destinations import Destination
 from kubo.store.knowledge import ActiveSource
 from kubo.workers.digest import TelegramDigestWorker
@@ -71,18 +72,25 @@ SWEEP_DISPATCH: dict[str, KindDispatch] = {
 
 # Sweep de destinos do digest (ADR-0029). Cada canal ganha seu próprio worker;
 # o endereço (PII) chega pelo construtor, a config só carrega `max_items`.
-DestinationFactory = Callable[[Destination, str], Any]
+# O executor LLM (ADR-0052) é passado para enriquecer o digest com parecer e
+# resumo do dia.
+DestinationFactory = Callable[[Destination, str, Executor], Any]
 
 
-def _telegram_factory(destination: Destination, base_url: str) -> TelegramDigestWorker:
-    return TelegramDigestWorker(destination=destination, base_url=base_url)
+def _telegram_factory(
+    destination: Destination, base_url: str, executor: Executor
+) -> TelegramDigestWorker:
+    return TelegramDigestWorker(destination=destination, base_url=base_url, executor=executor)
 
 
-def _email_factory(destination: Destination, base_url: str) -> EmailDigestWorker:
+def _email_factory(
+    destination: Destination, base_url: str, executor: Executor
+) -> EmailDigestWorker:
     return EmailDigestWorker(
         destination=destination,
         base_url=base_url,
         smtp_config=email_smtp_config(),
+        executor=executor,
     )
 
 

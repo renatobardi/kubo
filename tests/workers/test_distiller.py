@@ -33,6 +33,7 @@ from kubo.contracts.worker import ItemView
 from kubo.embedding import Embedder
 from kubo.errors import ConfigError, EmbeddingError, MalformedOutputError, RateLimitExhausted
 from kubo.workers.distiller import (
+    DaySummaryOutput,
     DistillerConfig,
     DistillerWorker,
     DistillOutput,
@@ -71,6 +72,12 @@ class _FakeExecutor:
         self.received_models.append(response_model)
         if idx in self._errors:
             raise self._errors[idx]
+        if idx not in self._outputs:
+            # Default para a chamada de resumo do dia (ADR-0052 §III) — os
+            # testes que não se importam com o resumo não precisam declarar.
+            if response_model is DaySummaryOutput:
+                return cast(T, DaySummaryOutput(summary="resumo do dia default"))
+            raise KeyError(idx)
         return cast(T, self._outputs[idx])
 
 
@@ -105,6 +112,14 @@ class _FakeKnowledge:
     def search_distilled(self, embedding: Sequence[float], k: int) -> list[Any]:
         """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
         return []
+
+    def get_opinions(self, item_ids: list[str]) -> dict[str, str]:
+        """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
+        return {}
+
+    def get_day_summary(self, day: Any) -> str | None:
+        """Não usado pelo distiller; presente só para satisfazer o Protocol KnowledgeReader."""
+        return None
 
 
 @dataclass
@@ -204,7 +219,8 @@ def test_score_call_receives_title_and_url_not_content() -> None:
     assert "https://x/y" in score_call_content
     assert "CONTEUDO_SECRETO" not in score_call_content
     # defesa contra troca de schema entre as 2 chamadas (achado CodeRabbit no PR #223)
-    assert executor.received_models == [ScoreOutput, DistillOutput]
+    # A 3ª chamada (DaySummaryOutput) é o resumo do dia (ADR-0052 §III).
+    assert executor.received_models == [ScoreOutput, DistillOutput, DaySummaryOutput]
 
 
 def test_score_instruction_carries_tenant_work_context() -> None:
@@ -272,7 +288,7 @@ def test_item_at_exact_cutoff_is_approved() -> None:
 
     result = DistillerWorker(executor).run(ctx)
 
-    assert executor.call_count == 2
+    assert executor.call_count == 3  # pontua + destila + resumo do dia (ADR-0052 §III)
     stats = result.stats.model_dump()
     assert stats["approved"] == 1
     assert stats["distilled"] == 1
@@ -669,7 +685,7 @@ def test_max_distill_items_breaks_the_loop_without_stranding_unscored_items() ->
     result = DistillerWorker(executor).run(ctx)
 
     assert result.error is None
-    assert executor.call_count == 2  # só pontuou+destilou o item 0
+    assert executor.call_count == 3  # pontuou+destilou item 0 + resumo do dia (ADR-0052 §III)
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
     scores = [p for p in result.payloads if isinstance(p, ScorePayload)]
     assert len(distilled) == 1
@@ -700,3 +716,96 @@ def test_max_score_items_limits_how_many_items_are_read() -> None:
     DistillerWorker(executor).run(ctx)
 
     assert knowledge.seen_limit == 7
+
+
+# ── Resumo do dia (ADR-0052 §III, KUBO-195) ───────────────────────────────────
+
+
+def _approve_and_distill_two() -> tuple[list[ItemView], dict[int, BaseModel]]:
+    """Helper: 2 itens aprovados + destilados — outputs para 4 chamadas (2 score + 2 distill)."""
+    items = [
+        ItemView(ref=0, title="t0", url="https://x/0", content="conteudo zero sobre a Anthropic"),
+        ItemView(ref=1, title="t1", url="https://x/1", content="conteudo um sobre a OpenAI"),
+    ]
+    outputs: dict[int, BaseModel] = {
+        0: _approve(9),
+        1: DistillOutput(summary="resumo zero", entities=[]),
+        2: _approve(8),
+        3: DistillOutput(summary="resumo um", entities=[]),
+    }
+    return items, outputs
+
+
+def test_distiller_writes_day_summary_after_run() -> None:
+    """O destilador escreve o resumo do dia ao terminar o run (ADR-0052 §III).
+    Após destilar itens, faz uma chamada LLM adicional e devolve
+    `DaySummaryPayload` no RunResult."""
+    from kubo.contracts.models import DaySummaryPayload
+
+    items, outputs = _approve_and_distill_two()
+    # 5ª chamada = resumo do dia
+    outputs[4] = DaySummaryOutput(summary="Ontem saíram 2 publicações; o eixo foi IA")
+    executor = _FakeExecutor(outputs=outputs)
+    knowledge = _FakeKnowledge(items)
+    ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 1
+    assert day_summaries[0].summary == "Ontem saíram 2 publicações; o eixo foi IA"
+    assert day_summaries[0].publication_count == 2  # 2 aprovados
+
+
+def test_distiller_no_day_summary_when_nothing_distilled() -> None:
+    """Se nada foi destilado, o destilador não escreve resumo do dia."""
+    from kubo.contracts.models import DaySummaryPayload
+
+    items = [ItemView(ref=0, title="t0", url="https://x/0", content="conteudo zero")]
+    outputs: dict[int, BaseModel] = {0: ScoreOutput(score=2)}  # reprovado
+    executor = _FakeExecutor(outputs=outputs)
+    knowledge = _FakeKnowledge(items)
+    ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 0
+
+
+def test_distiller_day_summary_malformed_does_not_fail_run() -> None:
+    """Resumo do dia malformado é pulado (logado), não derruba o run — os
+    payloads já processados são devolvidos normalmente."""
+    from kubo.contracts.models import DaySummaryPayload
+
+    items, outputs = _approve_and_distill_two()
+    # 5ª chamada = resumo do dia malformado
+    executor = _FakeExecutor(outputs=outputs, errors={4: MalformedOutputError("bad json")})
+    knowledge = _FakeKnowledge(items)
+    ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 0
+    # payloads normais ainda presentes
+    assert len([p for p in result.payloads if isinstance(p, DistilledPayload)]) == 2
+    assert result.error is None  # run não falhou
+
+
+def test_distiller_day_summary_strips_structural_markdown() -> None:
+    """O resumo do dia nasce sob o contrato de prosa limpa (ADR-0051 §III)."""
+    from kubo.contracts.models import DaySummaryPayload
+
+    items, outputs = _approve_and_distill_two()
+    outputs[4] = DaySummaryOutput(summary="## Resumo do dia\n\nOntem saíram 2 publicações")
+    executor = _FakeExecutor(outputs=outputs)
+    knowledge = _FakeKnowledge(items)
+    ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 1
+    assert "##" not in day_summaries[0].summary
+    assert "Ontem saíram 2 publicações" in day_summaries[0].summary

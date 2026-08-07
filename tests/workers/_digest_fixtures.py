@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+from pydantic import BaseModel
 from surrealdb import RecordID
 
 from kubo.contracts.models import DispatchPayload
 from kubo.contracts.worker import DigestSelectionView, DigestView
 from kubo.errors import SenderError
+from kubo.executors.base import Executor
 from kubo.store.destinations import Channel, Destination
 from kubo.workers._digest_common import DigestConfig
 
@@ -71,8 +73,16 @@ def _destination(
 
 
 class _FakeKnowledge:
-    def __init__(self, per_dest: dict[str, DigestSelectionView]) -> None:
+    def __init__(
+        self,
+        per_dest: dict[str, DigestSelectionView],
+        *,
+        opinions: dict[str, str] | None = None,
+        day_summaries: dict[date, str] | None = None,
+    ) -> None:
         self._per_dest = per_dest
+        self._opinions = opinions or {}
+        self._day_summaries = day_summaries or {}
         self.calls: list[tuple[str, int]] = []
 
     def items_to_score(self, limit: int) -> list[Any]:
@@ -88,6 +98,32 @@ class _FakeKnowledge:
     def search_distilled(self, embedding: Sequence[float], k: int) -> list[Any]:
         return []
 
+    def get_opinions(self, item_ids: list[str]) -> dict[str, str]:
+        return {k: v for k, v in self._opinions.items() if k in item_ids}
+
+    def get_day_summary(self, day: date) -> str | None:
+        return self._day_summaries.get(day)
+
+
+class _FakeExecutor:
+    """Fake de `Executor` para testes de digest — devolve outputs por índice."""
+
+    def __init__(
+        self,
+        outputs: dict[int, BaseModel] | None = None,
+    ) -> None:
+        self._outputs = outputs or {}
+        self.call_count = 0
+        self.received_content: list[str] = []
+        self.received_instructions: list[str] = []
+
+    def complete(self, instruction: str, untrusted_content: str, response_model: type[Any]) -> Any:
+        idx = self.call_count
+        self.call_count += 1
+        self.received_content.append(untrusted_content)
+        self.received_instructions.append(instruction)
+        return self._outputs[idx]
+
 
 @dataclass
 class _FakeCtx:
@@ -96,6 +132,7 @@ class _FakeCtx:
     knowledge: _FakeKnowledge
     logger: Any
     embedder: None = None
+    executor: Executor | None = None
 
 
 class _FakeSender:

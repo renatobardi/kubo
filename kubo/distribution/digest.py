@@ -33,6 +33,7 @@ TELEGRAM_LIMIT = 4096
 # digest escaneável. Não são segurança — são legibilidade + garantia de truncamento.
 _TITLE_CAP = 200
 _SUMMARY_CAP = 300
+_OPINION_CAP = 300
 _ENTITIES_CAP = 8
 _NO_TITLE = "(sem título)"
 
@@ -41,32 +42,41 @@ def build_telegram_digest(selection: DigestSelectionView, base_url: str) -> str:
     """Monta a mensagem HTML do digest (uma só, ≤ 4096) ou o aviso, conforme a forma.
 
     ADR-0050 §VI: as quatro formas de mensagem. O worker nunca fica em silêncio —
-    o só-se-novidade (ADR-0015 §V) foi revogado."""
+    o só-se-novidade (ADR-0015 §V) foi revogado. ADR-0052: o digest inclui o
+    resumo do dia (bloco de abertura) e o parecer por item (em cada entry)."""
     form = selection.form
     if form in ("empty_window", "none_passed"):
         return _warning_message(selection)
-    return _digest_message(selection.items, base_url, is_recovery=form == "recovery")
+    return _digest_message(selection, base_url, is_recovery=form == "recovery")
 
 
-def _digest_message(items: list[DigestView], base_url: str, *, is_recovery: bool) -> str:
+def _digest_message(selection: DigestSelectionView, base_url: str, *, is_recovery: bool) -> str:
     """Monta a mensagem HTML do digest com os itens, truncando em fronteira de entry
-    com rodapé "+N itens — ver na UI" quando não cabe tudo."""
+    com rodapé "+N itens — ver na UI" quando não cabe tudo. Inclui o resumo do dia
+    (ADR-0052 §II) como bloco de abertura, entre o cabeçalho e as entries."""
+    items = selection.items
     total = len(items)
     if total == 0:
         return ""
     header = _header(total, is_recovery=is_recovery)
+    day_summary = _escape(selection.day_summary) if selection.day_summary else None
     rendered = [_render_entry(v, base_url) for v in items]
-    full = _assemble(header, rendered, omitted=0)
+    full = _assemble(header, rendered, omitted=0, day_summary=day_summary)
     if len(full) <= TELEGRAM_LIMIT:
         return full
     # Trunca: inclui entradas inteiras enquanto a mensagem + rodapé couber.
     included = 0
     while included < total:
-        candidate = _assemble(header, rendered[: included + 1], omitted=total - included - 1)
+        candidate = _assemble(
+            header,
+            rendered[: included + 1],
+            omitted=total - included - 1,
+            day_summary=day_summary,
+        )
         if len(candidate) > TELEGRAM_LIMIT:
             break
         included += 1
-    return _assemble(header, rendered[:included], omitted=total - included)
+    return _assemble(header, rendered[:included], omitted=total - included, day_summary=day_summary)
 
 
 def _warning_message(selection: DigestSelectionView) -> str:
@@ -87,21 +97,31 @@ def _header(total: int, *, is_recovery: bool = False) -> str:
 
 def _render_entry(view: DigestView, base_url: str) -> str:
     """Renderiza UMA entrada: título (hyperlink para a fonte ou UI, em negrito), resumo
-    curto e entidades. Todo conteúdo dinâmico é escapado; só `<b>`/`<a>` do template
-    são markup. O título É o link (title-as-hyperlink) — sem linha separada de "abrir"."""
+    curto, parecer editorial (ADR-0052 §I) e entidades. Todo conteúdo dinâmico é
+    escapado; só `<b>`/`<a>` do template são markup. O título É o link
+    (title-as-hyperlink) — sem linha separada de "abrir"."""
     title = _escape(_cap(view.title or _NO_TITLE, _TITLE_CAP))
     summary = _escape(_cap(view.summary, _SUMMARY_CAP))
     link = _link(view, base_url)
     lines = [f'<a href="{link}"><b>{title}</b></a>', summary]
+    if view.opinion:
+        lines.append(f"Parecer: {_escape(_cap(view.opinion, _OPINION_CAP))}")
     if view.entities:
         names = ", ".join(_escape(e) for e in view.entities[:_ENTITIES_CAP])
         lines.append(f"Entidades: {names}")
     return "\n".join(lines)
 
 
-def _assemble(header: str, entries: list[str], *, omitted: int) -> str:
-    """Junta cabeçalho + entradas + rodapé de truncamento (só se `omitted > 0`)."""
-    blocks = [header, *entries]
+def _assemble(
+    header: str, entries: list[str], *, omitted: int, day_summary: str | None = None
+) -> str:
+    """Junta cabeçalho + [resumo do dia] + entradas + rodapé de truncamento
+    (só se `omitted > 0`). O resumo do dia (ADR-0052 §II) é o bloco de abertura,
+    entre o cabeçalho e as entries — mesmo texto nos dois canais."""
+    blocks = [header]
+    if day_summary:
+        blocks.append(day_summary)
+    blocks.extend(entries)
     if omitted > 0:
         blocks.append(f"+{omitted} itens — ver na UI")
     return "\n\n".join(blocks)

@@ -15,7 +15,12 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import EntityRef
 from kubo.store import knowledge
-from kubo.workers.distiller import DistillerWorker, DistillOutput, ScoreOutput
+from kubo.workers.distiller import (
+    DaySummaryOutput,
+    DistillerWorker,
+    DistillOutput,
+    ScoreOutput,
+)
 from scripts import drain_distill as dd
 
 T = TypeVar("T", bound=BaseModel)
@@ -69,9 +74,13 @@ class _FakeExecutor:
         self.calls = 0
 
     def complete(self, instruction: str, untrusted_content: str, response_model: type[T]) -> T:
-        out = self._outputs[self.calls]
+        idx = self.calls
         self.calls += 1
-        return cast(T, out)
+        # ADR-0052 §III: chamada extra de resumo do dia — default para testes
+        # que não se importam com o resumo.
+        if idx >= len(self._outputs) and response_model is DaySummaryOutput:
+            return cast(T, DaySummaryOutput(summary="resumo do dia drain default"))
+        return cast(T, self._outputs[idx])
 
 
 class _FakeEmbedder:

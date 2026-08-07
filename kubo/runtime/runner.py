@@ -18,10 +18,12 @@ from pydantic import ValidationError
 from surrealdb import RecordID
 
 from kubo.contracts.models import (
+    DaySummaryPayload,
     DispatchPayload,
     DistilledPayload,
     ErrorInfo,
     ItemPayload,
+    OpinionPayload,
     Payload,
     PrPayload,
     ReportPayload,
@@ -45,7 +47,9 @@ from kubo.store.knowledge import (
     insert_dispatch,
     insert_distilled,
     start_run,
+    upsert_day_summary,
     upsert_item,
+    upsert_opinion,
     upsert_source,
 )
 
@@ -132,94 +136,25 @@ def _persist(
     unresolved = 0
     for payload in payloads:
         if isinstance(payload, ItemPayload):
-            source = upsert_source(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                kind=payload.source.kind,
-                canonical=payload.source.canonical,
-                title=payload.source.title,
-            )
-            upsert_item(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                source=source,
-                external_id=payload.external_id,
-                content=payload.content,
-                url=payload.url,
-                title=payload.title,
-                metadata=payload.metadata,
-                published_at=payload.published_at,
-                run=run_id,
-            )
+            _persist_item(db, payload, run_id, tenant_id=tenant_id, user_id=user_id)
         elif isinstance(payload, DistilledPayload):
-            item = knowledge.resolve(payload.ref)
-            if item is None:
-                unresolved += 1
-                continue
-            entities = [
-                get_or_create_entity(
-                    db, tenant_id=tenant_id, user_id=user_id, name=e.name, kind=e.kind
-                )
-                for e in payload.entities
-            ]
-            chunks = [
-                Chunk(
-                    text=c.text,
-                    seq=c.seq,
-                    embedding=c.embedding,
-                    model=c.model,
-                    dim=c.dim,
-                    task_type=c.task_type,
-                )
-                for c in payload.chunks
-            ]
-            insert_distilled(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                item=item,
-                summary=payload.summary,
-                chunks=chunks,
-                run=run_id,
-                entities=entities,
+            unresolved += _persist_distilled(
+                db, payload, run_id, knowledge, tenant_id=tenant_id, user_id=user_id
             )
         elif isinstance(payload, ScorePayload):
-            item = knowledge.resolve(payload.ref)
-            if item is None:
-                unresolved += 1
-                continue
-            apply_score(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                item=item,
-                score=payload.score,
-                generated_title=payload.generated_title,
+            unresolved += _persist_score(
+                db, payload, knowledge, tenant_id=tenant_id, user_id=user_id
             )
         elif isinstance(payload, DispatchPayload):
-            # `items` (strings validated by pydantic boundary) → RecordID for the store.
-            # `destination` (a `destination:<key>` string validated by payload) → RecordID.
-            # `run_id` is NOT included: dispatch is a delivery fact, it has no `produced_by` edge
-            # (no consumer — ADR-0015 §II); the run itself is the execution provenance.
-            insert_dispatch(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                destination=record_id_from_destination(payload.destination),
-                channel=payload.channel,
-                status=payload.status,
-                artifact=payload.artifact,
-                watermark=payload.watermark,
-                item_count=payload.item_count,
-                items=[_parse_item_id(s) for s in payload.items],
-                error=payload.error.model_dump() if payload.error else None,
-            )
+            _persist_dispatch(db, payload, tenant_id=tenant_id, user_id=user_id)
         elif isinstance(payload, ReportPayload):
             _persist_report(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
         elif isinstance(payload, PrPayload):
             _persist_pr(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
+        elif isinstance(payload, OpinionPayload):
+            _persist_opinion(db, payload, tenant_id=tenant_id, user_id=user_id)
+        elif isinstance(payload, DaySummaryPayload):
+            _persist_day_summary(db, payload, tenant_id=tenant_id, user_id=user_id)
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(
                 db,
@@ -230,6 +165,168 @@ def _persist(
                 title=payload.title,
             )
     return unresolved
+
+
+def _persist_item(
+    db: Any,
+    payload: ItemPayload,
+    run_id: RecordID,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
+    """Persiste um ItemPayload: upserta a source (embutida inline) antes do item,
+    grava a proveniência `item -[collected_by]-> run` (ADR-0008 §VI)."""
+    source = upsert_source(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind=payload.source.kind,
+        canonical=payload.source.canonical,
+        title=payload.source.title,
+    )
+    upsert_item(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source=source,
+        external_id=payload.external_id,
+        content=payload.content,
+        url=payload.url,
+        title=payload.title,
+        metadata=payload.metadata,
+        published_at=payload.published_at,
+        run=run_id,
+    )
+
+
+def _persist_distilled(
+    db: Any,
+    payload: DistilledPayload,
+    run_id: RecordID,
+    knowledge: GraphKnowledge,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> int:
+    """Persiste um DistilledPayload (ADR-0013 §III): resolve `ref` via
+    `knowledge.resolve`, entidades por nome, grava distilled + chunks + arestas.
+    Devolve 1 se `ref` não-resolvível (skip-and-continue), 0 caso contrário."""
+    item = knowledge.resolve(payload.ref)
+    if item is None:
+        return 1
+    entities = [
+        get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name=e.name, kind=e.kind)
+        for e in payload.entities
+    ]
+    chunks = [
+        Chunk(
+            text=c.text,
+            seq=c.seq,
+            embedding=c.embedding,
+            model=c.model,
+            dim=c.dim,
+            task_type=c.task_type,
+        )
+        for c in payload.chunks
+    ]
+    insert_distilled(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item,
+        summary=payload.summary,
+        chunks=chunks,
+        run=run_id,
+        entities=entities,
+    )
+    return 0
+
+
+def _persist_score(
+    db: Any,
+    payload: ScorePayload,
+    knowledge: GraphKnowledge,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> int:
+    """Persiste um ScorePayload: resolve `ref` via `knowledge.resolve`, aplica
+    a nota. Devolve 1 se `ref` não-resolvível (skip-and-continue), 0 caso contrário."""
+    item = knowledge.resolve(payload.ref)
+    if item is None:
+        return 1
+    apply_score(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=item,
+        score=payload.score,
+        generated_title=payload.generated_title,
+    )
+    return 0
+
+
+def _persist_dispatch(
+    db: Any,
+    payload: DispatchPayload,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
+    """Persiste um DispatchPayload: `items` (strings validadas) → RecordID,
+    `destination` (string `destination:<key>`) → RecordID. `run_id` NÃO entra
+    — dispatch é fato de entrega, sem `produced_by` (ADR-0015 §II)."""
+    insert_dispatch(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        destination=record_id_from_destination(payload.destination),
+        channel=payload.channel,
+        status=payload.status,
+        artifact=payload.artifact,
+        watermark=payload.watermark,
+        item_count=payload.item_count,
+        items=[_parse_item_id(s) for s in payload.items],
+        error=payload.error.model_dump() if payload.error else None,
+    )
+
+
+def _persist_opinion(
+    db: Any,
+    payload: OpinionPayload,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
+    """ADR-0052 §I: parecer persistido por (item, tenant) — aresta `opinion_for`
+    (last-wins, idempotente). `item_id` é string `item:<hex>` → RecordID."""
+    upsert_opinion(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        item=_parse_item_id(payload.item_id),
+        opinion=payload.opinion,
+    )
+
+
+def _persist_day_summary(
+    db: Any,
+    payload: DaySummaryPayload,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> None:
+    """ADR-0052 §II: resumo do dia por (dia, tenant) — upsert na tabela
+    `day_summary` (fallback race-safe, §III)."""
+    upsert_day_summary(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        day=payload.day,
+        summary=payload.summary,
+        publication_count=payload.publication_count,
+    )
 
 
 def _persist_report(

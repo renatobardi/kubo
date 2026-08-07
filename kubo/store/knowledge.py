@@ -2289,6 +2289,125 @@ def _dedup_by_url(items: list[DigestItemView]) -> list[DigestItemView]:
     return [*best.values(), *no_url]
 
 
+# ── conteúdo editorial (ADR-0052, KUBO-195) ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class DaySummaryView:
+    """Resumo do dia por (dia, tenant) — artefato compartilhado entre canais
+    (ADR-0052 §II). `day` é o dia de calendário no fuso do tenant (date, não
+    datetime). `summary` é o texto editorial. `publication_count` é o total de
+    publicações relevantes daquele dia (não só as que couberam no envio)."""
+
+    day: date
+    summary: str
+    publication_count: int
+
+
+def upsert_opinion(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    item: RecordID,
+    opinion: str,
+) -> None:
+    """Grava o parecer do item para o tenant (ADR-0052 §I, aresta `opinion_for`
+    item->tenant). `DELETE $item->opinion_for` + `RELATE` (last-wins, espelha
+    `apply_score`): reescrever sobrescreve, não duplica — idempotente para o
+    caminho de fallback onde os dois canais podem gravar o mesmo item."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    statements = [
+        "DELETE $item->opinion_for WHERE out = $tenant",
+        "RELATE $item->opinion_for->$tenant SET opinion = $opinion",
+    ]
+    db.query("; ".join(statements), {"item": item, "tenant": tenant_id, "opinion": opinion})
+
+
+def get_opinion(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    item: RecordID,
+) -> str | None:
+    """Lê o parecer do item para o tenant, ou None se não existe."""
+    rows = db.query(
+        "SELECT VALUE opinion FROM $item->opinion_for WHERE out = $tenant;",
+        {"item": item, "tenant": tenant_id},
+    )
+    if not rows:
+        return None
+    return str(rows[0]) if rows[0] is not None else None
+
+
+def get_opinions(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    items: list[RecordID],
+) -> dict[str, str]:
+    """Lê pareceres em lote para múltiplos itens (chave = str(item_id)).
+    Itens sem parecer não aparecem no dict — o chamador detecta ausência por
+    `key not in result`."""
+    if not items:
+        return {}
+    result: dict[str, str] = {}
+    for item in items:
+        opinion = get_opinion(db, tenant_id=tenant_id, item=item)
+        if opinion is not None:
+            result[str(item)] = opinion
+    return result
+
+
+def upsert_day_summary(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    day: date,
+    summary: str,
+    publication_count: int,
+) -> None:
+    """Grava o resumo do dia para o tenant (ADR-0052 §II, tabela `day_summary`).
+    Upsert por (tenant_id, day) — UNIQUE INDEX garante um registro por par.
+    Reescrever sobrescreve, não duplica (fallback race-safe, ADR-0052 §III)."""
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    # Converte date para datetime meia-noite UTC (SurrealDB não tem tipo date)
+    day_dt = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    # DELETE + CREATE: idempotente (UNIQUE INDEX garante um registro por par).
+    # O runner envolve em transação implícita; o pior caso da corrida de
+    # fallback é um texto sobrescrito, nunca um erro (ADR-0052 §III).
+    db.query(
+        "DELETE day_summary WHERE tenant_id = $tenant AND day = $day; "
+        "CREATE day_summary SET tenant_id = $tenant, day = $day, "
+        "summary = $summary, publication_count = $count;",
+        {"tenant": tenant_id, "day": day_dt, "summary": summary, "count": publication_count},
+    )
+
+
+def get_day_summary(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    day: date,
+) -> DaySummaryView | None:
+    """Lê o resumo do dia para o tenant, ou None se não existe."""
+    day_dt = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    rows = db.query(
+        "SELECT summary, publication_count FROM day_summary "
+        "WHERE tenant_id = $tenant AND day = $day LIMIT 1;",
+        {"tenant": tenant_id, "day": day_dt},
+    )
+    if not rows:
+        return None
+    r = rows[0]
+    return DaySummaryView(
+        day=day,
+        summary=str(r["summary"]),
+        publication_count=int(r["publication_count"]),
+    )
+
+
 @dataclass(frozen=True)
 class DispatchListItem:
     """Linha da tela de Envios (ADR-0015, 12.7): canal, destino, status e — quando

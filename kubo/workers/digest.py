@@ -14,6 +14,7 @@ from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.distribution.digest import build_telegram_digest
 from kubo.distribution.telegram import send_telegram
 from kubo.errors import SenderError
+from kubo.executors.base import Executor
 from kubo.store.destinations import Destination
 from kubo.workers._digest_common import DigestConfig, _DigestWorker
 
@@ -46,8 +47,9 @@ class TelegramDigestWorker(_DigestWorker):
         destination: Destination,
         base_url: str,
         sender: Sender | None = None,
+        executor: Executor | None = None,
     ) -> None:
-        super().__init__(destination=destination, base_url=base_url)
+        super().__init__(destination=destination, base_url=base_url, executor=executor)
         self._sender: Sender = sender or send_telegram
 
     def _deliver(self, ctx: RunContext, selection: DigestSelectionView) -> None:
