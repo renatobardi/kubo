@@ -24,6 +24,7 @@ def _view(
     entities: tuple[str, ...] = ("OpenAI", "GPT"),
     url: str | None = None,
     score: int = 7,
+    opinion: str | None = None,
 ) -> DigestView:
     return DigestView(
         id=f"item:{key}",
@@ -33,6 +34,7 @@ def _view(
         published_at=_NOW,
         url=url,
         entities=list(entities),
+        opinion=opinion,
     )
 
 
@@ -41,6 +43,7 @@ def _selection(
     *,
     form: Literal["normal", "empty_window", "none_passed", "recovery"] = "normal",
     total_publications: int | None = None,
+    day_summary: str | None = None,
 ) -> DigestSelectionView:
     views = items if items is not None else [_view()]
     return DigestSelectionView(
@@ -50,6 +53,7 @@ def _selection(
         window_end=_NOW,
         watermark=_NOW,
         total_publications=total_publications if total_publications is not None else len(views),
+        day_summary=day_summary,
     )
 
 
@@ -153,3 +157,161 @@ def test_none_passed_form_sends_warning_with_count() -> None:
     subject, text, _ = result
     assert "3 publicações" in subject
     assert "nenhuma passou o corte" in text
+
+
+# ---------------------------------------------------------------------------
+# KUBO-196 — Identidade Direção B v2 no e-mail
+# ---------------------------------------------------------------------------
+
+
+def test_no_direcao_a_amber_color() -> None:
+    """Direção A rejeitada: o âmbar queimado (#b06327) não aparece no HTML."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "#b06327" not in html
+    assert "b06327" not in html
+
+
+def test_sakura_svg_inline_in_header() -> None:
+    """Logo sakura como SVG inline no header — sem <img>, sem src=, sem url()."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "<svg" in html
+    assert "viewBox" in html
+    # 5 pétalas = 5 paths com o path da pétala
+    assert html.count("<path") >= 5
+
+
+def test_tagline_present() -> None:
+    """Tagline do logo aparece no header do e-mail."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "The art of getting things done" in html
+
+
+def test_published_datetime_per_entry() -> None:
+    """Cada notícia mostra data e hora de publicação (KUBO-192, KUBO-196)."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, text, html = result
+    expected = "13 jul 2026 · 00:00"
+    assert expected in text
+    assert expected in html
+
+
+def test_dark_mode_media_query() -> None:
+    """Modo escuro via @media (prefers-color-scheme: dark) no <style>."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "prefers-color-scheme: dark" in html
+    assert "<style" in html
+
+
+def test_dark_mode_classes_on_content_elements() -> None:
+    """As classes de tema (email-ink, email-muted, sakura-petal, sakura-ink)
+    estão presentes nos elementos renderizados para que o dark mode os atinja."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "sakura-petal" in html
+    assert "sakura-ink" in html
+    assert "email-ink" in html
+    assert "email-muted" in html
+
+
+def test_mobile_media_query() -> None:
+    """Variante mobile legível via @media (max-width: 600px)."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "max-width: 600px" in html
+
+
+def test_no_external_image_references() -> None:
+    """Nenhuma referência a imagem externa, anexo embutido ou arquivo hospedado."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "<img" not in html
+    assert "src=" not in html  # sem src= em qualquer tag (svg usa path, não src)
+    assert "url(" not in html
+    assert "cid:" not in html
+
+
+def test_rendered_weight_under_cutoff() -> None:
+    """Peso do e-mail com 10 notícias permanece bem abaixo do teto de 102KB do Gmail."""
+    items = [_view(key=f"item{i}") for i in range(10)]
+    result = build_email_digest(_selection(items), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert len(html.encode("utf-8")) < 102_400  # 102KB em bytes
+
+
+def test_warning_email_uses_direcao_b_identity() -> None:
+    """E-mail de aviso (empty_window/none_passed) também usa a identidade B v2."""
+    result = build_email_digest(
+        _selection(items=[], form="empty_window", total_publications=0), _BASE
+    )
+    assert result is not None
+    _, _, html = result
+    assert "<svg" in html
+    assert "The art of getting things done" in html
+    assert "b06327" not in html
+
+
+# ---------------------------------------------------------------------------
+# Spec review PR #227 — cobertura faltante (AC5, AC6, AC7, AC9)
+# ---------------------------------------------------------------------------
+
+
+def test_opinion_rendered_in_html_and_text() -> None:
+    """AC5: cada notícia mostra o parecer opinativo no HTML e no texto."""
+    view = _view(opinion="Vale a pena ler: o modelo é consistente.")
+    result = build_email_digest(_selection([view]), _BASE)
+    assert result is not None
+    _, text, html = result
+    assert "Parecer: Vale a pena ler: o modelo é consistente." in text
+    assert "Parecer:" in html
+    assert "Vale a pena ler: o modelo é consistente." in html
+
+
+def test_day_summary_rendered_at_top() -> None:
+    """AC6: o resumo do dia aparece no topo do e-mail, antes das entries."""
+    summary = "Dia marcado por anúncios de IA e movimentação no Congresso."
+    result = build_email_digest(_selection([_view()], day_summary=summary), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert summary in html
+    # O day_summary vem antes da primeira entry (título da notícia)
+    assert html.index(summary) < html.index("OpenAI lança modelo")
+
+
+def test_dark_mode_classes_on_correct_elements() -> None:
+    """AC7: as classes de tema estão nos elementos corretos, não soltas no HTML."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    # sakura-petal deve estar em <path>, não em <div> ou <span>
+    assert 'class="sakura-petal" d=' in html
+    # sakura-ink deve estar em <line> e <circle>
+    assert 'class="sakura-ink" x1=' in html
+    assert 'class="sakura-ink" cx=' in html
+    # email-ink deve estar em <span> (wordmark) e <p> (summary)
+    assert 'class="email-ink" style=' in html
+    # email-muted deve estar em <span> (tagline) e <p> (date/opinion/entities)
+    assert 'class="email-muted" style=' in html
+
+
+def test_day_summary_is_escaped() -> None:
+    """AC9: conteúdo hostil no day_summary é escapado antes de renderizar."""
+    hostile_summary = '<script>alert("xss")</script>Resumo do dia.'
+    result = build_email_digest(_selection([_view()], day_summary=hostile_summary), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "alert" in html  # texto visível, não executável
