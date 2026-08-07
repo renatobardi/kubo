@@ -137,8 +137,8 @@ def _build_html(
     day_summary_html = ""
     if day_summary:
         day_summary_html = (
-            '<p style="margin:0 0 20px 0;font-size:14px;line-height:1.5;'
-            f'color:{_MUTED};font-style:italic;">'
+            '<p class="email-muted" style="margin:0 0 20px 0;font-size:14px;'
+            f'line-height:1.5;color:{_MUTED};font-style:italic;">'
             + html.escape(day_summary, quote=False)
             + "</p>\n"
         )
@@ -177,21 +177,24 @@ _SAKURA_SVG = (
     'style="display:inline-block;vertical-align:middle;">\n'
 )
 _PETAL = (
-    '<path d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 '
+    '<path class="sakura-petal" d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 '
     'C53,10 58,8 61,15 C67,27 62,43 50,50 Z" '
     'fill="#f4c9d4" stroke="#1c1917" stroke-width="6" '
     'stroke-linejoin="round" transform="rotate({angle} 50 50)"/>\n'
 )
 _STAMEN_LINE = (
-    '<line x1="50" y1="50" x2="50" y2="34" stroke="#1c1917" '
+    '<line class="sakura-ink" x1="50" y1="50" x2="50" y2="34" stroke="#1c1917" '
     'stroke-width="3.3" stroke-linecap="round" '
     'transform="rotate({angle} 50 50)"/>\n'
 )
-_STAMEN_DOT = '<circle cx="50" cy="33" r="3" fill="#1c1917" transform="rotate({angle} 50 50)"/>\n'
+_STAMEN_DOT = (
+    '<circle class="sakura-ink" cx="50" cy="33" r="3" fill="#1c1917" '
+    'transform="rotate({angle} 50 50)"/>\n'
+)
 _SAKURA_SVG += "".join(_PETAL.format(angle=a) for a in (0, 72, 144, 216, 288))
 _SAKURA_SVG += "".join(_STAMEN_LINE.format(angle=a) for a in (36, 108, 180, 252, 324))
 _SAKURA_SVG += "".join(_STAMEN_DOT.format(angle=a) for a in (36, 108, 180, 252, 324))
-_SAKURA_SVG += '<circle cx="50" cy="50" r="5.4" fill="#1c1917"/>\n</svg>'
+_SAKURA_SVG += '<circle class="sakura-ink" cx="50" cy="50" r="5.4" fill="#1c1917"/>\n</svg>'
 
 
 def _wrap_email(*, heading: str, day_summary: str, entries: str, footer_link: str) -> str:
@@ -252,9 +255,9 @@ _HTML_TEMPLATE = (
     "          <tr>\n"
     '            <td class="email-pad" style="padding:24px;">\n'
     '              <div style="margin:0 0 20px 0;">{sakura}'
-    '<span style="font-size:18px;font-weight:600;color:{ink};'
+    '<span class="email-ink" style="font-size:18px;font-weight:600;color:{ink};'
     'vertical-align:middle;margin-left:8px;">Kubo</span><br>'
-    '<span style="font-size:12px;color:{muted};'
+    '<span class="email-muted" style="font-size:12px;color:{muted};'
     'vertical-align:middle;">{tagline}</span></div>\n'
     '              <h1 class="email-h1 email-ink" style="margin:0 0 20px 0;'
     'font-size:18px;font-weight:600;color:{ink};">{heading}</h1>\n'
@@ -284,14 +287,15 @@ def _html_entry(view: DigestView, base_url: str) -> str:
     if view.opinion:
         opinion = html.escape(_cap(view.opinion, _OPINION_CAP), quote=False)
         opinion_block = (
-            f'<p style="margin:8px 0 0 0;font-size:13px;line-height:1.5;'
-            f'color:{_MUTED};font-style:italic;">Parecer: {opinion}</p>'
+            f'<p class="email-muted" style="margin:8px 0 0 0;font-size:13px;'
+            f'line-height:1.5;color:{_MUTED};font-style:italic;">Parecer: {opinion}</p>'
         )
     entities_block = ""
     if view.entities:
         names = ", ".join(html.escape(e, quote=False) for e in view.entities[:_ENTITIES_CAP])
         entities_block = (
-            f'<p style="margin:8px 0 0 0;font-size:12px;color:{_MUTED};">Entidades: {names}</p>'
+            f'<p class="email-muted" style="margin:8px 0 0 0;font-size:12px;'
+            f'color:{_MUTED};">Entidades: {names}</p>'
         )
     return _ENTRY_TEMPLATE.format(
         link=link,
@@ -314,7 +318,8 @@ _ENTRY_TEMPLATE = (
     "{title}</a></h2>\n"
     '  <p class="email-muted" style="margin:0 0 8px 0;font-size:12px;color:{muted};'
     '">{date}</p>\n'
-    '  <p style="margin:0 0 8px 0;font-size:14px;line-height:1.5;">{summary}</p>\n'
+    '  <p class="email-ink" style="margin:0 0 8px 0;font-size:14px;line-height:1.5;">'
+    "{summary}</p>\n"
     "  {opinion}\n"
     "  {entities}\n"
     "</div>"

@@ -192,10 +192,10 @@ def test_published_datetime_per_entry() -> None:
     """Cada notícia mostra data e hora de publicação (KUBO-192, KUBO-196)."""
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
-    _, _, html = result
-    # _NOW = datetime(2026, 7, 13, tzinfo=timezone.utc) → "13 jul 2026 · 14:30"
-    # (UTC 00:00 = 14:30 não; _NOW é meia-noite UTC → "00:00")
-    assert "13 jul 2026" in html
+    _, text, html = result
+    expected = "13 jul 2026 · 00:00"
+    assert expected in text
+    assert expected in html
 
 
 def test_dark_mode_media_query() -> None:
@@ -205,6 +205,18 @@ def test_dark_mode_media_query() -> None:
     _, _, html = result
     assert "prefers-color-scheme: dark" in html
     assert "<style" in html
+
+
+def test_dark_mode_classes_on_content_elements() -> None:
+    """As classes de tema (email-ink, email-muted, sakura-petal, sakura-ink)
+    estão presentes nos elementos renderizados para que o dark mode os atinja."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "sakura-petal" in html
+    assert "sakura-ink" in html
+    assert "email-ink" in html
+    assert "email-muted" in html
 
 
 def test_mobile_media_query() -> None:
