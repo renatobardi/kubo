@@ -284,12 +284,14 @@ def _set_github_readonly(
     ConfigError se `token` for None) — sem tocar catálogo/store real."""
     from kubo.errors import ConfigError
 
-    def _fake(db: object, *, tenant_id: object, user_id: object) -> tuple[str, str]:
+    def _fake(
+        db: object, *, tenant_id: object, user_id: object, name: str, default_base_url: str
+    ) -> tuple[str, str]:
         if token is None:
             raise ConfigError("integração 'github-readonly' sem token resolvido")
         return "https://api.github.com", token
 
-    monkeypatch.setattr("kubo.api.routes.sources._resolve_github_readonly", _fake)
+    monkeypatch.setattr("kubo.api.routes.sources.resolve_readonly_secret", _fake)
 
 
 @respx.mock

@@ -201,3 +201,21 @@ def resolve_integrations(
             base_url=integ.base_url,
         )
     return resolved
+
+
+def resolve_readonly_secret(
+    db: Any, *, tenant_id: Any, user_id: Any, name: str, default_base_url: str
+) -> tuple[str, str]:
+    """Resolve `(base_url, token)` de UMA integração nomeada do catálogo do tenant —
+    o par load+resolve+checa-secret que `flow_runner._forge_readonly_integration`
+    (promoção de código) e `sources._test_repo_mode` (KUBO-197, teste de cadastro)
+    precisavam idêntico, antes duplicado entre os dois (achado de code-review):
+    mesma integração (`github-readonly`), mesma lógica de erro, chamadores em
+    domínios diferentes mas a resolução em si é a mesma responsabilidade — cabe
+    aqui, junto de `load_integrations`/`resolve_integrations`, não em nenhum dos
+    dois domínios que a consomem."""
+    catalog = load_integrations(db, tenant_id, user_id)
+    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id)[name]
+    if not resolved.secret:
+        raise ConfigError(f"integração '{name}' sem token resolvido")
+    return resolved.base_url or default_base_url, resolved.secret
