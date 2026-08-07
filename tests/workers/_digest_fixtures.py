@@ -20,6 +20,7 @@ from kubo.errors import SenderError
 from kubo.executors.base import Executor
 from kubo.store.destinations import Channel, Destination
 from kubo.workers._digest_common import DigestConfig
+from kubo.workers._digest_editorial import DaySummaryOutput, OpinionOutput
 
 _NOW = datetime(2026, 7, 13, 9, 30, tzinfo=timezone.utc)
 _BASE = "https://kubo.test:3900"
@@ -106,13 +107,18 @@ class _FakeKnowledge:
 
 
 class _FakeExecutor:
-    """Fake de `Executor` para testes de digest — devolve outputs por índice."""
+    """Fake de `Executor` para testes de digest — devolve outputs por índice.
+
+    Suporta exceções por índice: se `errors[idx]` existe, levanta a exceção
+    em vez de devolver o output (para testar caminhos não-fatais)."""
 
     def __init__(
         self,
         outputs: dict[int, BaseModel] | None = None,
+        errors: dict[int, Exception] | None = None,
     ) -> None:
         self._outputs = outputs or {}
+        self._errors = errors or {}
         self.call_count = 0
         self.received_content: list[str] = []
         self.received_instructions: list[str] = []
@@ -122,7 +128,29 @@ class _FakeExecutor:
         self.call_count += 1
         self.received_content.append(untrusted_content)
         self.received_instructions.append(instruction)
+        if idx in self._errors:
+            raise self._errors[idx]
         return self._outputs[idx]
+
+
+class _FakeOpinionExecutor:
+    """Executor fake para testes verticais de enriquecimento editorial.
+    Devolve parecer e resumo do dia canned, com contagem de chamadas por tipo."""
+
+    def __init__(self, opinion: str, day_summary: str) -> None:
+        self._opinion = opinion
+        self._day_summary = day_summary
+        self.opinion_calls = 0
+        self.day_summary_calls = 0
+
+    def complete(self, instruction: str, untrusted_content: str, response_model: type[Any]) -> Any:
+        if response_model is OpinionOutput:
+            self.opinion_calls += 1
+            return OpinionOutput(opinion=self._opinion)
+        if response_model is DaySummaryOutput:
+            self.day_summary_calls += 1
+            return DaySummaryOutput(summary=self._day_summary)
+        raise ValueError(f"unexpected model: {response_model}")
 
 
 @dataclass

@@ -270,3 +270,85 @@ def test_no_enrichment_for_empty_window() -> None:
     assert len(opinions) == 0
     assert len(day_summaries) == 0
     assert executor.call_count == 0  # nenhuma chamada LLM
+
+
+def test_opinion_malformed_does_not_block_digest() -> None:
+    """MalformedOutputError no parecer é tratado — digest sai sem parecer, sem
+    OpinionPayload persistido (ADR-0052 §I, CLAUDE.md: erros não explodem)."""
+    from kubo.errors import MalformedOutputError
+
+    sel = _selection([_view("a"), _view("b")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
+    executor = _FakeExecutor(
+        outputs={2: DaySummaryOutput(summary="Resumo do dia")},
+        errors={0: MalformedOutputError("bad"), 1: MalformedOutputError("bad")},
+    )
+    sender = _FakeSender()
+    worker = _worker_with_executor(_destination(), sender, executor)
+    result = worker.run(_ctx_with_executor(know, executor))
+
+    opinions = [p for p in result.payloads if isinstance(p, OpinionPayload)]
+    assert len(opinions) == 0  # nenhum parecer persistido
+    # O digest foi enviado (não derrubado pelo erro)
+    assert len(sender.calls) == 1
+
+
+def test_opinion_rate_limited_does_not_block_digest() -> None:
+    """RateLimitExhausted no parecer é tratado — digest sai sem parecer (ADR-0052 §I)."""
+    from kubo.errors import RateLimitExhausted
+
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
+    executor = _FakeExecutor(
+        outputs={1: DaySummaryOutput(summary="Resumo do dia")},
+        errors={0: RateLimitExhausted("rate limited", scope="day")},
+    )
+    sender = _FakeSender()
+    worker = _worker_with_executor(_destination(), sender, executor)
+    result = worker.run(_ctx_with_executor(know, executor))
+
+    opinions = [p for p in result.payloads if isinstance(p, OpinionPayload)]
+    assert len(opinions) == 0
+    assert len(sender.calls) == 1
+
+
+def test_day_summary_malformed_does_not_block_digest() -> None:
+    """MalformedOutputError no resumo do dia é tratado — digest sai sem resumo,
+    sem DaySummaryPayload persistido (ADR-0052 §III)."""
+    from kubo.errors import MalformedOutputError
+
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
+    executor = _FakeExecutor(
+        outputs={0: OpinionOutput(opinion="Parecer A")},
+        errors={1: MalformedOutputError("bad")},
+    )
+    sender = _FakeSender()
+    worker = _worker_with_executor(_destination(), sender, executor)
+    result = worker.run(_ctx_with_executor(know, executor))
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 0
+    # O digest foi enviado com o parecer, mas sem o resumo
+    assert len(sender.calls) == 1
+    sent_text = str(sender.calls[0]["text"])
+    assert "Parecer A" in sent_text
+
+
+def test_day_summary_rate_limited_does_not_block_digest() -> None:
+    """RateLimitExhausted no resumo do dia é tratado — digest sai sem resumo (ADR-0052 §III)."""
+    from kubo.errors import RateLimitExhausted
+
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
+    executor = _FakeExecutor(
+        outputs={0: OpinionOutput(opinion="Parecer A")},
+        errors={1: RateLimitExhausted("rate limited", scope="day")},
+    )
+    sender = _FakeSender()
+    worker = _worker_with_executor(_destination(), sender, executor)
+    result = worker.run(_ctx_with_executor(know, executor))
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 0
+    assert len(sender.calls) == 1

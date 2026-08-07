@@ -9,8 +9,9 @@ DEFINE FIELD OVERWRITE opinion ON opinion_for TYPE string ASSERT string::len($va
 DEFINE FIELD OVERWRITE assigned_at ON opinion_for TYPE datetime DEFAULT time::now() READONLY;
 
 -- Resumo do dia: tabela por (dia, tenant). Único registro por par — upsert
--- sobrescreve (fallback race-safe, ADR-0052 §III). `day` é date (não datetime):
--- o dia de calendário no fuso do tenant, sem hora/minuto.
+-- sobrescreve (fallback race-safe, ADR-0052 §III). `day` é o dia de calendário
+-- no fuso do tenant, gravado como datetime na meia-noite UTC (SurrealDB não tem
+-- tipo date) — a normalização mora em `upsert_day_summary`.
 DEFINE TABLE OVERWRITE day_summary SCHEMAFULL;
 DEFINE FIELD OVERWRITE tenant_id ON day_summary TYPE record<tenant> ASSERT $value != NONE;
 DEFINE FIELD OVERWRITE day ON day_summary TYPE datetime ASSERT $value != NONE;

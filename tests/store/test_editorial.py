@@ -33,21 +33,6 @@ def db() -> Iterator[Any]:
         conn.query(f"REMOVE DATABASE IF EXISTS {_EDITORIAL_DB};")
 
 
-def _seed_tenant(db: Any) -> tuple[RecordID, RecordID]:
-    """Cria tenant com perfil (timezone UTC) — exercita o caminho do profile."""
-    user = tenancy.create_user(db, firebase_uid="editorial-uid")
-    tenant = tenancy.create_tenant(db, name="Editorial Test", owner_user_id=user.id)
-    tenancy.update_user_profile(
-        db,
-        user_id=user.id,
-        display_name="Owner",
-        language="pt-BR",
-        timezone="UTC",
-        work_context="AI agents and infrastructure",
-    )
-    return tenant.id, user.id
-
-
 def _make_item(
     db: Any,
     tenant_id: RecordID,

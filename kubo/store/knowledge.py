@@ -2317,11 +2317,14 @@ def upsert_opinion(
     `apply_score`): reescrever sobrescreve, não duplica — idempotente para o
     caminho de fallback onde os dois canais podem gravar o mesmo item."""
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    statements = [
-        "DELETE $item->opinion_for WHERE out = $tenant",
-        "RELATE $item->opinion_for->$tenant SET opinion = $opinion",
-    ]
-    db.query("; ".join(statements), {"item": item, "tenant": tenant_id, "opinion": opinion})
+    run_transaction(
+        db,
+        [
+            "DELETE $item->opinion_for WHERE out = $tenant",
+            "RELATE $item->opinion_for->$tenant SET opinion = $opinion",
+        ],
+        {"item": item, "tenant": tenant_id, "opinion": opinion},
+    )
 
 
 def get_opinion(
@@ -2348,14 +2351,18 @@ def get_opinions(
 ) -> dict[str, str]:
     """Lê pareceres em lote para múltiplos itens (chave = str(item_id)).
     Itens sem parecer não aparecem no dict — o chamador detecta ausência por
-    `key not in result`."""
+    `key not in result`. Uma única query cobre todos os itens (não N round-trips)."""
     if not items:
         return {}
+    rows = db.query(
+        "SELECT in, opinion FROM opinion_for WHERE out = $tenant AND in IN $items;",
+        {"items": items, "tenant": tenant_id},
+    )
     result: dict[str, str] = {}
-    for item in items:
-        opinion = get_opinion(db, tenant_id=tenant_id, item=item)
-        if opinion is not None:
-            result[str(item)] = opinion
+    for row in rows:
+        if row is None or row.get("opinion") is None:
+            continue
+        result[str(row["in"])] = str(row["opinion"])
     return result
 
 
@@ -2374,13 +2381,16 @@ def upsert_day_summary(
     tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
     # Converte date para datetime meia-noite UTC (SurrealDB não tem tipo date)
     day_dt = datetime.combine(day, time.min, tzinfo=timezone.utc)
-    # DELETE + CREATE: idempotente (UNIQUE INDEX garante um registro por par).
-    # O runner envolve em transação implícita; o pior caso da corrida de
-    # fallback é um texto sobrescrito, nunca um erro (ADR-0052 §III).
-    db.query(
-        "DELETE day_summary WHERE tenant_id = $tenant AND day = $day; "
-        "CREATE day_summary SET tenant_id = $tenant, day = $day, "
-        "summary = $summary, publication_count = $count;",
+    # DELETE + CREATE numa transação atômica (run_transaction): se o CREATE
+    # falhar, o DELETE reverte — o pior caso da corrida de fallback é um
+    # texto sobrescrito, nunca um erro nem um buraco (ADR-0052 §III).
+    run_transaction(
+        db,
+        [
+            "DELETE day_summary WHERE tenant_id = $tenant AND day = $day",
+            "CREATE day_summary SET tenant_id = $tenant, day = $day, "
+            "summary = $summary, publication_count = $count",
+        ],
         {"tenant": tenant_id, "day": day_dt, "summary": summary, "count": publication_count},
     )
 

@@ -793,6 +793,27 @@ def test_distiller_day_summary_malformed_does_not_fail_run() -> None:
     assert result.error is None  # run não falhou
 
 
+def test_distiller_day_summary_rate_limited_does_not_fail_run() -> None:
+    """RateLimitExhausted no resumo do dia é pulado (logado), não derruba o run —
+    os DistilledPayload já processados são devolvidos sem DaySummaryPayload."""
+    from kubo.contracts.models import DaySummaryPayload
+
+    items, outputs = _approve_and_distill_two()
+    # 5ª chamada = resumo do dia com rate limit
+    executor = _FakeExecutor(
+        outputs=outputs, errors={4: RateLimitExhausted("limited", scope="day")}
+    )
+    knowledge = _FakeKnowledge(items)
+    ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
+
+    result = DistillerWorker(executor).run(ctx)
+
+    day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
+    assert len(day_summaries) == 0
+    assert len([p for p in result.payloads if isinstance(p, DistilledPayload)]) == 2
+    assert result.error is None
+
+
 def test_distiller_day_summary_strips_structural_markdown() -> None:
     """O resumo do dia nasce sob o contrato de prosa limpa (ADR-0051 §III)."""
     from kubo.contracts.models import DaySummaryPayload

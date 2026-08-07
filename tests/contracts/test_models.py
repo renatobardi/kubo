@@ -19,6 +19,7 @@ from kubo.contracts.models import (
     EntityRef,
     ErrorInfo,
     ItemPayload,
+    OpinionPayload,
     Payload,
     PrPayload,
     ReportPayload,
@@ -277,6 +278,23 @@ def test_dispatch_payload_rejects_non_item_id() -> None:
         DispatchPayload.model_validate(_dispatch(items=["distilled:abc123"]))
     with pytest.raises(ValidationError):
         DispatchPayload.model_validate(_dispatch(items=["run:abc123"]))
+
+
+def test_opinion_payload_rejects_non_item_id() -> None:
+    """OpinionPayload rejeita item_id que não segue o padrão `item:<hex>` (ADR-0052 §I:
+    contrato de worker é fronteira de segurança — rigor máximo em validação)."""
+    with pytest.raises(ValidationError):
+        OpinionPayload.model_validate({"item_id": "distilled:abc123", "opinion": "Parecer válido"})
+    with pytest.raises(ValidationError):
+        OpinionPayload.model_validate({"item_id": "not-an-id", "opinion": "Parecer válido"})
+    with pytest.raises(ValidationError):
+        OpinionPayload.model_validate({"item_id": "", "opinion": "Parecer válido"})
+
+
+def test_opinion_payload_accepts_valid_item_id() -> None:
+    """OpinionPayload aceita item_id no formato `item:<hex>`."""
+    p = OpinionPayload.model_validate({"item_id": "item:abc123def456", "opinion": "Parecer válido"})
+    assert p.item_id == "item:abc123def456"
 
 
 def test_dispatch_report_accepts_distilled_ids() -> None:

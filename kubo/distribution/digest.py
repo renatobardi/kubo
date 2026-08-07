@@ -34,6 +34,7 @@ TELEGRAM_LIMIT = 4096
 _TITLE_CAP = 200
 _SUMMARY_CAP = 300
 _OPINION_CAP = 300
+_DAY_SUMMARY_CAP = 600
 _ENTITIES_CAP = 8
 _NO_TITLE = "(sem título)"
 
@@ -59,7 +60,16 @@ def _digest_message(selection: DigestSelectionView, base_url: str, *, is_recover
     if total == 0:
         return ""
     header = _header(total, is_recovery=is_recovery)
-    day_summary = _escape(selection.day_summary) if selection.day_summary else None
+    day_summary = (
+        _escape(_cap(selection.day_summary, _DAY_SUMMARY_CAP)) if selection.day_summary else None
+    )
+    # Se cabeçalho + resumo sozinhos não couberem, o resumo sai — a notícia vence
+    # o editorial (ADR-0052 §IV: o cabeçalho carrega a honestidade, não o resumo).
+    if (
+        day_summary
+        and len(_assemble(header, [], omitted=total, day_summary=day_summary)) > TELEGRAM_LIMIT
+    ):
+        day_summary = None
     rendered = [_render_entry(v, base_url) for v in items]
     full = _assemble(header, rendered, omitted=0, day_summary=day_summary)
     if len(full) <= TELEGRAM_LIMIT:

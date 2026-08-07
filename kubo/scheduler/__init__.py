@@ -240,10 +240,16 @@ def execute_digest_sweep_job() -> None:
 
         # Executor LLM para enriquecimento editorial (ADR-0052, KUBO-195) —
         # mesmo modelo do destilador. Criado uma vez por sweep, compartilhado
-        # entre destinos (stateless).
-        digest_executor = ApiExecutor(
-            ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
-        )
+        # entre destinos (stateless). Se a construção falhar (config inválida,
+        # env faltando), o sweep aborta com log estruturado — sem executor não
+        # há enriquecimento, mas os destinos ainda recebem o digest sem parecer.
+        try:
+            digest_executor = ApiExecutor(
+                ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
+            )
+        except Exception:  # noqa: BLE001 — setup failure, log and abort
+            _log.exception("digest_sweep_executor_setup_failed")
+            return
 
         dispatched = 0
         failed = 0

@@ -20,9 +20,11 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
+from kubo.distribution.email import SmtpConfig
 from kubo.runtime.runner import run_worker
 from kubo.store import client, destinations, knowledge, migrations
 from kubo.workers.digest import TelegramDigestWorker
+from tests.workers._digest_fixtures import _FakeOpinionExecutor
 
 pytestmark = pytest.mark.integration
 
@@ -159,23 +161,14 @@ def test_digest_vertical_rerun_sends_warning_not_silence(
 # ── Enriquecimento editorial (ADR-0052, KUBO-195) ─────────────────────────────
 
 
-class _FakeOpinionExecutor:
-    """Executor LLM fake que devolve parecer + resumo do dia canned."""
+class _RecordingEmailSender:
+    """Sender fake de e-mail: registra cada envio; nunca toca a rede."""
 
-    def __init__(self, opinion: str, day_summary: str) -> None:
-        self._opinion = opinion
-        self._day_summary = day_summary
-        self.call_count = 0
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
 
-    def complete(self, instruction: str, untrusted_content: str, response_model: type[Any]) -> Any:
-        from kubo.workers._digest_editorial import DaySummaryOutput, OpinionOutput
-
-        self.call_count += 1
-        if response_model is OpinionOutput:
-            return OpinionOutput(opinion=self._opinion)
-        if response_model is DaySummaryOutput:
-            return DaySummaryOutput(summary=self._day_summary)
-        raise ValueError(f"unexpected model: {response_model}")
+    def __call__(self, **kwargs: str) -> None:
+        self.calls.append(kwargs)
 
 
 def test_digest_vertical_with_editorial_sends_opinion_and_day_summary(
@@ -190,7 +183,7 @@ def test_digest_vertical_with_editorial_sends_opinion_and_day_summary(
     executor = _FakeOpinionExecutor(
         opinion="Parecer editorial teste — importa porque X",
         day_summary="Ontem saíram 2 publicações; o eixo foi IA aplicada",
-    )
+    )  # type: ignore[assignment]
     sender = _RecordingSender()
     worker = TelegramDigestWorker(
         destination=destinations.Destination(
@@ -235,31 +228,18 @@ def test_digest_vertical_opinion_reused_across_channels(
     """Parecer persistido pelo 1º canal é reusado pelo 2º — não recomputa (ADR-0052 §I).
     Prova o compartilhamento entre canais: dois destinos diferentes (Telegram +
     e-mail) disparam na mesma janela; o 2º não chama o LLM para itens que já
-    têm parecer, nem para o resumo do dia já persistido."""
-    from kubo.workers._digest_editorial import DaySummaryOutput, OpinionOutput
+    têm parecer, nem para o resumo do dia já persistido. O e-mail SAIU com o
+    conteúdo editorial reusado (não só não recomputou)."""
     from kubo.workers.email_digest import EmailDigestWorker
 
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", _CHAT_TOKEN)
     _seed_items(db, tenant_id, user_id, ["sobre IA"])
 
-    class _CountingExecutor:
-        def __init__(self) -> None:
-            self.opinion_calls = 0
-            self.day_summary_calls = 0
-
-        def complete(
-            self, instruction: str, untrusted_content: str, response_model: type[Any]
-        ) -> Any:
-            if response_model is OpinionOutput:
-                self.opinion_calls += 1
-                return OpinionOutput(opinion="Parecer compartilhado teste")
-            if response_model is DaySummaryOutput:
-                self.day_summary_calls += 1
-                return DaySummaryOutput(summary="Resumo do dia compartilhado")
-            raise ValueError(f"unexpected: {response_model}")
-
     # 1º canal: Telegram — computa parecer + resumo do dia
-    executor1 = _CountingExecutor()
+    executor1 = _FakeOpinionExecutor(
+        opinion="Parecer compartilhado teste",
+        day_summary="Resumo do dia compartilhado",
+    )
     sender1 = _RecordingSender()
     worker1 = TelegramDigestWorker(
         destination=destinations.Destination(
@@ -281,8 +261,11 @@ def test_digest_vertical_opinion_reused_across_channels(
     assert executor1.day_summary_calls == 1  # computou 1 resumo do dia
 
     # 2º canal: e-mail — mesmo itens, parecer já persistido pelo Telegram
-    executor2 = _CountingExecutor()
-    sender2 = _RecordingSender()
+    executor2 = _FakeOpinionExecutor(
+        opinion="Parecer compartilhado teste",
+        day_summary="Resumo do dia compartilhado",
+    )
+    sender2 = _RecordingEmailSender()
     worker2 = EmailDigestWorker(
         destination=destinations.Destination(
             id=RecordID("destination", "owneremail1"),
@@ -295,7 +278,13 @@ def test_digest_vertical_opinion_reused_across_channels(
             dispatches=0,
         ),
         base_url="https://kubo.test:3900",
-        smtp_config=None,
+        smtp_config=SmtpConfig(
+            host="smtp.test",
+            port=587,
+            user="u",
+            password="p",
+            from_address="kubo@example.com",
+        ),
         email_sender=sender2,
         executor=executor2,
     )
@@ -305,3 +294,7 @@ def test_digest_vertical_opinion_reused_across_channels(
     assert executor2.opinion_calls == 0
     # Resumo do dia já persistido — 0 chamadas na 2ª execução
     assert executor2.day_summary_calls == 0
+    # E o e-mail SAIU, com o conteúdo editorial reusado
+    assert len(sender2.calls) == 1
+    assert "Parecer compartilhado teste" in sender2.calls[0]["text_body"]
+    assert "Resumo do dia compartilhado" in sender2.calls[0]["text_body"]

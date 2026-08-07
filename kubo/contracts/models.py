@@ -191,7 +191,7 @@ class OpinionPayload(BaseModel):
 
     type: Literal["opinion"] = "opinion"
     schema_version: Literal[1] = 1
-    item_id: str
+    item_id: str = Field(pattern=r"^item:.+$")
     opinion: str = Field(min_length=1, max_length=500)
 
 

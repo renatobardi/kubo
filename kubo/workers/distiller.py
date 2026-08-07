@@ -455,11 +455,18 @@ class DistillerWorker:
         except MalformedOutputError:
             ctx.logger.warning("distiller.day_summary_malformed")
             return None
+        except RateLimitExhausted:
+            ctx.logger.warning("distiller.day_summary_rate_limited")
+            return None
 
+        summary = _strip_structural_markdown(out.summary)
+        if not summary:
+            ctx.logger.warning("distiller.day_summary_empty_after_strip")
+            return None
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
         return DaySummaryPayload(
             day=yesterday,
-            summary=_strip_structural_markdown(out.summary),
+            summary=summary,
             publication_count=counters.approved,
         )
 

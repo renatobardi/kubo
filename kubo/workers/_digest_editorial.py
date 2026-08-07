@@ -129,9 +129,9 @@ def _compute_opinion(
     ctx: RunContext,
     view: DigestView,
 ) -> str | None:
-    """Computa o parecer de um item via LLM. Devolve None se malformado ou rate
-    limit esgotado (logado, não derruba o envio — o digest sai sem parecer,
-    melhor que não sair)."""
+    """Computa o parecer de um item via LLM. Devolve None se malformado, rate
+    limit esgotado, ou se a prosa limpa resultar em texto vazio (logado, não
+    derruba o envio — o digest sai sem parecer, melhor que não sair)."""
     content = f"titulo: {view.title or ''}\nresumo: {view.summary}"
     try:
         out = executor.complete(_OPINION_INSTRUCTION, content, OpinionOutput)
@@ -141,7 +141,11 @@ def _compute_opinion(
     except RateLimitExhausted:
         ctx.logger.warning("digest.opinion_rate_limited", item_id=view.id)
         return None
-    return _strip_structural_markdown(out.opinion)
+    opinion = _strip_structural_markdown(out.opinion)
+    if not opinion:
+        ctx.logger.warning("digest.opinion_empty_after_strip", item_id=view.id)
+        return None
+    return opinion
 
 
 def _resolve_day_summary(
@@ -174,9 +178,13 @@ def _resolve_day_summary(
         ctx.logger.warning("digest.day_summary_rate_limited")
         return None, None
 
+    summary = _strip_structural_markdown(out.summary)
+    if not summary:
+        ctx.logger.warning("digest.day_summary_empty_after_strip")
+        return None, None
     payload = DaySummaryPayload(
         day=day,
-        summary=_strip_structural_markdown(out.summary),
+        summary=summary,
         publication_count=selection.total_publications,
     )
     return payload.summary, payload
