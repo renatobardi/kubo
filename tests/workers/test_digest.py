@@ -1,4 +1,4 @@
-"""Worker `telegram-digest` sob contrato (ADR-0029 §2/§3) — unit puro.
+"""Worker `telegram-digest` sob contrato (ADR-0029 §2/§3, ADR-0050) — unit puro.
 
 Sem SurrealDB, sem rede. O worker atua sobre UM destino (canal Telegram), recebe
 o endereço pelo construtor (PII, nunca na config/log/payload) e devolve um
@@ -14,7 +14,6 @@ import structlog
 from kubo.store.destinations import Destination
 from kubo.workers.digest import DigestConfig, TelegramDigestWorker
 from tests.workers._digest_fixtures import (
-    _assert_no_novelty,
     _assert_send_failure,
     _assert_sends_digest,
     _assert_wrong_channel,
@@ -23,6 +22,7 @@ from tests.workers._digest_fixtures import (
     _FakeCtx,
     _FakeKnowledge,
     _FakeSender,
+    _selection,
     _view,
 )
 
@@ -52,8 +52,8 @@ def _worker(destination: Destination, sender: _FakeSender) -> TelegramDigestWork
 
 
 def test_sends_digest_and_records_ok_dispatch() -> None:
-    views = [_view("a", 0), _view("b", 10), _view("c", 5)]
-    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": views})
+    sel = _selection([_view("a"), _view("b"), _view("c")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
     sender = _FakeSender()
     result = _worker(_destination(), sender).run(_ctx(know))
 
@@ -65,28 +65,35 @@ def test_sends_digest_and_records_ok_dispatch() -> None:
         expected_call={"token": "BOT-TOKEN", "chat_id": "42"},
     )
     d = _dispatch(result.payloads[0])
-    assert set(d.items) == {"distilled:a", "distilled:b", "distilled:c"}
+    assert set(d.items) == {"item:a", "item:b", "item:c"}
 
 
-def test_no_novelty_sends_nothing() -> None:
-    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": []})
+def test_empty_window_sends_warning_and_records_ok() -> None:
+    sel = _selection(items=[], form="empty_window", total_publications=0)
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
     sender = _FakeSender()
     result = _worker(_destination(), sender).run(_ctx(know))
 
-    _assert_no_novelty(result, sender)
+    assert len(result.payloads) == 1
+    d = _dispatch(result.payloads[0])
+    assert d.status == "ok"
+    assert d.item_count == 0
+    assert d.items == []
+    assert len(sender.calls) == 1  # aviso é enviado, não silêncio
 
 
 def test_send_failure_becomes_error_dispatch_without_exploding() -> None:
-    views = [_view("a", 0), _view("b", 3)]
-    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": views})
+    sel = _selection([_view("a"), _view("b")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
     sender = _FakeSender(fail=True)
     result = _worker(_destination(), sender).run(_ctx(know))
 
-    _assert_send_failure(result, sender, kind="telegram_send", watermark_minutes=3)
+    _assert_send_failure(result, sender, kind="telegram_send", watermark_minutes=0)
 
 
 def test_missing_token_is_send_error_not_crash() -> None:
-    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": [_view("a")]})
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
     sender = _FakeSender()
     result = _worker(_destination(), sender).run(_ctx(know, secret=None))
     d = _dispatch(result.payloads[0])
@@ -95,7 +102,8 @@ def test_missing_token_is_send_error_not_crash() -> None:
 
 
 def test_address_never_appears_in_payload_config_or_repr() -> None:
-    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": [_view("a")]})
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:a1b2c3d4e5f67890": sel})
     sender = _FakeSender()
     destination = _destination(address="55669999")
     result = TelegramDigestWorker(
@@ -111,7 +119,8 @@ def test_address_never_appears_in_payload_config_or_repr() -> None:
 
 def test_non_telegram_destination_is_not_sent() -> None:
     email = _destination(key="e1b2c3d4e5f67890", channel="email", address="owner@example.com")
-    know = _FakeKnowledge({"destination:e1b2c3d4e5f67890": [_view("a")]})
+    sel = _selection([_view("a")])
+    know = _FakeKnowledge({"destination:e1b2c3d4e5f67890": sel})
     sender = _FakeSender()
     result = _worker(email, sender).run(_ctx(know))
 

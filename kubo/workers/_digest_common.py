@@ -1,7 +1,9 @@
-"""Base compartilhada pelos workers de digest de um destino (ADR-0029/0031).
+"""Base compartilhada pelos workers de digest de um destino (ADR-0029/0031, ADR-0050).
 
-Mantém o ciclo comum: ler destilados novos, entregar, persistir payload ok/error.
-Cada canal herda `_DigestWorker` e implementa apenas `_deliver`.
+Mantém o ciclo comum: selecionar itens por janela de publicação, entregar, persistir
+payload ok/error. As quatro formas de mensagem (normal, empty_window, none_passed,
+recovery) são tratadas aqui — o worker nunca fica em silêncio (ADR-0050 revoga o
+só-se-novidade). Cada canal herda `_DigestWorker` e implementa apenas `_deliver`.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from kubo.contracts.models import DispatchPayload, ErrorInfo, RunResult, Stats
-from kubo.contracts.worker import DigestView, RunContext
+from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.errors import ContractError, SenderError
 from kubo.store.destinations import Destination
 
@@ -43,8 +45,14 @@ class _DigestWorker:
         self._base_url = base_url
 
     def run(self, ctx: RunContext) -> RunResult:
-        """Para o destino configurado, monta e envia o digest e devolve um
-        DispatchPayload ok ou error. Sem novidade devolve RunResult vazio."""
+        """Para o destino configurado, seleciona itens por janela de publicação,
+        monta e envia o digest (ou aviso), e devolve um DispatchPayload ok ou error.
+
+        As quatro formas de mensagem (ADR-0050 §VI) são tratadas aqui:
+        - normal/recovery: envia o digest com os itens selecionados.
+        - empty_window/none_passed: envia um aviso curto (item_count=0).
+        Todas produzem DispatchPayload com status=ok e watermark=window_end.
+        O só-se-novidade (ADR-0015 §V) é revogado: Kubo nunca fica em silêncio."""
         config = ctx.config
         expected = self._config_class.__name__
         if not isinstance(config, self._config_class):
@@ -53,20 +61,17 @@ class _DigestWorker:
             )
 
         destination_id = str(self._destination.id)
-        views = ctx.knowledge.distilled_for_digest(
+        selection = ctx.knowledge.items_for_digest(
             destination_id,
             config.max_items,  # type: ignore[attr-defined]
         )
-        if not views:
-            return _empty_run()
-
-        watermark = max(v.created_at for v in views)
-        items = [v.id for v in views]
+        items = [v.id for v in selection.items]
+        watermark = selection.watermark
 
         try:
-            self._deliver(ctx, views)
+            self._deliver(ctx, selection)
             payload = _payload(self._destination, self._channel, watermark, items, status="ok")
-            return _run_result(payload, failed=False, new_distilled=len(views))
+            return _run_result(payload, failed=False, new_distilled=len(selection.items))
         except SenderError as exc:
             payload = _payload(
                 self._destination,
@@ -76,10 +81,11 @@ class _DigestWorker:
                 status="error",
                 error=ErrorInfo(kind=self._error_kind, message=str(exc)[:_MSG_CAP]),
             )
-            return _run_result(payload, failed=True, new_distilled=len(views))
+            return _run_result(payload, failed=True, new_distilled=len(selection.items))
 
-    def _deliver(self, ctx: RunContext, views: list[DigestView]) -> None:
-        """Manda o digest pelo canal; levanta SenderError se não puder entregar."""
+    def _deliver(self, ctx: RunContext, selection: DigestSelectionView) -> None:
+        """Manda o digest (ou aviso) pelo canal; levanta SenderError se não puder
+        entregar. A forma da mensagem é determinada por `selection.form`."""
         raise NotImplementedError
 
     def __repr__(self) -> str:
@@ -97,7 +103,7 @@ def _payload(
     status: Literal["ok", "error"],
     error: ErrorInfo | None = None,
 ) -> DispatchPayload:
-    """DispatchPayload de entrega (ok ou error) com watermark da tentativa."""
+    """DispatchPayload de entrega (ok ou error) com watermark da janela (ADR-0050 §IV)."""
     return DispatchPayload(
         destination=str(destination.id),
         channel=channel,
@@ -120,11 +126,3 @@ def _run_result(payload: DispatchPayload, *, failed: bool, new_distilled: int) -
         }
     )
     return RunResult(payloads=[payload], stats=stats, error=payload.error)
-
-
-def _empty_run() -> RunResult:
-    """RunResult para quando não há novidade (só-se-novidade, ADR-0015 §V)."""
-    return RunResult(
-        payloads=[],
-        stats=Stats.model_validate({"new_distilled": 0, "dispatched": 0, "failed": 0}),
-    )

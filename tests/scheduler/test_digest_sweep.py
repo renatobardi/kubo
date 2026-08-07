@@ -75,7 +75,7 @@ def test_dispatches_one_run_per_active_destination(monkeypatch: pytest.MonkeyPat
     assert len(calls) == 2
     assert calls[0][0]._destination.id == destinations[0].id
     assert calls[1][0]._destination.id == destinations[1].id
-    assert all(c[1] == {"max_items": 50} for c in calls)
+    assert all(c[1] == {"max_items": 5} for c in calls)  # telegram = 5 (ADR-0050 §V)
 
 
 def test_zero_runs_when_distribution_paused(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from kubo.contracts.models import WorkerManifest
-from kubo.contracts.worker import DigestView, RunContext
+from kubo.contracts.worker import DigestSelectionView, RunContext
 from kubo.distribution.digest_email import build_email_digest
 from kubo.distribution.email import SmtpConfig, send_email
 from kubo.errors import SenderError
@@ -54,8 +54,9 @@ class EmailDigestWorker(_DigestWorker):
         self._smtp_config = smtp_config
         self._email_sender: EmailSender = email_sender or send_email
 
-    def _deliver(self, ctx: RunContext, views: list[DigestView]) -> None:
-        """Monta o e-mail e envia; levanta SenderError se não puder entregar."""
+    def _deliver(self, ctx: RunContext, selection: DigestSelectionView) -> None:
+        """Monta o e-mail (digest ou aviso) e envia; levanta SenderError se não
+        puder entregar."""
         del ctx  # não precisamos de integrações para e-mail
         if self._destination.channel != "email":
             raise SenderError(
@@ -63,7 +64,7 @@ class EmailDigestWorker(_DigestWorker):
             )
         if self._smtp_config is None:
             raise SenderError("configuração SMTP não fornecida")
-        built = build_email_digest(views, self._base_url)
+        built = build_email_digest(selection, self._base_url)
         if built is None:
             return
         subject, text_body, html_body = built
