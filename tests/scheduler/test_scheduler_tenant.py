@@ -26,8 +26,8 @@ _UID = "user:breakglass-owner"
 
 
 class _FakeUser:
-    def __init__(self, uid: str) -> None:
-        self.id = RecordID("user", "breakglass-owner")
+    def __init__(self, uid: str, *, user_id: RecordID = _USER) -> None:
+        self.id = user_id
         self.firebase_uid = uid
 
 
@@ -173,11 +173,52 @@ def test_pinned_does_not_log_warning(_patch_tenancy: None, monkeypatch: pytest.M
     assert len(fallback_warnings) == 0
 
 
-def test_partial_env_vars_fall_back(_patch_tenancy: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Só tenant setado (uid vazio) → fallback, não erro."""
+def test_partial_env_vars_raise_config_error(
+    _patch_tenancy: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Só tenant setado (uid vazio) → ConfigError, não fallback silencioso."""
     monkeypatch.setenv("KUBO_SCHEDULER_TENANT_ID", "tenant:breakglass")
     monkeypatch.delenv("KUBO_SCHEDULER_USER_UID", raising=False)
     db = _make_db()
-    tenant, user = resolve_scheduler_tenant_and_user(db)
-    assert tenant == _TENANT
-    assert user == _USER
+    with pytest.raises(ConfigError, match="KUBO_SCHEDULER_USER_UID is empty"):
+        resolve_scheduler_tenant_and_user(db)
+
+
+def test_partial_env_vars_uid_only_raises(
+    _patch_tenancy: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Só uid setado (tenant vazio) → ConfigError."""
+    monkeypatch.delenv("KUBO_SCHEDULER_TENANT_ID", raising=False)
+    monkeypatch.setenv("KUBO_SCHEDULER_USER_UID", _UID)
+    db = _make_db()
+    with pytest.raises(ConfigError, match="KUBO_SCHEDULER_TENANT_ID is empty"):
+        resolve_scheduler_tenant_and_user(db)
+
+
+def test_user_not_owner_of_tenant_raises(
+    _patch_tenancy: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User que não é owner do tenant pinado → ConfigError (CR2)."""
+    other_user = _FakeUser("other:uid", user_id=RecordID("user", "other-owner"))
+
+    def fake_get_user_by_firebase_uid(db: Any, uid: str) -> Any:
+        if uid == "other:uid":
+            return other_user
+        return None
+
+    def fake_get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
+        return _USER  # owner is _USER, not other_user
+
+    monkeypatch.setattr(
+        "kubo.scheduler.tenant.tenancy_store.get_user_by_firebase_uid",
+        fake_get_user_by_firebase_uid,
+    )
+    monkeypatch.setattr(
+        "kubo.scheduler.tenant.tenancy_store.get_tenant_owner",
+        fake_get_tenant_owner,
+    )
+    monkeypatch.setenv("KUBO_SCHEDULER_TENANT_ID", "tenant:other")
+    monkeypatch.setenv("KUBO_SCHEDULER_USER_UID", "other:uid")
+    db = _make_db()
+    with pytest.raises(ConfigError, match="is not the owner of tenant"):
+        resolve_scheduler_tenant_and_user(db)

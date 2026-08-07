@@ -26,10 +26,21 @@ def resolve_scheduler_tenant_and_user(db: Any) -> tuple[RecordID, RecordID]:
 
     KUBO-198: o fallback (2) é instável (`ORDER BY id LIMIT 1` pega qualquer
     tenant). Quando usado, loga um warning explícito para que a operação saiba
-    que o scheduler não está pinado — em produção, sempre setar as env vars."""
+    que o scheduler não está pinado — em produção, sempre setar as env vars.
+    Config parcial (só uma das duas vars) é erro, não fallback."""
     tenant_raw = os.environ.get("KUBO_SCHEDULER_TENANT_ID", "").strip()
     uid = os.environ.get("KUBO_SCHEDULER_USER_UID", "").strip()
-    if tenant_raw and uid:
+    if tenant_raw or uid:
+        if not tenant_raw:
+            raise ConfigError(
+                "KUBO_SCHEDULER_USER_UID set but KUBO_SCHEDULER_TENANT_ID is empty; "
+                "set both or neither"
+            )
+        if not uid:
+            raise ConfigError(
+                "KUBO_SCHEDULER_TENANT_ID set but KUBO_SCHEDULER_USER_UID is empty; "
+                "set both or neither"
+            )
         return _resolve_from_env(db, tenant_raw, uid)
     _log.warning(
         "scheduler_tenant_fallback",
@@ -46,6 +57,9 @@ def _resolve_from_env(db: Any, tenant_raw: str, uid: str) -> tuple[RecordID, Rec
     tenant = tenancy_store.parse_tenant_id(tenant_raw)
     if tenant is None:
         raise ConfigError(f"invalid KUBO_SCHEDULER_TENANT_ID: {tenant_raw}")
+    owner = tenancy_store.get_tenant_owner(db, tenant)
+    if owner != user.id:
+        raise ConfigError(f"KUBO_SCHEDULER_USER_UID '{uid}' is not the owner of tenant {tenant}")
     return tenant, user.id
 
 
