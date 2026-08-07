@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
+import structlog
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
 from kubo.store import tenancy as tenancy_store
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 def resolve_scheduler_tenant_and_user(db: Any) -> tuple[RecordID, RecordID]:
@@ -32,12 +32,9 @@ def resolve_scheduler_tenant_and_user(db: Any) -> tuple[RecordID, RecordID]:
     if tenant_raw and uid:
         return _resolve_from_env(db, tenant_raw, uid)
     _log.warning(
-        "scheduler.tenant.fallback",
-        extra={
-            "event": "scheduler_tenant_fallback",
-            "reason": "KUBO_SCHEDULER_TENANT_ID/KUBO_SCHEDULER_USER_UID not set; "
-            "using unstable get_first_tenant (ORDER BY id) — pin env vars in production",
-        },
+        "scheduler_tenant_fallback",
+        reason="KUBO_SCHEDULER_TENANT_ID/KUBO_SCHEDULER_USER_UID not set; "
+        "using unstable get_first_tenant (ORDER BY id) — pin env vars in production",
     )
     return _resolve_first_tenant_owner(db)
 

@@ -25,32 +25,15 @@ _USER = RecordID("user", "breakglass-owner")
 _UID = "user:breakglass-owner"
 
 
-def _mock_db(*, tenant_id: RecordID = _TENANT, user_id: RecordID = _USER) -> Any:
-    """DB mock que simula get_user_by_firebase_uid e get_first_tenant."""
-    db = MagicMock()
-
-    def get_user_by_firebase_uid(_db: Any, uid: str) -> Any:
-        if uid == _UID:
-            m = MagicMock()
-            m.id = user_id
-            return m
-        return None
-
-    # tenancy_store functions are called as module functions, not methods
-    db._get_user_by_firebase_uid = get_user_by_firebase_uid
-    return db
-
-
 class _FakeUser:
     def __init__(self, uid: str) -> None:
         self.id = RecordID("user", "breakglass-owner")
         self.firebase_uid = uid
 
 
-def _make_db(*, user_found: bool = True, tenant_id: RecordID = _TENANT) -> Any:
-    """Cria um mock de db que responde às chamadas de tenancy_store."""
-    db = MagicMock()
-    return db
+def _make_db() -> Any:
+    """Mock de db — o mocking real acontece no fixture _patch_tenancy."""
+    return MagicMock()
 
 
 @pytest.fixture
@@ -160,35 +143,32 @@ def test_fallback_resolves_first_tenant(
     assert user == _USER
 
 
-def test_fallback_logs_warning(
-    _patch_tenancy: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_fallback_logs_warning(_patch_tenancy: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hardening (KUBO-198): fallback sem env vars loga warning explícito."""
+    from structlog.testing import capture_logs
+
     monkeypatch.delenv("KUBO_SCHEDULER_TENANT_ID", raising=False)
     monkeypatch.delenv("KUBO_SCHEDULER_USER_UID", raising=False)
     db = _make_db()
-    resolve_scheduler_tenant_and_user(db)
-    # O warning deve mencionar que o scheduler não está pinado e o fallback
-    # instável (ORDER BY id) está sendo usado
-    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    with capture_logs() as logs:
+        resolve_scheduler_tenant_and_user(db)
+    warnings = [e for e in logs if e["log_level"] == "warning"]
     assert len(warnings) >= 1
-    msg = warnings[0].getMessage()
-    assert "KUBO_SCHEDULER_TENANT_ID" in msg or "fallback" in msg.lower()
+    assert warnings[0]["event"] == "scheduler_tenant_fallback"
+    assert "KUBO_SCHEDULER" in warnings[0]["reason"]
 
 
-def test_pinned_does_not_log_warning(
-    _patch_tenancy: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_pinned_does_not_log_warning(_patch_tenancy: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Scheduler pinado (env vars setadas) NÃO loga warning de fallback."""
+    from structlog.testing import capture_logs
+
     monkeypatch.setenv("KUBO_SCHEDULER_TENANT_ID", "tenant:breakglass")
     monkeypatch.setenv("KUBO_SCHEDULER_USER_UID", _UID)
     db = _make_db()
-    resolve_scheduler_tenant_and_user(db)
+    with capture_logs() as logs:
+        resolve_scheduler_tenant_and_user(db)
     fallback_warnings = [
-        r
-        for r in caplog.records
-        if r.levelname == "WARNING"
-        and ("fallback" in r.getMessage().lower() or "KUBO_SCHEDULER" in r.getMessage())
+        e for e in logs if e["log_level"] == "warning" and e["event"] == "scheduler_tenant_fallback"
     ]
     assert len(fallback_warnings) == 0
 
