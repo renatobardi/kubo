@@ -31,10 +31,12 @@ from kubo.errors import (
     format_validation_error,
 )
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.runtime.integrations import load_integrations, resolve_integrations
 from kubo.runtime.personas import load_persona
 from kubo.store import client, knowledge
 from kubo.store.knowledge import SourceDetail, SourceStat
 from kubo.workers import feed as feed_mod
+from kubo.workers import github_releases as github_releases_mod
 from kubo.workers.feed import FeedPreview, preview_feed
 from kubo.workers.finder import Finder
 
@@ -184,9 +186,9 @@ class EditSource(BaseModel):
 
 
 class SourceTestForm(BaseModel):
-    """Entrada validada do form "Testar" (KUBO-50): modo + valor digitado."""
+    """Entrada validada do form "Testar" (KUBO-50 RSS; KUBO-197 `repo`): modo + valor digitado."""
 
-    mode: Literal["feed", "site", "name"]
+    mode: Literal["feed", "site", "name", "repo"]
     value: str
 
     @field_validator("value", mode="after")
@@ -665,13 +667,16 @@ def _failure_steps(steps: list[tuple[str, str]]) -> dict[str, Any]:
     return {"ok": False, "steps": [{"label": lbl, "detail": det} for lbl, det in steps]}
 
 
-def _success_ctx(url: str, preview: FeedPreview, via: str | None) -> dict[str, Any]:
+def _success_ctx(
+    url: str, preview: FeedPreview, via: str | None, *, label: str = "Feed encontrado"
+) -> dict[str, Any]:
     return {
         "ok": True,
         "via": via,
         "discovered_url": url,
         "title": preview.title or "",
         "entries": preview.entries,
+        "label": label,
     }
 
 
@@ -761,6 +766,56 @@ def _test_name_mode(request: Request, value: str) -> Response:
         )
 
 
+_LABEL_REPO = "Repositório do GitHub"
+
+
+def _resolve_github_readonly(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> tuple[str, str]:
+    """Resolve `(base_url, token)` da integração `github-readonly` do TENANT ativo —
+    a mesma integração que o worker `github-releases` usa pra coletar de verdade
+    (KUBO-197). Espelha `flow_runner._forge_readonly_integration` (mesmo par
+    load/resolve), sem importar dali: domínio de promoção de código não tem relação
+    com cadastro de fonte, e a função é pequena o bastante pra não valer o
+    acoplamento entre módulos não relacionados."""
+    catalog = load_integrations(db, tenant_id, user_id)
+    resolved = resolve_integrations(["github-readonly"], catalog, db=db, tenant_id=tenant_id)[
+        "github-readonly"
+    ]
+    if not resolved.secret:
+        raise ConfigError("integração 'github-readonly' sem token resolvido")
+    return resolved.base_url or "https://api.github.com", resolved.secret
+
+
+def _test_repo_mode(request: Request, value: str) -> Response:
+    """Modo (d): repositório do GitHub — normaliza e busca as releases mais recentes,
+    sem persistir nada (KUBO-197). Reaproveita o padrão do KUBO-50: mesma
+    `FeedPreview`, mesmo par de exceção `ValueError`/`FetchError`, mesmo snippet
+    HTML — só o rótulo de sucesso muda (`label`, via `_success_ctx`)."""
+    try:
+        canonical = _github_canonical(value)
+    except ValueError as exc:
+        return _render_test_result(request, _failure_ctx(_LABEL_REPO, str(exc)))
+
+    with client.connect() as db:
+        ctx = resolve_session(request, db)
+        if ctx is None:
+            return PlainTextResponse(_DENIED, status_code=403)
+        try:
+            base_url, token = _resolve_github_readonly(
+                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+            )
+        except ConfigError as exc:
+            return _render_test_result(request, _failure_ctx(_LABEL_REPO, str(exc)))
+
+    repo = canonical.removeprefix("https://github.com/")
+    try:
+        preview = github_releases_mod.preview_releases(repo, base_url=base_url, token=token)
+    except (ValueError, github_releases_mod.FetchError) as exc:
+        return _render_test_result(request, _failure_ctx(_LABEL_REPO, str(exc)))
+    return _render_test_result(
+        request, _success_ctx(canonical, preview, via=None, label="Repositório encontrado")
+    )
+
+
 @router.post("/test")
 def test_source(
     request: Request,
@@ -768,10 +823,11 @@ def test_source(
     canonical: Annotated[str, Form()] = "",
     csrf: Annotated[str, Form()] = "",
 ) -> Response:
-    """Testa/descobre um feed RSS sem persistir (dry-run). Retorna HTML parcial para HTMX.
+    """Testa/descobre uma fonte sem persistir (dry-run). Retorna HTML parcial para HTMX.
 
-    Modos: `feed` (URL direta), `site` (autodiscovery), `name` (finder + fallback).
-    Falhas renderizam o snippet de erro; sucesso devolve a URL descoberta + amostra de entradas
+    Modos: `feed` (URL direta), `site` (autodiscovery), `name` (finder + fallback) — os
+    3 de RSS (KUBO-50); `repo` (owner/name do GitHub, KUBO-197). Falhas renderizam o
+    snippet de erro; sucesso devolve a URL/canonical descoberta + amostra de entradas
     e atualiza os campos do form via hx-swap-oob."""
     if not verify_csrf(request, csrf):
         return PlainTextResponse("CSRF inválido — recarregue a página.", status_code=403)
@@ -786,4 +842,6 @@ def test_source(
         return _test_feed_mode(request, payload.value)
     if payload.mode == "site":
         return _test_site_mode(request, payload.value)
+    if payload.mode == "repo":
+        return _test_repo_mode(request, payload.value)
     return _test_name_mode(request, payload.value)

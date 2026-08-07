@@ -64,6 +64,7 @@ from kubo.contracts.models import (
 )
 from kubo.contracts.worker import RunContext
 from kubo.errors import ConfigError, ContractError
+from kubo.workers.feed import FeedPreview
 
 _CONTENT_CAP = 65536  # mesmo teto do FeedWorker — folgado p/ release notes longas
 _TITLE_CAP = 500  # título é rótulo, não corpo
@@ -232,6 +233,35 @@ def _fetch_releases(base_url: str, token: str, owner: str, repo: str) -> list[di
     url = f"{base_url}/repos/{owner}/{repo}/releases"
     with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
         return _stream_json_list(client, url, _headers(token), {"per_page": _PER_PAGE})
+
+
+FetchError = _FetchError  # alias público para call sites fora do worker (espelha feed.py)
+
+
+def preview_releases(repo: str, *, base_url: str, token: str, max_entries: int = 3) -> FeedPreview:
+    """Busca até `max_entries` releases qualificadas (draft/prerelease pulados, mesmo
+    filtro do worker real) do repo, sem persistir nada — dry-run de teste de cadastro
+    (KUBO-197), espelha `preview_feed` do `FeedWorker` (mesmo padrão do KUBO-50,
+    reaproveitado em vez de duplicado: mesma `FeedPreview`, mesmo par
+    `ValueError`/`FetchError` que a rota de teste já sabe tratar).
+
+    `repo` shape inválido levanta `ValueError` ANTES de qualquer fetch — mesma
+    validação estrutural que `GithubReleasesConfig` já exige na construção."""
+    if not _is_valid_repo_shape(repo):
+        raise ValueError("repositório do GitHub inválido: use owner/name")
+    owner, _, name = repo.partition("/")
+    releases = _fetch_releases(base_url, token, owner, name)
+    entries: list[dict[str, str]] = []
+    for release in releases:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        title = release.get("name") or release.get("tag_name") or ""
+        entries.append(
+            {"title": _clean(title, _TITLE_CAP), "url": _html_url(release.get("html_url")) or ""}
+        )
+        if len(entries) >= max_entries:
+            break
+    return FeedPreview(title=repo, entries=entries)
 
 
 def _html_url(value: Any) -> str | None:
