@@ -55,7 +55,12 @@
         body.append(ev.submitter.name, ev.submitter.value);
       }
       // formAction do botão sobrescreve o action do form.
-      var action = (ev.submitter && ev.submitter.formAction) || form.action;
+      // Usa getAttribute('action') em vez de form.action (propriedade IDL) porque
+      // alguns browsers resolvem form.action para a URL da página quando o form
+      // está dentro de <li> ou <details> — o atributo cru é o source of truth.
+      var action = (ev.submitter && ev.submitter.getAttribute('formaction'))
+        || form.getAttribute('action')
+        || form.action;
 
       fetch(action, {
         method: 'POST',
