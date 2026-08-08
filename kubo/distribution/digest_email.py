@@ -1,9 +1,10 @@
 """Builder puro do digest de e-mail (ADR-0031, ADR-0050, KUBO-196): itens → (assunto, texto, HTML).
 
-Identidade Direção B v2 (canônica): preto mono, stone quente, Inter, sakura SVG inline.
-Sem imagem externa, anexo embutido ou arquivo hospedado — a sakura é SVG inline e a
-marca é texto. Dark mode via <style> no <head> com prefers-color-scheme. Mobile via
-max-width:600px. Todo conteúdo dinâmico é escapado; o corpo textual fica cru.
+Identidade do design system: glifo sakura em tile near-black, card com ring
+(box-shadow inset), MSO/Outlook compat, preheader, dark mode, mobile. O shell
+HTML vive em `email_template.wrap_email`; este módido monta o body (day_summary
++ entries como <tr>) e passa ao wrapper. Todo conteúdo dinâmico é escapado; o
+corpo textual fica cru.
 
 As quatro formas de mensagem (ADR-0050 §VI): normal/recovery enviam o digest;
 empty_window/none_passed enviam um aviso curto. O worker nunca fica em silêncio.
@@ -16,20 +17,21 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from kubo.contracts.worker import DigestSelectionView, DigestView
+from kubo.distribution.email_template import (
+    _BORDER,
+    _FINE,
+    _FONT,
+    _INK,
+    _MUTED,
+    _SECONDARY,
+    wrap_email,
+)
 
 _TITLE_CAP = 200
 _SUMMARY_CAP = 300
 _OPINION_CAP = 300
 _ENTITIES_CAP = 8
 _NO_TITLE = "(sem título)"
-
-# Direção B v2 — preto mono, stone quente (oklch aproximado em hex para email).
-# Cores dark são hardcoded no <style> media query (CSS não pode usar vars Python).
-_INK = "#1c1917"  # foreground (stone-900)
-_BG = "#f5f5f4"  # background (stone-100)
-_CARD = "#ffffff"  # card
-_BORDER = "#e7e5e4"  # border (stone-200)
-_MUTED = "#78716c"  # muted-foreground (stone-500)
 
 
 def build_email_digest(
@@ -39,8 +41,7 @@ def build_email_digest(
 
     ADR-0050 §VI: as quatro formas de mensagem. Retorna sempre uma tupla —
     o worker nunca fica em silêncio (só-se-novidade revogado). ADR-0052: inclui
-    o resumo do dia (bloco de abertura) e o parecer por item (em cada entry).
-    KUBO-196: identidade Direção B v2 — sakura SVG inline, preto mono, dark mode."""
+    o resumo do dia (bloco de abertura) e o parecer por item (em cada entry)."""
     form = selection.form
     if form in ("empty_window", "none_passed"):
         return _warning_email(selection, base_url)
@@ -65,21 +66,26 @@ def _warning_email(selection: DigestSelectionView, base_url: str) -> tuple[str, 
         n = selection.total_publications
         pub = "publicação" if n == 1 else "publicações"
         subject = f"Kubo · {n} {pub}, nenhuma passou o corte"
-        text = (
-            f"Kubo · {n} {pub} no período, nenhuma passou o corte de relevância.\n\n"
-            f"Ver na UI: {base_url}/distilled"
-        )
+        message = f"Kubo · {n} {pub} no período, nenhuma passou o corte de relevância."
+        heading = f"Kubo · {n} {pub}, nenhuma passou o corte"
     else:
         subject = "Kubo · sem novidades no período"
-        text = f"Kubo · sem novidades no período.\n\nVer na UI: {base_url}/distilled"
-    warning_html = (
-        '<p style="margin:0 0 8px 0;font-size:14px;">' + html.escape(text, quote=False) + "</p>"
+        message = "Kubo · sem novidades no período."
+        heading = "Kubo · sem novidades no período"
+    text = f"{message}\n\nVer na UI: {base_url}/distilled"
+    warning_body = (
+        '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
+        f'<p class="kubo-muted" style="margin:0 0 8px 0;font-family:{_FONT};'
+        f'font-size:14px;line-height:22px;color:{_SECONDARY};">'
+        + html.escape(message, quote=False)
+        + "</p>\n"
+        "</td></tr>\n"
     )
-    html_body = _wrap_email(
-        heading="Kubo · sem novidades",
-        day_summary="",
-        entries=warning_html,
+    html_body = wrap_email(
+        heading=html.escape(heading, quote=False),
+        body_html=warning_body,
         footer_link=html.escape(f"{base_url}/distilled", quote=True),
+        preheader=html.escape(heading, quote=False),
     )
     return subject, text, html_body
 
@@ -132,22 +138,36 @@ def _build_html(
     plural = "novo" if total == 1 else "novos"
     label = "recuperação · " if is_recovery else ""
     heading = f"Kubo · {label}{total} {plural} no acervo"
-    entries = [_html_entry(v, base_url) for v in views]
-    entries_html = "\n".join(entries)
-    day_summary_html = ""
+    parts: list[str] = []
     if day_summary:
-        day_summary_html = (
-            '<p class="email-muted" style="margin:0 0 20px 0;font-size:14px;'
-            f'line-height:1.5;color:{_MUTED};font-style:italic;">'
-            + html.escape(day_summary, quote=False)
-            + "</p>\n"
-        )
-    return _wrap_email(
+        parts.append(_day_summary_tr(html.escape(day_summary, quote=False)))
+    for v in views:
+        parts.append(_html_entry(v, base_url))
+        parts.append(_DIVIDER_TR)
+    body_html = "\n".join(parts)
+    return wrap_email(
         heading=html.escape(heading, quote=False),
-        day_summary=day_summary_html,
-        entries=entries_html,
+        body_html=body_html,
         footer_link=html.escape(f"{base_url}/distilled", quote=True),
+        preheader=html.escape(heading, quote=False),
     )
+
+
+def _day_summary_tr(summary: str) -> str:
+    """Resumo do dia como <tr> — bloco de abertura antes das entries (ADR-0052 §II)."""
+    return (
+        '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
+        f'<div class="kubo-muted" style="font-family:{_FONT};'
+        f'font-size:14px;line-height:22px;color:{_SECONDARY};font-style:italic;">{summary}</div>\n'
+        "</td></tr>\n" + _DIVIDER_TR
+    )
+
+
+_DIVIDER_TR = (
+    '<tr><td class="kubo-pad" style="padding:0 40px;">'
+    f'<div class="kubo-border" style="border-top:1px solid {_BORDER};'
+    'font-size:0;line-height:0;">&nbsp;</div></td></tr>\n'
+)
 
 
 def _format_published_at(dt: datetime) -> str:
@@ -169,160 +189,54 @@ def _format_published_at(dt: datetime) -> str:
     return f"{dt.day:02d} {months[dt.month - 1]} {dt.year} · {dt.hour:02d}:{dt.minute:02d}"
 
 
-# --- Sakura SVG (5 pétalas, traço mono — Direção B v2) -----------------------
-
-_SAKURA_SVG = (
-    '<svg width="28" height="28" viewBox="0 0 100 100" fill="none" '
-    'xmlns="http://www.w3.org/2000/svg" '
-    'style="display:inline-block;vertical-align:middle;">\n'
-)
-_PETAL = (
-    '<path class="sakura-petal" d="M50,50 C38,43 33,27 39,15 C42,8 47,10 50,17 '
-    'C53,10 58,8 61,15 C67,27 62,43 50,50 Z" '
-    'fill="#f4c9d4" stroke="#1c1917" stroke-width="6" '
-    'stroke-linejoin="round" transform="rotate({angle} 50 50)"/>\n'
-)
-_STAMEN_LINE = (
-    '<line class="sakura-ink" x1="50" y1="50" x2="50" y2="34" stroke="#1c1917" '
-    'stroke-width="3.3" stroke-linecap="round" '
-    'transform="rotate({angle} 50 50)"/>\n'
-)
-_STAMEN_DOT = (
-    '<circle class="sakura-ink" cx="50" cy="33" r="3" fill="#1c1917" '
-    'transform="rotate({angle} 50 50)"/>\n'
-)
-_SAKURA_SVG += "".join(_PETAL.format(angle=a) for a in (0, 72, 144, 216, 288))
-_SAKURA_SVG += "".join(_STAMEN_LINE.format(angle=a) for a in (36, 108, 180, 252, 324))
-_SAKURA_SVG += "".join(_STAMEN_DOT.format(angle=a) for a in (36, 108, 180, 252, 324))
-_SAKURA_SVG += '<circle class="sakura-ink" cx="50" cy="50" r="5.4" fill="#1c1917"/>\n</svg>'
-
-
-def _wrap_email(*, heading: str, day_summary: str, entries: str, footer_link: str) -> str:
-    """Embrulha conteúdo no template HTML com identidade Direção B v2."""
-    return _HTML_TEMPLATE.format(
-        heading=heading,
-        day_summary=day_summary,
-        entries=entries,
-        footer_link=footer_link,
-        sakura=_SAKURA_SVG,
-        tagline="The art of getting things done",
-        ink=_INK,
-        bg=_BG,
-        card=_CARD,
-        border=_BORDER,
-        muted=_MUTED,
-    )
-
-
-_HTML_TEMPLATE = (
-    "<!DOCTYPE html>\n"
-    '<html lang="pt-BR">\n'
-    "<head>\n"
-    '  <meta charset="UTF-8">\n'
-    '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-    "  <title>Kubo digest</title>\n"
-    "  <style>\n"
-    "    @media (prefers-color-scheme: dark) {{\n"
-    "      .email-body {{ background-color:#1c1917 !important; }}\n"
-    "      .email-card {{ background-color:#292524 !important; "
-    "border-color:rgba(255,255,255,0.10) !important; }}\n"
-    "      .email-ink {{ color:#fafaf9 !important; }}\n"
-    "      .email-muted {{ color:#a8a29e !important; }}\n"
-    "      .email-border {{ border-color:rgba(255,255,255,0.10) !important; }}\n"
-    "      .email-link {{ color:#fafaf9 !important; }}\n"
-    "      .sakura-petal {{ fill:none !important; stroke:#f4c9d4 !important; }}\n"
-    "      .sakura-ink {{ stroke:#f4c9d4 !important; fill:#f4c9d4 !important; }}\n"
-    "    }}\n"
-    "    @media (max-width: 600px) {{\n"
-    "      .email-card {{ border-radius:0 !important; "
-    "max-width:100% !important; }}\n"
-    "      .email-pad {{ padding:16px !important; }}\n"
-    "      .email-h1 {{ font-size:16px !important; }}\n"
-    "      .email-h2 {{ font-size:15px !important; }}\n"
-    "    }}\n"
-    "  </style>\n"
-    "</head>\n"
-    '<body class="email-body" style="margin:0;padding:0;background-color:{bg};'
-    'font-family:Inter,Arial,sans-serif;color:{ink};">\n'
-    '  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" '
-    'border="0">\n'
-    "    <tr>\n"
-    '      <td align="center" style="padding:24px 12px;">\n'
-    '        <table role="presentation" width="100%" '
-    'cellspacing="0" cellpadding="0" border="0" '
-    'class="email-card" style="max-width:600px;background:{card};'
-    'border-radius:14px;border:1px solid {border};">\n'
-    "          <tr>\n"
-    '            <td class="email-pad" style="padding:24px;">\n'
-    '              <div style="margin:0 0 20px 0;">{sakura}'
-    '<span class="email-ink" style="font-size:18px;font-weight:600;color:{ink};'
-    'vertical-align:middle;margin-left:8px;">Kubo</span><br>'
-    '<span class="email-muted" style="font-size:12px;color:{muted};'
-    'vertical-align:middle;">{tagline}</span></div>\n'
-    '              <h1 class="email-h1 email-ink" style="margin:0 0 20px 0;'
-    'font-size:18px;font-weight:600;color:{ink};">{heading}</h1>\n'
-    "              {day_summary}"
-    "              {entries}\n"
-    '              <p class="email-muted" style="margin:24px 0 0 0;'
-    'font-size:12px;color:{muted};">'
-    '<a href="{footer_link}" class="email-link" '
-    'style="color:{ink};text-decoration:none;">Ver na UI</a></p>\n'
-    "            </td>\n"
-    "          </tr>\n"
-    "        </table>\n"
-    "      </td>\n"
-    "    </tr>\n"
-    "  </table>\n"
-    "</body>\n"
-    "</html>"
-)
-
-
 def _html_entry(view: DigestView, base_url: str) -> str:
     title = html.escape(_cap(view.title or _NO_TITLE, _TITLE_CAP), quote=False)
     summary = html.escape(_cap(view.summary, _SUMMARY_CAP), quote=False)
     link = html.escape(_link(view, base_url), quote=True)
     date_str = html.escape(_format_published_at(view.published_at), quote=False)
-    opinion_block = ""
+    opinion_html = ""
     if view.opinion:
         opinion = html.escape(_cap(view.opinion, _OPINION_CAP), quote=False)
-        opinion_block = (
-            f'<p class="email-muted" style="margin:8px 0 0 0;font-size:13px;'
-            f'line-height:1.5;color:{_MUTED};font-style:italic;">Parecer: {opinion}</p>'
+        opinion_html = (
+            f'<div class="kubo-muted" style="margin-top:8px;font-family:{_FONT};'
+            f"font-size:13px;line-height:20px;color:{_SECONDARY};"
+            f'font-style:italic;">Parecer: {opinion}</div>\n'
         )
-    entities_block = ""
+    entities_html = ""
     if view.entities:
         names = ", ".join(html.escape(e, quote=False) for e in view.entities[:_ENTITIES_CAP])
-        entities_block = (
-            f'<p class="email-muted" style="margin:8px 0 0 0;font-size:12px;'
-            f'color:{_MUTED};">Entidades: {names}</p>'
+        entities_html = (
+            f'<div class="kubo-muted" style="margin-top:8px;font-family:{_FONT};'
+            f'font-size:12px;color:{_MUTED};">Entidades: {names}</div>\n'
         )
-    return _ENTRY_TEMPLATE.format(
+    return _ENTRY_TR.format(
         link=link,
         title=title,
         date=date_str,
         summary=summary,
-        opinion=opinion_block,
-        entities=entities_block,
+        opinion=opinion_html,
+        entities=entities_html,
+        font=_FONT,
         ink=_INK,
-        muted=_MUTED,
-        border=_BORDER,
+        secondary=_SECONDARY,
+        fine=_FINE,
     )
 
 
-_ENTRY_TEMPLATE = (
-    '<div class="email-border" style="margin-bottom:20px;padding-bottom:20px;'
-    'border-bottom:1px solid {border};">\n'
-    '  <h2 class="email-h2" style="margin:0 0 4px 0;font-size:16px;font-weight:600;">'
-    '<a href="{link}" class="email-link" style="color:{ink};text-decoration:none;">'
-    "{title}</a></h2>\n"
-    '  <p class="email-muted" style="margin:0 0 8px 0;font-size:12px;color:{muted};'
-    '">{date}</p>\n'
-    '  <p class="email-ink" style="margin:0 0 8px 0;font-size:14px;line-height:1.5;">'
-    "{summary}</p>\n"
-    "  {opinion}\n"
-    "  {entities}\n"
-    "</div>"
+_ENTRY_TR = (
+    '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+    '<tr><td style="padding-bottom:20px;">\n'
+    '<a href="{link}" class="kubo-fg" style="font-family:{font};'
+    'font-size:15px;font-weight:bold;color:{ink};text-decoration:none;">{title}</a>\n'
+    '<div class="kubo-muted" style="margin-top:4px;font-family:{font};'
+    'font-size:13px;line-height:20px;color:{secondary};">{summary}</div>\n'
+    '<div style="margin-top:6px;font-family:{font};'
+    'font-size:12px;color:{fine};">{date}</div>\n'
+    "{opinion}"
+    "{entities}"
+    "</td></tr></table>\n"
+    "</td></tr>\n"
 )
 
 

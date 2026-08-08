@@ -1,8 +1,9 @@
 """Builder puro do digest de e-mail (ADR-0031, ADR-0050): selection → (assunto, texto, HTML).
 
-HTML inline com identidade visual mínima; conteúdo dinâmico escapado. As quatro
-formas de mensagem (ADR-0050 §VI) são tratadas: normal/recovery enviam o digest;
-empty_window/none_passed enviam um aviso curto.
+HTML inline com identidade visual do design system (glifo sakura em tile near-black,
+card com ring, MSO/Outlook compat, dark mode, preheader); conteúdo dinâmico escapado.
+As quatro formas de mensagem (ADR-0050 §VI) são tratadas: normal/recovery enviam o
+digest; empty_window/none_passed enviam um aviso curto.
 """
 
 from __future__ import annotations
@@ -160,7 +161,8 @@ def test_none_passed_form_sends_warning_with_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# KUBO-196 — Identidade Direção B v2 no e-mail
+# Identidade do design system no e-mail (glifo sakura em tile, card com ring,
+# MSO/Outlook compat, preheader, dark mode, mobile)
 # ---------------------------------------------------------------------------
 
 
@@ -173,15 +175,15 @@ def test_no_direcao_a_amber_color() -> None:
     assert "b06327" not in html
 
 
-def test_sakura_svg_inline_in_header() -> None:
-    """Logo sakura como SVG inline no header — sem <img>, sem src=, sem url()."""
+def test_glyph_tile_in_header() -> None:
+    """Logo = glifo ❇ (&#10047;) num tile near-black — sem <svg>, sem <img>."""
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
     _, _, html = result
-    assert "<svg" in html
-    assert "viewBox" in html
-    # 5 pétalas = 5 paths com o path da pétala
-    assert html.count("<path") >= 5
+    assert "&#10047;" in html or "❇" in html
+    assert "#1c1917" in html  # tile near-black
+    assert "#f4c9d4" in html  # glifo rosa
+    assert "<svg" not in html
 
 
 def test_tagline_present() -> None:
@@ -212,15 +214,18 @@ def test_dark_mode_media_query() -> None:
 
 
 def test_dark_mode_classes_on_content_elements() -> None:
-    """As classes de tema (email-ink, email-muted, sakura-petal, sakura-ink)
+    """As classes de tema (kubo-bg, kubo-card, kubo-fg, kubo-muted, kubo-border)
     estão presentes nos elementos renderizados para que o dark mode os atinja."""
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
     _, _, html = result
-    assert "sakura-petal" in html
-    assert "sakura-ink" in html
-    assert "email-ink" in html
-    assert "email-muted" in html
+    assert "kubo-bg" in html
+    assert "kubo-card" in html
+    assert "kubo-fg" in html
+    assert "kubo-muted" in html
+    assert "kubo-border" in html
+    # kubo-border aplicado aos divisores entre entries (CodeRabbit review)
+    assert html.count('class="kubo-border"') >= 2  # divisor do template + divisor entre entries
 
 
 def test_mobile_media_query() -> None:
@@ -228,7 +233,7 @@ def test_mobile_media_query() -> None:
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
     _, _, html = result
-    assert "max-width: 600px" in html
+    assert "max-width:600px" in html or "max-width: 600px" in html
 
 
 def test_no_external_image_references() -> None:
@@ -237,7 +242,7 @@ def test_no_external_image_references() -> None:
     assert result is not None
     _, _, html = result
     assert "<img" not in html
-    assert "src=" not in html  # sem src= em qualquer tag (svg usa path, não src)
+    assert "src=" not in html  # sem src= em qualquer tag
     assert "url(" not in html
     assert "cid:" not in html
 
@@ -251,16 +256,41 @@ def test_rendered_weight_under_cutoff() -> None:
     assert len(html.encode("utf-8")) < 102_400  # 102KB em bytes
 
 
-def test_warning_email_uses_direcao_b_identity() -> None:
-    """E-mail de aviso (empty_window/none_passed) também usa a identidade B v2."""
+def test_warning_email_uses_brand_identity() -> None:
+    """E-mail de aviso (empty_window/none_passed) também usa a identidade do design system."""
     result = build_email_digest(
         _selection(items=[], form="empty_window", total_publications=0), _BASE
     )
     assert result is not None
     _, _, html = result
-    assert "<svg" in html
+    assert "&#10047;" in html or "❇" in html
     assert "The art of getting things done" in html
     assert "b06327" not in html
+
+
+def test_preheader_present() -> None:
+    """Preheader hidden no topo do e-mail (preview text em clientes de email)."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "display:none" in html
+    assert "max-height:0" in html
+
+
+def test_mso_conditional_comments() -> None:
+    """Comentários condicionais MSO para compatibilidade com Outlook desktop."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "[if mso]" in html
+
+
+def test_card_uses_ring_not_border() -> None:
+    """O card usa box-shadow inset (ring) em vez de border — assinatura do design system."""
+    result = build_email_digest(_selection([_view()]), _BASE)
+    assert result is not None
+    _, _, html = result
+    assert "box-shadow:inset 0 0 0 1px" in html or "box-shadow:inset 0 0 0 1px #e7e5e4" in html
 
 
 # ---------------------------------------------------------------------------
@@ -295,15 +325,12 @@ def test_dark_mode_classes_on_correct_elements() -> None:
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
     _, _, html = result
-    # sakura-petal deve estar em <path>, não em <div> ou <span>
-    assert 'class="sakura-petal" d=' in html
-    # sakura-ink deve estar em <line> e <circle>
-    assert 'class="sakura-ink" x1=' in html
-    assert 'class="sakura-ink" cx=' in html
-    # email-ink deve estar em <span> (wordmark) e <p> (summary)
-    assert 'class="email-ink" style=' in html
-    # email-muted deve estar em <span> (tagline) e <p> (date/opinion/entities)
-    assert 'class="email-muted" style=' in html
+    # kubo-card deve estar no <td> do card (com box-shadow inset)
+    assert 'class="kubo-card"' in html
+    # kubo-fg deve estar em elementos de texto (wordmark, título, link)
+    assert 'class="kubo-fg"' in html
+    # kubo-muted deve estar em elementos de texto secundário (date, summary, opinion)
+    assert 'class="kubo-muted"' in html
 
 
 def test_day_summary_is_escaped() -> None:

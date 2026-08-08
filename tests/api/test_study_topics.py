@@ -107,7 +107,7 @@ def test_error_dialog_skips_htmx_forms(authed_client: TestClient) -> None:
 def test_error_dialog_uses_formaction(authed_client: TestClient) -> None:
     """O interceptor respeita formAction do botão submitter (HTML spec)."""
     html = authed_client.get("/study/topics").text
-    assert "ev.submitter && ev.submitter.formAction" in html
+    assert "ev.submitter && ev.submitter.getAttribute('formaction')" in html
 
 
 def test_plain_text_errors_return_text_plain_content_type(

@@ -105,7 +105,7 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
     assert len(calls) == 1
     assert calls[0]["token"] == "bot-token"
     assert calls[0]["chat_id"] == "123456"
-    assert "Obrigado" in calls[0]["text"]
+    assert "Olá" in calls[0]["text"]
     assert "Bardi" in calls[0]["text"]
 
     # Audit: welcome registra um dispatch com artifact="welcome"
