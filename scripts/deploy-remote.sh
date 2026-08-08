@@ -139,3 +139,19 @@ bash scripts/health-guard.sh kubo-scheduler --mode stable --timeout 90
 # digest do GHCR não são dangling enquanto estão em uso; prune irrestrito evitado
 # para não apagar lixo de outras stacks no oute-server.
 docker image prune -f --filter "label=com.docker.compose.project=kubo" >/dev/null || true
+
+# Keep only current + 1 previous kubo image (prevents disk exhaustion from
+# digest-pulled images accumulating across deploys). Lists all kubo repo images
+# by creation time (newest first), keeps the first 2, removes the rest.
+# The running image is always among the newest (just pulled this deploy), and
+# the previous one serves as rollback target.
+repo="${KUBO_IMAGE_REPO:-ghcr.io/renatobardi/kubo}"
+kept=0
+while IFS=$'\t' read -r img_id _created; do
+  if [ "$kept" -lt 2 ]; then
+    kept=$((kept + 1))
+    continue
+  fi
+  docker rmi -f "$img_id" 2>/dev/null || true
+done < <(docker images --format '{{.ID}}\t{{.CreatedAt}}' --filter "reference=${repo}" | sort -t$'\t' -k2 -r)
+docker builder prune -f --filter "until=24h" >/dev/null 2>&1 || true
