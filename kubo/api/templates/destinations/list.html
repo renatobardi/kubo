@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
 {% block title %}Destinos · Kubo{% endblock %}
+{% set _example_names = [
+  "Akira Toriyama", "Hayao Miyazaki", "Hideo Kojima", "Naoko Takeuchi",
+  "Kentaro Miura", "Satoshi Tajiri", "Tetsuya Nomura", "CLAMP",
+  "Shigeru Miyamoto", "Rumiko Takahashi", "Hirohiko Araki", "Fumito Ueda",
+] %}
+{% set _example_name = _example_names | random %}
+{% set _example_email = _example_name | lower | replace(" ", ".") + "@exemplo.com" %}
 {% block content %}
 <div class="space-y-4">
   {{ macros.page_header("Destinos", "Para onde o conhecimento sai — pessoas e sistemas, com endereço visível só para você.") }}
@@ -18,12 +25,12 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div>
         <label for="inv-name" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Nome</label>
-        <input id="inv-name" name="name" required placeholder="Marina Alves"
+        <input id="inv-name" name="name" required placeholder="{{ _example_name }}"
                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
       </div>
       <div>
         <label for="inv-email" class="mb-1.5 block text-xs font-semibold text-muted-foreground">E-mail (opcional — Kubo manda o convite automaticamente)</label>
-        <input id="inv-email" name="email" type="email" placeholder="marina@exemplo.com"
+        <input id="inv-email" name="email" type="email" placeholder="{{ _example_email }}"
                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <p class="mt-1 text-2xs text-muted-foreground">Sem e-mail, você recebe um link para copiar e mandar por qualquer canal.</p>
         <p class="mt-2 text-2xs text-muted-foreground">
@@ -47,7 +54,7 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div>
         <label for="dst-name" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Nome</label>
-        <input id="dst-name" name="name" required placeholder="Renato (Telegram)"
+        <input id="dst-name" name="name" required placeholder="{{ _example_name }} (Telegram)"
                class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
       </div>
       <div class="grid grid-cols-2 gap-3">
