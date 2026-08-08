@@ -8,6 +8,8 @@ Não verifica escaping — isso é responsabilidade dos callers (digest/welcome)
 
 from __future__ import annotations
 
+import re
+
 from kubo.distribution.email_template import wrap_email
 
 
@@ -148,3 +150,14 @@ def test_color_scheme_meta() -> None:
     html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
     assert "color-scheme" in html
     assert "light dark" in html
+
+
+def test_outer_background_is_transparent() -> None:
+    """Body e wrapper externo não definem cor de fundo — fica transparente."""
+    html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
+    body_tag = re.search(r"<body[^>]*>", html)
+    assert body_tag is not None
+    assert "background-color" not in body_tag.group(0)
+    outer_table = re.search(r'<table[^>]*class="kubo-bg"[^>]*>', html)
+    assert outer_table is not None
+    assert "background-color" not in outer_table.group(0)
