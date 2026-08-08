@@ -11,7 +11,7 @@ def test_welcome_telegram_text_contains_name_and_bardi_signature() -> None:
     """Telegram HTML message greets the recipient and signs as Bardi."""
     text = welcome_telegram_text("Renato")
     assert "<b>Olá, Renato!</b>" in text
-    assert "Com carinho,\nBardi" in text
+    assert "— Bardi" in text
 
 
 def test_welcome_telegram_text_escapes_html_in_name() -> None:
@@ -26,9 +26,9 @@ def test_welcome_email_signs_as_bardi_in_both_parts() -> None:
     subject, text_body, html_body = welcome_email("Claudia")
     assert subject == "Bem-vindo ao Kubo"
     assert "Olá, Claudia!" in text_body
-    assert "Com carinho,\nBardi" in text_body
+    assert "— Bardi" in text_body
     assert "Olá, Claudia!</p>" in html_body
-    assert "Com carinho,<br>Bardi</p>" in html_body
+    assert "— Bardi</p>" in html_body
 
 
 def test_welcome_email_escapes_html_in_name() -> None:

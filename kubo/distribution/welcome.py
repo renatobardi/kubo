@@ -13,12 +13,9 @@ def welcome_telegram_text(name: str) -> str:
     """Mensagem de boas-vindas em HTML para o Telegram."""
     return (
         f"<b>Olá, {html.escape(name)}!</b>\n\n"
-        "Obrigado por fazer parte do Kubo. Estou construindo essa ferramenta "
-        "para ajudar a acompanhar o que importa e compartilhar conhecimento "
-        "de forma mais leve.\n\n"
-        "Se algo parecer estranho, lento ou confuso, responde aqui. "
-        "Toda ajuda é bem-vinda para melhorar.\n\n"
-        "Com carinho,\nBardi"
+        "Canal do Kubo ativo. Daqui pra frente é por aqui que as entregas chegam.\n\n"
+        "Se algo parecer errado, responde — leio tudo.\n\n"
+        "— Bardi"
     )
 
 
@@ -27,20 +24,14 @@ def welcome_email(name: str) -> tuple[str, str, str]:
     subject = "Bem-vindo ao Kubo"
     text = (
         f"Olá, {name}!\n\n"
-        "Obrigado por fazer parte do Kubo. Estou construindo essa ferramenta "
-        "para ajudar a acompanhar o que importa e compartilhar conhecimento "
-        "de forma mais leve.\n\n"
-        "Se algo parecer estranho, lento ou confuso, me avisa. "
-        "Toda ajuda é bem-vinda para melhorar.\n\n"
-        "Com carinho,\nBardi"
+        "Canal do Kubo ativo. Daqui pra frente é por aqui que as entregas chegam.\n\n"
+        "Se algo parecer errado, responde — leio tudo.\n\n"
+        "— Bardi"
     )
     html_body = (
         f"<p>Olá, {html.escape(name)}!</p>"
-        "<p>Obrigado por fazer parte do Kubo. Estou construindo essa ferramenta "
-        "para ajudar a acompanhar o que importa e compartilhar conhecimento "
-        "de forma mais leve.</p>"
-        "<p>Se algo parecer estranho, lento ou confuso, me avisa. "
-        "Toda ajuda é bem-vinda para melhorar.</p>"
-        "<p>Com carinho,<br>Bardi</p>"
+        "<p>Canal do Kubo ativo. Daqui pra frente é por aqui que as entregas chegam.</p>"
+        "<p>Se algo parecer errado, responde — leio tudo.</p>"
+        "<p>— Bardi</p>"
     )
     return subject, text, html_body
