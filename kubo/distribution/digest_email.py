@@ -17,7 +17,15 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from kubo.contracts.worker import DigestSelectionView, DigestView
-from kubo.distribution.email_template import wrap_email
+from kubo.distribution.email_template import (
+    _BORDER,
+    _FINE,
+    _FONT,
+    _INK,
+    _MUTED,
+    _SECONDARY,
+    wrap_email,
+)
 
 _TITLE_CAP = 200
 _SUMMARY_CAP = 300
@@ -58,20 +66,18 @@ def _warning_email(selection: DigestSelectionView, base_url: str) -> tuple[str, 
         n = selection.total_publications
         pub = "publicação" if n == 1 else "publicações"
         subject = f"Kubo · {n} {pub}, nenhuma passou o corte"
-        text = (
-            f"Kubo · {n} {pub} no período, nenhuma passou o corte de relevância.\n\n"
-            f"Ver na UI: {base_url}/distilled"
-        )
+        message = f"Kubo · {n} {pub} no período, nenhuma passou o corte de relevância."
         heading = f"Kubo · {n} {pub}, nenhuma passou o corte"
     else:
         subject = "Kubo · sem novidades no período"
-        text = f"Kubo · sem novidades no período.\n\nVer na UI: {base_url}/distilled"
+        message = "Kubo · sem novidades no período."
         heading = "Kubo · sem novidades no período"
+    text = f"{message}\n\nVer na UI: {base_url}/distilled"
     warning_body = (
         '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
-        '<p class="kubo-muted" style="margin:0 0 8px 0;font-family:Arial,Helvetica,'
-        'sans-serif;font-size:14px;line-height:22px;color:#57534e;">'
-        + html.escape(text.split("\n\n")[0], quote=False)
+        f'<p class="kubo-muted" style="margin:0 0 8px 0;font-family:{_FONT};'
+        f'font-size:14px;line-height:22px;color:{_SECONDARY};">'
+        + html.escape(message, quote=False)
         + "</p>\n"
         "</td></tr>\n"
     )
@@ -151,16 +157,16 @@ def _day_summary_tr(summary: str) -> str:
     """Resumo do dia como <tr> — bloco de abertura antes das entries (ADR-0052 §II)."""
     return (
         '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
-        '<div class="kubo-muted" style="font-family:Arial,Helvetica,sans-serif;'
-        f'font-size:14px;line-height:22px;color:#57534e;font-style:italic;">{summary}</div>\n'
+        f'<div class="kubo-muted" style="font-family:{_FONT};'
+        f'font-size:14px;line-height:22px;color:{_SECONDARY};font-style:italic;">{summary}</div>\n'
         "</td></tr>\n" + _DIVIDER_TR
     )
 
 
 _DIVIDER_TR = (
     '<tr><td class="kubo-pad" style="padding:0 40px;">'
-    '<div style="border-top:1px solid #e7e5e4;font-size:0;line-height:0;">'
-    "&nbsp;</div></td></tr>\n"
+    f'<div class="kubo-border" style="border-top:1px solid {_BORDER};'
+    'font-size:0;line-height:0;">&nbsp;</div></td></tr>\n'
 )
 
 
@@ -192,16 +198,16 @@ def _html_entry(view: DigestView, base_url: str) -> str:
     if view.opinion:
         opinion = html.escape(_cap(view.opinion, _OPINION_CAP), quote=False)
         opinion_html = (
-            '<div class="kubo-muted" style="margin-top:8px;font-family:Arial,Helvetica,'
-            f"sans-serif;font-size:13px;line-height:20px;color:#57534e;"
+            f'<div class="kubo-muted" style="margin-top:8px;font-family:{_FONT};'
+            f"font-size:13px;line-height:20px;color:{_SECONDARY};"
             f'font-style:italic;">Parecer: {opinion}</div>\n'
         )
     entities_html = ""
     if view.entities:
         names = ", ".join(html.escape(e, quote=False) for e in view.entities[:_ENTITIES_CAP])
         entities_html = (
-            '<div class="kubo-muted" style="margin-top:8px;font-family:Arial,Helvetica,'
-            f'sans-serif;font-size:12px;color:#78716c;">Entidades: {names}</div>\n'
+            f'<div class="kubo-muted" style="margin-top:8px;font-family:{_FONT};'
+            f'font-size:12px;color:{_MUTED};">Entidades: {names}</div>\n'
         )
     return _ENTRY_TR.format(
         link=link,
@@ -210,6 +216,10 @@ def _html_entry(view: DigestView, base_url: str) -> str:
         summary=summary,
         opinion=opinion_html,
         entities=entities_html,
+        font=_FONT,
+        ink=_INK,
+        secondary=_SECONDARY,
+        fine=_FINE,
     )
 
 
@@ -217,12 +227,12 @@ _ENTRY_TR = (
     '<tr><td class="kubo-pad" style="padding:16px 40px 0;">\n'
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
     '<tr><td style="padding-bottom:20px;">\n'
-    '<a href="{link}" class="kubo-fg" style="font-family:Arial,Helvetica,sans-serif;'
-    'font-size:15px;font-weight:bold;color:#1c1917;text-decoration:none;">{title}</a>\n'
-    '<div class="kubo-muted" style="margin-top:4px;font-family:Arial,Helvetica,'
-    'sans-serif;font-size:13px;line-height:20px;color:#57534e;">{summary}</div>\n'
-    '<div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;'
-    'font-size:12px;color:#a8a29e;">{date}</div>\n'
+    '<a href="{link}" class="kubo-fg" style="font-family:{font};'
+    'font-size:15px;font-weight:bold;color:{ink};text-decoration:none;">{title}</a>\n'
+    '<div class="kubo-muted" style="margin-top:4px;font-family:{font};'
+    'font-size:13px;line-height:20px;color:{secondary};">{summary}</div>\n'
+    '<div style="margin-top:6px;font-family:{font};'
+    'font-size:12px;color:{fine};">{date}</div>\n'
     "{opinion}"
     "{entities}"
     "</td></tr></table>\n"

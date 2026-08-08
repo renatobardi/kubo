@@ -73,6 +73,12 @@ def test_dark_mode_classes() -> None:
     assert "kubo-border" in html
 
 
+def test_divider_has_kubo_border_class() -> None:
+    """O divisor do template tem class='kubo-border' para dark mode alcançá-lo."""
+    html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
+    assert 'class="kubo-border"' in html
+
+
 def test_mobile_media_query() -> None:
     """@media (max-width:600px) no <style>."""
     html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")

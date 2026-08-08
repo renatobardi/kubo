@@ -224,6 +224,8 @@ def test_dark_mode_classes_on_content_elements() -> None:
     assert "kubo-fg" in html
     assert "kubo-muted" in html
     assert "kubo-border" in html
+    # kubo-border aplicado aos divisores entre entries (CodeRabbit review)
+    assert html.count('class="kubo-border"') >= 2  # divisor do template + divisor entre entries
 
 
 def test_mobile_media_query() -> None:

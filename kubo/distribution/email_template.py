@@ -22,6 +22,7 @@ _MUTED = "#78716c"  # muted-foreground (stone-500)
 _SECONDARY = "#57534e"  # secondary text (stone-600)
 _FINE = "#a8a29e"  # fine print (stone-400)
 _SAKURA_PINK = "#f4c9d4"  # glifo rosa no tile
+_FONT = "Arial,Helvetica,sans-serif"  # email-safe (Inter não renderiza sem webfont)
 
 # Glifo sakura — ❇ (U+2747 FLORAL HEART). Email-safe em qualquer cliente.
 _GLYPH = "&#10047;"
@@ -56,6 +57,7 @@ def wrap_email(*, heading: str, body_html: str, footer_link: str, preheader: str
         secondary=_SECONDARY,
         fine=_FINE,
         pink=_SAKURA_PINK,
+        font=_FONT,
         glyph=_GLYPH,
         tagline=_TAGLINE,
     )
@@ -80,8 +82,8 @@ def _footer_block(footer_link: str) -> str:
     """Rodapé do card com link 'Ver na UI'."""
     return (
         '<tr><td class="kubo-pad" align="center" style="padding:4px 40px 32px;">\n'
-        f'<a href="{footer_link}" class="kubo-fg" style="font-family:Arial,Helvetica,'
-        f"sans-serif;font-size:13px;font-weight:bold;color:{_INK};"
+        f'<a href="{footer_link}" class="kubo-fg" style="font-family:{_FONT};'
+        f"font-size:13px;font-weight:bold;color:{_INK};"
         f'text-decoration:none;">Ver na UI &rarr;</a>\n'
         "</td></tr>\n"
     )
@@ -143,8 +145,8 @@ _TEMPLATE = (
     'color:{pink};">{glyph}</td>\n'
     "</tr></table>\n"
     "</td>\n"
-    '<td valign="middle" class="kubo-fg" style="font-family:Arial,Helvetica,'
-    "sans-serif;font-size:17px;font-weight:bold;letter-spacing:-0.3px;"
+    '<td valign="middle" class="kubo-fg" style="font-family:{font};'
+    "font-size:17px;font-weight:bold;letter-spacing:-0.3px;"
     'color:{ink};">Kubo</td>\n'
     "</tr></table>\n"
     "</td></tr>\n"
@@ -156,15 +158,15 @@ _TEMPLATE = (
     "\n"
     # --- Heading ---
     '<tr><td class="kubo-pad" style="padding:28px 40px 8px;">\n'
-    '<h1 class="kubo-fg" style="margin:0;font-family:Arial,Helvetica,sans-serif;'
+    '<h1 class="kubo-fg" style="margin:0;font-family:{font};'
     "font-size:22px;font-weight:bold;letter-spacing:-0.4px;color:{ink};"
     '">{heading}</h1>\n'
     "</td></tr>\n"
     "\n"
-    # --- Divider antes do body ---
+    # --- Divider antes do body (kubo-border para dark mode) ---
     '<tr><td class="kubo-pad" style="padding:16px 40px 0;">'
-    '<div style="border-top:1px solid {border};font-size:0;line-height:0;">'
-    "&nbsp;</div></td></tr>\n"
+    '<div class="kubo-border" style="border-top:1px solid {border};font-size:0;'
+    'line-height:0;">&nbsp;</div></td></tr>\n'
     "\n"
     # --- Body (inserido pelo caller) ---
     "{body}\n"
@@ -177,7 +179,7 @@ _TEMPLATE = (
     "\n"
     # --- Tagline abaixo do card ---
     '<tr><td align="center" style="padding:20px 24px 0;">\n'
-    '<div class="kubo-muted" style="font-family:Arial,Helvetica,sans-serif;'
+    '<div class="kubo-muted" style="font-family:{font};'
     'font-size:12px;color:{fine};">{tagline}</div>\n'
     "</td></tr>\n"
     "\n"
