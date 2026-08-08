@@ -15,7 +15,6 @@ from __future__ import annotations
 
 # Cores (hex, alinhadas ao design system — oklch convertido para email-safe).
 _INK = "#1c1917"  # foreground (stone-900)
-_BG = "#f5f4f1"  # background
 _CARD = "#ffffff"  # card
 _BORDER = "#e7e5e4"  # border (stone-200)
 _MUTED = "#78716c"  # muted-foreground (stone-500)
@@ -70,7 +69,7 @@ def _preheader_block(preheader: str) -> str:
     # texto do corpo como preview (técnica padrão de preheader).
     return (
         '<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;'
-        f'font-size:1px;line-height:1px;color:{_BG};">{preheader}'
+        f'font-size:1px;line-height:1px;">{preheader}'
         "&nbsp;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;"
         "&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;&#8203;"
         "&#8203;&#8203;&#8203;&#8203;</div>\n"
@@ -126,7 +125,7 @@ _TEMPLATE = (
     '<body style="margin:0;padding:0;">\n'
     "{preheader}"
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-    'border="0" class="kubo-bg">\n'
+    'border="0">\n'
     '<tr><td align="center" style="padding:32px 16px;">\n'
     '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
     'border="0" class="kubo-wrap" style="width:600px;max-width:600px;">\n'
