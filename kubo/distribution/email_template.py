@@ -50,7 +50,6 @@ def wrap_email(*, heading: str, body_html: str, footer_link: str, preheader: str
         body=body_html,
         footer=footer_html,
         ink=_INK,
-        bg=_BG,
         card=_CARD,
         border=_BORDER,
         muted=_MUTED,
@@ -116,7 +115,6 @@ _TEMPLATE = (
     ".kubo-pad{{padding-left:20px !important;padding-right:20px !important}}\n"
     "}}\n"
     "@media (prefers-color-scheme: dark){{\n"
-    ".kubo-bg{{background-color:{ink} !important}}\n"
     ".kubo-card{{background-color:#292524 !important;"
     "box-shadow:inset 0 0 0 1px rgba(255,255,255,0.1) !important}}\n"
     ".kubo-fg{{color:#fafaf9 !important}}\n"
@@ -125,10 +123,10 @@ _TEMPLATE = (
     "}}\n"
     "</style>\n"
     "</head>\n"
-    '<body style="margin:0;padding:0;background-color:{bg};">\n'
+    '<body style="margin:0;padding:0;">\n'
     "{preheader}"
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-    'border="0" class="kubo-bg" style="background-color:{bg};">\n'
+    'border="0" class="kubo-bg">\n'
     '<tr><td align="center" style="padding:32px 16px;">\n'
     '<table role="presentation" width="600" cellpadding="0" cellspacing="0" '
     'border="0" class="kubo-wrap" style="width:600px;max-width:600px;">\n'
