@@ -58,7 +58,7 @@ _SESSION_COOKIE = "kubo_session"
 # Sem sessão exigida: a tela de login, o handler de login Firebase, o liveness,
 # os estáticos e o webhook do Telegram (a tela de login precisa carregar CSS/JS;
 # o webhook carrega seu próprio secret). Tudo mais passa pelo guard.
-_PUBLIC_PATHS = frozenset({"/login", "/auth/firebase", "/healthz", "/telegram/webhook"})
+_PUBLIC_PATHS = frozenset({"/login", "/auth/firebase", "/healthz", "/telegram/webhook", "/logout"})
 # Barra final proposital: só o que está SOB /static/ é público. Sem ela, uma rota
 # futura chamada, digamos, /statics passaria pelo guard sem sessão.
 # /invite/<token> também é público: é a landing do convite de equipe.

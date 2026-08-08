@@ -1,13 +1,22 @@
 {% extends "base.html" %}
 {% import "_macros.html" as macros %}
 {% block title %}Destinos · Kubo{% endblock %}
-{% set _example_names = [
-  "Akira Toriyama", "Hayao Miyazaki", "Hideo Kojima", "Naoko Takeuchi",
-  "Kentaro Miura", "Satoshi Tajiri", "Tetsuya Nomura", "CLAMP",
-  "Shigeru Miyamoto", "Rumiko Takahashi", "Hirohiko Araki", "Fumito Ueda",
-] %}
-{% set _example_name = _example_names | random %}
-{% set _example_email = _example_name | lower | replace(" ", ".") + "@exemplo.com" %}
+{% set _examples = [
+  ("Akira Toriyama", "dragonball.com"),
+  ("Hayao Miyazaki", "ghibli.jp"),
+  ("Hideo Kojima", "kojimaproductions.jp"),
+  ("Naoko Takeuchi", "sailormoon.com"),
+  ("Kentaro Miura", "berserk.fandom.com"),
+  ("Satoshi Tajiri", "pokemon.com"),
+  ("Tetsuya Nomura", "finalfantasy.com"),
+  ("CLAMP", "clamp-net.com"),
+  ("Shigeru Miyamoto", "nintendo.com"),
+  ("Rumiko Takahashi", "inuyasha.fandom.com"),
+  ("Hirohiko Araki", "jojo.fandom.com"),
+  ("Fumito Ueda", "teamico.com"),
+] | random %}
+{% set _example_name = _examples[0] %}
+{% set _example_email = _examples[0] | lower | replace(" ", ".") + "@" + _examples[1] %}
 {% block content %}
 <div class="space-y-4">
   {{ macros.page_header("Destinos", "Para onde o conhecimento sai — pessoas e sistemas, com endereço visível só para você.") }}
