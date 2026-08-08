@@ -66,8 +66,9 @@ def test_dark_mode_media_query() -> None:
 
 
 def test_dark_mode_classes() -> None:
-    """Classes kubo-card, kubo-fg, kubo-muted, kubo-border presentes."""
+    """Classes kubo-bg, kubo-card, kubo-fg, kubo-muted, kubo-border presentes."""
     html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
+    assert "kubo-bg" in html
     assert "kubo-card" in html
     assert "kubo-fg" in html
     assert "kubo-muted" in html
@@ -151,26 +152,33 @@ def test_color_scheme_meta() -> None:
     assert "light dark" in html
 
 
-def test_outer_background_is_transparent() -> None:
-    """Body e wrapper externo não definem cor de fundo — fica transparente."""
+def test_outer_background_is_theme_aware() -> None:
+    """Body e wrapper externo definem background-color branco (claro) e near-black (escuro)."""
     html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
     body_tag = re.search(r"<body[^>]*>", html)
     assert body_tag is not None
-    assert "background-color" not in body_tag.group(0)
-    outer_table = re.search(r'<table[^>]*width="100%"[^>]*>', html)
+    assert "background-color" in body_tag.group(0)
+    outer_table = re.search(r'<table[^>]*class="kubo-bg"[^>]*>', html)
     assert outer_table is not None
-    assert "background-color" not in outer_table.group(0)
+    assert "background-color" in outer_table.group(0)
 
 
-def test_no_kubo_bg_class() -> None:
-    """Classe kubo-bg foi removida — sem regra CSS a targeting."""
+def test_body_background_no_gray_light_mode() -> None:
+    """O fundo do body em light mode é branco (#ffffff), não cinza (#f5f4f1)."""
     html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
-    assert "kubo-bg" not in html
+    body_tag = re.search(r"<body[^>]*>", html)
+    assert body_tag is not None
+    assert "#f5f4f1" not in body_tag.group(0)
+    assert "#ffffff" in body_tag.group(0)
 
 
-def test_no_bg_color_value_in_output() -> None:
-    """Constante _BG (#f5f4f1) removida — cor de fundo não aparece no HTML."""
-    html = wrap_email(
-        heading="Test", body_html="<p>body</p>", footer_link="https://x", preheader="Preview"
-    )
-    assert "#f5f4f1" not in html
+def test_dark_mode_outer_background_override() -> None:
+    """@media (prefers-color-scheme: dark) sobrescreve body e kubo-bg para #1c1917."""
+    html = wrap_email(heading="Test", body_html="<p>body</p>", footer_link="https://x")
+    start = html.find("@media (prefers-color-scheme: dark)")
+    assert start != -1
+    end = html.find("</style>", start)
+    styles = html[start:end]
+    assert "body" in styles
+    assert ".kubo-bg" in styles
+    assert "#1c1917" in styles

@@ -214,11 +214,12 @@ def test_dark_mode_media_query() -> None:
 
 
 def test_dark_mode_classes_on_content_elements() -> None:
-    """As classes de tema (kubo-card, kubo-fg, kubo-muted, kubo-border)
+    """As classes de tema (kubo-bg, kubo-card, kubo-fg, kubo-muted, kubo-border)
     estão presentes nos elementos renderizados para que o dark mode os atinja."""
     result = build_email_digest(_selection([_view()]), _BASE)
     assert result is not None
     _, _, html = result
+    assert "kubo-bg" in html
     assert "kubo-card" in html
     assert "kubo-fg" in html
     assert "kubo-muted" in html
