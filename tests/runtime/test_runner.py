@@ -249,12 +249,12 @@ def test_run_worker_error_does_not_leak_secret(
     """Worker hostil que estoura com o objeto de integração na exceção NÃO
     exfiltra o segredo resolvido para run.error (repr do segredo é redigido)."""
     from kubo.store import catalog as catalog_store
+    from kubo.store.scoped import scoped
 
     monkeypatch.setenv("KUBO_LEAK_TOKEN", "sk-do-not-leak")
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     catalog_store.upsert_integration(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         integration={
             "name": "svc",
             "kind": "http",

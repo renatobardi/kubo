@@ -28,6 +28,7 @@ from kubo.store import settings as settings_store
 from kubo.store.client import connect as _real_connect
 from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
+from kubo.store.scoped import scoped
 from kubo.workers.analyst import ReportOutput
 from tests.api.conftest import UI_PASSWORD
 
@@ -112,7 +113,9 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
                 "RELATE $u->membership->$t SET role = 'owner';",
                 {"u": user_id, "t": tenant_id},
             )
-            catalog_store.seed_catalog(root, tenant_id=tenant_id, created_by=user_id)
+            catalog_store.seed_catalog(
+                scoped(root, tenant_id=tenant_id, user_id=user_id), created_by=user_id
+            )
             dest_rid = destinations_store.create_destination(
                 root, name="Renato", kind="pessoa", channel="telegram", address="chat-1"
             )

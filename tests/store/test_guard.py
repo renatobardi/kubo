@@ -6,7 +6,7 @@ O guard varre os literais SQL dos módulos migrados e falha quando:
    estar na allowlist nominal com justificativa.
 
 A baseline de módulos não migrados é dado explícito do teste — só encolhe.
-Nenhuma módulo migra no PR1 (KUBO-209); a baseline começa cheia.
+PR2 (KUBO-212): catalog.py migra; a baseline encolhe de um módulo.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from kubo.store.guard import (
 # Só encolhe — quando um módulo migra, sai daqui e entra no escopo do guard.
 BASELINE_NOT_MIGRATED: frozenset[str] = frozenset(
     {
-        "catalog",
         "client",
         "destinations",
         "flows",
@@ -39,6 +38,28 @@ BASELINE_NOT_MIGRATED: frozenset[str] = frozenset(
         "tenancy",
         "tenant_credentials",
         "transaction",
+    }
+)
+
+# Allowlist de SQL não-literal justificado para módulos já migrados.
+# Cada entrada é nominal: módulo + função + justificativa.
+_ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
+    {
+        AllowlistEntry(
+            module="catalog",
+            function="_list_catalog_items",
+            justification="table name is one of three fixed catalog tables, not user input",
+        ),
+        AllowlistEntry(
+            module="catalog",
+            function="_get_catalog_item",
+            justification="SQL is a module-level constant (_SELECT_BY_ID), not dynamic",
+        ),
+        AllowlistEntry(
+            module="catalog",
+            function="_upsert_catalog_item",
+            justification="SQL is a module-level constant (_SELECT_BY_ID), not dynamic",
+        ),
     }
 )
 
@@ -205,12 +226,16 @@ def _store_modules() -> set[str]:
     return {p.stem for p in STORE_DIR.glob("*.py") if not p.name.startswith("__")}
 
 
-def test_baseline_covers_all_store_modules() -> None:
-    """A baseline + exempt cobre todos os módulos da store — nenhum órfão."""
+# Módulos já migrados para ScopedStore — vigiados pelo guard.
+# Só cresce — quando um módulo migra, sai da baseline e entra aqui.
+MIGRATED: frozenset[str] = frozenset({"catalog"})
+
+
+def test_all_store_modules_classified() -> None:
+    """Todo módulo da store está classificado: baseline, exempt, ou migrado."""
     all_modules = _store_modules()
-    covered = BASELINE_NOT_MIGRATED | _EXEMPT
-    orphans = all_modules - covered
-    assert not orphans, f"Store modules not in baseline or exempt: {orphans}"
+    unclassified = all_modules - BASELINE_NOT_MIGRATED - _EXEMPT - MIGRATED
+    assert not unclassified, f"Store modules not classified: {unclassified}"
 
 
 def test_baseline_only_shrinks() -> None:
@@ -221,21 +246,16 @@ def test_baseline_only_shrinks() -> None:
 
 
 def test_guard_migrated_modules_pass() -> None:
-    """Módulos migrados (fora da baseline) passam o guard sem violações.
+    """Módulos migrados passam o guard sem violações.
 
-    No PR1 (KUBO-209), nenhum módulo migra — a baseline está cheia e o
-    conjunto de módulos migrados é vazio. Este teste existe para que a
-    primeira migração (PR2) já tenha rede.
+    No PR2 (KUBO-212), catalog.py migra — a baseline encolhe de um módulo.
+    O guard vigia catalog.py com a allowlist de SQL não-literal justificado.
     """
-    all_modules = _store_modules()
-    migrated = all_modules - BASELINE_NOT_MIGRATED - _EXEMPT
-    allowlist: frozenset[AllowlistEntry] = frozenset()
-
     all_violations: list[tuple[str, Violation]] = []
-    for mod_name in sorted(migrated):
+    for mod_name in sorted(MIGRATED):
         path = STORE_DIR / f"{mod_name}.py"
         source = path.read_text(encoding="utf-8")
-        violations = scan_module(source, str(path), mod_name, allowlist)
+        violations = scan_module(source, str(path), mod_name, _ALLOWLIST)
         for v in violations:
             all_violations.append((mod_name, v))
 

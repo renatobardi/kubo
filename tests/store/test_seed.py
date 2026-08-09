@@ -21,6 +21,7 @@ from kubo.errors import ConfigError
 from kubo.runtime.catalog_defaults import DEFAULT_INTEGRATIONS
 from kubo.store import catalog, client, knowledge, migrations, settings
 from kubo.store import destinations as destination_store
+from kubo.store.scoped import scoped
 from kubo.store.seed import (
     FEED_CADASTROS,
     main,
@@ -366,7 +367,8 @@ def test_main_seeds_catalog_for_tenant_that_predates_adr_0042(
     db.query("DELETE catalog_integration WHERE tenant_id = $t;", {"t": tenant_id})
     db.query("DELETE catalog_persona WHERE tenant_id = $t;", {"t": tenant_id})
     db.query("DELETE catalog_flow_template WHERE tenant_id = $t;", {"t": tenant_id})
-    assert catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id) == []
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    assert catalog.list_integrations(session) == []
 
     monkeypatch.setattr("kubo.store.seed.client.connect", lambda cfg=None: _FakeConnect(db))
     monkeypatch.setattr(
@@ -376,7 +378,7 @@ def test_main_seeds_catalog_for_tenant_that_predates_adr_0042(
 
     main()
 
-    integrations = catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
+    integrations = catalog.list_integrations(session)
     names = {i["name"] for i in integrations}
     assert names == {i["name"] for i in DEFAULT_INTEGRATIONS}
     assert "rss" in names
@@ -402,16 +404,17 @@ def test_main_catalog_seed_is_idempotent_and_preserves_edits(
     )
 
     main()
-    rss = catalog.get_integration(db, tenant_id=tenant_id, name="rss", user_id=user_id)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    rss = catalog.get_integration(session, name="rss")
     assert rss is not None
     edited = dict(rss, base_url="https://meu-proxy-rss.example")
-    catalog.upsert_integration(db, tenant_id=tenant_id, user_id=user_id, integration=edited)
+    catalog.upsert_integration(session, integration=edited)
 
     main()
 
-    still_there = catalog.get_integration(db, tenant_id=tenant_id, name="rss", user_id=user_id)
+    still_there = catalog.get_integration(session, name="rss")
     assert still_there is not None
     assert still_there["base_url"] == "https://meu-proxy-rss.example"
-    integrations = catalog.list_integrations(db, tenant_id=tenant_id, user_id=user_id)
+    integrations = catalog.list_integrations(session)
     names = [i["name"] for i in integrations]
     assert len(names) == len(set(names))  # sem duplicata

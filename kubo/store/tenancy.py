@@ -207,11 +207,13 @@ def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
     if tenant is None:
         raise StoreError("tenant vanished during creation")
 
-    # Semeia o catálogo default do tenant (ADR-0042, KUBO-119).
+    # Semeia o catálogo default do tenant (ADR-0042, KUBO-119, ADR-0053).
     # Import local para evitar circularidade com kubo.store.catalog.
     from kubo.store import catalog
+    from kubo.store.scoped import scoped
 
-    catalog.seed_catalog(db, tenant_id=tenant_id, created_by=owner_user_id)
+    session = scoped(db, tenant_id=tenant_id, user_id=owner_user_id)
+    catalog.seed_catalog(session, created_by=owner_user_id)
     return tenant
 
 

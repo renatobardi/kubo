@@ -163,8 +163,8 @@ def scan_module(
             continue
 
         if _is_string_literal(sql_arg):
-            assert isinstance(sql_arg, ast.Constant)
-            assert isinstance(sql_arg.value, str)
+            if not isinstance(sql_arg, ast.Constant) or not isinstance(sql_arg.value, str):
+                continue
             sql = sql_arg.value
             table = _references_tenant_scoped_table(sql)
             if table is not None and "$tenant_id" not in sql:
