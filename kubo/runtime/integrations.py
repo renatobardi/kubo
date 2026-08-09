@@ -121,15 +121,16 @@ def load_integrations_from_dir(catalog_dir: Path) -> dict[str, Integration]:
 
 
 def load_integrations(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Integration]:
-    """Carrega as integrações do catálogo do tenant no banco (ADR-0042).
+    """Carrega as integrações do catálogo do tenant no banco (ADR-0042, ADR-0053).
 
-    Leitura direta a cada chamada, sem cache."""
+    Leitura direta a cada chamada, sem cache. Cria a sessão escopada internamente
+    — o caller não muda (KUBO-212)."""
     from kubo.store import catalog as _catalog_store
+    from kubo.store.scoped import scoped
 
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     return load_items_from_db(
-        db,
-        tenant_id,
-        user_id,
+        session,
         _catalog_store.list_integrations,
         Integration,
         _KIND,

@@ -27,6 +27,7 @@ from kubo.store import catalog, client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import upsert_seed_source
+from kubo.store.scoped import scoped
 
 _log = structlog.get_logger().bind(worker="seed-cli")
 
@@ -215,7 +216,8 @@ def main() -> int:
     try:
         with client.connect() as db:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-            catalog.seed_catalog(db, tenant_id=tenant_id, created_by=user_id)
+            session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+            catalog.seed_catalog(session)
             settings_applied = seed_default_settings(db)
             owner_applied = seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
             count = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)

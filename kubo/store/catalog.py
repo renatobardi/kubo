@@ -1,11 +1,12 @@
-"""Catálogo por-tenant no banco + changelog de auditoria (ADR-0042, KUBO-119).
+"""Catálogo por-tenant no banco + changelog de auditoria (ADR-0042, KUBO-119, ADR-0053).
 
 A store trabalha com dicts de conteúdo; os Pydantic models (`Persona`, `Integration`,
 `FlowTemplate`) vivem em `kubo.runtime.*` e são convertidos pelo chamador. Isso evita
 circularidade com os loaders de runtime, que puxam deste módulo.
 
-Toda operação pública exige `user_id` e `tenant_id` e passa por `assert_membership`
-(ADR-0039 §II) antes de executar — a autorização é da store, não do chamador.
+Toda operação pública recebe uma `ScopedStore` (KUBO-212, ADR-0053): a sessão carrega
+`(tenant_id, user_id)`, checa membership na criação, e injeta `$tenant_id`/`$user_id`
+nos params de toda query. O caller não passa tenant_id/user_id — a sessão os fornece.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from kubo.runtime.catalog_defaults import (
     DEFAULT_PERSONAS,
 )
 from kubo.store import transaction
+from kubo.store.scoped import ScopedStore
 
 # SQL templates reutilizáveis — evitam duplicação de literais identificada pelo Sonar.
 _SELECT_BY_ID = "SELECT * FROM $r;"
@@ -35,42 +37,33 @@ _NON_SEEDED_PERSONAS: frozenset[str] = frozenset({"work_context_reviewer"})
 
 
 def _list_catalog_items(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     table: str,
     from_row: Any,
 ) -> list[dict[str, Any]]:
     """Lista todos os itens de uma tabela de catálogo do tenant, ordenados por nome."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        f"SELECT * FROM {table} WHERE tenant_id = $t ORDER BY name ASC;",  # noqa: S608
-        {"t": tenant_id},
+    rows = session.query(
+        f"SELECT * FROM {table} WHERE tenant_id = $tenant_id ORDER BY name ASC;"  # noqa: S608
     )
     return [from_row(r) for r in rows]
 
 
 def _get_catalog_item(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     table: str,
     name: str,
     from_row: Any,
 ) -> dict[str, Any] | None:
     """Lê um item de catálogo pelo nome, ou None se não existe no tenant."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(_SELECT_BY_ID, {"r": _catalog_id(tenant_id, table, name)})
+    rows = session.query(_SELECT_BY_ID, {"r": _catalog_id(session.tenant_id, table, name)})
     return from_row(rows[0]) if rows else None
 
 
 def _upsert_catalog_item(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     table: str,
     name: str,
     kind: str,
@@ -84,21 +77,20 @@ def _upsert_catalog_item(
     transação — `before` antes do UPSERT, `after` depois — garantindo que o audit
     trail reflita exatamente o estado observado e gravado na transação, sem janela
     de corrida com escritores concorrentes (ADR-0042, CodeRabbit review)."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _catalog_id(tenant_id, table, name)
+    rid = _catalog_id(session.tenant_id, table, name)
 
-    params: dict[str, Any] = {"r": rid, "t": tenant_id, "n": name}
+    params: dict[str, Any] = {"r": rid, "n": name}
     params.update(fields)
     changelog_stmt, changelog_params = _changelog_statement(
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         kind=kind,
         item_name=name,
         before_expr="$before_row",
         after_expr="$after_row",
-        changed_by=user_id,
+        changed_by=session.user_id,
     )
     transaction.run_transaction(
-        db,
+        session,
         [
             "LET $before_row = (SELECT * FROM $r)[0]",
             set_clause,
@@ -107,15 +99,13 @@ def _upsert_catalog_item(
         ],
         {**params, **changelog_params},
     )
-    persisted = db.query(_SELECT_BY_ID, {"r": rid})
+    persisted = session.query(_SELECT_BY_ID, {"r": rid})
     return from_row(persisted[0])
 
 
 def _delete_catalog_item(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     table: str,
     name: str,
     kind: str,
@@ -127,21 +117,20 @@ def _delete_catalog_item(
     de auditoria compartilha a mesma transação da mutação, sem janela de corrida
     (CodeRabbit review). A checagem de existência também roda na transação: se o
     item não existe, o `before_row` é NONE e a transação aborta com erro explícito."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rid = _catalog_id(tenant_id, table, name)
+    rid = _catalog_id(session.tenant_id, table, name)
 
     params: dict[str, Any] = {"r": rid}
     changelog_stmt, changelog_params = _changelog_statement(
-        tenant_id=tenant_id,
+        tenant_id=session.tenant_id,
         kind=kind,
         item_name=name,
         before_expr="$before_row",
         after_expr="None",
-        changed_by=user_id,
+        changed_by=session.user_id,
     )
     try:
         transaction.run_transaction(
-            db,
+            session,
             [
                 "LET $before_row = (SELECT * FROM $r)[0]",
                 "IF $before_row IS NONE { THROW 'ConfigError: not found' } ELSE { DELETE $r }",
@@ -165,16 +154,6 @@ def _fresh_changelog_id() -> RecordID:
     """Novo id para cada entrada de changelog (não é determinístico: um item
     pode mudar muitas vezes)."""
     return RecordID("catalog_changelog", secrets.token_hex(16))
-
-
-def _assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> None:
-    """Proxy para a autorização por membership do ADR-0039 §II.
-
-    Import local para evitar circularidade com kubo.store.tenancy.
-    """
-    from kubo.store import tenancy
-
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
 
 
 def _persona_from_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -244,23 +223,21 @@ def _changelog_statement(
     return stmt, params
 
 
-def seed_catalog(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> None:
+def seed_catalog(session: ScopedStore) -> None:
     """Semeia o catálogo default de um tenant novo (personas, integrações, templates).
 
     Idempotente por id determinístico: re-rodar NÃO cria duplicatas e NÃO sobrescreve
     campos já preenchidos (usa coalesce `field ?? $value`), preservando edições do
     usuário. `created_at` é READONLY e `updated_at` default só entra na criação.
     """
-    _assert_membership(db, user_id=created_by, tenant_id=tenant_id)
-
     statements: list[str] = []
-    params: dict[str, Any] = {"t": tenant_id}
+    params: dict[str, Any] = {}
 
     def _add(prefix: str, table: str, item: dict[str, Any], keys: tuple[str, ...]) -> None:
-        rid = _catalog_id(tenant_id, table, item["name"])
+        rid = _catalog_id(session.tenant_id, table, item["name"])
         p_rid = f"{prefix}r"
         p_name = f"{prefix}n"
-        sets = ["tenant_id = $t", f"name = ${p_name}"]
+        sets = ["tenant_id = $tenant_id", f"name = ${p_name}"]
         params[p_rid] = rid
         params[p_name] = item["name"]
         for key in keys:
@@ -289,50 +266,40 @@ def seed_catalog(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> None:
             ("version", "board", "cast", "deliverable", "triggers", "budget_usd"),
         )
 
-    transaction.run_transaction(db, statements, params)
+    transaction.run_transaction(session, statements, params)
 
 
 # ── Personas ──────────────────────────────────────────────────────────────────
 
 
-def list_personas(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
+def list_personas(session: ScopedStore) -> list[dict[str, Any]]:
     """Lista todas as personas do tenant, ordenadas por nome."""
     return _list_catalog_items(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_persona",
         from_row=_persona_from_row,
     )
 
 
-def get_persona(
-    db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
-) -> dict[str, Any] | None:
+def get_persona(session: ScopedStore, *, name: str) -> dict[str, Any] | None:
     """Lê uma persona pelo nome, ou None se não existe no tenant."""
     return _get_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_persona",
         name=name,
         from_row=_persona_from_row,
     )
 
 
-def upsert_persona(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, persona: dict[str, Any]
-) -> dict[str, Any]:
+def upsert_persona(session: ScopedStore, *, persona: dict[str, Any]) -> dict[str, Any]:
     """Cria ou atualiza uma persona no catálogo do tenant e grava changelog."""
     return _upsert_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_persona",
         name=persona["name"],
         kind="persona",
         set_clause=(
-            "UPSERT $r SET tenant_id = $t, name = $n, executor = $e, model = $m, "
+            "UPSERT $r SET tenant_id = $tenant_id, name = $n, executor = $e, model = $m, "
             "prompt = $p, permissions = $perms, updated_at = time::now()"
         ),
         fields={
@@ -345,12 +312,10 @@ def upsert_persona(
     )
 
 
-def delete_persona(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
+def delete_persona(session: ScopedStore, *, name: str) -> None:
     """Remove uma persona do catálogo do tenant e grava changelog com after=None."""
     _delete_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_persona",
         name=name,
         kind="persona",
@@ -361,44 +326,34 @@ def delete_persona(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
 # ── Integrations ──────────────────────────────────────────────────────────────
 
 
-def list_integrations(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
+def list_integrations(session: ScopedStore) -> list[dict[str, Any]]:
     """Lista todas as integrações do tenant, ordenadas por nome."""
     return _list_catalog_items(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_integration",
         from_row=_integration_from_row,
     )
 
 
-def get_integration(
-    db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
-) -> dict[str, Any] | None:
+def get_integration(session: ScopedStore, *, name: str) -> dict[str, Any] | None:
     """Lê uma integração pelo nome, ou None se não existe no tenant."""
     return _get_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_integration",
         name=name,
         from_row=_integration_from_row,
     )
 
 
-def upsert_integration(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, integration: dict[str, Any]
-) -> dict[str, Any]:
+def upsert_integration(session: ScopedStore, *, integration: dict[str, Any]) -> dict[str, Any]:
     """Cria ou atualiza uma integração no catálogo do tenant e grava changelog."""
     return _upsert_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_integration",
         name=integration["name"],
         kind="integration",
         set_clause=(
-            "UPSERT $r SET tenant_id = $t, name = $n, kind = $k, auth = $a, "
+            "UPSERT $r SET tenant_id = $tenant_id, name = $n, kind = $k, auth = $a, "
             "rate_limit = $rl, base_url = $b, updated_at = time::now()"
         ),
         fields={
@@ -411,12 +366,10 @@ def upsert_integration(
     )
 
 
-def delete_integration(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
+def delete_integration(session: ScopedStore, *, name: str) -> None:
     """Remove uma integração do catálogo do tenant e grava changelog."""
     _delete_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_integration",
         name=name,
         kind="integration",
@@ -427,44 +380,34 @@ def delete_integration(db: Any, *, tenant_id: RecordID, name: str, user_id: Reco
 # ── Flow Templates ────────────────────────────────────────────────────────────
 
 
-def list_flow_templates(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
+def list_flow_templates(session: ScopedStore) -> list[dict[str, Any]]:
     """Lista todos os flow_templates do tenant, ordenados por nome."""
     return _list_catalog_items(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_flow_template",
         from_row=_flow_template_from_row,
     )
 
 
-def get_flow_template(
-    db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID
-) -> dict[str, Any] | None:
+def get_flow_template(session: ScopedStore, *, name: str) -> dict[str, Any] | None:
     """Lê um flow_template pelo nome, ou None se não existe no tenant."""
     return _get_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_flow_template",
         name=name,
         from_row=_flow_template_from_row,
     )
 
 
-def upsert_flow_template(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, template: dict[str, Any]
-) -> dict[str, Any]:
+def upsert_flow_template(session: ScopedStore, *, template: dict[str, Any]) -> dict[str, Any]:
     """Cria ou atualiza um flow_template no catálogo do tenant e grava changelog."""
     return _upsert_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_flow_template",
         name=template["name"],
         kind="flow_template",
         set_clause=(
-            "UPSERT $r SET tenant_id = $t, name = $n, version = $v, board = $b, "
+            "UPSERT $r SET tenant_id = $tenant_id, name = $n, version = $v, board = $b, "
             "cast = $c, deliverable = $d, triggers = $tr, budget_usd = $bu, "
             "updated_at = time::now()"
         ),
@@ -480,12 +423,10 @@ def upsert_flow_template(
     )
 
 
-def delete_flow_template(db: Any, *, tenant_id: RecordID, name: str, user_id: RecordID) -> None:
+def delete_flow_template(session: ScopedStore, *, name: str) -> None:
     """Remove um flow_template do catálogo do tenant e grava changelog."""
     _delete_catalog_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         table="catalog_flow_template",
         name=name,
         kind="flow_template",
@@ -496,12 +437,10 @@ def delete_flow_template(db: Any, *, tenant_id: RecordID, name: str, user_id: Re
 # ── Changelog (read-only) ─────────────────────────────────────────────────────
 
 
-def list_changelog(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[dict[str, Any]]:
+def list_changelog(session: ScopedStore) -> list[dict[str, Any]]:
     """Histórico de mudanças do catálogo do tenant, do mais recente para o mais antigo."""
-    _assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT * FROM catalog_changelog WHERE tenant_id = $t ORDER BY changed_at DESC;",
-        {"t": tenant_id},
+    rows = session.query(
+        "SELECT * FROM catalog_changelog WHERE tenant_id = $tenant_id ORDER BY changed_at DESC;",
     )
     return [
         {

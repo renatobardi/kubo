@@ -80,16 +80,16 @@ def load_personas_from_dir(catalog_dir: Path) -> dict[str, Persona]:
 
 
 def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
-    """Carrega as personas do catálogo do tenant no banco (ADR-0042).
+    """Carrega as personas do catálogo do tenant no banco (ADR-0042, ADR-0053).
 
-    Leitura direta a cada chamada, sem cache. O `tenant_id`/`user_id` vêm da sessão
-    após checagem de membership na store."""
+    Leitura direta a cada chamada, sem cache. Cria a sessão escopada internamente
+    — o caller não muda (KUBO-212)."""
     from kubo.store import catalog as _catalog_store
+    from kubo.store.scoped import scoped
 
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     return load_items_from_db(
-        db,
-        tenant_id,
-        user_id,
+        session,
         _catalog_store.list_personas,
         Persona,
         _KIND,

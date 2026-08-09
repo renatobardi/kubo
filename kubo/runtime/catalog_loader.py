@@ -13,6 +13,7 @@ import yaml
 from pydantic import ValidationError
 
 from kubo.errors import ConfigError, format_validation_error
+from kubo.store.scoped import ScopedStore
 
 
 class _NamedModel(Protocol):
@@ -52,15 +53,16 @@ def load_items_from_dir(catalog_dir: Path, model_cls: type[T], kind_label: str) 
 
 
 def load_items_from_db(
-    db: Any,
-    tenant_id: Any,
-    user_id: Any,
-    list_fn: Callable[..., list[dict[str, Any]]],
+    session: ScopedStore,
+    list_fn: Callable[[ScopedStore], list[dict[str, Any]]],
     model_cls: type[T],
     kind_label: str,
 ) -> dict[str, T]:
-    """Load catalog items for a tenant from the DB, keyed by item name."""
-    rows = list_fn(db, tenant_id=tenant_id, user_id=user_id)
+    """Load catalog items for a tenant from the DB, keyed by item name.
+
+    `session` is a `ScopedStore` (ADR-0053); `list_fn` receives it directly.
+    """
+    rows = list_fn(session)
     catalog: dict[str, T] = {}
     for row in rows:
         try:
