@@ -8,9 +8,20 @@ WHERE" (invisível) — que é pior. O guard converte isso em gate mecânico.
 Regras de falha:
 1. Query sobre tabela tenant-scoped sem `$tenant_id` → violação.
 2. SQL não-literal (variável, f-string, concatenação) → violação, a menos que
-   esteja na allowlist nominal com justificativa.
-3. O guard vigia só os módulos já migrados — a baseline de não-migrados é
+   esteja na allowlist nominal com justificativa. Ausência de argumento SQL
+   (call sem args, ou só kwargs não-SQL) também é não-literal — fail-closed,
+   nunca ignorado.
+3. `run_transaction(mod, [statements], ...)` é varrido: cada statement literal
+   é verificado como query; statements não-literais seguem a regra 2. O
+   caminho transacional é o único canal de escrita — cegue a ele é fail-open.
+4. O guard vigia só os módulos já migrados — a baseline de não-migrados é
    explícita no teste e só encolhe.
+
+Limitação registrada: a heurística de nome-de-tabela não enxerga acesso por
+RecordID bind (`SELECT * FROM $r`) nem SQL montado cross-função. Nesses casos
+o isolamento vem da chave determinística (tenant no hash do id) e da allowlist
+nominal — não do predicado `WHERE tenant_id`. O guard não os substitui; garante
+que o que tem nome de tabela visível não regride.
 """
 
 from __future__ import annotations
@@ -77,7 +88,14 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
     }
 )
 
+# Iteração determinística — a mensagem de violação não varia entre processos
+# (hash de frozenset é randomizado; tuple ordenado não é).
+_SORTED_TENANT_SCOPED_TABLES: tuple[str, ...] = tuple(sorted(TENANT_SCOPED_TABLES))
+
 _QUERY_METHODS: frozenset[str] = frozenset({"query", "query_raw"})
+_TRANSACTION_FUNCS: frozenset[str] = frozenset({"run_transaction"})
+_SQL_KEYWORD = "sql"
+_STATEMENTS_KEYWORD = "statements"
 
 
 @dataclass(frozen=True)
@@ -121,17 +139,164 @@ def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
     return "<module>"
 
 
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Nomes de módulo atribuídos uma única vez a literal string → valor.
+
+    Reatribuição (a qualquer coisa) ou import desqualifica o nome: o guard só
+    confia em constantes imutáveis por inspeção estática. Conservador de mais,
+    não de menos — o escape hatch é a allowlist nominal.
+    """
+    constants: dict[str, str] = {}
+    disqualified: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if target.id in constants or target.id in disqualified:
+                    disqualified.add(target.id)
+                    constants.pop(target.id, None)
+                    continue
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    constants[target.id] = node.value.value
+                else:
+                    disqualified.add(target.id)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[-1]
+                disqualified.add(name)
+                constants.pop(name, None)
+
+    return constants
+
+
+def _resolve_sql(arg: ast.AST, constants: dict[str, str]) -> str | None:
+    """Resolve um node para um literal SQL string, ou None se não-literal.
+
+    Aceita: string literal constante, ou `Name` que aponta para constante de
+    módulo confiável. O resto (f-string, concat, variável, call) é não-literal.
+    """
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.Name) and arg.id in constants:
+        return constants[arg.id]
+    return None
+
+
 def _references_tenant_scoped_table(sql: str) -> str | None:
-    """Nome da primeira tabela tenant-scoped referenciada no SQL, ou None."""
-    for table in TENANT_SCOPED_TABLES:
+    """Nome da primeira tabela tenant-scoped referenciada no SQL, ou None.
+
+    Iteração em ordem alfabética — determinística para mensagens e asserts.
+    """
+    for table in _SORTED_TENANT_SCOPED_TABLES:
         if re.search(rf"\b{re.escape(table)}\b", sql, re.IGNORECASE):
             return table
     return None
 
 
-def _is_string_literal(node: ast.AST) -> bool:
-    """True se o node é uma string literal constante (não f-string, não concat)."""
-    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+def _is_allowed(module_name: str, func_name: str, allowlist: frozenset[AllowlistEntry]) -> bool:
+    """True se a função está na allowlist nominal do módulo."""
+    return any(e.module == module_name and e.function == func_name for e in allowlist)
+
+
+def _missing_tenant_violation(lineno: int, table: str, method: str) -> Violation:
+    return Violation(
+        lineno=lineno,
+        kind="missing_tenant_filter",
+        message=f"query on tenant-scoped table '{table}' without $tenant_id in {method}()",
+    )
+
+
+def _non_literal_violation(lineno: int, func_name: str, method: str) -> Violation:
+    return Violation(
+        lineno=lineno,
+        kind="non_literal_sql",
+        message=(
+            f"non-literal SQL in {func_name}() — {method}() requires "
+            f"a string literal or an allowlist entry with justification"
+        ),
+    )
+
+
+def _call_name(func: ast.AST) -> str | None:
+    """Nome de uma call por `obj.m()` (attr) ou `m()` (name), ou None."""
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _keyword_arg(node: ast.Call, name: str) -> ast.AST | None:
+    """Valor do keyword `name` na call, ou None."""
+    for kw in node.keywords:
+        if kw.arg == name:
+            return kw.value
+    return None
+
+
+def _check_query_call(
+    node: ast.Call,
+    method: str,
+    parents: dict[ast.AST, ast.AST],
+    module_name: str,
+    allowlist: frozenset[AllowlistEntry],
+    constants: dict[str, str],
+) -> list[Violation]:
+    """Verifica uma call a `.query()`/`.query_raw()` — arg posicional ou keyword `sql`."""
+    sql_arg = node.args[0] if node.args else _keyword_arg(node, _SQL_KEYWORD)
+    func_name = _enclosing_function(node, parents)
+
+    if sql_arg is None:
+        # Sem argumento SQL: fail-closed (não ignorado).
+        if _is_allowed(module_name, func_name, allowlist):
+            return []
+        return [_non_literal_violation(node.lineno, func_name, method)]
+
+    sql = _resolve_sql(sql_arg, constants)
+    if sql is None:
+        if _is_allowed(module_name, func_name, allowlist):
+            return []
+        return [_non_literal_violation(node.lineno, func_name, method)]
+
+    table = _references_tenant_scoped_table(sql)
+    if table is not None and "$tenant_id" not in sql:
+        return [_missing_tenant_violation(node.lineno, table, method)]
+    return []
+
+
+def _check_transaction_call(
+    node: ast.Call,
+    parents: dict[ast.AST, ast.AST],
+    module_name: str,
+    allowlist: frozenset[AllowlistEntry],
+    constants: dict[str, str],
+) -> list[Violation]:
+    """Verifica cada statement literal de `run_transaction(mod, [stmts], ...)`.
+
+    Lista de statements não-literal (variável, call) → non_literal_sql. Cada
+    statement não-literal dentro da lista segue a regra de allowlist nominal.
+    """
+    stmts_arg = node.args[1] if len(node.args) > 1 else _keyword_arg(node, _STATEMENTS_KEYWORD)
+    func_name = _enclosing_function(node, parents)
+
+    if not isinstance(stmts_arg, ast.List):
+        if _is_allowed(module_name, func_name, allowlist):
+            return []
+        return [_non_literal_violation(node.lineno, func_name, "run_transaction")]
+
+    violations: list[Violation] = []
+    for elt in stmts_arg.elts:
+        sql = _resolve_sql(elt, constants)
+        if sql is None:
+            if not _is_allowed(module_name, func_name, allowlist):
+                violations.append(_non_literal_violation(elt.lineno, func_name, "run_transaction"))
+            continue
+        table = _references_tenant_scoped_table(sql)
+        if table is not None and "$tenant_id" not in sql:
+            violations.append(_missing_tenant_violation(elt.lineno, table, "run_transaction"))
+    return violations
 
 
 def scan_module(
@@ -142,55 +307,28 @@ def scan_module(
 ) -> list[Violation]:
     """Varre o código-fonte de um módulo e devolve as violações do guard.
 
-    Procura chamadas a `.query()` e `.query_raw()`, extrai o SQL do primeiro
-    argumento e verifica:
-    - Se é literal e referencia tabela tenant-scoped → precisa de `$tenant_id`.
+    Procura chamadas a `.query()`/`.query_raw()` e `run_transaction(...)`,
+    extrai o SQL e verifica:
+    - Se é literal (ou constante de módulo confiável) e referencia tabela
+      tenant-scoped → precisa de `$tenant_id`.
     - Se não é literal → precisa estar na allowlist com justificativa.
     """
     tree = ast.parse(source, filename=filename)
     parents = _build_parent_map(tree)
+    constants = _module_string_constants(tree)
     violations: list[Violation] = []
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr not in _QUERY_METHODS:
-            continue
-
-        sql_arg = node.args[0] if node.args else None
-        if sql_arg is None:
-            continue
-
-        if _is_string_literal(sql_arg):
-            if not isinstance(sql_arg, ast.Constant) or not isinstance(sql_arg.value, str):
-                continue
-            sql = sql_arg.value
-            table = _references_tenant_scoped_table(sql)
-            if table is not None and "$tenant_id" not in sql:
-                violations.append(
-                    Violation(
-                        lineno=node.lineno,
-                        kind="missing_tenant_filter",
-                        message=(
-                            f"query on tenant-scoped table '{table}' without $tenant_id "
-                            f"in {func.attr}()"
-                        ),
-                    )
-                )
-        else:
-            func_name = _enclosing_function(node, parents)
-            allowed = any(e.module == module_name and e.function == func_name for e in allowlist)
-            if not allowed:
-                violations.append(
-                    Violation(
-                        lineno=node.lineno,
-                        kind="non_literal_sql",
-                        message=(
-                            f"non-literal SQL in {func_name}() — {func.attr}() requires "
-                            f"a string literal or an allowlist entry with justification"
-                        ),
-                    )
-                )
+        name = _call_name(node.func)
+        if name in _QUERY_METHODS:
+            violations.extend(
+                _check_query_call(node, name, parents, module_name, allowlist, constants)
+            )
+        elif name in _TRANSACTION_FUNCS:
+            violations.extend(
+                _check_transaction_call(node, parents, module_name, allowlist, constants)
+            )
 
     return violations

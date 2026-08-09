@@ -223,7 +223,7 @@ def _changelog_statement(
     return stmt, params
 
 
-def seed_catalog(session: ScopedStore, *, created_by: RecordID) -> None:
+def seed_catalog(session: ScopedStore) -> None:
     """Semeia o catálogo default de um tenant novo (personas, integrações, templates).
 
     Idempotente por id determinístico: re-rodar NÃO cria duplicatas e NÃO sobrescreve

@@ -113,9 +113,7 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
                 "RELATE $u->membership->$t SET role = 'owner';",
                 {"u": user_id, "t": tenant_id},
             )
-            catalog_store.seed_catalog(
-                scoped(root, tenant_id=tenant_id, user_id=user_id), created_by=user_id
-            )
+            catalog_store.seed_catalog(scoped(root, tenant_id=tenant_id, user_id=user_id))
             dest_rid = destinations_store.create_destination(
                 root, name="Renato", kind="pessoa", channel="telegram", address="chat-1"
             )

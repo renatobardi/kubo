@@ -13,6 +13,7 @@ import yaml
 from pydantic import ValidationError
 
 from kubo.errors import ConfigError, format_validation_error
+from kubo.store.scoped import ScopedStore
 
 
 class _NamedModel(Protocol):
@@ -52,8 +53,8 @@ def load_items_from_dir(catalog_dir: Path, model_cls: type[T], kind_label: str) 
 
 
 def load_items_from_db(
-    session: Any,
-    list_fn: Callable[..., list[dict[str, Any]]],
+    session: ScopedStore,
+    list_fn: Callable[[ScopedStore], list[dict[str, Any]]],
     model_cls: type[T],
     kind_label: str,
 ) -> dict[str, T]:

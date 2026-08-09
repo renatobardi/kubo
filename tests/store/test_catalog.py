@@ -138,11 +138,12 @@ def test_tenant_isolation_membership_blocked(db: Any) -> None:
 
 
 def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
-    """Sessão do tenant A não vê nem altera persona do tenant B (seam HTTP, KUBO-212).
+    """Sessão do tenant A não vê nem altera persona, integração ou template do tenant B.
 
-    Mesmo que o caller tente usar um nome de persona que existe no tenant B,
-    a sessão do tenant A não encontra — o record ID é determinístico por
-    (tenant, nome) e o WHERE filtra por $tenant_id.
+    Seam de isolamento (KUBO-212): não existe rota HTTP de CRUD de catálogo —
+    a seam é a construção da sessão, e este teste a exercita no nível da store.
+    Cobre os dois mecanismos: o WHERE `$tenant_id` (listagem) e o record ID
+    determinístico por (tenant, nome) (leitura/escrita ponto-a-ponto via `$r`).
     """
     owner_a = tenancy.create_user(db, firebase_uid=f"uid-a-{secrets.token_hex(4)}")
     tenant_a = tenancy.create_tenant(db, name="A", owner_user_id=owner_a.id)
@@ -152,7 +153,7 @@ def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
     session_a = scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id)
     session_b = scoped(db, tenant_id=tenant_b.id, user_id=owner_b.id)
 
-    # Upsert da mesma persona em ambos os tenants com prompts diferentes
+    # Mesmo item nos dois tenants com conteúdo diferente, nos três catálogos
     catalog.upsert_persona(
         session_a,
         persona={
@@ -173,25 +174,85 @@ def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
             "permissions": [],
         },
     )
+    catalog.upsert_integration(
+        session_a,
+        integration={
+            "name": "shared-integ",
+            "kind": "http",
+            "auth": {"type": "none"},
+            "rate_limit": None,
+            "base_url": "https://a.example.com",
+        },
+    )
+    catalog.upsert_integration(
+        session_b,
+        integration={
+            "name": "shared-integ",
+            "kind": "http",
+            "auth": {"type": "none"},
+            "rate_limit": None,
+            "base_url": "https://b.example.com",
+        },
+    )
+    base_a = catalog.get_flow_template(session_a, name="analysis")
+    base_b = catalog.get_flow_template(session_b, name="analysis")
+    assert base_a is not None
+    assert base_b is not None
+    template_a = {**base_a, "name": "shared-tpl"}
+    template_b = {**base_b, "name": "shared-tpl"}
+    template_a["budget_usd"] = 1.0
+    template_b["budget_usd"] = 2.0
+    catalog.upsert_flow_template(session_a, template=template_a)
+    catalog.upsert_flow_template(session_b, template=template_b)
 
-    # Sessão A vê só o seu prompt, não o do B
+    # Item que existe SÓ no tenant B: leitura ponto-a-ponto (record ID via $r)
+    # da sessão A não encontra — a chave determinística inclui o tenant.
+    catalog.upsert_persona(
+        session_b,
+        persona={
+            "name": "only-in-b",
+            "executor": "api",
+            "model": None,
+            "prompt": "secret-b",
+            "permissions": [],
+        },
+    )
+    assert catalog.get_persona(session_b, name="only-in-b") is not None
+    assert catalog.get_persona(session_a, name="only-in-b") is None
+
+    # Leituras ponto-a-ponto: cada sessão vê só o próprio conteúdo
     persona_a = catalog.get_persona(session_a, name="shared")
     assert persona_a is not None
     assert persona_a["prompt"] == "tenant-a-prompt"
-
     persona_b = catalog.get_persona(session_b, name="shared")
     assert persona_b is not None
     assert persona_b["prompt"] == "tenant-b-prompt"
 
-    # Sessão A lista só as suas personas
-    names_a = {p["name"] for p in catalog.list_personas(session_a)}
-    names_b = {p["name"] for p in catalog.list_personas(session_b)}
-    assert "shared" in names_a
-    assert "shared" in names_b
-    # Os defaults são os mesmos, mas os registros são distintos por tenant
+    integ_a = catalog.get_integration(session_a, name="shared-integ")
+    assert integ_a is not None
+    assert integ_a["base_url"] == "https://a.example.com"
+    integ_b = catalog.get_integration(session_b, name="shared-integ")
+    assert integ_b is not None
+    assert integ_b["base_url"] == "https://b.example.com"
 
-    # Sessão A não consegue apagar persona do tenant B
+    tpl_a = catalog.get_flow_template(session_a, name="shared-tpl")
+    assert tpl_a is not None
+    assert tpl_a["budget_usd"] == 1.0
+    tpl_b = catalog.get_flow_template(session_b, name="shared-tpl")
+    assert tpl_b is not None
+    assert tpl_b["budget_usd"] == 2.0
+
+    # Listagens: o conteúdo distinto aparece listado, não só o nome presente
+    prompts_a = {p["name"]: p["prompt"] for p in catalog.list_personas(session_a)}
+    prompts_b = {p["name"]: p["prompt"] for p in catalog.list_personas(session_b)}
+    assert prompts_a["shared"] == "tenant-a-prompt"
+    assert prompts_b["shared"] == "tenant-b-prompt"
+    assert "only-in-b" not in prompts_a
+    assert "only-in-b" in prompts_b
+
+    # Sessão A apaga só a própria persona; a do tenant B sobrevive intacta
     catalog.delete_persona(session_a, name="shared")
+    assert catalog.get_persona(session_a, name="shared") is None
     persona_b_after = catalog.get_persona(session_b, name="shared")
     assert persona_b_after is not None
     assert persona_b_after["prompt"] == "tenant-b-prompt"

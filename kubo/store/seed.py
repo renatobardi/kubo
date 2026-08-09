@@ -217,7 +217,7 @@ def main() -> int:
         with client.connect() as db:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
             session = scoped(db, tenant_id=tenant_id, user_id=user_id)
-            catalog.seed_catalog(session, created_by=user_id)
+            catalog.seed_catalog(session)
             settings_applied = seed_default_settings(db)
             owner_applied = seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id)
             count = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)

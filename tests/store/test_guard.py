@@ -52,13 +52,26 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
         ),
         AllowlistEntry(
             module="catalog",
-            function="_get_catalog_item",
-            justification="SQL is a module-level constant (_SELECT_BY_ID), not dynamic",
+            function="_upsert_catalog_item",
+            justification=(
+                "run_transaction statements assembled from fixed templates "
+                "(set_clause, changelog_stmt) with bind params"
+            ),
         ),
         AllowlistEntry(
             module="catalog",
-            function="_upsert_catalog_item",
-            justification="SQL is a module-level constant (_SELECT_BY_ID), not dynamic",
+            function="_delete_catalog_item",
+            justification=(
+                "run_transaction assembles changelog_stmt from a fixed template with bind params"
+            ),
+        ),
+        AllowlistEntry(
+            module="catalog",
+            function="seed_catalog",
+            justification=(
+                "run_transaction statements assembled from fixed UPSERT templates "
+                "with bind params (coalesce pattern)"
+            ),
         ),
     }
 )
@@ -214,6 +227,171 @@ def test_tenant_scoped_tables_excludes_global() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scanner: keyword calls, constantes de módulo e run_transaction
+# ---------------------------------------------------------------------------
+
+
+def test_scan_detects_keyword_literal_missing_tenant() -> None:
+    """Chamada por keyword com literal sem $tenant_id → violação (não é ignorada)."""
+    source = textwrap.dedent("""\
+        def f(db):
+            db.query(sql="SELECT * FROM flow WHERE id = $id;")
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "missing_tenant_filter"
+
+
+def test_scan_detects_keyword_non_literal() -> None:
+    """Chamada por keyword com variável → violação non_literal_sql (fail-closed)."""
+    source = textwrap.dedent("""\
+        def f(db, sql):
+            db.query(sql=sql)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_detects_call_without_sql_argument() -> None:
+    """Chamada sem argumento SQL → violação non_literal_sql (fail-closed)."""
+    source = textwrap.dedent("""\
+        def f(db):
+            db.query()
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_resolves_module_string_constant() -> None:
+    """Constante de módulo é resolvida e verificada como literal."""
+    source = textwrap.dedent("""\
+        _Q = "SELECT * FROM flow WHERE id = $id;"
+
+        def f(db):
+            db.query(_Q)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "missing_tenant_filter"
+
+
+def test_scan_resolved_constant_with_tenant_passes() -> None:
+    """Constante de módulo com $tenant_id → sem violação."""
+    source = textwrap.dedent("""\
+        _Q = "SELECT * FROM flow WHERE tenant_id = $tenant_id;"
+
+        def f(db):
+            db.query(_Q)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert violations == []
+
+
+def test_scan_reassigned_constant_is_non_literal() -> None:
+    """Nome reatribuído não é constante confiável → violação non_literal_sql."""
+    source = textwrap.dedent("""\
+        _Q = "SELECT * FROM flow WHERE tenant_id = $tenant_id;"
+        _Q = build()
+
+        def f(db):
+            db.query(_Q)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_imported_name_is_non_literal() -> None:
+    """Nome importado (não definido no módulo) → violação non_literal_sql."""
+    source = textwrap.dedent("""\
+        from somewhere import _Q
+
+        def f(db):
+            db.query(_Q)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_run_transaction_checks_literal_statements() -> None:
+    """Statement literal de run_transaction sobre tabela tenant-scoped → violação."""
+    source = textwrap.dedent("""\
+        def f(db):
+            run_transaction(db, ["DELETE FROM flow WHERE id = $id;"])
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "missing_tenant_filter"
+
+
+def test_scan_run_transaction_passes_with_tenant() -> None:
+    """Statement literal com $tenant_id → sem violação."""
+    source = textwrap.dedent("""\
+        def f(db):
+            run_transaction(db, ["DELETE FROM flow WHERE tenant_id = $tenant_id;"])
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert violations == []
+
+
+def test_scan_run_transaction_non_literal_statement() -> None:
+    """Statement por variável em run_transaction → violação non_literal_sql."""
+    source = textwrap.dedent("""\
+        def f(db, stmt):
+            run_transaction(db, ["LET $x = 1", stmt])
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_run_transaction_non_list_statements() -> None:
+    """Statements fora de lista literal (variável) → violação non_literal_sql."""
+    source = textwrap.dedent("""\
+        def f(db, statements):
+            run_transaction(db, statements)
+    """)
+    violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(violations) == 1
+    assert violations[0].kind == "non_literal_sql"
+
+
+def test_scan_run_transaction_allowlisted() -> None:
+    """Statement não-literal allowlisted com justificativa → sem violação."""
+    source = textwrap.dedent("""\
+        def build(db, stmt):
+            run_transaction(db, [stmt])
+    """)
+    allowlist = frozenset(
+        {
+            AllowlistEntry(
+                module="synthetic",
+                function="build",
+                justification="statements assembled from fixed templates",
+            ),
+        }
+    )
+    violations = scan_module(source, "synthetic.py", "synthetic", allowlist)
+    assert violations == []
+
+
+def test_violation_message_deterministic_for_multi_table_sql() -> None:
+    """SQL com 2+ tabelas tenant-scoped nomeia sempre a mesma (ordem estável)."""
+    source = textwrap.dedent("""\
+        def f(db):
+            db.query("SELECT * FROM task JOIN flow ON task.flow = flow.id;")
+    """)
+    first = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    second = scan_module(source, "synthetic.py", "synthetic", frozenset())
+    assert len(first) == 1
+    assert first[0].message == second[0].message
+    assert "flow" in first[0].message  # ordem alfabética: flow < task
+
+
+# ---------------------------------------------------------------------------
 # Guard real: varredura dos módulos migrados
 # ---------------------------------------------------------------------------
 
@@ -243,6 +421,28 @@ def test_baseline_only_shrinks() -> None:
     all_modules = _store_modules()
     phantom = BASELINE_NOT_MIGRATED - all_modules
     assert not phantom, f"Baseline references non-existent modules: {phantom}"
+
+
+# Tetos de tamanho: a baseline só encolhe e a allowlist não vira bypass geral.
+# Ao migrar um módulo, BAIXE o teto da baseline junto.
+_BASELINE_MAX_SIZE = 13
+_ALLOWLIST_MAX_SIZE = 6
+
+
+def test_baseline_size_does_not_grow() -> None:
+    """A baseline não pode crescer — migrar de volta exige baixar o teto aqui."""
+    assert len(BASELINE_NOT_MIGRATED) <= _BASELINE_MAX_SIZE
+
+
+def test_allowlist_size_ceiling() -> None:
+    """Allowlist com teto — exceções são nominais e contáveis, não um bypass geral."""
+    assert len(_ALLOWLIST) <= _ALLOWLIST_MAX_SIZE
+
+
+def test_baseline_and_migrated_do_not_overlap() -> None:
+    """Um módulo não pode estar na baseline e sob o guard ao mesmo tempo."""
+    overlap = BASELINE_NOT_MIGRATED & MIGRATED
+    assert not overlap, f"Modules in both baseline and migrated: {overlap}"
 
 
 def test_guard_migrated_modules_pass() -> None:

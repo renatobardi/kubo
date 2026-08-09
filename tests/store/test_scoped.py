@@ -62,10 +62,37 @@ def test_scoped_succeeds_with_valid_membership(
 
 def test_scoped_fails_without_membership(db: Any, user_tenant: tuple[RecordID, RecordID]) -> None:
     """Criar sessão sem membership levanta MembershipRequiredError."""
-    user_id, _tenant_id = user_tenant
+    _user_id, tenant_id = user_tenant
     outsider = tenancy.create_user(db, firebase_uid="outsider-uid")
     with pytest.raises(MembershipRequiredError):
-        scoped(db, tenant_id=user_tenant[1], user_id=outsider.id)
+        scoped(db, tenant_id=tenant_id, user_id=outsider.id)
+
+
+def test_direct_construction_checks_membership(
+    db: Any, user_tenant: tuple[RecordID, RecordID]
+) -> None:
+    """Construir ScopedStore direto (sem factory) também checa membership.
+
+    A checagem mora no construtor: construção direta com `superadmin=False`
+    (o default) não é porta de bypass (CodeRabbit PR #237).
+    """
+    user_id, tenant_id = user_tenant
+    outsider = tenancy.create_user(db, firebase_uid="direct-outsider-uid")
+    with pytest.raises(MembershipRequiredError):
+        ScopedStore(db, tenant_id=tenant_id, user_id=outsider.id)
+
+    store = ScopedStore(db, tenant_id=tenant_id, user_id=user_id)
+    assert store.superadmin is False
+
+
+def test_direct_construction_superadmin_skips_membership(
+    db: Any, user_tenant: tuple[RecordID, RecordID]
+) -> None:
+    """`superadmin=True` literal dispensa membership — sítio greppável (ADR-0053 §4)."""
+    _user_id, tenant_id = user_tenant
+    admin = tenancy.create_user(db, firebase_uid="direct-admin-uid")
+    store = ScopedStore(db, tenant_id=tenant_id, user_id=admin.id, superadmin=True)
+    assert store.superadmin is True
 
 
 # ---------------------------------------------------------------------------
@@ -172,23 +199,52 @@ def test_run_transaction_inherits_injection(
 
 
 # ---------------------------------------------------------------------------
+# Injeção: prova observável via spy (sem banco)
+# ---------------------------------------------------------------------------
+
+
+class _SpyDb:
+    """Conexão falsa que registra (sql, params) de cada chamada."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    def query(self, sql: str, params: dict[str, Any] | None = None) -> list[Any]:
+        self.calls.append((sql, params))
+        return []
+
+    def query_raw(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.calls.append((sql, params))
+        return {"result": []}
+
+
+def test_scoped_store_injection_overrides_caller_params() -> None:
+    """tenant_id/user_id do caller NUNCA vencem os da sessão (segurança)."""
+    spy = _SpyDb()
+    store = ScopedStore(
+        spy,
+        tenant_id=RecordID("tenant", "real"),
+        user_id=RecordID("user", "real"),
+        superadmin=True,  # dispensa membership — sem banco neste teste
+    )
+    store.query("SELECT * FROM flow WHERE tenant_id = $tenant_id;", {"tenant_id": "evil"})
+    assert spy.calls[0][1] == {
+        "tenant_id": RecordID("tenant", "real"),
+        "user_id": RecordID("user", "real"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # PoolReader
 # ---------------------------------------------------------------------------
 
 
-def test_pool_reader_query_does_not_inject_tenant(db: Any) -> None:
-    """PoolReader não injeta $tenant_id — leitura do pool é global."""
-    reader = PoolReader(db)
-    # Query sem $tenant_id funciona — PoolReader não injeta
-    rows = reader.query("SELECT * FROM tenant LIMIT 1;")
-    assert len(rows) >= 0  # não levanta
-
-
-def test_pool_reader_is_distinct_type() -> None:
-    """PoolReader é tipo próprio, distinguível de ScopedStore pelo pyright."""
-    # A distinção é de tipo, não de runtime — este teste documenta o contrato
-    assert PoolReader is not ScopedStore
-    assert ScopedStore is not PoolReader
+def test_pool_reader_query_does_not_inject_tenant() -> None:
+    """PoolReader passa os params intactos — nenhuma injeção de tenant/user."""
+    spy = _SpyDb()
+    reader = PoolReader(spy)
+    reader.query("SELECT * FROM item LIMIT 1;", {"k": "v"})
+    assert spy.calls == [("SELECT * FROM item LIMIT 1;", {"k": "v"})]
 
 
 # ---------------------------------------------------------------------------

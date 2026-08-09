@@ -213,7 +213,7 @@ def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
     from kubo.store.scoped import scoped
 
     session = scoped(db, tenant_id=tenant_id, user_id=owner_user_id)
-    catalog.seed_catalog(session, created_by=owner_user_id)
+    catalog.seed_catalog(session)
     return tenant
 
 

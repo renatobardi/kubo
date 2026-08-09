@@ -36,6 +36,11 @@ class ScopedStore:
     `tenant_id`/`user_id` no dict de params antes de delegar. O caller não
     passa esses params; a query os referencia como `$tenant_id`/`$user_id`.
 
+    Membership é checada no construtor (ADR-0053 §1: "uma vez na criação") —
+    a checagem mora num sítio só, não em cada factory. O default `superadmin=False`
+    é seguro por padrão; o bypass exige `superadmin=True` literal, que é sítio
+    de código greppável (ADR-0053 §4), nunca dado derivado de request.
+
     Não existe `ScopedStore` sem tenant: o construtor exige ambos. Acesso
     genuinamente global usa `PoolReader` ou a conexão crua, com nome próprio.
     """
@@ -48,13 +53,19 @@ class ScopedStore:
         user_id: RecordID,
         superadmin: bool = False,
     ) -> None:
+        if not superadmin:
+            assert_membership(db, user_id=user_id, tenant_id=tenant_id)
         self._db = db
         self.tenant_id = tenant_id
         self.user_id = user_id
         self.superadmin = superadmin
 
     def _inject(self, params: dict[str, Any] | None) -> dict[str, Any]:
-        """Retorna params com tenant_id/user_id injetados (não sobrescreve chaves do caller)."""
+        """Injeta tenant_id/user_id, sobrescrevendo chaves do caller se houver.
+
+        A sessão é a autoridade: um `tenant_id` vindo do caller nunca pode vencer
+        o da sessão — sobrescrever incondicional é a semântica de segurança.
+        """
         merged = dict(params) if params else {}
         merged[_TENANT_PARAM] = self.tenant_id
         merged[_USER_PARAM] = self.user_id
@@ -93,13 +104,12 @@ class PoolReader:
 
 
 def scoped(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> ScopedStore:
-    """Factory de acesso comum: checa membership uma vez e devolve a sessão.
+    """Factory de acesso comum: a checagem de membership roda no construtor.
 
     Membership é checada na mesma conexão da operação. A revogação só passa
     a valer no próximo `ScopedStore` — a sessão vive o tempo de um request.
     """
-    assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    return ScopedStore(db, tenant_id=tenant_id, user_id=user_id, superadmin=False)
+    return ScopedStore(db, tenant_id=tenant_id, user_id=user_id)
 
 
 def scoped_superadmin(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> ScopedStore:
