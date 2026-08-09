@@ -26,17 +26,8 @@ from kubo.store.guard import (
 BASELINE_NOT_MIGRATED: frozenset[str] = frozenset(
     {
         "client",
-        "destinations",
-        "flows",
         "invites",
-        "knowledge",
-        "seed",
-        "seed_extra_rss",
-        "settings",
-        "study",
-        "team_invites",
         "tenancy",
-        "tenant_credentials",
         "transaction",
     }
 )
@@ -71,6 +62,14 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
             justification=(
                 "run_transaction statements assembled from fixed UPSERT templates "
                 "with bind params (coalesce pattern)"
+            ),
+        ),
+        AllowlistEntry(
+            module="knowledge",
+            function="search",
+            justification=(
+                "k/ef are bounded integers computed by the store, not user input; "
+                "the search vector goes via bind param"
             ),
         ),
     }
@@ -142,10 +141,10 @@ def test_scan_detects_fstring_sql() -> None:
 
 
 def test_scan_detects_concatenated_sql() -> None:
-    """SQL por concatenação → violação non_literal_sql."""
+    """SQL por concatenação com variável → violação non_literal_sql."""
     source = textwrap.dedent("""\
-        def f(db):
-            db.query("SELECT * FROM " + "flow;")
+        def f(db, table):
+            db.query("SELECT * FROM " + table)
     """)
     violations = scan_module(source, "synthetic.py", "synthetic", frozenset())
     assert len(violations) == 1
@@ -406,7 +405,20 @@ def _store_modules() -> set[str]:
 
 # Módulos já migrados para ScopedStore — vigiados pelo guard.
 # Só cresce — quando um módulo migra, sai da baseline e entra aqui.
-MIGRATED: frozenset[str] = frozenset({"catalog"})
+MIGRATED: frozenset[str] = frozenset(
+    {
+        "catalog",
+        "destinations",
+        "flows",
+        "knowledge",
+        "seed",
+        "seed_extra_rss",
+        "settings",
+        "study",
+        "team_invites",
+        "tenant_credentials",
+    }
+)
 
 
 def test_all_store_modules_classified() -> None:
@@ -425,7 +437,7 @@ def test_baseline_only_shrinks() -> None:
 
 # Tetos de tamanho: a baseline só encolhe e a allowlist não vira bypass geral.
 # Ao migrar um módulo, BAIXE o teto da baseline junto.
-_BASELINE_MAX_SIZE = 13
+_BASELINE_MAX_SIZE = 4
 _ALLOWLIST_MAX_SIZE = 6
 
 

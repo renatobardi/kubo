@@ -25,6 +25,7 @@ from kubo.errors import ConfigError, format_validation_error
 from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
+from kubo.store.scoped import scoped
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -126,8 +127,9 @@ def settings_page(request: Request) -> Response:
         ctx = resolve_session(request, ro)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         settings = settings_store.get_settings(ro)
-        choices = settings_store.default_destination_choices(ro)
+        choices = settings_store.default_destination_choices(session)
     return _render_page(request, settings, choices)
 
 
@@ -155,8 +157,9 @@ def update_settings(
             ctx = resolve_session(request, ro)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             settings = settings_store.get_settings(ro)
-            choices = settings_store.default_destination_choices(ro)
+            choices = settings_store.default_destination_choices(session)
         return _render_page(
             request,
             settings,
@@ -171,6 +174,7 @@ def update_settings(
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             if form.default_destination is not None:
                 temp = settings_store.Settings(
                     id=RecordID("settings", "global"),
@@ -179,10 +183,10 @@ def update_settings(
                     default_destination=form.default_destination,
                 )
                 try:
-                    settings_store.resolve_default_destination(db, temp)
+                    settings_store.resolve_default_destination(session, temp)
                 except ConfigError as exc:
                     settings = settings_store.get_settings(db)
-                    choices = settings_store.default_destination_choices(db)
+                    choices = settings_store.default_destination_choices(session)
                     return _render_page(request, settings, choices, notice=str(exc), status=400)
 
             old_settings = settings_store.get_settings(db)
@@ -192,15 +196,14 @@ def update_settings(
                 and not form.distribution_paused
                 and form.unpause_mode == "recente"
             )
-            destinations = destination_store.active_destinations(db) if unpause_recent else []
+            destinations = destination_store.active_destinations(session) if unpause_recent else []
             settings_store.put_settings_and_reset(
-                db,
+                session,
                 digest_cron=form.digest_cron,
                 distribution_paused=form.distribution_paused,
                 default_destination=form.default_destination,
                 unpause_recent=unpause_recent,
                 destinations=destinations,
-                tenant_id=ctx.tenant_id,
             )
     except ConfigError:
         _log.warning(_WRITE_LOG)

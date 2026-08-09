@@ -11,7 +11,7 @@ Leituras usam `client.connect` (kubo_ro). Rotas SÍNCRONAS (`def`, threadpool �
 from __future__ import annotations
 
 import time
-from typing import Annotated, Any
+from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Form, Query, Request
@@ -38,6 +38,7 @@ from kubo.store.flows import (
     list_flows,
     read_gate_context,
 )
+from kubo.store.scoped import ScopedStore, scoped, scoped_superadmin
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -64,20 +65,13 @@ def list_page(
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
         is_superadmin = ctx.role == "superadmin"
-        flows = list_flows(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
-            limit=size,
-            start=start,
+        session = (
+            scoped_superadmin(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            if is_superadmin
+            else scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         )
-        total = count_flows(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
-        )
+        flows = list_flows(session, limit=size, start=start)
+        total = count_flows(session)
     return templates.TemplateResponse(
         request,
         _LIST_TEMPLATE,
@@ -94,10 +88,11 @@ def board_page(request: Request, flow_key: str) -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
-        board = flow_board(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, flow=flow)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        board = flow_board(session, flow=flow)
         if board is None:
             return RedirectResponse(_LIST_PATH, status_code=303)
-        gate_ctx = _gate_context(db, board, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        gate_ctx = _gate_context(session, board)
     return _render_board(request, board, gate_ctx)
 
 
@@ -193,15 +188,14 @@ def _apply_promotion(
     capturado AQUI, distinto do `ConfigError` de `connect_rw` na rota: aquele é "escrita
     indisponível", este é "falta o token de LEITURA" — mensagens diferentes evitam depurar no
     escuro (achado do advisor antes do smoke)."""
-    if read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task) is None:
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)  # type: ignore[arg-type]
+    if read_gate_context(session, gate_task=gate_task) is None:
         return _reopen_board(
             request,
             gate_task,
             notice="Esta decisão já foi tomada.",
             status=409,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     try:
         promote_gate(
@@ -217,9 +211,7 @@ def _apply_promotion(
             gate_task,
             notice=str(exc),
             status=422,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     except ForgeError:
         _log.warning("flows.promote_forge_unavailable")
@@ -228,9 +220,7 @@ def _apply_promotion(
             gate_task,
             notice="Não foi possível consultar o GitHub. Tente novamente.",
             status=502,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     except ConfigError:
         _log.warning("flows.promote_config_unavailable")
@@ -240,9 +230,7 @@ def _apply_promotion(
             notice="Confirmação indisponível: falta configuração (token read-only do GitHub "
             "ou coordenadas do sandbox).",
             status=503,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     except StateError:
         return _reopen_board(
@@ -250,12 +238,10 @@ def _apply_promotion(
             gate_task,
             notice="Esta decisão já foi tomada.",
             status=409,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     return RedirectResponse(
-        f"/flows/{_flow_key(db, gate_task, tenant_id=tenant_id, user_id=user_id)}",
+        f"/flows/{_flow_key(session, gate_task)}",
         status_code=303,
     )
 
@@ -305,22 +291,21 @@ def _apply_decision(
     """Com a conexão de ESCRITA aberta: staleness (409) → decisão → redirect ao board. Efeito
     externo falho (SenderError no envio do analysis, ForgeError no close do PR do dev) reabre o
     board com aviso; o gate segue aberto (at-least-once)."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)  # type: ignore[arg-type]
     # Staleness GENÉRICO (não o literal `awaiting_review`): read_gate_context é o oráculo de
     # "gate humano ABERTO" — None se já decidido/inválido. Roda ANTES do efeito externo, então
     # um gate dev já resolvido não dispara um close de PR à toa.
-    if read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task) is None:
+    if read_gate_context(session, gate_task=gate_task) is None:
         return _reopen_board(
             request,
             gate_task,
             notice="Esta decisão já foi tomada.",
             status=409,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     try:
         if approve:
-            destination, base_url = _owner_delivery(db)
+            destination, base_url = _owner_delivery(session)
             resume_gate(
                 db,
                 tenant_id=tenant_id,
@@ -343,9 +328,7 @@ def _apply_decision(
             gate_task,
             notice="Falha ao enviar no Telegram; tente de novo.",
             status=502,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     except ForgeError:
         return _reopen_board(
@@ -353,9 +336,7 @@ def _apply_decision(
             gate_task,
             notice="Falha ao fechar o PR no GitHub; tente de novo.",
             status=502,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     except StateError:
         return _reopen_board(
@@ -363,34 +344,29 @@ def _apply_decision(
             gate_task,
             notice="Esta decisão já foi tomada.",
             status=409,
-            db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session=session,
         )
     return RedirectResponse(
-        f"/flows/{_flow_key(db, gate_task, tenant_id=tenant_id, user_id=user_id)}",
+        f"/flows/{_flow_key(session, gate_task)}",
         status_code=303,
     )
 
 
-def _owner_delivery(db: Any) -> tuple[Destination, str]:
+def _owner_delivery(session: ScopedStore) -> tuple[Destination, str]:
     """Resolve o destino padrão nas configurações + a base URL para links.
 
     Aprovação ignora `distribution_paused` (ação explícita do dono, ADR-0028 §6).
     Um destino arquivado/dangling/NONE falha com uma mensagem apontando para Configurações."""
-    settings = settings_store.get_settings(db)
+    settings = settings_store.get_settings(session)
     if settings is None:
         raise ConfigError("configurações não encontradas — configure o destino padrão")
-    destination = settings_store.resolve_default_destination(db, settings)
+    destination = settings_store.resolve_default_destination(session, settings)
     return destination, resolve_base_url()
 
 
 def _gate_context(
-    db: object,
+    session: ScopedStore,
     board: FlowBoardView,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> object | None:
     """Contexto do GateSheet do card de gate (se houver): prosa + fontes das arestas."""
     gate = next((c for c in board.tasks if c.is_gate), None)
@@ -399,7 +375,7 @@ def _gate_context(
     task = _parse_task_id(gate.id)
     if task is None:
         return None
-    return read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=task)
+    return read_gate_context(session, gate_task=task)
 
 
 def _render_board(
@@ -420,43 +396,39 @@ def _reopen_board(
     *,
     notice: str,
     status: int,
-    db: object | None = None,
-    tenant_id: RecordID,
-    user_id: RecordID,
+    session: ScopedStore | None = None,
+    tenant_id: RecordID | None = None,
+    user_id: RecordID | None = None,
 ) -> Response:
-    """Reabre o board do flow do gate com um aviso (staleness/erro). Usa a conexão dada (de
+    """Reabre o board do flow do gate com um aviso (staleness/erro). Usa a sessão dada (de
     escrita) ou abre uma de leitura — a re-renderização mostra o estado atual (fonte da verdade)."""
-    if db is not None:
-        return _reopen_with(
-            request, db, gate_task, notice, status, tenant_id=tenant_id, user_id=user_id
-        )
+    if session is not None:
+        return _reopen_with(request, session, gate_task, notice, status)
+    if tenant_id is None or user_id is None:
+        raise ValueError("tenant_id and user_id required when session is None")
     with client.connect() as ro:
-        return _reopen_with(
-            request, ro, gate_task, notice, status, tenant_id=tenant_id, user_id=user_id
-        )
+        session = scoped(ro, tenant_id=tenant_id, user_id=user_id)
+        return _reopen_with(request, session, gate_task, notice, status)
 
 
 def _reopen_with(
     request: Request,
-    db: object,
+    session: ScopedStore,
     gate_task: RecordID,
     notice: str,
     status: int,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> Response:
     """Renderiza o board do flow ao qual o gate pertence, com aviso e status dados."""
-    flow = flow_of_task(db, tenant_id=tenant_id, user_id=user_id, task=gate_task)
+    flow = flow_of_task(session, task=gate_task)
     if flow is None:
         return RedirectResponse(_LIST_PATH, status_code=303)
-    board = flow_board(db, tenant_id=tenant_id, user_id=user_id, flow=flow)
+    board = flow_board(session, flow=flow)
     if board is None:
         return RedirectResponse(_LIST_PATH, status_code=303)
     return _render_board(
         request,
         board,
-        _gate_context(db, board, tenant_id=tenant_id, user_id=user_id),
+        _gate_context(session, board),
         notice=notice,
         status=status,
     )
@@ -475,7 +447,7 @@ def _parse_task_id(raw: str) -> RecordID | None:
     return RecordID("task", key)
 
 
-def _flow_key(db: object, task: RecordID, *, tenant_id: RecordID, user_id: RecordID) -> str:
+def _flow_key(session: ScopedStore, task: RecordID) -> str:
     """A KEY do flow do task (para o redirect `/flows/<key>`), via a store (invariante 2)."""
-    flow = flow_of_task(db, tenant_id=tenant_id, user_id=user_id, task=task)
+    flow = flow_of_task(session, task=task)
     return str(flow).partition(":")[2] if flow is not None else ""

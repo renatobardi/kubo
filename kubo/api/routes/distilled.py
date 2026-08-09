@@ -25,6 +25,7 @@ from kubo.embedding import GeminiEmbedder
 from kubo.errors import ConfigError, EmbeddingError
 from kubo.store import client, knowledge
 from kubo.store.knowledge import SearchHit
+from kubo.store.scoped import scoped, scoped_superadmin
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -67,19 +68,15 @@ def list_page(
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
         is_superadmin = ctx.role == "superadmin"
+        session_factory = scoped_superadmin if is_superadmin else scoped
+        session = session_factory(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         items = knowledge.list_distilled(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
+            session,
             limit=size,
             start=start,
         )
         total = knowledge.count_distilled(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
+            session,
         )
     return templates.TemplateResponse(
         request,
@@ -112,11 +109,10 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         hits = _dedupe_by_distilled(
             knowledge.search(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 embedding=vector,
                 k=_SEARCH_K,
             )
@@ -124,12 +120,7 @@ def search(request: Request, q: Annotated[str, Query()] = "") -> Response:
         results = [
             view
             for hit in hits
-            if (
-                view := knowledge.read_distilled(
-                    db, hit.distilled, tenant_id=ctx.tenant_id, user_id=ctx.user_id
-                )
-            )
-            is not None
+            if (view := knowledge.read_distilled(session, hit.distilled)) is not None
         ]
     return templates.TemplateResponse(
         request, _RESULTS_TEMPLATE, {"results": results, "query": query, "error": None}
@@ -152,11 +143,10 @@ def detail(request: Request, distilled_id: str) -> Response:
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse("Acesso negado.", status_code=403)
-            view = knowledge.read_distilled(db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            view = knowledge.read_distilled(session, rid)
             if view is not None:
-                related = knowledge.related_distilled(
-                    db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id, limit=_RELATED
-                )
+                related = knowledge.related_distilled(session, rid, limit=_RELATED)
     if view is None:
         return templates.TemplateResponse(
             request, "distilled/not_found.html", {"raw": distilled_id}, status_code=404

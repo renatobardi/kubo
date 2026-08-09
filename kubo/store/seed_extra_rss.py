@@ -22,6 +22,7 @@ import structlog
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store.knowledge import upsert_seed_source
+from kubo.store.scoped import scoped
 
 _log = structlog.get_logger().bind(worker="seed-extra-rss")
 
@@ -161,11 +162,10 @@ def seed_extra_rss_sources(db: Any) -> int:
     dono sobrevivem. Devolve o número de feeds processados.
     """
     tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     for feed in FEEDS:
         upsert_seed_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session,
             kind="rss",
             canonical=feed.canonical,
             title=feed.title,

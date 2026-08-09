@@ -12,12 +12,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, migrations
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     create_material,
     create_topic,
@@ -83,15 +84,13 @@ def test_generate_lesson_content_uses_sections_with_provenance(
     (chapter_seq, section_seq). A lição persistida tem a provenance correta.
     """
     from kubo.scheduler import study_lessons
-    from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem
+    from kubo.study.tutor import LessonOutput, ProvenanceItem, QuizItem, Tutor
 
     # 1. Cria tema + material com 2 capítulos × 2 seções = 4 seções.
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(2)
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Livro",
         fmt="epub",
@@ -104,16 +103,16 @@ def test_generate_lesson_content_uses_sections_with_provenance(
     )
 
     # 2. Busca as seções e salva plano com as 2 primeiras seções.
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=material.id)
+    sections = list_all_sections(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id
+    )
     assert len(sections) == 4
     # sections[0] e sections[1] são do capítulo 1 (chapter_seq=1, seq=1 e 2)
     assert sections[0].chapter_seq == 1
     assert sections[1].chapter_seq == 1
 
     _, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         entries=[("Lição 1", [sections[0].id, sections[1].id])],
     )
@@ -123,9 +122,7 @@ def test_generate_lesson_content_uses_sections_with_provenance(
     from kubo.store.study import create_lesson
 
     lesson_id = create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=entries[0].study_plan,
         plan_entry_id=entry.id,
         scheduled_for=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
@@ -165,13 +162,12 @@ def test_generate_lesson_content_uses_sections_with_provenance(
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
     study_lessons._generate_lesson_content(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=entries[0].study_plan,
         lesson_id=lesson_id,
         entry=entry,
         work_context="",
+        tutor=cast(Tutor, _FakeTutor()),
     )
 
     # 4. Verifica que a lição foi preenchida com a provenance de seções.

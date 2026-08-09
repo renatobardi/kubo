@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from kubo.store import knowledge
+from kubo.store.scoped import scoped
 from scripts import audit_sample as aud
 
 _PT = "O banco central manteve a taxa de juros nesta reunião para observar mais dados."
@@ -108,16 +109,14 @@ def test_main_writes_doc_against_seeded_db(db, tenant_id, user_id, tmp_path, mon
     `chdir` em tmp_path para o `validated_out` (confina ao cwd) aceitar o `--out`."""
     monkeypatch.chdir(tmp_path)
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(
         db, source=src, external_id="e1", content="conteúdo original do item para auditar"
     )
-    run = knowledge.start_run(db, worker="distiller", tenant_id=tenant_id, user_id=user_id)
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller")
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="resumo recente destilado",
         chunks=[],

@@ -24,6 +24,7 @@ from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import client, migrations
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     count_lessons_for_plan,
     create_lesson,
@@ -84,7 +85,7 @@ def _plan_with_entries(
     db: Any, tenant_id: RecordID, user_id: RecordID, *, lessons: int = 2
 ) -> tuple[RecordID, list[RecordID]]:
     """Cria tema + material + plano com `lessons` entradas; devolve (plan_id, entry_ids)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = [
         ParsedChapter(seq=i, title=f"Capítulo {i}", content=f"Conteúdo {i}.", part=None)
         for i in range(1, lessons + 1)
@@ -101,9 +102,7 @@ def _plan_with_entries(
         for ch in chapters
     }
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Livro",
         fmt="epub",
@@ -115,12 +114,10 @@ def _plan_with_entries(
         summary="Um livro.",
     )
     all_sections = list_all_sections(
-        db, tenant_id=tenant_id, user_id=user_id, material_id=material.id
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id
     )
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         entries=[(f"Lição {i + 1}", [all_sections[i].id]) for i in range(lessons)],
     )
@@ -139,17 +136,13 @@ def _filled_lesson(
 ) -> RecordID:
     """Cria e preenche uma lição (como o scheduler faz com o Tutor)."""
     lesson_id = create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entry_id,
         scheduled_for=datetime(2026, 8, day, 12, 0, tzinfo=timezone.utc),
     )
     fill_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         concept="Conceito destilado.",
         scenario="Cenário.",
@@ -170,7 +163,7 @@ def test_get_lesson_returns_content_and_quiz(
     """A lição preenchida volta com os 4 blocos, quiz e proveniência (a UI precisa disso)."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
-    lesson = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    lesson = get_lesson(scoped(db, tenant_id=tenant_id, user_id=user_id), lesson_id=lesson_id)
     assert lesson is not None
     assert lesson.concept == "Conceito destilado."
     assert lesson.scenario == "Cenário."
@@ -187,21 +180,22 @@ def test_get_lesson_of_other_user_is_none(
     """Lição de outro usuário é INEXISTENTE, não negada (a rota vira 404)."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
-    assert get_lesson(db, tenant_id=tenant_id, user_id=other_user_id, lesson_id=lesson_id) is None
+    assert (
+        get_lesson(scoped(db, tenant_id=tenant_id, user_id=other_user_id), lesson_id=lesson_id)
+        is None
+    )
 
 
 def test_placeholder_lesson_is_flagged(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Lição criada e não preenchida (Tutor falhou) é placeholder, não lição vazia."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entries[0],
         scheduled_for=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
     )
-    lesson = get_lesson(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    lesson = get_lesson(scoped(db, tenant_id=tenant_id, user_id=user_id), lesson_id=lesson_id)
     assert lesson is not None
     assert lesson.is_placeholder is True
     assert lesson.quiz == []
@@ -217,29 +211,28 @@ def test_placeholder_does_not_count_as_done(
     """
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entries[0],
         scheduled_for=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
     )
-    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 0
+    assert (
+        count_lessons_for_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id)
+        == 0
+    )
 
 
 def test_pending_lesson_is_found_for_retry(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """A lição placeholder é encontrável para re-tentativa do Tutor."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entries[0],
         scheduled_for=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
     )
     found = get_pending_lesson_for_entry(
-        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id, plan_entry_id=entries[0]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id, plan_entry_id=entries[0]
     )
     assert found is not None
     assert str(found) == str(lesson_id)
@@ -251,10 +244,15 @@ def test_filled_lesson_counts_and_is_not_pending(
     """Depois do fill, a lição conta como gerada e não aparece como pendente."""
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
-    assert count_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == 1
+    assert (
+        count_lessons_for_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id)
+        == 1
+    )
     assert (
         get_pending_lesson_for_entry(
-            db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id, plan_entry_id=entries[0]
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            plan_id=plan_id,
+            plan_entry_id=entries[0],
         )
         is None
     )
@@ -267,7 +265,9 @@ def test_list_lessons_for_plan_is_ordered_by_date(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=6)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
-    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    lessons = list_lessons_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert [lesson.scheduled_for.day for lesson in lessons] == [4, 6]
 
 
@@ -281,9 +281,7 @@ def test_create_study_log_persists_performance(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     log = create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         answers=[0, 0],
         correct_count=1,
@@ -292,7 +290,7 @@ def test_create_study_log_persists_performance(
     assert log.answers == [0, 0]
     assert log.correct_count == 1
     assert log.reaction == "dificil"
-    stored = get_study_log(db, tenant_id=tenant_id, user_id=user_id, lesson_id=lesson_id)
+    stored = get_study_log(scoped(db, tenant_id=tenant_id, user_id=user_id), lesson_id=lesson_id)
     assert stored is not None
     assert stored.correct_count == 1
 
@@ -304,9 +302,7 @@ def test_study_log_without_reaction_is_allowed(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     log = create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         answers=[0, 1],
         correct_count=2,
@@ -320,9 +316,7 @@ def test_second_study_log_is_refused(db: Any, tenant_id: RecordID, user_id: Reco
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         answers=[0, 1],
         correct_count=2,
@@ -330,9 +324,7 @@ def test_second_study_log_is_refused(db: Any, tenant_id: RecordID, user_id: Reco
     )
     with pytest.raises(StoreError):
         create_study_log(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             lesson_id=lesson_id,
             answers=[1, 0],
             correct_count=0,
@@ -348,9 +340,7 @@ def test_study_log_of_other_user_is_refused(
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     with pytest.raises(StoreError):
         create_study_log(
-            db,
-            tenant_id=tenant_id,
-            user_id=other_user_id,
+            scoped(db, tenant_id=tenant_id, user_id=other_user_id),
             lesson_id=lesson_id,
             answers=[0, 1],
             correct_count=2,
@@ -366,27 +356,25 @@ def test_logs_for_plan_are_indexed_by_lesson(
     first = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=6)
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=first,
         answers=[0, 1],
         correct_count=2,
         reaction="ok",
     )
-    logs = list_study_logs_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    logs = list_study_logs_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert str(first) in logs
     assert len(logs) == 1
 
 
 def test_progress_counts_completed_lessons(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """O progresso do tema anda quando o registro de estudo existe (antes era sempre 0/N)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = [ParsedChapter(seq=1, title="Cap 1", content="Conteúdo.", part=None)]
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Livro",
         fmt="epub",
@@ -403,27 +391,25 @@ def test_progress_counts_completed_lessons(db: Any, tenant_id: RecordID, user_id
         },
         summary="Livro.",
     )
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=material.id)
+    sections = list_all_sections(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id
+    )
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         entries=[("Lição 1", [sections[0].id])],
     )
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan.id, entries[0].id)
-    before = get_topic_progress(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    before = get_topic_progress(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert before.done == 0
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         answers=[0, 1],
         correct_count=2,
         reaction=None,
     )
-    after = get_topic_progress(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    after = get_topic_progress(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert after.done == 1
     assert after.total == 1
 
@@ -442,15 +428,15 @@ def test_recent_misses_returns_wrong_question_texts(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
-        answers=[1, 1],  # 1ª errada (gabarito 0), 2ª certa
+        answers=[1, 1],
         correct_count=1,
         reaction=None,
     )
-    misses = recent_misses_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    misses = recent_misses_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert misses == ["O que é um Tema?"]
 
 
@@ -461,15 +447,16 @@ def test_recent_misses_is_empty_without_errors(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id)
     lesson_id = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0])
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lesson_id,
         answers=[0, 1],
         correct_count=2,
         reaction=None,
     )
-    assert recent_misses_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id) == []
+    assert (
+        recent_misses_for_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id)
+        == []
+    )
 
 
 def test_recent_misses_prefers_recent_and_caps(
@@ -495,16 +482,14 @@ def test_recent_misses_prefers_recent_and_caps(
     newer = _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=6, quiz=newer_quiz)
     for lesson_id in (older, newer):
         create_study_log(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             lesson_id=lesson_id,
-            answers=[1, 0],  # erra as duas
+            answers=[1, 0],
             correct_count=0,
             reaction=None,
         )
     misses = recent_misses_for_plan(
-        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id, limit=3
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id, limit=3
     )
     assert len(misses) == 3  # 4 erros, teto de 3
     # A lição mais recente (day=6) contribui primeiro — prompt distinto.
@@ -524,12 +509,12 @@ def test_lesson_for_today_returns_first_undone(
     from kubo.store.study import list_topics_by_state
 
     # O _plan_with_entries cria o topic em draft; precisamos ativar o plano.
-    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topics = list_topics_by_state(scoped(db, tenant_id=tenant_id, user_id=user_id), state="draft")
     assert len(topics) == 1
     set_topic_state(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topics[0].id, state="scheduled"
     )
-    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    result = lesson_for_today(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert result is not None
     lesson, topic = result
     assert topic.title == "Estudo"
@@ -545,9 +530,7 @@ def test_lesson_for_today_skips_done_lessons(
     lid1 = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=5)
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lid1,
         answers=[0, 1],
         correct_count=2,
@@ -555,11 +538,11 @@ def test_lesson_for_today_skips_done_lessons(
     )
     from kubo.store.study import list_topics_by_state
 
-    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topics = list_topics_by_state(scoped(db, tenant_id=tenant_id, user_id=user_id), state="draft")
     set_topic_state(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topics[0].id, state="scheduled"
     )
-    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    result = lesson_for_today(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert result is not None
     lesson, _topic = result
     assert lesson.scheduled_for.day == 5  # segunda lição (primeira concluída)
@@ -572,9 +555,7 @@ def test_lesson_for_today_none_when_all_done(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=1)
     lid = _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
     create_study_log(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         lesson_id=lid,
         answers=[0, 1],
         correct_count=2,
@@ -582,11 +563,11 @@ def test_lesson_for_today_none_when_all_done(
     )
     from kubo.store.study import list_topics_by_state
 
-    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topics = list_topics_by_state(scoped(db, tenant_id=tenant_id, user_id=user_id), state="draft")
     set_topic_state(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topics[0].id, state="scheduled"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topics[0].id, state="scheduled"
     )
-    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    result = lesson_for_today(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert result is None
 
 
@@ -595,7 +576,7 @@ def test_lesson_for_today_none_without_active_plan(
 ) -> None:
     """Sem plano ativo (draft only) → None."""
     _plan_with_entries(db, tenant_id, user_id, lessons=1)  # topic fica em draft
-    result = lesson_for_today(db, tenant_id=tenant_id, user_id=user_id)
+    result = lesson_for_today(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert result is None
 
 
@@ -611,11 +592,11 @@ def test_get_topics_progress_batch_matches_single(
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[1], day=5)
     from kubo.store.study import list_topics_by_state
 
-    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topics = list_topics_by_state(scoped(db, tenant_id=tenant_id, user_id=user_id), state="draft")
     topic_id = topics[0].id
-    single = get_topic_progress(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    single = get_topic_progress(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     batch = get_topics_progress_batch(
-        db, tenant_id=tenant_id, user_id=user_id, topic_ids=[topic_id]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_ids=[topic_id]
     )
     key = str(topic_id)
     assert key in batch
@@ -630,13 +611,13 @@ def test_get_topics_progress_batch_multiple_plans(
     plan_id, entries = _plan_with_entries(db, tenant_id, user_id, lessons=1)
     _filled_lesson(db, tenant_id, user_id, plan_id, entries[0], day=4)
     # Segundo tema sem plano.
-    topic2 = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Sem plano")
+    topic2 = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Sem plano")
     from kubo.store.study import list_topics_by_state
 
-    topics = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="draft")
+    topics = list_topics_by_state(scoped(db, tenant_id=tenant_id, user_id=user_id), state="draft")
     topic1_id = next(t.id for t in topics if t.title == "Estudo")
     batch = get_topics_progress_batch(
-        db, tenant_id=tenant_id, user_id=user_id, topic_ids=[topic1_id, topic2.id]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_ids=[topic1_id, topic2.id]
     )
     assert batch[str(topic1_id)].total == 1
     assert batch[str(topic2.id)].total == 0
@@ -647,5 +628,7 @@ def test_get_topics_progress_batch_empty_list(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Lista vazia → dict vazio."""
-    batch = get_topics_progress_batch(db, tenant_id=tenant_id, user_id=user_id, topic_ids=[])
+    batch = get_topics_progress_batch(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_ids=[]
+    )
     assert batch == {}

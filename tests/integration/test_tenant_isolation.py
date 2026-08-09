@@ -22,6 +22,7 @@ from kubo.api.app import create_app  # noqa: E402
 from kubo.api.auth import hash_password  # noqa: E402
 from kubo.store import client as store_client  # noqa: E402
 from kubo.store import migrations, tenancy
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -121,8 +122,12 @@ def test_entities_route_is_tenant_scoped(db: Any, test_client: TestClient) -> No
     # Uma entidade em cada tenant
     from kubo.store.knowledge import get_or_create_entity
 
-    get_or_create_entity(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID, name="Entity A")
-    get_or_create_entity(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID, name="Entity B")
+    get_or_create_entity(
+        scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID), name="Entity A"
+    )
+    get_or_create_entity(
+        scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID), name="Entity B"
+    )
 
     _switch(test_client, tenant_a.id)
     html_a = test_client.get("/entities").text
@@ -145,10 +150,7 @@ def test_superadmin_can_browse_foreign_tenant(
     from kubo.store.knowledge import get_or_create_entity
 
     get_or_create_entity(
-        db,
-        tenant_id=normal_tenant.id,
-        user_id=normal_user.id,
-        name="Foreign Entity",
+        scoped(db, tenant_id=normal_tenant.id, user_id=normal_user.id), name="Foreign Entity"
     )
 
     from kubo.api.routes import auth as auth_mod
@@ -181,7 +183,7 @@ def test_cross_tenant_entity_detail_returns_403(db: Any, test_client: TestClient
     from kubo.store.knowledge import get_or_create_entity
 
     entity_b = get_or_create_entity(
-        db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID, name="Entity B2"
+        scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID), name="Entity B2"
     )
 
     _switch(test_client, tenant_a.id)
@@ -219,17 +221,13 @@ def test_sources_route_is_tenant_scoped(db: Any, test_client: TestClient) -> Non
     from kubo.store.knowledge import create_source
 
     create_source(
-        db,
-        tenant_id=tenant_a.id,
-        user_id=_BREAKGLASS_USER_ID,
+        scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID),
         kind="rss",
         canonical="https://a.example.com/feed.xml",
         title="Feed A",
     )
     create_source(
-        db,
-        tenant_id=tenant_b.id,
-        user_id=_BREAKGLASS_USER_ID,
+        scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID),
         kind="rss",
         canonical="https://b.example.com/feed.xml",
         title="Feed B",
@@ -255,8 +253,8 @@ def test_runs_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
 
     from kubo.store.knowledge import start_run
 
-    start_run(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID, worker="feed-a")
-    start_run(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID, worker="feed-b")
+    start_run(scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID), worker="feed-a")
+    start_run(scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID), worker="feed-b")
 
     _switch(test_client, tenant_a.id)
     html_a = test_client.get("/runs").text
@@ -282,25 +280,21 @@ def test_dispatches_route_is_tenant_scoped(db: Any, test_client: TestClient) -> 
     from kubo.store.knowledge import insert_dispatch
 
     dest_a = create_destination(
-        db,
+        scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID),
         name="Destino A",
         kind="pessoa",
         channel="telegram",
         address="111",
-        tenant_id=tenant_a.id,
     )
     dest_b = create_destination(
-        db,
+        scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID),
         name="Destino B",
         kind="pessoa",
         channel="telegram",
         address="222",
-        tenant_id=tenant_b.id,
     )
     insert_dispatch(
-        db,
-        tenant_id=tenant_a.id,
-        user_id=_BREAKGLASS_USER_ID,
+        scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID),
         destination=dest_a,
         channel="telegram",
         status="ok",
@@ -309,9 +303,7 @@ def test_dispatches_route_is_tenant_scoped(db: Any, test_client: TestClient) -> 
         items=[],
     )
     insert_dispatch(
-        db,
-        tenant_id=tenant_b.id,
-        user_id=_BREAKGLASS_USER_ID,
+        scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID),
         destination=dest_b,
         channel="telegram",
         status="ok",

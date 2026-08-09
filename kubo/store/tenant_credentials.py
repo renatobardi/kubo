@@ -3,18 +3,22 @@
 Cada tenant guarda N chaves (uma por `provider`). O segredo em si nunca é
 persistido em claro: a camada de store cifra com Fernet antes de escrever e
 decifra após ler. A chave mestra vem de `KUBO_TENANT_CREDENTIAL_KEY`.
+
+Toda operação pública recebe uma `ScopedStore` (KUBO-212, ADR-0053): a sessão
+carrega `(tenant_id, user_id)`, checa membership na criação, e injeta
+`$tenant_id`/`$user_id` nos params de toda query. O caller não passa
+tenant_id/user_id — a sessão os fornece.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from cryptography.fernet import Fernet
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError, StoreError
-from kubo.store import tenancy as _tenancy
+from kubo.store.scoped import ScopedStore
 
 
 def _fernet() -> Fernet:
@@ -43,31 +47,23 @@ def _record_id(tenant_id: RecordID, provider: str) -> RecordID:
 
 
 def set_credential(
-    db: Any,
+    session: ScopedStore,
     *,
-    user_id: RecordID | None = None,
-    tenant_id: RecordID,
     provider: str,
     secret: str,
 ) -> None:
-    """Cria ou atualiza a credencial cifrada de um provider para um tenant.
-
-    Se `user_id` for fornecido, exige membership no tenant (ADR-0039 §II).
-    """
-    if user_id is not None:
-        _tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    """Cria ou atualiza a credencial cifrada de um provider para um tenant."""
     if not provider.strip():
         raise StoreError("provider cannot be empty")
     if not secret:
         raise StoreError("secret cannot be empty")
 
     encrypted = _encrypt(secret)
-    db.query(
-        "UPSERT $id SET tenant_id = $tenant, provider = $provider, "
+    session.query(
+        "UPSERT $id SET tenant_id = $tenant_id, provider = $provider, "
         "`value` = $value, updated_at = time::now();",
         {
-            "id": _record_id(tenant_id, provider),
-            "tenant": tenant_id,
+            "id": _record_id(session.tenant_id, provider),
             "provider": provider.strip(),
             "value": encrypted,
         },
@@ -75,21 +71,14 @@ def set_credential(
 
 
 def get_credential(
-    db: Any,
+    session: ScopedStore,
     *,
-    user_id: RecordID | None = None,
-    tenant_id: RecordID,
     provider: str,
 ) -> str | None:
-    """Lê e decifra a credencial de um provider para um tenant, ou None.
-
-    Se `user_id` for fornecido, exige membership no tenant (ADR-0039 §II).
-    """
-    if user_id is not None:
-        _tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT `value` FROM tenant_credential WHERE id = $id LIMIT 1;",
-        {"id": _record_id(tenant_id, provider)},
+    """Lê e decifra a credencial de um provider para um tenant, ou None."""
+    rows = session.query(
+        "SELECT `value` FROM tenant_credential WHERE id = $id AND tenant_id = $tenant_id LIMIT 1;",
+        {"id": _record_id(session.tenant_id, provider)},
     )
     if not rows:
         return None
@@ -97,19 +86,12 @@ def get_credential(
 
 
 def delete_credential(
-    db: Any,
+    session: ScopedStore,
     *,
-    user_id: RecordID | None = None,
-    tenant_id: RecordID,
     provider: str,
 ) -> None:
-    """Revoga (apaga) a credencial de um provider para um tenant.
-
-    Se `user_id` for fornecido, exige membership no tenant (ADR-0039 §II).
-    """
-    if user_id is not None:
-        _tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    db.query(
+    """Revoga (apaga) a credencial de um provider para um tenant."""
+    session.query(
         "DELETE $id;",
-        {"id": _record_id(tenant_id, provider)},
+        {"id": _record_id(session.tenant_id, provider)},
     )

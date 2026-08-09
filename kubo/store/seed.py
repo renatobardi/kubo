@@ -114,11 +114,10 @@ def seed_feed_cadastros(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> i
     permanece para proteger pausa/título que o dono já tenha mudado ANTES do 1º seed."""
     if _marker_seen(db, "feed_cadastros"):
         return 0
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     for feed in FEED_CADASTROS:
         upsert_seed_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session,
             kind="rss",
             canonical=feed.canonical,
             title=feed.title,
@@ -169,13 +168,13 @@ def seed_owner_destination(db: Any, *, tenant_id: RecordID, user_id: RecordID) -
         return False
 
     chat_id = _owner_telegram_chat_id()
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     rid = destination_store.create_destination(
-        db,
+        session,
         name="owner-telegram",
         kind="pessoa",
         channel="telegram",
         address=chat_id,
-        tenant_id=tenant_id,
     )
 
     current = settings_store.get_settings(db)

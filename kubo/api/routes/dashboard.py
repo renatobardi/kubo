@@ -15,6 +15,7 @@ from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
 from kubo.store import study as study_store
 from kubo.store import tenancy as tenancy_store
+from kubo.store.scoped import scoped, scoped_superadmin
 
 router = APIRouter()
 
@@ -65,12 +66,9 @@ def dashboard(request: Request) -> Response:
         if ctx is None:
             return Response("Acesso negado.", status_code=403, media_type="text/plain")
         is_superadmin = ctx.role == "superadmin"
-        counts = knowledge.dashboard_counts(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
-        )
+        session_factory = scoped_superadmin if is_superadmin else scoped
+        session = session_factory(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        counts = knowledge.dashboard_counts(session)
         runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
         # Superadmin pode acessar tenant sem membership — lesson_for_today chama
@@ -78,9 +76,7 @@ def dashboard(request: Request) -> Response:
         today_lesson = None
         if not is_superadmin:
             try:
-                today_lesson = study_store.lesson_for_today(
-                    db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
-                )
+                today_lesson = study_store.lesson_for_today(session)
             except Exception:
                 today_lesson = None
 

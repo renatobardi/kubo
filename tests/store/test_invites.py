@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from surrealdb import RecordID
 
 from kubo.errors import (
     DuplicateDestinationError,
@@ -19,6 +20,7 @@ from kubo.errors import (
     StaleInviteError,
 )
 from kubo.store import client, destinations, invites, migrations
+from kubo.store.scoped import ScopedStore
 
 pytestmark = pytest.mark.integration
 
@@ -36,6 +38,12 @@ def db() -> Iterator[Any]:
         migrations.apply_migrations(conn)
         yield conn
         conn.query(f"REMOVE DATABASE IF EXISTS {_INVITES_DB};")
+
+
+@pytest.fixture
+def session(db: Any, tenant_id: RecordID, user_id: RecordID) -> ScopedStore:
+    """ScopedStore para o tenant/user do fixture."""
+    return ScopedStore(db, tenant_id=tenant_id, user_id=user_id)
 
 
 def _seconds_from_now(value: datetime) -> float:
@@ -133,8 +141,14 @@ def test_resend_rejects_already_accepted_invite(db: Any) -> None:
         invites.resend_invite(db, invite.id)
 
 
-def test_accept_invite_creates_destination_and_marks_accepted(db: Any) -> None:
-    """Aceite cria destination ativo e marca accepted_at."""
+def test_accept_invite_creates_destination_and_marks_accepted(
+    db: Any,
+) -> None:
+    """Aceite cria destination ativo e marca accepted_at.
+
+    O destination criado pelo aceite é global (sem tenant_id, ADR-0033) — lê
+    direto do banco, não via ScopedStore.
+    """
     invite = invites.create_invite(db, name="Marina")
     destination_id = invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
 
@@ -143,19 +157,20 @@ def test_accept_invite_creates_destination_and_marks_accepted(db: Any) -> None:
     assert updated.accepted_at is not None
     assert updated.status == "accepted"
 
-    destination = destinations.get_destination(db, destination_id)
-    assert destination is not None
-    assert destination.name == "Marina"
-    assert destination.kind == "pessoa"
-    assert destination.channel == "telegram"
-    assert destination.address == "123456"
-    assert destination.enabled is True
+    rows = db.query("SELECT * FROM $r;", {"r": destination_id})
+    assert rows
+    destination = rows[0]
+    assert destination["name"] == "Marina"
+    assert destination["kind"] == "pessoa"
+    assert destination["channel"] == "telegram"
+    assert destination["address"] == "123456"
+    assert destination["enabled"] is True
 
 
-def test_accept_invite_rejects_duplicate_chat_id(db: Any) -> None:
+def test_accept_invite_rejects_duplicate_chat_id(db: Any, session: ScopedStore) -> None:
     """chat_id já cadastrado em outro destination recusa o aceite."""
     destinations.create_destination(
-        db, name="Dono", kind="pessoa", channel="telegram", address="123456"
+        session, name="Dono", kind="pessoa", channel="telegram", address="123456"
     )
     invite = invites.create_invite(db, name="Marina")
 

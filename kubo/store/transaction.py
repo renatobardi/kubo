@@ -32,7 +32,13 @@ def run_transaction(
     """
     body = ";\n".join(s.strip().rstrip(";") for s in statements)
     surql = f"BEGIN;\n{body};\nCOMMIT;"
+    import structlog
+
+    structlog.get_logger("kubo.store.transaction").info(
+        "run_transaction.surql", surql=surql, params=params
+    )
     raw = db.query_raw(surql, params or {})  # noqa: S608 (surql montado só de literais + bind params)
+    structlog.get_logger("kubo.store.transaction").info("run_transaction.raw", raw=raw)
     failed = [r for r in raw["result"] if r.get("status") == "ERR"]
     if failed:
         detail = "; ".join(str(r.get("result")) for r in failed)

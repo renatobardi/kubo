@@ -159,15 +159,52 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.destinations.invite_store.list_invites", lambda db, **kw: []
     )
+    # ScopedStore fake: o construtor real chama assert_membership (db.query),
+    # mas o db do teste é `object()`. O fake devolve um SimpleNamespace que
+    # carrega os ids da sessão e não explode se as funções de store stubadas
+    # (acima) não forem chamadas (KUBO-213).
+    _fake_session = SimpleNamespace(
+        tenant_id=RecordID("tenant", "breakglass"),
+        user_id=RecordID("user", "breakglass-owner"),
+    )
+    _modules_with_scoped = (
+        "auth",
+        "dashboard",
+        "destinations",
+        "dispatches",
+        "distilled",
+        "entities",
+        "flows",
+        "runs",
+        "settings",
+        "sources",
+        "study",
+    )
+    for _mod in _modules_with_scoped:
+        for _fn in ("scoped", "scoped_superadmin"):
+            _attr = f"kubo.api.routes.{_mod}.{_fn}"
+            try:
+                monkeypatch.setattr(
+                    _attr,
+                    lambda db, *, tenant_id, user_id: SimpleNamespace(
+                        tenant_id=tenant_id, user_id=user_id
+                    ),
+                )
+            except AttributeError:
+                pass
     _settings_store_stub = SimpleNamespace(
         get_settings=lambda db: Settings(
             id=RecordID("settings", "global"),
             digest_cron="30 9 * * *",
             distribution_paused=False,
             default_destination=None,
-        )
+        ),
+        default_destination_choices=lambda session: [_OWNER],
+        resolve_default_destination=lambda session, s: _OWNER,
+        put_settings_and_reset=lambda *a, **kw: None,
     )
     monkeypatch.setattr("kubo.api.routes.destinations.settings_store", _settings_store_stub)
+    monkeypatch.setattr("kubo.api.routes.flows.settings_store", _settings_store_stub)
 
 
 @pytest.fixture(autouse=True)

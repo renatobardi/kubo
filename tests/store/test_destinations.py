@@ -20,6 +20,7 @@ from kubo.errors import (
     StaleDestinationError,
 )
 from kubo.store import client, destinations, knowledge, migrations
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -74,10 +75,14 @@ def test_create_destination_lands_active_and_normalized(
 ) -> None:
     """Cadastrar cria destino ativo e normaliza o endereço antes de gravar."""
     rid = destinations.create_destination(
-        db, name="Renato", kind="pessoa", channel="telegram", address="  123456  "
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Renato",
+        kind="pessoa",
+        channel="telegram",
+        address="  123456  ",
     )
 
-    row = destinations.get_destination(db, rid)
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert row is not None
     assert row.name == "Renato"
     assert row.kind == "pessoa"
@@ -91,20 +96,40 @@ def test_create_rejects_duplicate_active_or_paused(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Mesmo (channel, address) normalizado já ativo/pausado → DuplicateDestinationError."""
-    destinations.create_destination(db, name="A", kind="pessoa", channel="telegram", address="123")
+    destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="123",
+    )
     with pytest.raises(DuplicateDestinationError):
         destinations.create_destination(
-            db, name="B", kind="sistema", channel="telegram", address="123"
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            name="B",
+            kind="sistema",
+            channel="telegram",
+            address="123",
         )
 
     # Pausado também segura o slot (arquivado é outro caso).
     rid = destinations.create_destination(
-        db, name="C", kind="pessoa", channel="email", address="c@example.com"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="C",
+        kind="pessoa",
+        channel="email",
+        address="c@example.com",
     )
-    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid, enabled=False)
+    destinations.set_destination_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
+    )
     with pytest.raises(DuplicateDestinationError):
         destinations.create_destination(
-            db, name="D", kind="pessoa", channel="email", address="C@EXAMPLE.COM"
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            name="D",
+            kind="pessoa",
+            channel="email",
+            address="C@EXAMPLE.COM",
         )
 
 
@@ -113,16 +138,24 @@ def test_create_reactivates_archived_instead_of_duplicating(
 ) -> None:
     """Re-cadastrar um endereço arquivado reativa o registro existente, não cria novo."""
     rid = destinations.create_destination(
-        db, name="Velho", kind="pessoa", channel="telegram", address="999"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Velho",
+        kind="pessoa",
+        channel="telegram",
+        address="999",
     )
-    destinations.archive_destination(db, id=rid)
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
     again = destinations.create_destination(
-        db, name="Novo", kind="sistema", channel="telegram", address="999"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Novo",
+        kind="sistema",
+        channel="telegram",
+        address="999",
     )
 
     assert str(again) == str(rid)
-    row = destinations.get_destination(db, rid)
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert row is not None
     assert row.enabled is True
     assert row.archived_at is None
@@ -135,11 +168,17 @@ def test_edit_updates_name_and_address_preserving_id(
 ) -> None:
     """Editar nome e endereço mantém o id; o endereço é normalizado."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.edit_destination(db, id=rid, name="A2", address=" 222 ")
+    destinations.edit_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, name="A2", address=" 222 "
+    )
 
-    row = destinations.get_destination(db, rid)
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert row is not None
     assert row.name == "A2"
     assert row.address == "222"
@@ -150,58 +189,98 @@ def test_edit_rejects_address_collision_with_another_destination(
 ) -> None:
     """Editar para (channel, address) de OUTRO destino → DuplicateDestinationError."""
     a = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.create_destination(db, name="B", kind="pessoa", channel="telegram", address="222")
+    destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="B",
+        kind="pessoa",
+        channel="telegram",
+        address="222",
+    )
     with pytest.raises(DuplicateDestinationError):
-        destinations.edit_destination(db, id=a, name="A", address="222")
+        destinations.edit_destination(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=a, name="A", address="222"
+        )
 
 
 def test_edit_archived_is_stale(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Destino arquivado não pode ser editado."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.archive_destination(db, id=rid)
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     with pytest.raises(StaleDestinationError):
-        destinations.edit_destination(db, id=rid, name="A2", address="222")
+        destinations.edit_destination(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, name="A2", address="222"
+        )
 
 
 def test_pause_resume_cycle(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Pausar (enabled=false, archived_at=None) e retomar são reversíveis."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid, enabled=False)
-    assert destinations.get_destination(db, rid).enabled is False  # type: ignore[union-attr]
+    destinations.set_destination_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
+    )
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
+    assert row is not None
+    assert row.enabled is False
 
-    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid, enabled=True)
-    assert destinations.get_destination(db, rid).enabled is True  # type: ignore[union-attr]
+    destinations.set_destination_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=True
+    )
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
+    assert row is not None
+    assert row.enabled is True
 
 
 def test_pause_archived_is_stale(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Pausar/retomar um arquivado é stale — só `restore_destination` reativa."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.archive_destination(db, id=rid)
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     with pytest.raises(StaleDestinationError):
-        destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid, enabled=True)
+        destinations.set_destination_enabled(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=True
+        )
 
 
 def test_archive_and_restore_cycle(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Arquivar grava enabled=false + archived_at; restaurar limpa os dois."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.archive_destination(db, id=rid)
-    row = destinations.get_destination(db, rid)
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert row is not None
     assert row.enabled is False
     assert row.archived_at is not None
 
-    destinations.restore_destination(db, tenant_id=tenant_id, id=rid)
-    row = destinations.get_destination(db, rid)
+    destinations.restore_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
+    row = destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert row is not None
     assert row.enabled is True
     assert row.archived_at is None
@@ -212,10 +291,16 @@ def test_delete_hard_removes_when_zero_dispatches(
 ) -> None:
     """Hard delete remove o destino quando nenhum dispatch o aponta."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destinations.delete_destination(db, id=rid)
-    assert destinations.get_destination(db, rid) is None
+    destinations.delete_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
+    assert (
+        destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) is None
+    )
 
 
 def test_delete_refused_when_dispatch_exists(
@@ -223,13 +308,15 @@ def test_delete_refused_when_dispatch_exists(
 ) -> None:
     """Delete atômico recusa se há dispatches; o destino permanece."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         destination=rid,
         channel="telegram",
         status="ok",
@@ -238,29 +325,54 @@ def test_delete_refused_when_dispatch_exists(
         items=[],
     )
     with pytest.raises(DestinationHasHistoryError):
-        destinations.delete_destination(db, id=rid)
+        destinations.delete_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
-    assert destinations.get_destination(db, rid) is not None
+    assert (
+        destinations.get_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
+        is not None
+    )
 
 
 def test_active_destinations_filters_by_channel_and_state(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """active_destinations(channel) devolve só ativos (enabled, não arquivados) daquele canal."""
-    destinations.create_destination(db, name="Tg", kind="pessoa", channel="telegram", address="111")
-    rid2 = destinations.create_destination(
-        db, name="Tg2", kind="pessoa", channel="telegram", address="222"
-    )
-    destinations.archive_destination(db, id=rid2)
-    rid3 = destinations.create_destination(
-        db, name="Tg3", kind="pessoa", channel="telegram", address="333"
-    )
-    destinations.set_destination_enabled(db, tenant_id=tenant_id, id=rid3, enabled=False)
     destinations.create_destination(
-        db, name="Email", kind="pessoa", channel="email", address="e@example.com"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Tg",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
+    )
+    rid2 = destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Tg2",
+        kind="pessoa",
+        channel="telegram",
+        address="222",
+    )
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid2)
+    rid3 = destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Tg3",
+        kind="pessoa",
+        channel="telegram",
+        address="333",
+    )
+    destinations.set_destination_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid3, enabled=False
+    )
+    destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Email",
+        kind="pessoa",
+        channel="email",
+        address="e@example.com",
     )
 
-    tg = destinations.active_destinations(db, channel="telegram")
+    tg = destinations.active_destinations(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), channel="telegram"
+    )
     assert len(tg) == 1
     assert tg[0].address == "111"
 
@@ -270,13 +382,15 @@ def test_list_destinations_counts_dispatches(
 ) -> None:
     """list_destinations inclui a contagem de dispatches de cada destino."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
     now = datetime.now(timezone.utc)
     knowledge.insert_dispatch(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         destination=rid,
         channel="telegram",
         status="ok",
@@ -284,7 +398,7 @@ def test_list_destinations_counts_dispatches(
         item_count=0,
         items=[],
     )
-    rows = destinations.list_destinations(db)
+    rows = destinations.list_destinations(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert len(rows) == 1
     assert rows[0].dispatches == 1
 
@@ -293,16 +407,30 @@ def test_active_destinations_without_channel_returns_all_active(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """active_destinations() sem filtro de canal devolve todos os ativos."""
-    destinations.create_destination(db, name="Tg", kind="pessoa", channel="telegram", address="111")
     destinations.create_destination(
-        db, name="Em", kind="pessoa", channel="email", address="a@b.com"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Tg",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
+    )
+    destinations.create_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Em",
+        kind="pessoa",
+        channel="email",
+        address="a@b.com",
     )
     archived = destinations.create_destination(
-        db, name="Arq", kind="pessoa", channel="telegram", address="222"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="Arq",
+        kind="pessoa",
+        channel="telegram",
+        address="222",
     )
-    destinations.archive_destination(db, id=archived)
+    destinations.archive_destination(scoped(db, tenant_id=tenant_id, user_id=user_id), id=archived)
 
-    all_active = destinations.active_destinations(db)
+    all_active = destinations.active_destinations(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert {d.channel for d in all_active} == {"telegram", "email"}
 
 
@@ -311,11 +439,19 @@ def test_reset_destination_watermark_writes_zero_item_dispatch(
 ) -> None:
     """reset_destination_watermark grava dispatch ok de 0 itens, auditável."""
     rid = destinations.create_destination(
-        db, name="A", kind="pessoa", channel="telegram", address="111"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        name="A",
+        kind="pessoa",
+        channel="telegram",
+        address="111",
     )
-    destination = destinations.get_destination(db, rid)
+    destination = destinations.get_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), rid
+    )
     assert destination is not None
-    destinations.reset_destination_watermark(db, tenant_id=tenant_id, destination=destination)
+    destinations.reset_destination_watermark(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=destination
+    )
 
     rows = db.query(
         "SELECT * FROM dispatch WHERE destination = $d AND artifact = 'digest';",

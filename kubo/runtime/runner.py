@@ -52,6 +52,7 @@ from kubo.store.knowledge import (
     upsert_opinion,
     upsert_source,
 )
+from kubo.store.scoped import ScopedStore, scoped
 
 
 @dataclass(frozen=True)
@@ -133,33 +134,30 @@ def _persist(
     payload — nunca levanta — e é contado para o `run_worker` decidir o fechamento do run.
     `insert_distilled` pode levantar (`StoreError`/`ValueError` de dim); essas propagam:
     só o ref não-resolvível é skip-and-continue."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     unresolved = 0
     for payload in payloads:
         if isinstance(payload, ItemPayload):
-            _persist_item(db, payload, run_id, tenant_id=tenant_id, user_id=user_id)
+            _persist_item(db, session, payload, run_id, tenant_id=tenant_id, user_id=user_id)
         elif isinstance(payload, DistilledPayload):
             unresolved += _persist_distilled(
-                db, payload, run_id, knowledge, tenant_id=tenant_id, user_id=user_id
+                session, payload, run_id, knowledge, tenant_id=tenant_id, user_id=user_id
             )
         elif isinstance(payload, ScorePayload):
-            unresolved += _persist_score(
-                db, payload, knowledge, tenant_id=tenant_id, user_id=user_id
-            )
+            unresolved += _persist_score(session, payload, knowledge)
         elif isinstance(payload, DispatchPayload):
-            _persist_dispatch(db, payload, tenant_id=tenant_id, user_id=user_id)
+            _persist_dispatch(session, payload)
         elif isinstance(payload, ReportPayload):
-            _persist_report(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
+            _persist_report(session, payload, flow_ctx)
         elif isinstance(payload, PrPayload):
-            _persist_pr(db, payload, flow_ctx, tenant_id=tenant_id, user_id=user_id)
+            _persist_pr(session, payload, flow_ctx)
         elif isinstance(payload, OpinionPayload):
-            _persist_opinion(db, payload, tenant_id=tenant_id, user_id=user_id)
+            _persist_opinion(session, payload)
         elif isinstance(payload, DaySummaryPayload):
-            _persist_day_summary(db, payload, tenant_id=tenant_id, user_id=user_id)
+            _persist_day_summary(session, payload)
         else:  # SourcePayload — o único outro membro restante da união
             upsert_source(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 kind=payload.kind,
                 canonical=payload.canonical,
                 title=payload.title,
@@ -169,6 +167,7 @@ def _persist(
 
 def _persist_item(
     db: Any,
+    session: ScopedStore,
     payload: ItemPayload,
     run_id: RecordID,
     *,
@@ -178,9 +177,7 @@ def _persist_item(
     """Persiste um ItemPayload: upserta a source (embutida inline) antes do item,
     grava a proveniência `item -[collected_by]-> run` (ADR-0008 §VI)."""
     source = upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         kind=payload.source.kind,
         canonical=payload.source.canonical,
         title=payload.source.title,
@@ -201,7 +198,7 @@ def _persist_item(
 
 
 def _persist_distilled(
-    db: Any,
+    session: ScopedStore,
     payload: DistilledPayload,
     run_id: RecordID,
     knowledge: GraphKnowledge,
@@ -215,10 +212,7 @@ def _persist_distilled(
     item = knowledge.resolve(payload.ref)
     if item is None:
         return 1
-    entities = [
-        get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name=e.name, kind=e.kind)
-        for e in payload.entities
-    ]
+    entities = [get_or_create_entity(session, name=e.name, kind=e.kind) for e in payload.entities]
     chunks = [
         Chunk(
             text=c.text,
@@ -231,9 +225,7 @@ def _persist_distilled(
         for c in payload.chunks
     ]
     insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         item=item,
         summary=payload.summary,
         chunks=chunks,
@@ -244,12 +236,9 @@ def _persist_distilled(
 
 
 def _persist_score(
-    db: Any,
+    session: ScopedStore,
     payload: ScorePayload,
     knowledge: GraphKnowledge,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> int:
     """Persiste um ScorePayload: resolve `ref` via `knowledge.resolve`, aplica
     a nota. Devolve 1 se `ref` não-resolvível (skip-and-continue), 0 caso contrário."""
@@ -257,9 +246,7 @@ def _persist_score(
     if item is None:
         return 1
     apply_score(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         item=item,
         score=payload.score,
         generated_title=payload.generated_title,
@@ -268,19 +255,14 @@ def _persist_score(
 
 
 def _persist_dispatch(
-    db: Any,
+    session: ScopedStore,
     payload: DispatchPayload,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """Persiste um DispatchPayload: `items` (strings validadas) → RecordID,
     `destination` (string `destination:<key>`) → RecordID. `run_id` NÃO entra
     — dispatch é fato de entrega, sem `produced_by` (ADR-0015 §II)."""
     insert_dispatch(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         destination=record_id_from_destination(payload.destination),
         channel=payload.channel,
         status=payload.status,
@@ -293,36 +275,26 @@ def _persist_dispatch(
 
 
 def _persist_opinion(
-    db: Any,
+    session: ScopedStore,
     payload: OpinionPayload,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """ADR-0052 §I: parecer persistido por (item, tenant) — aresta `opinion_for`
     (last-wins, idempotente). `item_id` é string `item:<hex>` → RecordID."""
     upsert_opinion(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         item=_parse_item_id(payload.item_id),
         opinion=payload.opinion,
     )
 
 
 def _persist_day_summary(
-    db: Any,
+    session: ScopedStore,
     payload: DaySummaryPayload,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """ADR-0052 §II: resumo do dia por (dia, tenant) — upsert na tabela
     `day_summary` (fallback race-safe, §III)."""
     upsert_day_summary(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         day=payload.day,
         summary=payload.summary,
         publication_count=payload.publication_count,
@@ -330,12 +302,9 @@ def _persist_day_summary(
 
 
 def _persist_report(
-    db: Any,
+    session: ScopedStore,
     payload: ReportPayload,
     flow_ctx: FlowCtx | None,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """Grava um ReportPayload como deliverable + arestas (ADR-0016 §III), fora do laço de
     `_persist` (extraído para manter a complexidade do laço sob o teto).
@@ -347,9 +316,7 @@ def _persist_report(
     if flow_ctx is None:
         raise ConfigError("ReportPayload exige flow_ctx (proveniência de flow/task)")
     insert_deliverable(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=flow_ctx.flow,
         task=flow_ctx.task,
         kind="report",
@@ -359,12 +326,9 @@ def _persist_report(
 
 
 def _persist_pr(
-    db: Any,
+    session: ScopedStore,
     payload: PrPayload,
     flow_ctx: FlowCtx | None,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """Grava um PrPayload como deliverable `kind="pr"` (ADR-0019 §VI), espelho exato do
     `_persist_report`: mesma costura de proveniência via `flow_ctx`, mesmo `insert_deliverable`.
@@ -376,9 +340,7 @@ def _persist_pr(
     if flow_ctx is None:
         raise ConfigError("PrPayload exige flow_ctx (proveniência de flow/task)")
     insert_deliverable(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=flow_ctx.flow,
         task=flow_ctx.task,
         kind="pr",
@@ -416,7 +378,9 @@ def _build_context(
     bound com run_id/worker."""
     config_model = manifest.config.model_validate(config or {})
     catalog = load_integrations(db, tenant_id, user_id)
-    integrations = resolve_integrations(manifest.integrations, catalog, db=db, tenant_id=tenant_id)
+    integrations = resolve_integrations(
+        manifest.integrations, catalog, db=db, tenant_id=tenant_id, user_id=user_id
+    )
     logger = structlog.get_logger().bind(run_id=str(run_id), worker=manifest.name)
     return RunContext(
         config=config_model,
@@ -449,7 +413,8 @@ def run_worker(
     proveniência de um `ReportPayload` (ADR-0016 §III) — o mecanismo genérico só ganha um
     contexto de ATRIBUIÇÃO opcional, não lógica de flow. `None` para os workers da fase 1."""
     manifest = validate_worker(worker)
-    run_id = start_run(db, tenant_id=tenant_id, user_id=user_id, worker=manifest.name)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    run_id = start_run(session, worker=manifest.name)
     try:
         ctx = _build_context(
             manifest,
@@ -478,15 +443,11 @@ def run_worker(
         # falha mais específico); senão, ref não-resolvível (defensivo, §III.6);
         # senão, ok.
         if result.error is not None:
-            fail_run(
-                db, run_id, tenant_id=tenant_id, user_id=user_id, error=result.error.model_dump()
-            )
+            fail_run(session, run_id, error=result.error.model_dump())
         elif unresolved > 0:
             fail_run(
-                db,
+                session,
                 run_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
                 error=ErrorInfo(
                     kind="unresolvable_ref",
                     message=f"{unresolved} payload(s) com ref não-resolvível",
@@ -494,15 +455,7 @@ def run_worker(
                 ).model_dump(),
             )
         else:
-            finish_run(
-                db, run_id, tenant_id=tenant_id, user_id=user_id, stats=result.stats.model_dump()
-            )
+            finish_run(session, run_id, stats=result.stats.model_dump())
     except Exception as exc:  # noqa: BLE001 — fronteira: exceção vira erro estruturado, não crash
-        fail_run(
-            db,
-            run_id,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            error=_error_from_exception(exc).model_dump(),
-        )
+        fail_run(session, run_id, error=_error_from_exception(exc).model_dump())
     return run_id

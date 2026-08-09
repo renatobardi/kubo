@@ -14,6 +14,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, knowledge, migrations
+from kubo.store.scoped import scoped
 from kubo.store.seed_extra_rss import FEEDS, main, seed_extra_rss_sources
 
 pytestmark = pytest.mark.integration
@@ -45,14 +46,16 @@ def test_seed_creates_all_extra_feeds(db: Any, tenant_id: RecordID, user_id: Rec
     assert processed == len(FEEDS)
     assert _count_source(db) == len(FEEDS)
 
-    active = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+    active = knowledge.active_sources(scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss")
     assert len(active) == len(FEEDS)
 
     by_canonical = {s.canonical: s for s in active}
     moonshot = by_canonical["https://medium.com/feed/@kimi_moonshot"]
     assert moonshot.title == "Moonshot AI / Kimi"
 
-    moonshot_detail = knowledge.get_source(db, moonshot.id, tenant_id=tenant_id, user_id=user_id)
+    moonshot_detail = knowledge.get_source(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), moonshot.id
+    )
     assert moonshot_detail is not None
     assert moonshot_detail.enabled is True
 
@@ -68,27 +71,25 @@ def test_seed_is_idempotent(db: Any, tenant_id: RecordID, user_id: RecordID) -> 
 def test_seed_preserves_owner_edits(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """O seed não sobrescreve título, tags ou pausa definidos pelo dono."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://medium.com/feed/@kimi_moonshot",
         title="Meu título",
     )
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rid,
         title="Meu título",
         tags=["custom"],
         canonical="https://medium.com/feed/@kimi_moonshot",
     )
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
+    )
 
     seed_extra_rss_sources(db)
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Meu título"
     assert got.tags == ["custom"]

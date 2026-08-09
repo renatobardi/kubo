@@ -43,6 +43,7 @@ from kubo.embedding import GeminiEmbedder
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.runner import run_worker
 from kubo.store import client, knowledge, tenancy
+from kubo.store.scoped import scoped
 from kubo.workers.distiller import DistillerWorker
 
 _log = structlog.get_logger().bind(worker="drain_distill")
@@ -118,7 +119,9 @@ def drain(
     porque destilaram, seja porque foram reprovados — os dois são progresso real."""
     worker = _build_worker()
     embedder = GeminiEmbedder.from_env()
-    initial = pending = knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id)
+    initial = pending = knowledge.count_items_to_score(
+        scoped(db, tenant_id=tenant_id, user_id=user_id)
+    )
     drained = batches = 0
     reason = "max_batches"
     for _ in range(max_batches):
@@ -132,8 +135,8 @@ def drain(
             tenant_id=tenant_id,
             user_id=user_id,
         )
-        status = knowledge.run_status(db, run_id, tenant_id=tenant_id, user_id=user_id)
-        after = knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id)
+        status = knowledge.run_status(scoped(db, tenant_id=tenant_id, user_id=user_id), run_id)
+        after = knowledge.count_items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id))
         outcome = evaluate_batch(status, pending, after)
         drained += max(outcome.distilled, 0)
         batches += 1

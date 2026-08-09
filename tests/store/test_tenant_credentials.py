@@ -13,6 +13,7 @@ import pytest
 
 from kubo.errors import ConfigError, MembershipRequiredError
 from kubo.store import client, migrations, tenancy, tenant_credentials
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -46,16 +47,22 @@ def _owner_and_tenant(db: Any) -> tuple[Any, Any]:
     return user, tenant
 
 
+def _session(db: Any, user_id: Any, tenant_id: Any) -> Any:
+    """Sessão escopada para o par (user, tenant) — checa membership na criação."""
+    return scoped(db, tenant_id=tenant_id, user_id=user_id)
+
+
 def test_set_and_get_credential_roundtrip(db: Any) -> None:
     """Segredo é recuperado em claro após ser cifrado em repouso."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="sk-tenant-key"
+        session,
+        provider="openai",
+        secret="sk-tenant-key",  # pragma: allowlist secret
     )
-    loaded = tenant_credentials.get_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-    )
+    loaded = tenant_credentials.get_credential(session, provider="openai")
 
     assert loaded == "sk-tenant-key"
 
@@ -63,9 +70,12 @@ def test_set_and_get_credential_roundtrip(db: Any) -> None:
 def test_credential_is_encrypted_in_database(db: Any) -> None:
     """O segredo nunca aparece em claro no dump da tabela."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="sk-secret"
+        session,
+        provider="openai",
+        secret="sk-secret",  # pragma: allowlist secret
     )
     rows = db.query(
         "SELECT * FROM tenant_credential WHERE provider = $provider;",
@@ -80,16 +90,19 @@ def test_credential_is_encrypted_in_database(db: Any) -> None:
 def test_rotate_credential(db: Any) -> None:
     """Sobrescrever uma credencial existente atualiza o valor."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="old-key"
+        session,
+        provider="openai",
+        secret="old-key",  # pragma: allowlist secret
     )
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="new-key"
+        session,
+        provider="openai",
+        secret="new-key",  # pragma: allowlist secret
     )
-    loaded = tenant_credentials.get_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-    )
+    loaded = tenant_credentials.get_credential(session, provider="openai")
 
     assert loaded == "new-key"
 
@@ -97,16 +110,15 @@ def test_rotate_credential(db: Any) -> None:
 def test_revoke_credential(db: Any) -> None:
     """Apagar uma credencial a remove por provider."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="key"
+        session,
+        provider="openai",
+        secret="key",  # pragma: allowlist secret
     )
-    tenant_credentials.delete_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-    )
-    loaded = tenant_credentials.get_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-    )
+    tenant_credentials.delete_credential(session, provider="openai")
+    loaded = tenant_credentials.get_credential(session, provider="openai")
 
     assert loaded is None
 
@@ -114,23 +126,23 @@ def test_revoke_credential(db: Any) -> None:
 def test_get_missing_credential_returns_none(db: Any) -> None:
     """Provider não cadastrado devolve None."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
-    loaded = tenant_credentials.get_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="anthropic"
-    )
+    loaded = tenant_credentials.get_credential(session, provider="anthropic")
     assert loaded is None
 
 
 def test_provider_is_normalized_with_whitespace(db: Any) -> None:
     """Provider com espaços em branco é normalizado para a mesma chave."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="  openai  ", secret="key"
+        session,
+        provider="  openai  ",
+        secret="key",  # pragma: allowlist secret
     )
-    loaded = tenant_credentials.get_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-    )
+    loaded = tenant_credentials.get_credential(session, provider="openai")
 
     assert loaded == "key"
 
@@ -141,61 +153,60 @@ def test_credential_isolation_between_tenants(db: Any) -> None:
     tenant_a = tenancy.create_tenant(db, name="A", owner_user_id=owner_a.id)
     owner_b = tenancy.create_user(db, firebase_uid="uid-b", email="b@example.com")
     tenant_b = tenancy.create_tenant(db, name="B", owner_user_id=owner_b.id)
+    session_a = _session(db, owner_a.id, tenant_a.id)
+    session_b = _session(db, owner_b.id, tenant_b.id)
 
     tenant_credentials.set_credential(
-        db, user_id=owner_a.id, tenant_id=tenant_a.id, provider="openai", secret="key-a"
+        session_a,
+        provider="openai",
+        secret="key-a",  # pragma: allowlist secret
     )
 
-    assert (
-        tenant_credentials.get_credential(
-            db, user_id=owner_a.id, tenant_id=tenant_a.id, provider="openai"
-        )
-        == "key-a"
-    )
-    assert (
-        tenant_credentials.get_credential(
-            db, user_id=owner_b.id, tenant_id=tenant_b.id, provider="openai"
-        )
-        is None
-    )
+    assert tenant_credentials.get_credential(session_a, provider="openai") == "key-a"
+    assert tenant_credentials.get_credential(session_b, provider="openai") is None
 
 
 def test_member_of_other_tenant_cannot_read(db: Any) -> None:
-    """Usuário sem membership no tenant é recusado na leitura."""
+    """Usuário sem membership no tenant é recusado na criação da sessão."""
     owner = tenancy.create_user(db, firebase_uid="uid-owner", email="owner@example.com")
     tenant = tenancy.create_tenant(db, name="Protegido", owner_user_id=owner.id)
     other = tenancy.create_user(db, firebase_uid="uid-other", email="other@example.com")
+    owner_session = _session(db, owner.id, tenant.id)
 
     tenant_credentials.set_credential(
-        db, user_id=owner.id, tenant_id=tenant.id, provider="openai", secret="key"
+        owner_session,
+        provider="openai",
+        secret="key",  # pragma: allowlist secret
     )
 
     with pytest.raises(MembershipRequiredError):
-        tenant_credentials.get_credential(
-            db, user_id=other.id, tenant_id=tenant.id, provider="openai"
-        )
+        _session(db, other.id, tenant.id)
 
 
 def test_set_credential_fails_without_key_env(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Sem a chave mestra, set_credential falha fechado com ConfigError."""
     monkeypatch.delenv("KUBO_TENANT_CREDENTIAL_KEY", raising=False)
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
 
     with pytest.raises(ConfigError):
         tenant_credentials.set_credential(
-            db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="key"
+            session,
+            provider="openai",
+            secret="key",  # pragma: allowlist secret
         )
 
 
 def test_get_credential_fails_without_key_env(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Sem a chave mestra, get_credential falha fechado com ConfigError."""
     user, tenant = _owner_and_tenant(db)
+    session = _session(db, user.id, tenant.id)
     tenant_credentials.set_credential(
-        db, user_id=user.id, tenant_id=tenant.id, provider="openai", secret="key"
+        session,
+        provider="openai",
+        secret="key",  # pragma: allowlist secret
     )
     monkeypatch.delenv("KUBO_TENANT_CREDENTIAL_KEY", raising=False)
 
     with pytest.raises(ConfigError):
-        tenant_credentials.get_credential(
-            db, user_id=user.id, tenant_id=tenant.id, provider="openai"
-        )
+        tenant_credentials.get_credential(session, provider="openai")

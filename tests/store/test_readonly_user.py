@@ -22,6 +22,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, knowledge, migrations, tenancy
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -45,23 +46,19 @@ def ro_env() -> Iterator[tuple[Any, Any, RecordID, RecordID]]:
         tenant = tenancy.create_tenant(root, name="ReadOnlyTest", owner_user_id=user.id)
         # Grafo completo (source -> item -> distilled -> entity) para o viewer LER as
         # MESMAS projeções 2-hop das telas, não só um SELECT simples.
-        knowledge.start_run(root, worker="feed", tenant_id=tenant.id, user_id=user.id)
+        knowledge.start_run(scoped(root, tenant_id=tenant.id, user_id=user.id), worker="feed")
         src = knowledge.upsert_source(
-            root,
-            tenant_id=tenant.id,
-            user_id=user.id,
+            scoped(root, tenant_id=tenant.id, user_id=user.id),
             kind="rss",
             canonical="https://x/feed",
             title="Feed",
         )
         item = knowledge.upsert_item(root, source=src, external_id="e1", content="c", title="Post")
         ent = knowledge.get_or_create_entity(
-            root, tenant_id=tenant.id, user_id=user.id, name="Python", kind="tecnologia"
+            scoped(root, tenant_id=tenant.id, user_id=user.id), name="Python", kind="tecnologia"
         )
         knowledge.insert_distilled(
-            root,
-            tenant_id=tenant.id,
-            user_id=user.id,
+            scoped(root, tenant_id=tenant.id, user_id=user.id),
             item=item,
             summary="resumo",
             chunks=[],
@@ -93,22 +90,26 @@ def test_readonly_user_can_do_graph_projections(
     permissão de travessia de aresta, isto explodiria — não explode."""
     _root, viewer, tenant_id, user_id = ro_env
     cards = knowledge.list_distilled(
-        viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0
+        scoped(viewer, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
     )
     assert cards and cards[0].title == "Post" and cards[0].source_canonical == "https://x/feed"
 
     entities = knowledge.list_entities(
-        viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0
+        scoped(viewer, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
     )
     assert entities and entities[0].name == "Python" and entities[0].mentions == 1
 
-    view = knowledge.read_entity(viewer, entities[0].id, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_entity(
+        scoped(viewer, tenant_id=tenant_id, user_id=user_id), entities[0].id
+    )
     assert view is not None and len(view.distilled) == 1
 
-    sources = knowledge.sources_with_stats(viewer, tenant_id=tenant_id, user_id=user_id)
+    sources = knowledge.sources_with_stats(scoped(viewer, tenant_id=tenant_id, user_id=user_id))
     assert sources and sources[0].items == 1 and sources[0].last_collected_at is not None
 
-    runs = knowledge.list_runs(viewer, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)
+    runs = knowledge.list_runs(
+        scoped(viewer, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )
     assert runs and runs[0].worker == "feed"
 
 

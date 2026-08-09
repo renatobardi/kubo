@@ -19,6 +19,7 @@ from kubo.errors import (
     StaleDestinationError,
     StoreError,
 )
+from kubo.store.scoped import ScopedStore
 from kubo.store.transaction import run_transaction
 
 Channel = Literal["telegram", "email"]
@@ -87,24 +88,13 @@ def normalize_unpause_mode(raw: str | None) -> str:
     return v if v in _UNPAUSE_MODES else "backlog"
 
 
-def _find_destination_id(
-    db: Any, *, channel: str, address: str, tenant_id: RecordID | None = None
-) -> RecordID | None:
-    """Resolve a destination id by its natural key (channel, address), or None.
-
-    When `tenant_id` is provided, scopes the search to the tenant.
-    """
-    if tenant_id is not None:
-        rows = db.query(
-            "SELECT id FROM destination "
-            "WHERE channel = $channel AND address = $address AND tenant_id = $tenant;",
-            {"channel": channel, "address": address, "tenant": tenant_id},
-        )
-    else:
-        rows = db.query(
-            "SELECT id FROM destination WHERE channel = $channel AND address = $address;",
-            {"channel": channel, "address": address},
-        )
+def _find_destination_id(session: ScopedStore, *, channel: str, address: str) -> RecordID | None:
+    """Resolve a destination id by its natural key (channel, address), or None."""
+    rows = session.query(
+        "SELECT id FROM destination "
+        "WHERE channel = $channel AND address = $address AND tenant_id = $tenant_id;",
+        {"channel": channel, "address": address},
+    )
     return rows[0]["id"] if rows else None
 
 
@@ -130,33 +120,24 @@ def _destination_from_row(row: dict[str, Any]) -> Destination:
     )
 
 
-def get_destination(
-    db: Any, id: RecordID, *, tenant_id: RecordID | None = None
-) -> Destination | None:
-    """Read one destination by id, or None if it does not exist.
-
-    When `tenant_id` is provided, filters by tenant (row-level isolation).
-    """
-    if tenant_id is not None:
-        rows = db.query(
-            "SELECT * FROM $r WHERE tenant_id = $tenant;",
-            {"r": id, "tenant": tenant_id},
-        )
-    else:
-        rows = db.query("SELECT * FROM $r;", {"r": id})
+def get_destination(session: ScopedStore, id: RecordID) -> Destination | None:
+    """Read one destination by id, scoped to the session's tenant."""
+    rows = session.query(
+        "SELECT * FROM $r WHERE tenant_id = $tenant_id;",
+        {"r": id},
+    )
     if not rows:
         return None
     return _destination_from_row(rows[0])
 
 
 def create_destination(
-    db: Any,
+    session: ScopedStore,
     *,
     name: str,
     kind: str,
     channel: str,
     address: str,
-    tenant_id: RecordID | None = None,
 ) -> RecordID:
     """Register a new destination, normalizing the address. If an archived destination
     with the same (channel, address) exists, reactivate it (update name/kind); if it is
@@ -165,13 +146,13 @@ def create_destination(
     if channel not in ("telegram", "email"):
         raise StoreError(f"invalid channel: {channel!r}")
     normalized = normalize_address(channel, address)
-    existing = _find_destination_id(db, channel=channel, address=normalized, tenant_id=tenant_id)
+    existing = _find_destination_id(session, channel=channel, address=normalized)
     if existing is not None:
-        current = get_destination(db, existing)
+        current = get_destination(session, existing)
         if current is None:
             raise StaleDestinationError(f"destination vanished during creation: {existing}")
         if current.archived_at is not None:
-            updated = db.query(
+            updated = session.query(
                 "UPDATE $r SET name = $name, kind = $kind, enabled = true, "
                 "archived_at = NONE WHERE archived_at IS NOT NONE;",
                 {"r": existing, "name": name, "kind": kind},
@@ -181,45 +162,37 @@ def create_destination(
             return existing
         raise DuplicateDestinationError(f"destination already registered: channel={channel}")
     rid = _fresh_destination_id()
-    if tenant_id is not None:
-        db.query(
-            "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
-            "address = $address, enabled = true, archived_at = NONE, tenant_id = $tenant;",
-            {
-                "r": rid,
-                "name": name,
-                "kind": kind,
-                "channel": channel,
-                "address": normalized,
-                "tenant": tenant_id,
-            },
-        )
-    else:
-        db.query(
-            "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
-            "address = $address, enabled = true, archived_at = NONE;",
-            {"r": rid, "name": name, "kind": kind, "channel": channel, "address": normalized},
-        )
+    session.query(
+        "CREATE $r SET name = $name, kind = $kind, channel = $channel, "
+        "address = $address, enabled = true, archived_at = NONE, tenant_id = $tenant_id;",
+        {
+            "r": rid,
+            "name": name,
+            "kind": kind,
+            "channel": channel,
+            "address": normalized,
+        },
+    )
     return rid
 
 
-def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
+def edit_destination(session: ScopedStore, *, id: RecordID, name: str, address: str) -> None:
     """Edit a destination's name and address while preserving its id.
 
     Rejects if the destination is archived or if the new (channel, address) collides
     with another destination.
     """
-    current = get_destination(db, id)
+    current = get_destination(session, id)
     if current is None or current.archived_at is not None:
         raise StaleDestinationError(f"destination not editable (missing or archived): {id}")
     normalized = normalize_address(current.channel, address)
     if normalized != current.address:
-        other = _find_destination_id(db, channel=current.channel, address=normalized)
+        other = _find_destination_id(session, channel=current.channel, address=normalized)
         if other is not None and str(other) != str(id):
             raise DuplicateDestinationError(
                 f"destination already registered: channel={current.channel}"
             )
-    updated = db.query(
+    updated = session.query(
         "UPDATE $r SET name = $name, address = $address WHERE archived_at IS NONE;",
         {"r": id, "name": name, "address": normalized},
     )
@@ -228,59 +201,68 @@ def edit_destination(db: Any, *, id: RecordID, name: str, address: str) -> None:
 
 
 def reset_watermark_statement(
-    *, prefix: str, destination: Destination, tenant_id: RecordID
+    *, prefix: str, destination: Destination
 ) -> tuple[str, dict[str, Any]]:
     """Return a zero-item `CREATE dispatch` statement (watermark=time::now()) and its params.
 
-    `prefix` scopes the bind keys ($d, $dest, $ch, $tenant) so the caller can build a
-    multi-statement transaction without key collisions. `tenant_id` is written on the
-    dispatch record (KUBO-128).
+    `prefix` scopes the bind keys ($d, $dest, $ch) so the caller can build a
+    multi-statement transaction without key collisions. `$tenant_id` is injected
+    by the `ScopedStore` session (ADR-0053).
     """
     d = f"{prefix}d"
     dest = f"{prefix}dest"
     ch = f"{prefix}ch"
-    tenant = f"{prefix}tenant"
     rid = RecordID("dispatch", secrets.token_hex(16))
     return (
-        f"CREATE ${d} SET tenant_id = ${tenant}, destination = ${dest}, channel = ${ch}, "
+        f"CREATE ${d} SET tenant_id = $tenant_id, destination = ${dest}, channel = ${ch}, "
         f"status = 'ok', artifact = 'digest', watermark = time::now(), "
-        f"item_count = 0, items = [], error = NONE",
+        f"item_count = 0, items = [], error = NONE;",
         {
             d: rid,
-            tenant: tenant_id,
             dest: destination.id,
             ch: destination.channel,
         },
     )
 
 
-def _run_reactivate_transaction(
-    db: Any,
+def set_destination_enabled(
+    session: ScopedStore,
     *,
     id: RecordID,
-    update_statement: str,
-    update_params: dict[str, Any],
-    mode: str,
-    destination: Destination | None,
-    tenant_id: RecordID,
+    enabled: bool,
+    mode: str | None = None,
+    destination: Destination | None = None,
 ) -> None:
-    """Run UPDATE + watermark reset (when mode='recente') in an atomic transaction.
+    """Pause (`enabled=false`) or resume (`enabled=true`) a non-archived destination.
 
-    Raises `StaleDestinationError` if the UPDATE touches no rows.
+    mode='recente' writes a zero-item dispatch that advances the watermark —
+    atomically with the UPDATE. `$tenant_id` is written on the dispatch by the
+    session (KUBO-128, ADR-0053).
     """
-    statements: list[str] = [
-        f"LET $updated = ({update_statement} RETURN AFTER)",
-        "IF count($updated) == 0 { THROW 'StaleDestinationError' }",
-    ]
-    params: dict[str, Any] = dict(update_params)
-    if mode == "recente":
-        if destination is None:
-            raise StoreError("destination is required for mode='recente'")
-        stmt, p = reset_watermark_statement(prefix="", destination=destination, tenant_id=tenant_id)
-        statements.append(stmt)
-        params |= p
+    mode = normalize_unpause_mode(mode)
+    if mode == "recente" and destination is None:
+        raise StoreError("destination is required for mode='recente'")
     try:
-        run_transaction(db, statements, params)
+        run_transaction(
+            session,
+            [
+                "LET $updated = (UPDATE $r SET enabled = $enabled "
+                "WHERE archived_at IS NONE AND tenant_id = $tenant_id RETURN AFTER)",
+                "IF count($updated) == 0 { THROW 'StaleDestinationError' }",
+                "IF $mode != 'recente' { } ELSE { "
+                "CREATE $d SET tenant_id = $tenant_id, destination = $dest, channel = $ch, "
+                "status = 'ok', artifact = 'digest', watermark = time::now(), "
+                "item_count = 0, items = [], error = NONE; }",
+            ],
+            {
+                "r": id,
+                "enabled": enabled,
+                "mode": mode,
+                "d": RecordID("dispatch", secrets.token_hex(16)) if mode == "recente" else None,
+                "dest": destination.id if mode == "recente" and destination else None,
+                "ch": destination.channel if mode == "recente" and destination else None,
+            },
+        )
     except StoreError as exc:
         if "StaleDestinationError" in str(exc):
             raise StaleDestinationError(
@@ -289,49 +271,13 @@ def _run_reactivate_transaction(
         raise
 
 
-def set_destination_enabled(
-    db: Any,
-    *,
-    id: RecordID,
-    enabled: bool,
-    mode: str | None = None,
-    destination: Destination | None = None,
-    tenant_id: RecordID,
-) -> None:
-    """Pause (`enabled=false`) or resume (`enabled=true`) a non-archived destination.
-
-    mode='recente' writes a zero-item dispatch that advances the watermark —
-    atomically with the UPDATE. `tenant_id` is written on the dispatch (KUBO-128).
-    """
-    mode = normalize_unpause_mode(mode)
-    update = "UPDATE $r SET enabled = $enabled WHERE archived_at IS NONE"
-    _run_reactivate_transaction(
-        db,
-        id=id,
-        update_statement=update,
-        update_params={"r": id, "enabled": enabled},
-        mode=mode,
-        destination=destination if enabled else None,
-        tenant_id=tenant_id,
+def archive_destination(session: ScopedStore, *, id: RecordID) -> None:
+    """Archive a destination: `enabled=false` + `archived_at` atomically."""
+    updated = session.query(
+        "UPDATE $r SET enabled = false, archived_at = time::now() "
+        "WHERE archived_at IS NONE AND tenant_id = $tenant_id;",
+        {"r": id},
     )
-
-
-def archive_destination(db: Any, *, id: RecordID, tenant_id: RecordID | None = None) -> None:
-    """Archive a destination: `enabled=false` + `archived_at` atomically.
-
-    When `tenant_id` is provided, scopes the UPDATE to the tenant (row-level isolation).
-    """
-    if tenant_id is not None:
-        updated = db.query(
-            "UPDATE $r SET enabled = false, archived_at = time::now() "
-            "WHERE archived_at IS NONE AND tenant_id = $tenant;",
-            {"r": id, "tenant": tenant_id},
-        )
-    else:
-        updated = db.query(
-            "UPDATE $r SET enabled = false, archived_at = time::now() WHERE archived_at IS NONE;",
-            {"r": id},
-        )
     if not updated:
         raise StaleDestinationError(
             f"destination not archivable (missing or already archived): {id}"
@@ -339,41 +285,53 @@ def archive_destination(db: Any, *, id: RecordID, tenant_id: RecordID | None = N
 
 
 def restore_destination(
-    db: Any,
+    session: ScopedStore,
     *,
     id: RecordID,
     mode: str | None = None,
     destination: Destination | None = None,
-    tenant_id: RecordID,
 ) -> None:
     """Restore an archived destination to active state.
 
     mode='recente' writes a zero-item dispatch that advances the watermark —
-    atomically with the UPDATE. `tenant_id` is written on the dispatch (KUBO-128).
+    atomically with the UPDATE. `$tenant_id` is written on the dispatch by the
+    session (KUBO-128, ADR-0053).
     """
     mode = normalize_unpause_mode(mode)
-    update = "UPDATE $r SET enabled = true, archived_at = NONE WHERE archived_at IS NOT NONE"
-    _run_reactivate_transaction(
-        db,
-        id=id,
-        update_statement=update,
-        update_params={"r": id},
-        mode=mode,
-        destination=destination,
-        tenant_id=tenant_id,
+    if mode == "recente" and destination is None:
+        raise StoreError("destination is required for mode='recente'")
+    run_transaction(
+        session,
+        [
+            "LET $updated = (UPDATE $r SET enabled = true, archived_at = NONE "
+            "WHERE archived_at IS NOT NONE AND tenant_id = $tenant_id RETURN AFTER)",
+            "IF count($updated) == 0 { THROW 'StaleDestinationError' }",
+            "IF $mode != 'recente' { } ELSE { "
+            "CREATE $d SET tenant_id = $tenant_id, destination = $dest, channel = $ch, "
+            "status = 'ok', artifact = 'digest', watermark = time::now(), "
+            "item_count = 0, items = [], error = NONE; }",
+        ],
+        {
+            "r": id,
+            "mode": mode,
+            "d": RecordID("dispatch", secrets.token_hex(16)) if mode == "recente" else None,
+            "dest": destination.id if mode == "recente" and destination else None,
+            "ch": destination.channel if mode == "recente" and destination else None,
+        },
     )
 
 
-def destination_dispatch_count(db: Any, id: RecordID) -> int:
-    """Count how many dispatches point to this destination."""
-    rows = db.query(
-        "SELECT count() FROM dispatch WHERE destination = $addr GROUP ALL;",
+def destination_dispatch_count(session: ScopedStore, id: RecordID) -> int:
+    """Count how many dispatches point to this destination (within the tenant)."""
+    rows = session.query(
+        "SELECT count() FROM dispatch WHERE destination = $addr "
+        "AND tenant_id = $tenant_id GROUP ALL;",
         {"addr": id},
     )
     return int(rows[0]["count"]) if rows else 0
 
 
-def delete_destination(db: Any, *, id: RecordID) -> None:
+def delete_destination(session: ScopedStore, *, id: RecordID) -> None:
     """Atomic hard delete of a destination with zero dispatches.
 
     Also clears `settings.default_destination` inside the same transaction
@@ -382,13 +340,15 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
     """
     try:
         run_transaction(
-            db,
+            session,
             [
                 "UPDATE settings SET default_destination = NONE WHERE default_destination = $r",
-                "LET $exists = (SELECT id FROM $r)",
+                "LET $exists = (SELECT id FROM $r WHERE tenant_id = $tenant_id)",
                 "IF count($exists) == 0 { THROW 'StaleDestinationError' }",
-                "LET $deleted = (DELETE $r WHERE (SELECT count() FROM dispatch "
-                "WHERE destination = $r GROUP ALL)[0].count = 0 RETURN BEFORE)",
+                "LET $dispatch_count = (SELECT count() FROM dispatch WHERE destination = $r "
+                "AND tenant_id = $tenant_id GROUP ALL)",
+                "LET $count = $dispatch_count[0].count ?? 0",
+                "LET $deleted = (DELETE $r WHERE $count = 0 RETURN BEFORE)",
                 "IF count($deleted) == 0 { THROW 'DestinationHasHistoryError' }",
             ],
             {"r": id},
@@ -403,40 +363,49 @@ def delete_destination(db: Any, *, id: RecordID) -> None:
         raise
 
 
-def active_destinations(db: Any, *, channel: str | None = None) -> list[Destination]:
-    """List ACTIVE destinations (`enabled=true`, `archived_at IS NONE`). If `channel`
-    is provided, filter by channel; otherwise return all (ADR-0029 §9)."""
-    query = "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE"
-    params: dict[str, Any] = {}
-    if channel is not None:
-        query += " AND channel = $channel"
-        params["channel"] = channel
-    query += ";"
-    rows = db.query(query, params)
+_ACTIVE_DESTINATIONS_SQL = (
+    "SELECT * FROM destination WHERE enabled = true AND archived_at IS NONE "
+    "AND tenant_id = $tenant_id "
+    "AND ($channel IS NONE OR channel = $channel);"
+)
+
+
+def active_destinations(session: ScopedStore, *, channel: str | None = None) -> list[Destination]:
+    """List ACTIVE destinations (`enabled=true`, `archived_at IS NONE`) for the tenant.
+    If `channel` is provided, filter by channel; otherwise return all (ADR-0029 §9)."""
+    rows = session.query(_ACTIVE_DESTINATIONS_SQL, {"channel": channel})
     return [_destination_from_row(r) for r in rows]
 
 
-def reset_destination_watermark(db: Any, *, destination: Destination, tenant_id: RecordID) -> None:
+def reset_destination_watermark(session: ScopedStore, *, destination: Destination) -> None:
     """Advance the destination watermark to database `time::now()` without delivering content.
 
     Writes a zero-item `ok` dispatch (artifact='digest'), auditable in the Dispatches
-    UI — the "recente" option on reactivation/unpause (ADR-0029 §6). `tenant_id` is
-    written on the dispatch (KUBO-128).
+    UI — the "recente" option on reactivation/unpause (ADR-0029 §6). `$tenant_id` is
+    written on the dispatch by the session (KUBO-128, ADR-0053).
     """
-    stmt, params = reset_watermark_statement(
-        prefix="", destination=destination, tenant_id=tenant_id
+    rid = RecordID("dispatch", secrets.token_hex(16))
+    session.query(
+        "CREATE $d SET tenant_id = $tenant_id, destination = $dest, channel = $ch, "
+        "status = 'ok', artifact = 'digest', watermark = time::now(), "
+        "item_count = 0, items = [], error = NONE;",
+        {
+            "d": rid,
+            "dest": destination.id,
+            "ch": destination.channel,
+        },
     )
-    db.query(stmt + ";", params)
 
 
 _LIST_DESTINATIONS_SQL = (
     "SELECT *, "
-    "(SELECT count() FROM dispatch WHERE destination = $parent.id GROUP ALL)[0].count "
-    "AS dispatches FROM destination;"
+    "(SELECT count() FROM dispatch WHERE destination = $parent.id "
+    "AND tenant_id = $tenant_id GROUP ALL)[0].count "
+    "AS dispatches FROM destination WHERE tenant_id = $tenant_id;"
 )
 
 
-def list_destinations(db: Any) -> list[Destination]:
-    """List all destinations with their dispatch count (for the UI)."""
-    rows = db.query(_LIST_DESTINATIONS_SQL)
+def list_destinations(session: ScopedStore) -> list[Destination]:
+    """List all destinations for the tenant with their dispatch count (for the UI)."""
+    rows = session.query(_LIST_DESTINATIONS_SQL)
     return [_destination_from_row(r) for r in rows]

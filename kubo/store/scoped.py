@@ -83,6 +83,11 @@ class ScopedStore:
         """
         return self._db.query_raw(sql, self._inject(params))
 
+    @property
+    def db(self) -> Any:
+        """Conexão crua subjacente: só para leituras globais (tabelas sem tenant_id)."""
+        return self._db
+
 
 class PoolReader:
     """Leitura do pool (tabela `item`, sem `tenant_id` no schema).

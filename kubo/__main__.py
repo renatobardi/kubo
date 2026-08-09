@@ -23,6 +23,7 @@ from kubo.store import client, knowledge
 from kubo.store import settings as settings_store
 from kubo.store import tenancy as tenancy_store
 from kubo.store.knowledge import DistilledView, SearchHit
+from kubo.store.scoped import scoped
 
 _DISTILLED_TABLE = "distilled"
 
@@ -134,13 +135,12 @@ def run_query(
     por distilled (`dedupe_hits`), resolve a proveniência de cada hit
     (`read_distilled`) e formata (`format_query_results`).
     """
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     vector = embedder.embed([question])[0]
-    hits = dedupe_hits(
-        knowledge.search(db, tenant_id=tenant_id, user_id=user_id, embedding=vector, k=k)
-    )
+    hits = dedupe_hits(knowledge.search(session, embedding=vector, k=k))
     results: list[tuple[SearchHit, DistilledView]] = []
     for hit in hits:
-        view = knowledge.read_distilled(db, hit.distilled, tenant_id=tenant_id, user_id=user_id)
+        view = knowledge.read_distilled(session, hit.distilled)
         if view is None:
             # defensivo: hit aponta para um distilled que sumiu entre a busca e a
             # leitura — pula em vez de quebrar o comando inteiro.
@@ -161,8 +161,9 @@ def run_show(
     distilled (`read_distilled`) e formata (`format_distilled`); `None` se o
     distilled não existe no grafo.
     """
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     distilled = parse_distilled_id(raw_id)
-    view = knowledge.read_distilled(db, distilled, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_distilled(session, distilled)
     if view is None:
         return None
     return format_distilled(view, provenance=provenance)
@@ -196,7 +197,8 @@ def run_flow_command(
         settings = settings_store.get_settings(db)
         if settings is None:
             raise ConfigError("configurações não encontradas — configure o destino padrão")
-        dest = settings_store.resolve_default_destination(db, settings)
+        session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+        dest = settings_store.resolve_default_destination(session, settings)
         embedder = GeminiEmbedder.from_env()
         base_url = resolve_base_url()
     return run_flow(

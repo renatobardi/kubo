@@ -23,6 +23,7 @@ from kubo.store import client, migrations
 from kubo.store.client import connect as _real_connect
 from kubo.store.knowledge import get_source as _real_get_source
 from kubo.store.knowledge import source_item_count as _real_source_item_count
+from kubo.store.scoped import scoped, scoped_superadmin
 from tests.api.conftest import UI_PASSWORD
 
 pytestmark = pytest.mark.integration
@@ -32,7 +33,7 @@ _RW_PASS = secrets.token_urlsafe(24)  # gerada por run — nunca um literal no r
 
 
 @pytest.fixture
-def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+def app_db(stub_store: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     """App real apontado a um db efêmero com kubo_rw. A conftest stuba as leituras; a escrita
     (connect_rw) é a real, dirigida pelo SURREAL_DB + KUBO_RW_SURREAL_PASS do teste."""
     monkeypatch.setenv("SURREAL_DB", _DB)
@@ -45,6 +46,11 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     # Capturamos as referências no import do módulo (antes do stub_store rodar).
     monkeypatch.setattr(sources_route.knowledge, "get_source", _real_get_source)
     monkeypatch.setattr(sources_route.knowledge, "source_item_count", _real_source_item_count)
+    # Restaura ScopedStore real: a conftest stubou `scoped` para um SimpleNamespace
+    # sem `query`, mas este teste usa conexão real (KUBO-213).
+    monkeypatch.setattr(sources_route, "scoped", scoped)
+    if hasattr(sources_route, "scoped_superadmin"):
+        monkeypatch.setattr(sources_route, "scoped_superadmin", scoped_superadmin)
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")

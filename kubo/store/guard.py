@@ -140,11 +140,11 @@ def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
 
 
 def _module_string_constants(tree: ast.Module) -> dict[str, str]:
-    """Nomes de módulo atribuídos uma única vez a literal string → valor.
+    """Nomes de módulo atribuídos uma única vez a literal string/f-string → valor.
 
     Reatribuição (a qualquer coisa) ou import desqualifica o nome: o guard só
-    confia em constantes imutáveis por inspeção estática. Conservador de mais,
-    não de menos — o escape hatch é a allowlist nominal.
+    confia em constantes imutáveis por inspeção estática. F-strings só entram
+    se forem resolvíveis a partir de literais e outras constantes já conhecidas.
     """
     constants: dict[str, str] = {}
     disqualified: set[str] = set()
@@ -158,8 +158,9 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
                     disqualified.add(target.id)
                     constants.pop(target.id, None)
                     continue
-                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    constants[target.id] = node.value.value
+                resolved = _resolve_sql(node.value, constants)
+                if resolved is not None:
+                    constants[target.id] = resolved
                 else:
                     disqualified.add(target.id)
         elif isinstance(node, ast.Import | ast.ImportFrom):
@@ -174,13 +175,34 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
 def _resolve_sql(arg: ast.AST, constants: dict[str, str]) -> str | None:
     """Resolve um node para um literal SQL string, ou None se não-literal.
 
-    Aceita: string literal constante, ou `Name` que aponta para constante de
-    módulo confiável. O resto (f-string, concat, variável, call) é não-literal.
+    Aceita: string literal constante, `Name` que aponta para constante de
+    módulo confiável, concatenação de strings já resolvíveis, ou f-string
+    cujas partes são todas literais ou `Name` de constantes confiáveis. O
+    resto (variável, call, expressão) é não-literal.
     """
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
         return arg.value
     if isinstance(arg, ast.Name) and arg.id in constants:
         return constants[arg.id]
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+        left = _resolve_sql(arg.left, constants)
+        right = _resolve_sql(arg.right, constants)
+        if left is not None and right is not None:
+            return left + right
+        return None
+    if isinstance(arg, ast.JoinedStr):
+        parts: list[str] = []
+        for value in arg.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                resolved = _resolve_sql(value.value, constants)
+                if resolved is None:
+                    return None
+                parts.append(resolved)
+            else:
+                return None
+        return "".join(parts)
     return None
 
 

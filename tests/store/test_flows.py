@@ -36,6 +36,7 @@ from kubo.store.flows import (
     transition_task,
 )
 from kubo.store.knowledge import Chunk
+from kubo.store.scoped import ScopedStore, scoped
 
 pytestmark = pytest.mark.integration
 
@@ -97,16 +98,19 @@ def _tenant_owner(db: Any) -> tuple[RecordID, RecordID]:
     return tenant.id, user.id
 
 
+def _session(db: Any) -> ScopedStore:
+    """ScopedStore para o tenant/user do fixture de teste."""
+    tenant_id, user_id = _tenant_owner(db)
+    return scoped(db, tenant_id=tenant_id, user_id=user_id)
+
+
 def _instantiate(db: Any, template_yaml: str, tmp_path: Path) -> Any:
     """Escreve `template_yaml` num arquivo, carrega, e instancia um flow dele."""
-    tenant_id, user_id = _tenant_owner(db)
     path = tmp_path / "analysis.yaml"
     path.write_text(template_yaml, encoding="utf-8")
     template = load_flow_template(path)
     return instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         template=template,
         personas=_PERSONAS,
         question="q?",
@@ -145,18 +149,14 @@ def test_honest_invariant_4_live_flow_obeys_frozen_snapshot_not_catalog(
     (b) REJEITA analyzing→archived (a transição só do catálogo novo)."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     transition_task(
-        db,
+        _session(db),
         task,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
         from_state="created",
         to_state="analyzing",
     )
@@ -168,20 +168,16 @@ def test_honest_invariant_4_live_flow_obeys_frozen_snapshot_not_catalog(
     # (b) o catálogo novo permite archived, mas o snapshot congelado não → rejeita.
     with pytest.raises(StateError):
         transition_task(
-            db,
+            _session(db),
             task,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
             from_state="analyzing",
             to_state="archived",
         )
 
     # (a) o snapshot congelado ainda permite delivered → aceita.
     transition_task(
-        db,
+        _session(db),
         task,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
         from_state="analyzing",
         to_state="delivered",
     )
@@ -193,19 +189,15 @@ def test_transition_rejects_pair_not_in_snapshot(db: Any, tmp_path: Path) -> Non
     levanta StateError — o par é validado contra o snapshot congelado."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     with pytest.raises(StateError):
         transition_task(
-            db,
+            _session(db),
             task,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
             from_state="created",
             to_state="delivered",
         )
@@ -216,19 +208,15 @@ def test_transition_rejects_wrong_from_state(db: Any, tmp_path: Path) -> None:
     contra dupla-transição / chamada com premissa errada)."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     with pytest.raises(StateError):
         transition_task(
-            db,
+            _session(db),
             task,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
             from_state="analyzing",
             to_state="delivered",
         )
@@ -247,9 +235,7 @@ def test_create_task_wires_belongs_to_and_assigned_to(db: Any, tmp_path: Path) -
     assigned_to->persona (as arestas que a proveniência exige)."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
@@ -265,15 +251,13 @@ def test_set_task_run_links_task_to_run(db: Any, tmp_path: Path) -> None:
     """set_task_run grava task.run apontando para o run que a executou (auditoria)."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
-    run = knowledge.start_run(db, tenant_id=db.tenant_id, user_id=db.user_id, worker="analista")
-    set_task_run(db, tenant_id=db.tenant_id, user_id=db.user_id, task=task, run=run)
+    run = knowledge.start_run(_session(db), worker="analista")
+    set_task_run(_session(db), task=task, run=run)
     assert db.query("SELECT VALUE run FROM $t;", {"t": task})[0] == run
 
 
@@ -283,9 +267,7 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
     recuperada — tudo atômico."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
@@ -298,9 +280,7 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
     ]
 
     deliverable = insert_deliverable(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         task=task,
         kind="report",
@@ -323,18 +303,14 @@ def test_insert_deliverable_pr_stores_typed_url_and_number(db: Any, tmp_path: Pa
     E4). Prova que os campos option<...> aceitam o PR e ficam ausentes fora dele."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
     task = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
 
     deliverable = insert_deliverable(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         task=task,
         kind="pr",
@@ -371,33 +347,25 @@ def _review_flow(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
     tenant_id, user_id = _tenant_owner(db)
     inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
     analyst = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     transition_task(
-        db,
+        _session(db),
         analyst,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="created",
         to_state="analyzing",
     )
     transition_task(
-        db,
+        _session(db),
         analyst,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="analyzing",
         to_state="awaiting_review",
     )
     gate = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["humano"],
         state="awaiting_review",
@@ -411,10 +379,8 @@ def test_transition_task_refuses_gate_pair(db: Any, tmp_path: Path) -> None:
     _, analyst, _ = _review_flow(db, tmp_path)
     with pytest.raises(StateError, match="decide_gate"):
         transition_task(
-            db,
+            _session(db),
             analyst,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
             from_state="awaiting_review",
             to_state="delivered",
         )
@@ -426,9 +392,7 @@ def test_decide_gate_approves_both_tasks_atomically(db: Any, tmp_path: Path) -> 
     silencioso só morre lendo o estado persistido (ADR-0018 §I/§IV)."""
     _, analyst, gate = _review_flow(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=analyst,
         gate_task=gate,
         to_state="delivered",
@@ -446,9 +410,7 @@ def test_decide_gate_rejects_with_reason(db: Any, tmp_path: Path) -> None:
     do gate — a decisão vira registro no grafo, não só efeito de UI."""
     _, analyst, gate = _review_flow(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=analyst,
         gate_task=gate,
         to_state="rejected",
@@ -468,9 +430,7 @@ def test_decide_gate_rejection_requires_reason(db: Any, tmp_path: Path) -> None:
     _, analyst, gate = _review_flow(db, tmp_path)
     with pytest.raises(StateError):
         decide_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=analyst,
             gate_task=gate,
             to_state="rejected",
@@ -483,18 +443,14 @@ def test_decide_gate_rejection_requires_reason(db: Any, tmp_path: Path) -> None:
 def _seed_distilled(db: Any, title: str) -> Any:
     """Semeia um distilled com um item titulado (via derived_from) — para read_gate_context
     resolver o título da fonte."""
-    tenant_id, user_id = _tenant_owner(db)
-    src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
-    )
+    session = _session(db)
+    src = knowledge.upsert_source(session, kind="rss", canonical=f"src::{title}")
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
     )
     chunk = Chunk(text="s", seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
     return knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         item=item,
         summary="s",
         chunks=[chunk],
@@ -509,9 +465,7 @@ def test_read_gate_context_gathers_flow_deliverable_and_sources(db: Any, tmp_pat
     d1 = _seed_distilled(db, "Rust ownership")
     d2 = _seed_distilled(db, "GC tradeoffs")
     insert_deliverable(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         task=analyst,
         kind="report",
@@ -519,7 +473,7 @@ def test_read_gate_context_gathers_flow_deliverable_and_sources(db: Any, tmp_pat
         consulted=[d1, d2],
     )
 
-    ctx = read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=gate)
+    ctx = read_gate_context(_session(db), gate_task=gate)
 
     assert ctx is not None
     assert ctx.flow == inst.flow
@@ -536,9 +490,7 @@ def test_read_gate_context_none_for_orphan_task(db: Any) -> None:
     orphan = db.query(
         "CREATE task SET state = 'awaiting_review', tenant_id = $t;", {"t": db.tenant_id}
     )[0]["id"]
-    assert (
-        read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=orphan) is None
-    )
+    assert read_gate_context(_session(db), gate_task=orphan) is None
 
 
 def test_read_gate_context_rejects_non_gate_task(db: Any, tmp_path: Path) -> None:
@@ -546,9 +498,7 @@ def test_read_gate_context_rejects_non_gate_task(db: Any, tmp_path: Path) -> Non
     ANALISTA (forja pela borda HTTP) → None, senão `decide_gate` atualizaria a task errada e o
     gate real ficaria aberto após os efeitos externos."""
     _inst, analyst, _gate = _review_flow(db, tmp_path)
-    assert (
-        read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=analyst) is None
-    )  # analista não é o gate
+    assert read_gate_context(_session(db), gate_task=analyst) is None  # analista não é o gate
 
 
 def test_decide_gate_rejects_contradictory_decision(db: Any, tmp_path: Path) -> None:
@@ -558,9 +508,7 @@ def test_decide_gate_rejects_contradictory_decision(db: Any, tmp_path: Path) -> 
     _inst, analyst, gate = _review_flow(db, tmp_path)
     with pytest.raises(StateError):
         decide_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=analyst,
             gate_task=gate,
             to_state="rejected",
@@ -581,18 +529,14 @@ def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
 
     inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
     analyst = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     transition_task(
-        db,
+        _session(db),
         analyst,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
         from_state="created",
         to_state="analyzing",
     )
@@ -605,9 +549,7 @@ def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
 
     with pytest.raises(StoreError, match="simulação"):
         flows_mod.open_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=analyst,
             analyst_from="analyzing",
             analyst_to="awaiting_review",
@@ -633,18 +575,14 @@ def test_open_gate_validates_analyst_transition_against_snapshot(db: Any, tmp_pa
 
     inst = _instantiate(db, _ANALYSIS_REVIEW, tmp_path)
     analyst = create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     with pytest.raises(StateError):
         flows_mod.open_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=analyst,
             analyst_from="created",
             analyst_to="delivered",  # par não está nas transições do snapshot
@@ -659,9 +597,9 @@ def test_list_flows_derives_status_gate_and_cast(db: Any, tmp_path: Path) -> Non
     ativo. Um flow no gate → status 'aguardando', gate_open, cast {analista, humano}."""
     inst, _analyst, _gate = _review_flow(db, tmp_path)
 
-    rows = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)
+    rows = list_flows(_session(db), limit=20, start=0)
 
-    assert count_flows(db, tenant_id=db.tenant_id, user_id=db.user_id) == 1
+    assert count_flows(_session(db)) == 1
     assert len(rows) == 1
     row = rows[0]
     assert row.id == str(inst.flow)
@@ -677,16 +615,14 @@ def test_list_flows_delivered_status(db: Any, tmp_path: Path) -> None:
     """Após aprovar, as 2 tasks vão a delivered → status 'entregue', sem gate aberto."""
     _, analyst, gate = _review_flow(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=analyst,
         gate_task=gate,
         to_state="delivered",
         decision="approved",
     )
 
-    row = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)[0]
+    row = list_flows(_session(db), limit=20, start=0)[0]
     assert row.status == "entregue"
     assert row.gate_open is False
     assert row.tasks_open == 0
@@ -697,7 +633,7 @@ def test_flow_board_columns_are_snapshot_states_cards_are_tasks(db: Any, tmp_pat
     em awaiting_review é marcada como gate (ring âmbar + botões na UI)."""
     inst, analyst, gate = _review_flow(db, tmp_path)
 
-    board = flow_board(db, tenant_id=db.tenant_id, user_id=db.user_id, flow=inst.flow)
+    board = flow_board(_session(db), flow=inst.flow)
 
     assert board is not None
     assert board.id == str(inst.flow)
@@ -719,12 +655,7 @@ def test_flow_board_columns_are_snapshot_states_cards_are_tasks(db: Any, tmp_pat
 
 def test_flow_board_none_for_missing_flow(db: Any) -> None:
     """flow_board de um flow inexistente → None (nunca crash)."""
-    assert (
-        flow_board(
-            db, tenant_id=db.tenant_id, user_id=db.user_id, flow=RecordID("flow", "does-not-exist")
-        )
-        is None
-    )
+    assert flow_board(_session(db), flow=RecordID("flow", "does-not-exist")) is None
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -752,46 +683,35 @@ _DEV_MINI = (
 def _dev_flow(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
     """Instancia um flow `dev-mini` levado ao gate: a task dev em `review` + a task do gate
     (humano) nascida em `review`. Devolve (inst, dev_task, gate_task)."""
-    tenant_id, user_id = _tenant_owner(db)
     path = tmp_path / "dev-mini.yaml"
     path.write_text(_DEV_MINI, encoding="utf-8")
     template = load_flow_template(path)
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         template=template,
         personas=_PERSONAS,
         question="add hello()",
     )
     dev = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["dev"],
         state="created",
     )
     transition_task(
-        db,
+        _session(db),
         dev,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="created",
         to_state="implementing",
     )
     transition_task(
-        db,
+        _session(db),
         dev,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="implementing",
         to_state="review",
     )
     gate = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["humano"],
         state="review",
@@ -805,9 +725,7 @@ def test_decide_gate_approves_non_delivered_target_by_convention(db: Any, tmp_pa
     hardcoda o nome do estado terminal (só `rejected` é reservado, ADR-0019 §VII)."""
     _inst, dev, gate = _dev_flow(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=gate,
         to_state="done",
@@ -825,9 +743,7 @@ def test_decide_gate_rejects_approved_to_reject_state_dev(db: Any, tmp_path: Pat
     _inst, dev, gate = _dev_flow(db, tmp_path)
     with pytest.raises(StateError):
         decide_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=dev,
             gate_task=gate,
             to_state="rejected",
@@ -842,9 +758,7 @@ def test_read_gate_context_dev_pr_deliverable(db: Any, tmp_path: Path) -> None:
     content = resumo untrusted (E4). `sources` vazio (PR não tem consults)."""
     inst, dev, gate = _dev_flow(db, tmp_path)
     insert_deliverable(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         task=dev,
         kind="pr",
@@ -854,7 +768,7 @@ def test_read_gate_context_dev_pr_deliverable(db: Any, tmp_path: Path) -> None:
         pr_number=7,
     )
 
-    ctx = read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=gate)
+    ctx = read_gate_context(_session(db), gate_task=gate)
 
     assert ctx is not None
     assert ctx.flow == inst.flow
@@ -874,9 +788,7 @@ def test_read_gate_context_report_sets_kind_and_null_pr(db: Any, tmp_path: Path)
     inst, analyst, gate = _review_flow(db, tmp_path)
     d1 = _seed_distilled(db, "Rust ownership")
     insert_deliverable(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         task=analyst,
         kind="report",
@@ -884,7 +796,7 @@ def test_read_gate_context_report_sets_kind_and_null_pr(db: Any, tmp_path: Path)
         consulted=[d1],
     )
 
-    ctx = read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=gate)
+    ctx = read_gate_context(_session(db), gate_task=gate)
 
     assert ctx is not None
     assert ctx.deliverable_kind == "report"
@@ -899,22 +811,20 @@ def test_read_gate_context_requires_exactly_one_counterpart(db: Any, tmp_path: P
     inst, _dev, gate = _dev_flow(db, tmp_path)
     # segunda task não-humana no mesmo flow (dev extra) — ambiguidade
     create_task(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["dev"],
         state="implementing",
     )
     with pytest.raises(StateError):
-        read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=gate)
+        read_gate_context(_session(db), gate_task=gate)
 
 
 def test_flow_board_marks_dev_gate_from_snapshot(db: Any, tmp_path: Path) -> None:
     """is_gate é derivado do snapshot: a task do humano em `review` (gate-from de dev-mini) é
     marcada como gate, mesmo o estado NÃO se chamando `awaiting_review`."""
     _inst, dev, gate = _dev_flow(db, tmp_path)
-    board = flow_board(db, tenant_id=db.tenant_id, user_id=db.user_id, flow=_inst.flow)
+    board = flow_board(_session(db), flow=_inst.flow)
     assert board is not None
     by_id = {c.id: c for c in board.tasks}
     assert by_id[str(gate)].is_gate is True  # humano + review (gate-from) = card de gate
@@ -925,7 +835,7 @@ def test_list_flows_dev_gate_open_and_status(db: Any, tmp_path: Path) -> None:
     """list_flows marca gate_open para o dev-mini parado em `review` (gate-from do snapshot) —
     senão o dono não veria o gate na lista. Status derivado = 'aguardando'."""
     _inst, _dev, _gate = _dev_flow(db, tmp_path)
-    row = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)[0]
+    row = list_flows(_session(db), limit=20, start=0)[0]
     assert row.gate_open is True
     assert row.status == "aguardando"
     assert set(row.cast) == {"dev", "humano"}
@@ -937,15 +847,13 @@ def test_list_flows_dev_done_status(db: Any, tmp_path: Path) -> None:
     terminal-ness deriva do snapshot ANTIGO, não do catálogo v2 (onde `done` abre promoção)."""
     _inst, dev, gate = _dev_flow(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=gate,
         to_state="done",
         decision="approved",
     )
-    row = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)[0]
+    row = list_flows(_session(db), limit=20, start=0)[0]
     assert row.status == "entregue"
     assert row.gate_open is False
     assert row.tasks_open == 0
@@ -968,46 +876,35 @@ _DEV_MINI_V2 = (
 
 def _dev_flow_v2(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
     """Instancia um flow `dev-mini` v2 levado ao gate `review`: (inst, dev_task, review_gate)."""
-    tenant_id, user_id = _tenant_owner(db)
     path = tmp_path / "dev-mini.yaml"
     path.write_text(_DEV_MINI_V2, encoding="utf-8")
     template = load_flow_template(path)
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         template=template,
         personas=_PERSONAS,
         question="add worker X",
     )
     dev = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["dev"],
         state="created",
     )
     transition_task(
-        db,
+        _session(db),
         dev,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="created",
         to_state="implementing",
     )
     transition_task(
-        db,
+        _session(db),
         dev,
-        tenant_id=tenant_id,
-        user_id=user_id,
         from_state="implementing",
         to_state="review",
     )
     gate = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        _session(db),
         flow=inst.flow,
         persona=inst.personas["humano"],
         state="review",
@@ -1030,9 +927,7 @@ def test_dev_v2_approve_auto_opens_promotion_gate(db: Any, tmp_path: Path) -> No
     persona da nova task deriva do próprio gate task (humano), sem parâmetro."""
     inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     next_gate = decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="done",
@@ -1057,9 +952,7 @@ def test_decide_gate_no_auto_open_when_target_is_terminal(db: Any, tmp_path: Pat
     quando o destino é um estado gate-from do snapshot."""
     _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     result = decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="rejected",
@@ -1074,9 +967,7 @@ def test_decide_gate_stale_second_decide_keeps_single_promotion(db: Any, tmp_pat
     cria um 2º gate de promoção — auto-open condicionado ao UPDATE do gate mover a linha."""
     inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="done",
@@ -1084,9 +975,7 @@ def test_decide_gate_stale_second_decide_keeps_single_promotion(db: Any, tmp_pat
     )
     with pytest.raises(StateError):
         decide_gate(
-            db,
-            tenant_id=db.tenant_id,
-            user_id=db.user_id,
+            _session(db),
             analyst_task=dev,
             gate_task=review_gate,
             to_state="done",
@@ -1101,20 +990,15 @@ def test_read_gate_context_ignores_decided_gate(db: Any, tmp_path: Path) -> None
     com `gate_state='done'` e a dev como counterpart (única não-humana)."""
     _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     promo = decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="done",
         decision="approved",
     )
     assert promo is not None
-    assert (
-        read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=review_gate)
-        is None
-    )
-    ctx = read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=promo)
+    assert read_gate_context(_session(db), gate_task=review_gate) is None
+    ctx = read_gate_context(_session(db), gate_task=promo)
     assert ctx is not None
     assert ctx.gate_state == "done"
     assert ctx.counterpart_task == dev
@@ -1124,7 +1008,7 @@ def test_read_gate_context_exposes_gate_state(db: Any, tmp_path: Path) -> None:
     """gate_state expõe o estado gate-from da decisão (para o behavior validar o par antes de
     qualquer I/O externo — trap c: rejeitar um gate de promoção não pode tocar o PR mesclado)."""
     _inst, _dev, review_gate = _dev_flow_v2(db, tmp_path)
-    ctx = read_gate_context(db, tenant_id=db.tenant_id, user_id=db.user_id, gate_task=review_gate)
+    ctx = read_gate_context(_session(db), gate_task=review_gate)
     assert ctx is not None
     assert ctx.gate_state == "review"
 
@@ -1134,15 +1018,13 @@ def test_flow_board_v2_promotion_open_and_review_decided(db: Any, tmp_path: Path
     a review-human decidida (done, com decisão) NÃO; a dev (não-humana) NÃO."""
     inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     promo = decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="done",
         decision="approved",
     )
-    board = flow_board(db, tenant_id=db.tenant_id, user_id=db.user_id, flow=inst.flow)
+    board = flow_board(_session(db), flow=inst.flow)
     assert board is not None
     by_id = {c.id: c for c in board.tasks}
     assert by_id[str(promo)].is_gate is True
@@ -1156,29 +1038,25 @@ def test_list_flows_v2_awaiting_promotion_then_promoted(db: Any, tmp_path: Path)
     parada em `done` (não-terminal) conta como FECHADA (closed = terminal ∨ decidida)."""
     _inst, dev, review_gate = _dev_flow_v2(db, tmp_path)
     promo = decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=review_gate,
         to_state="done",
         decision="approved",
     )
     assert promo is not None
-    row = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)[0]
+    row = list_flows(_session(db), limit=20, start=0)[0]
     assert row.gate_open is True
     assert row.status == "aguardando"
 
     decide_gate(
-        db,
-        tenant_id=db.tenant_id,
-        user_id=db.user_id,
+        _session(db),
         analyst_task=dev,
         gate_task=promo,
         to_state="promoted",
         decision="approved",
     )
-    row = list_flows(db, tenant_id=db.tenant_id, user_id=db.user_id, limit=20, start=0)[0]
+    row = list_flows(_session(db), limit=20, start=0)[0]
     assert row.status == "entregue"
     assert row.gate_open is False
     assert row.tasks_open == 0
@@ -1188,7 +1066,7 @@ def test_flow_gates_reads_snapshot_pairs(db: Any, tmp_path: Path) -> None:
     """flow_gates expõe os pares de gate do snapshot congelado (para o behavior validar o par
     pretendido antes de I/O externo). `[done, rejected]` NÃO é gate do dev-mini v2."""
     inst, _dev, _review_gate = _dev_flow_v2(db, tmp_path)
-    gates = flow_gates(db, tenant_id=db.tenant_id, user_id=db.user_id, flow=inst.flow)
+    gates = flow_gates(_session(db), flow=inst.flow)
     assert ("review", "done") in gates
     assert ("done", "promoted") in gates
     assert ("done", "rejected") not in gates
