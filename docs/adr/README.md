@@ -57,3 +57,7 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0047](0047-estudos-tema-container.md) | Estudos: Tema como container de N Materiais | aceito |
 | [0048](0048-sectionizer-pessoa-section-persistencia.md) | Sectionizer: particionamento de capítulos em seções + seção como átomo do plano (KUBO-184/185) | aceito |
 | [0049](0049-estudos-licao-na-ui-ingestao-background.md) | Estudos: Lição na UI, registro de estudo e ingestão de Material em background (KUBO-199) | aceito |
+| [0050](0050-digest-janela-publicacao-substitui-watermark.md) | Digest por janela de publicação substitui o watermark posicional | aceito |
+| [0051](0051-titulo-gerado-nota-parecer-destilador.md) | Destilador vira portão: nota de relevância, título gerado sob proveniência, prosa limpa | aceito |
+| [0052](0052-parecer-resumo-dia-artefato-compartilhado.md) | Parecer por item e resumo do dia: onde vivem, quem escreve | aceito |
+| [0053](0053-scopedstore-escopo-tenant-na-conexao.md) | ScopedStore: escopo de tenant na sessão de store, não na assinatura | proposto |
