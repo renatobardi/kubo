@@ -2712,3 +2712,120 @@ def test_count_items_to_score_zero_when_none_pending(
 ) -> None:
     """Banco sem candidato pendente de pontuação conta 0 (não None, não erro)."""
     assert knowledge.count_items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 0
+
+
+# ── Cross-tenant isolation: items_to_score / items_without_distilled ───────
+
+
+def _seed_two_tenants(
+    db: Any,
+    tenant_a: RecordID,
+    user_a: RecordID,
+    *,
+    content_a: str = "conteúdo A1",
+    content_b: str = "conteúdo B1",
+    slug: str = "",
+) -> tuple[RecordID, RecordID]:
+    """Cria um tenant B e uma source/item em cada tenant; devolve (tenant_b, user_b_id).
+
+    Reuso de setup para os testes cross-tenant (evita Data Clump)."""
+    user_b = tenancy.create_user(db, firebase_uid=f"uid-tenant-b{slug}")
+    tenant_b = tenancy.create_tenant(db, name=f"Tenant B{slug}", owner_user_id=user_b.id)
+
+    src_a = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_a, user_id=user_a),
+        kind="rss",
+        canonical=f"https://a/feed{slug}",
+    )
+    knowledge.upsert_item(db, source=src_a, external_id="a1", content=content_a)
+
+    src_b = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_b.id, user_id=user_b.id),
+        kind="rss",
+        canonical=f"https://b/feed{slug}",
+    )
+    knowledge.upsert_item(db, source=src_b, external_id="b1", content=content_b)
+
+    return tenant_b.id, user_b.id
+
+
+def test_items_to_score_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """items_to_score só devolve itens cuja source (Cadastro) pertence ao tenant
+    da sessão (ADR-0040 §VI). Itens de outro tenant não aparecem — sem esse
+    filtro, o distiller de um tenant pontua itens do outro, queimando cota e
+    carimbando scored_for no tenant errado (incidente 2026-08-08)."""
+    tenant_b, user_b = _seed_two_tenants(db, tenant_id, user_id)
+
+    # Tenant A só deve ver 1 item (o seu), não 2
+    pending_a = knowledge.items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10)
+    assert len(pending_a) == 1
+
+    # Tenant B só deve ver 1 item (o seu)
+    pending_b = knowledge.items_to_score(scoped(db, tenant_id=tenant_b, user_id=user_b), limit=10)
+    assert len(pending_b) == 1
+
+
+def test_count_items_to_score_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """count_items_to_score usa o MESMO filtro de isolamento que items_to_score
+    (ADR-0040 §VI) — se não filtrasse, a métrica de progresso mentiria ao somar
+    itens de outro tenant."""
+    tenant_b, user_b = _seed_two_tenants(db, tenant_id, user_id, slug="-score")
+
+    session_a = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    session_b = scoped(db, tenant_id=tenant_b, user_id=user_b)
+
+    assert knowledge.count_items_to_score(session_a) == 1
+    assert knowledge.count_items_to_score(session_b) == 1
+
+
+def test_items_without_distilled_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """items_without_distilled também isola por tenant — mesmo motivo que
+    items_to_score (ADR-0040 §VI)."""
+    tenant_b, user_b = _seed_two_tenants(db, tenant_id, user_id, slug="-distilled")
+
+    pending_a = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
+    assert len(pending_a) == 1
+
+    pending_b = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_b, user_id=user_b), limit=10
+    )
+    assert len(pending_b) == 1
+
+
+def test_count_items_without_distilled_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """count_items_without_distilled também isola por tenant — sem filtro a
+    métrica de progresso contaria itens de outro tenant."""
+    tenant_b, user_b = _seed_two_tenants(db, tenant_id, user_id, slug="-count")
+
+    session_a = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    session_b = scoped(db, tenant_id=tenant_b, user_id=user_b)
+
+    assert knowledge.count_items_without_distilled(session_a) == 1
+    assert knowledge.count_items_without_distilled(session_b) == 1
+
+
+def test_dashboard_counts_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """O painel de contagens (DashboardCounts) deve mostrar apenas itens do
+    tenant ativo, não o total global do pool (ADR-0040 §VI)."""
+    tenant_b, user_b = _seed_two_tenants(db, tenant_id, user_id, slug="-dash")
+
+    counts_a = knowledge.dashboard_counts(scoped(db, tenant_id=tenant_id, user_id=user_id))
+    counts_b = knowledge.dashboard_counts(scoped(db, tenant_id=tenant_b, user_id=user_b))
+
+    # Cada tenant tem 1 source e 1 item; sem filtro ambos veriam items=2
+    assert counts_a.items == 1
+    assert counts_b.items == 1
+    assert counts_a.sources == 1
+    assert counts_b.sources == 1
