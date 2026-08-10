@@ -39,7 +39,8 @@ from typing import Any
 
 import structlog
 
-from kubo.store import client
+from kubo.store import client, tenancy
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger().bind(worker="cleanup_0014_dup")
@@ -75,13 +76,13 @@ def plan_for_item(distilleds: Sequence[Any]) -> tuple[Any, list[Any]]:
     return ordered[0], list(ordered[1:])
 
 
-def _delete_distilled(db: Any, distilled: Any, chunk_ids: Sequence[Any]) -> None:
+def _delete_distilled(session: ScopedStore, distilled: Any, chunk_ids: Sequence[Any]) -> None:
     """Apaga os chunks (por id) e o distilled numa transação — a cascata do DELETE do
     nó remove as arestas RELATION. Chunks primeiro (senão `chunk_of` some e orfana)."""
     stmts = [f"DELETE $c{i}" for i in range(len(chunk_ids))] + ["DELETE $d"]
     params: dict[str, Any] = {f"c{i}": c for i, c in enumerate(chunk_ids)}
     params["d"] = distilled
-    run_transaction(db, stmts, params)
+    run_transaction(session, stmts, params)
 
 
 def _short(rid: Any) -> str:
@@ -109,6 +110,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     with client.connect(client.config()) as db:
+        user, tenant = tenancy.get_or_create_user_and_tenant(
+            db, firebase_uid="cleanup-0014", email="cleanup-0014@kubo.local"
+        )
+        session = scoped(db, tenant_id=tenant.id, user_id=user.id)
         items = find_dup_items(db)
         print(f"itens_duplicados: {len(items)}")
         to_delete = skipped_divergent = 0
@@ -134,7 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     continue
                 to_delete += 1
                 if args.apply:
-                    _delete_distilled(db, d, chs)
+                    _delete_distilled(session, d, chs)
 
         mode = "APLICADO" if args.apply else "DRY-RUN (nada foi deletado)"
         print(

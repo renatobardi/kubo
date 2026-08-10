@@ -15,6 +15,7 @@ from surrealdb import RecordID
 
 from kubo.runtime.context import GraphKnowledge
 from kubo.store import client, knowledge, migrations, tenancy
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -39,7 +40,7 @@ def test_items_to_score_assigns_sequential_refs_and_resolves(
     """2 itens pendentes -> items_to_score(limit=10) devolve 2 ItemViews com
     refs 0 e 1; gk.resolve(0)/gk.resolve(1) devolvem os RecordIDs corretos."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(
         db, source=source_id, external_id="a", content="conteúdo A", title="Título A"
@@ -74,7 +75,7 @@ def test_items_to_score_carries_url(db: Any, tenant_id: RecordID, user_id: Recor
     """A pontuação (ADR-0051 §I.1) roda sobre título E URL — o ItemView precisa
     carregar a url, não só title/content."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="c", url="https://x/a")
 
@@ -101,7 +102,7 @@ def test_refs_are_monotonic_across_two_calls(
     MESMOS 2 itens (ordem determinística por id), só que com refs novos; prova
     que o contador é por-instância e monotônico, não que o lote muda sozinho."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
@@ -130,7 +131,7 @@ def test_items_to_score_excludes_already_scored(
     """Um item já pontuado (passe ou não o corte) não aparece em items_to_score —
     reprovação é definitiva (ADR-0051 §I.4); confirma a integração ponta a ponta."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     pending_item = knowledge.upsert_item(
         db, source=source_id, external_id="pending", content="pendente"
@@ -138,7 +139,9 @@ def test_items_to_score_excludes_already_scored(
     scored_item = knowledge.upsert_item(
         db, source=source_id, external_id="scored", content="já pontuado"
     )
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=scored_item, score=2)
+    knowledge.apply_score(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=scored_item, score=2
+    )
 
     gk = GraphKnowledge(db, tenant_id=tenant_id, user_id=user_id)
     views = gk.items_to_score(limit=10)

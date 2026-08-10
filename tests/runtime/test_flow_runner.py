@@ -8,7 +8,7 @@ erro de config, nunca costura proveniência às cegas nem crasha.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from surrealdb import RecordID
@@ -101,7 +101,7 @@ def test_persist_report_without_flow_ctx_is_config_error() -> None:
     boundary do run_worker o mapeia para kind='config'), nunca costura às cegas."""
     payload = ReportPayload(content="corpo", consulted=[])
     with pytest.raises(ConfigError, match="flow_ctx"):
-        _persist_report(object(), payload, None, tenant_id=_TENANT_ID, user_id=_USER_ID)
+        _persist_report(cast(Any, object()), payload, None)
 
 
 def test_manifest_is_worker_manifest() -> None:

@@ -15,13 +15,13 @@ Para executar no ambiente de produção:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import structlog
 
 from kubo.scheduler.tenant import resolve_scheduler_tenant_and_user
 from kubo.store import client
 from kubo.store.knowledge import upsert_seed_source
+from kubo.store.scoped import scoped
 
 _log = structlog.get_logger().bind(worker="seed-extra-rss")
 
@@ -154,18 +154,17 @@ FEEDS: list[FeedSeed] = [
 ]
 
 
-def seed_extra_rss_sources(db: Any) -> int:
+def seed_extra_rss_sources(db: client.UnscopedDb) -> int:
     """Semeia os feeds adicionais como Cadastros rss ativos.
 
     Idempotente por (tenant_id, kind, canonical) e não-destrutivo: títulos/tags/pausa do
     dono sobrevivem. Devolve o número de feeds processados.
     """
     tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     for feed in FEEDS:
         upsert_seed_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session,
             kind="rss",
             canonical=feed.canonical,
             title=feed.title,

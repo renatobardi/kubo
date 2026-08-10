@@ -20,6 +20,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, migrations
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     count_ready_materials_by_topic,
     create_material,
@@ -58,7 +59,7 @@ def _chapters(n: int = 2) -> list[ParsedChapter]:
 
 
 def _topic(db: Any, tenant_id: RecordID, user_id: RecordID) -> RecordID:
-    return create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo").id
+    return create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo").id
 
 
 # --- create_pending_material -----------------------------------------------------------
@@ -70,9 +71,7 @@ def test_create_pending_material_has_pending_status(
     """Material criado via upload tem status=pending, sem chapters/sections."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -92,9 +91,7 @@ def test_create_pending_material_is_user_scoped(
     """Material pending é isolado por usuário."""
     topic_id = _topic(db, tenant_id, user_id)
     create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -102,7 +99,7 @@ def test_create_pending_material_is_user_scoped(
         file_path="/data/livro.epub",
         size_bytes=1024,
     )
-    pending = list_pending_materials(db, tenant_id=tenant_id, user_id=other_user_id)
+    pending = list_pending_materials(scoped(db, tenant_id=tenant_id, user_id=other_user_id))
     assert pending == []
 
 
@@ -115,9 +112,7 @@ def test_ingest_material_creates_chapters_and_marks_ready(
     """ingest_material: parse → chapters + sections + summary → ready."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -126,9 +121,7 @@ def test_ingest_material_creates_chapters_and_marks_ready(
         size_bytes=1024,
     )
     ready = ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=material.id,
         chapters=_chapters(2),
         sections=None,
@@ -147,9 +140,7 @@ def test_ingest_material_is_idempotent_on_ready(
     """Re-ingest de material já ready não duplica chapters/sections."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -158,9 +149,7 @@ def test_ingest_material_is_idempotent_on_ready(
         size_bytes=1024,
     )
     ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=material.id,
         chapters=_chapters(2),
         sections=None,
@@ -168,9 +157,7 @@ def test_ingest_material_is_idempotent_on_ready(
     )
     # 2ª chamada: deve ser no-op ou re-processar sem duplicar.
     ready = ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=material.id,
         chapters=_chapters(2),
         sections=None,
@@ -187,9 +174,7 @@ def test_mark_material_failed_sets_error(db: Any, tenant_id: RecordID, user_id: 
     """Falha de ingestão marca material como failed com motivo."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -198,9 +183,7 @@ def test_mark_material_failed_sets_error(db: Any, tenant_id: RecordID, user_id: 
         size_bytes=1024,
     )
     failed = mark_material_failed(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=material.id,
         error="Falha ao parsear epub.",
     )
@@ -218,9 +201,7 @@ def test_list_pending_materials_returns_only_pending(
     """list_pending_materials filtra por status=pending."""
     topic_id = _topic(db, tenant_id, user_id)
     m1 = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro 1",
         fmt="epub",
@@ -229,9 +210,7 @@ def test_list_pending_materials_returns_only_pending(
         size_bytes=1024,
     )
     m2 = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro 2",
         fmt="epub",
@@ -241,15 +220,13 @@ def test_list_pending_materials_returns_only_pending(
     )
     # m2 vira ready
     ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=m2.id,
         chapters=_chapters(1),
         sections=None,
         summary="Resumo.",
     )
-    pending = list_pending_materials(db, tenant_id=tenant_id, user_id=user_id)
+    pending = list_pending_materials(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert len(pending) == 1
     assert pending[0].id == m1.id
 
@@ -263,9 +240,7 @@ def test_retry_material_ingest_resets_to_pending(
     """Retry de material failed volta para pending."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -274,17 +249,10 @@ def test_retry_material_ingest_resets_to_pending(
         size_bytes=1024,
     )
     mark_material_failed(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        material_id=material.id,
-        error="Timeout.",
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id, error="Timeout."
     )
     retried = retry_material_ingest(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        material_id=material.id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id
     )
     assert retried.status == "pending"
     assert retried.error is None
@@ -299,9 +267,7 @@ def test_count_ready_materials_excludes_pending(
     """count_ready_materials_by_topic só conta ready, não pending/failed."""
     topic_id = _topic(db, tenant_id, user_id)
     m1 = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro 1",
         fmt="epub",
@@ -310,9 +276,7 @@ def test_count_ready_materials_excludes_pending(
         size_bytes=1024,
     )
     create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro 2",
         fmt="epub",
@@ -322,16 +286,16 @@ def test_count_ready_materials_excludes_pending(
     )
     # m1 vira ready
     ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=m1.id,
         chapters=_chapters(1),
         sections=None,
         summary="Resumo.",
     )
     assert (
-        count_ready_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+        count_ready_materials_by_topic(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+        )
         == 1
     )
 
@@ -345,9 +309,7 @@ def test_create_material_legacy_marks_ready(
     """create_material (síncrono, legado) cria com status=ready."""
     topic_id = _topic(db, tenant_id, user_id)
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Livro",
         fmt="epub",
@@ -371,9 +333,7 @@ def test_list_materials_by_topic_shows_status(
     """list_materials_by_topic devolve o status de cada material."""
     topic_id = _topic(db, tenant_id, user_id)
     m1 = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Pendente",
         fmt="epub",
@@ -382,18 +342,14 @@ def test_list_materials_by_topic_shows_status(
         size_bytes=1024,
     )
     ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         material_id=m1.id,
         chapters=_chapters(1),
         sections=None,
         summary="OK.",
     )
     m2 = create_pending_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         title="Falhado",
         fmt="epub",
@@ -402,13 +358,11 @@ def test_list_materials_by_topic_shows_status(
         size_bytes=1024,
     )
     mark_material_failed(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        material_id=m2.id,
-        error="Erro.",
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=m2.id, error="Erro."
     )
-    materials = list_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    materials = list_materials_by_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     statuses = {m.title: m.status for m in materials}
     assert statuses["Pendente"] == "ready"
     assert statuses["Falhado"] == "failed"

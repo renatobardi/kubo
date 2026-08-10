@@ -113,6 +113,20 @@ Transversal ao Kubo: qualquer persona pode consumi-lo para contextualizar output
 o primeiro cliente. Entra em prompts — nunca contém segredos. Código: `work_context`.
 _Evite_: "bio", "perfil" solto.
 
+## Tenancy
+
+**Tenant**:
+O workspace de uma equipe ou pessoa no Kubo. Todo dado tenant-scoped pertence a exatamente um
+tenant; nenhum dado de tenant tem `tenant_id` anulável. Um [[Membro]] pertence a um tenant por
+meio de `membership`. Código: `tenant`. _Evite_: "workspace" quando a distinção com a UI importa;
+"organização".
+
+**Sessão de store**:
+O objeto que carrega o escopo de tenant e user em operações no `kubo/store/`. Checa `membership`
+uma vez na criação e injeta o predicado de tenant em toda query que emite. Substitui o repasse
+manual de `tenant_id`/`user_id` em cada assinatura de store. Código: `ScopedStore`. _Evite_:
+"conexão" (a conexão é o socket SurrealDB; a sessão é o escopo por cima), "contexto" solto.
+
 ## Identidade e preferências
 
 **Conta**:

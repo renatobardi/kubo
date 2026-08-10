@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.errors import SenderError
@@ -42,12 +43,46 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     importlib.reload(importlib.import_module("kubo.store.invites"))
     importlib.reload(importlib.import_module("kubo.store.destinations"))
     importlib.reload(importlib.import_module("kubo.store.settings"))
+    # Restaura `scoped` real (a conftest stuba para SimpleNamespace sem .query()).
+    from kubo.store.scoped import scoped as _real_scoped
+
+    monkeypatch.setattr("kubo.api.routes.destinations.scoped", _real_scoped)
+    monkeypatch.setattr("kubo.api.routes.settings.scoped", _real_scoped)
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
+        # Cria user/tenant/membership para o resolve_session stubado (breakglass).
+        # Usa SQL direto porque o conftest stuba tenancy.get_user_by_firebase_uid.
+        _bg_user_id = RecordID("user", "breakglass-owner")
+        _bg_tenant_id = RecordID("tenant", "breakglass")
+        root.query(
+            "CREATE $u SET firebase_uid = $uid, email = NONE, created_at = time::now();",
+            {"u": _bg_user_id, "uid": "user:breakglass-owner"},
+        )
+        root.query(
+            "CREATE $t SET name = $name, created_at = time::now();",
+            {"t": _bg_tenant_id, "name": "Breakglass"},
+        )
+        root.query(
+            "RELATE $u->membership->$t SET role = 'owner', created_at = time::now();",
+            {"u": _bg_user_id, "t": _bg_tenant_id},
+        )
+        # Sobrescreve o stub de resolve_session com os IDs reais criados no banco.
+        from types import SimpleNamespace as _NS
+
+        _real_ctx = _NS(
+            tenant_id=_bg_tenant_id,
+            user_id=_bg_user_id,
+            role="owner",
+        )
+        for _mod in ("destinations", "settings", "flows"):
+            monkeypatch.setattr(
+                f"kubo.api.routes.{_mod}.resolve_session",
+                lambda request, db, _ctx=_real_ctx: _ctx,
+            )
         try:
             yield create_app()
         finally:

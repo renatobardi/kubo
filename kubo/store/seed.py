@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
 
 import structlog
 from surrealdb import RecordID
@@ -78,7 +77,7 @@ FEED_CADASTROS: list[FeedSeed] = [
 ]
 
 
-def _ensure_marker_table(db: Any) -> None:
+def _ensure_marker_table(db: client.UnscopedDb) -> None:
     """`IF NOT EXISTS` como no runner de migrations: SELECT de tabela inexistente ERRA no v3.1.5."""
     db.query("DEFINE TABLE IF NOT EXISTS seed_marker SCHEMALESS;")
 
@@ -88,19 +87,19 @@ def _marker_id(name: str) -> RecordID:
     return RecordID("seed_marker", name)
 
 
-def _marker_seen(db: Any, name: str) -> bool:
+def _marker_seen(db: client.UnscopedDb, name: str) -> bool:
     """Verifica se o marcador `seed_marker:<name>` já existe."""
     _ensure_marker_table(db)
     rows = db.query("SELECT id FROM $r;", {"r": _marker_id(name)})
     return bool(rows)
 
 
-def _mark(db: Any, name: str) -> None:
+def _mark(db: client.UnscopedDb, name: str) -> None:
     """Cria o marcador `seed_marker:<name>` com timestamp."""
     db.query("CREATE $r SET applied_at = time::now();", {"r": _marker_id(name)})
 
 
-def seed_feed_cadastros(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> int:
+def seed_feed_cadastros(db: client.UnscopedDb, *, tenant_id: RecordID, user_id: RecordID) -> int:
     """Semeia as `FEED_CADASTROS` como Cadastros rss ativos — bootstrap histórico que roda
     **UMA VEZ por ambiente** (marcador `seed:feed_cadastros`), não a cada deploy. Devolve quantas
     fontes processou (0 se já semeado).
@@ -114,11 +113,10 @@ def seed_feed_cadastros(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> i
     permanece para proteger pausa/título que o dono já tenha mudado ANTES do 1º seed."""
     if _marker_seen(db, "feed_cadastros"):
         return 0
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     for feed in FEED_CADASTROS:
         upsert_seed_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session,
             kind="rss",
             canonical=feed.canonical,
             title=feed.title,
@@ -128,7 +126,7 @@ def seed_feed_cadastros(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> i
     return len(FEED_CADASTROS)
 
 
-def seed_default_settings(db: Any) -> bool:
+def seed_default_settings(db: client.UnscopedDb) -> bool:
     """Cria o singleton `settings:global` com os defaults operacionais UMA VEZ por ambiente
     (KUBO-44, ADR-0028). Segue o mesmo padrão de marcador do seed de feeds para evitar
     overwrite de edições do dono feitas pela UI."""
@@ -157,7 +155,9 @@ def _owner_telegram_chat_id() -> str:
     return value
 
 
-def seed_owner_destination(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> bool:
+def seed_owner_destination(
+    db: client.UnscopedDb, *, tenant_id: RecordID, user_id: RecordID
+) -> bool:
     """Semeia o destino Telegram do dono e o define como padrão UMA VEZ por ambiente.
 
     Cria o destino a partir de `KUBO_OWNER_TELEGRAM_CHAT_ID` (nunca literal no código),
@@ -169,13 +169,13 @@ def seed_owner_destination(db: Any, *, tenant_id: RecordID, user_id: RecordID) -
         return False
 
     chat_id = _owner_telegram_chat_id()
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     rid = destination_store.create_destination(
-        db,
+        session,
         name="owner-telegram",
         kind="pessoa",
         channel="telegram",
         address=chat_id,
-        tenant_id=tenant_id,
     )
 
     current = settings_store.get_settings(db)

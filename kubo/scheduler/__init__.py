@@ -39,6 +39,7 @@ from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import active_sources
+from kubo.store.scoped import scoped
 from kubo.workers.distiller import DistillerWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
@@ -190,7 +191,8 @@ def execute_sweep_job(kind: str) -> None:
         raise ConfigError(f"sweep de kind '{kind}' sem despacho em SWEEP_DISPATCH")
     with client.connect(client.config()) as db:
         tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
-        sources = active_sources(db, tenant_id=tenant_id, user_id=user_id, kind=kind)
+        session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+        sources = active_sources(session, kind=kind)
     dispatched = 0
     failed = 0
     for source in sources:
@@ -236,7 +238,8 @@ def execute_digest_sweep_job() -> None:
 
         with client.connect(client.config()) as list_db:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(list_db)
-            destination_list = destination_store.active_destinations(list_db)
+            session = scoped(list_db, tenant_id=tenant_id, user_id=user_id)
+            destination_list = destination_store.active_destinations(session)
 
         # Executor LLM para enriquecimento editorial (ADR-0052, KUBO-195) —
         # mesmo modelo do destilador. Criado uma vez por sweep, compartilhado

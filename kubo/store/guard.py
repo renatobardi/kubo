@@ -7,13 +7,14 @@ WHERE" (invisível) — que é pior. O guard converte isso em gate mecânico.
 
 Regras de falha:
 1. Query sobre tabela tenant-scoped sem `$tenant_id` → violação.
-2. SQL não-literal (variável, f-string, concatenação) → violação, a menos que
+2. SQL não-literal (variável, call, expressão) → violação, a menos que
    esteja na allowlist nominal com justificativa. Ausência de argumento SQL
    (call sem args, ou só kwargs não-SQL) também é não-literal — fail-closed,
-   nunca ignorado.
-3. `run_transaction(mod, [statements], ...)` é varrido: cada statement literal
-   é verificado como query; statements não-literais seguem a regra 2. O
-   caminho transacional é o único canal de escrita — cegue a ele é fail-open.
+   nunca ignorado. F-string e concatenação de constantes conhecidas são
+   resolvidas a literal; se houver parte não-resolvível, voltam a ser violação.
+3. `run_transaction(mod, [statements], ...)` e `run_global_transaction(...)`
+   são varridos. `run_transaction` exige `$tenant_id` em statements sobre
+   tabelas tenant-scoped; `run_global_transaction` não pode tocá-las.
 4. O guard vigia só os módulos já migrados — a baseline de não-migrados é
    explícita no teste e só encolhe.
 
@@ -93,7 +94,7 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
 _SORTED_TENANT_SCOPED_TABLES: tuple[str, ...] = tuple(sorted(TENANT_SCOPED_TABLES))
 
 _QUERY_METHODS: frozenset[str] = frozenset({"query", "query_raw"})
-_TRANSACTION_FUNCS: frozenset[str] = frozenset({"run_transaction"})
+_TRANSACTION_FUNCS: frozenset[str] = frozenset({"run_transaction", "run_global_transaction"})
 _SQL_KEYWORD = "sql"
 _STATEMENTS_KEYWORD = "statements"
 
@@ -140,11 +141,11 @@ def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
 
 
 def _module_string_constants(tree: ast.Module) -> dict[str, str]:
-    """Nomes de módulo atribuídos uma única vez a literal string → valor.
+    """Nomes de módulo atribuídos uma única vez a literal string/f-string → valor.
 
     Reatribuição (a qualquer coisa) ou import desqualifica o nome: o guard só
-    confia em constantes imutáveis por inspeção estática. Conservador de mais,
-    não de menos — o escape hatch é a allowlist nominal.
+    confia em constantes imutáveis por inspeção estática. F-strings só entram
+    se forem resolvíveis a partir de literais e outras constantes já conhecidas.
     """
     constants: dict[str, str] = {}
     disqualified: set[str] = set()
@@ -158,8 +159,9 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
                     disqualified.add(target.id)
                     constants.pop(target.id, None)
                     continue
-                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    constants[target.id] = node.value.value
+                resolved = _resolve_sql(node.value, constants)
+                if resolved is not None:
+                    constants[target.id] = resolved
                 else:
                     disqualified.add(target.id)
         elif isinstance(node, ast.Import | ast.ImportFrom):
@@ -174,13 +176,34 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
 def _resolve_sql(arg: ast.AST, constants: dict[str, str]) -> str | None:
     """Resolve um node para um literal SQL string, ou None se não-literal.
 
-    Aceita: string literal constante, ou `Name` que aponta para constante de
-    módulo confiável. O resto (f-string, concat, variável, call) é não-literal.
+    Aceita: string literal constante, `Name` que aponta para constante de
+    módulo confiável, concatenação de strings já resolvíveis, ou f-string
+    cujas partes são todas literais ou `Name` de constantes confiáveis. O
+    resto (variável, call, expressão) é não-literal.
     """
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
         return arg.value
     if isinstance(arg, ast.Name) and arg.id in constants:
         return constants[arg.id]
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+        left = _resolve_sql(arg.left, constants)
+        right = _resolve_sql(arg.right, constants)
+        if left is not None and right is not None:
+            return left + right
+        return None
+    if isinstance(arg, ast.JoinedStr):
+        parts: list[str] = []
+        for value in arg.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                resolved = _resolve_sql(value.value, constants)
+                if resolved is None:
+                    return None
+                parts.append(resolved)
+            else:
+                return None
+        return "".join(parts)
     return None
 
 
@@ -272,8 +295,13 @@ def _check_transaction_call(
     module_name: str,
     allowlist: frozenset[AllowlistEntry],
     constants: dict[str, str],
+    tx_name: str,
 ) -> list[Violation]:
-    """Verifica cada statement literal de `run_transaction(mod, [stmts], ...)`.
+    """Verifica cada statement literal de `run_*transaction(mod, [stmts], ...)`.
+
+    `run_transaction`: cada statement que toca tabela tenant-scoped precisa de
+    `$tenant_id`. `run_global_transaction`: nenhum statement pode tocar tabela
+    tenant-scoped — é o caminho de tabelas globais.
 
     Lista de statements não-literal (variável, call) → non_literal_sql. Cada
     statement não-literal dentro da lista segue a regra de allowlist nominal.
@@ -284,18 +312,29 @@ def _check_transaction_call(
     if not isinstance(stmts_arg, ast.List):
         if _is_allowed(module_name, func_name, allowlist):
             return []
-        return [_non_literal_violation(node.lineno, func_name, "run_transaction")]
+        return [_non_literal_violation(node.lineno, func_name, tx_name)]
 
+    is_global = tx_name == "run_global_transaction"
     violations: list[Violation] = []
     for elt in stmts_arg.elts:
         sql = _resolve_sql(elt, constants)
         if sql is None:
             if not _is_allowed(module_name, func_name, allowlist):
-                violations.append(_non_literal_violation(elt.lineno, func_name, "run_transaction"))
+                violations.append(_non_literal_violation(elt.lineno, func_name, tx_name))
             continue
         table = _references_tenant_scoped_table(sql)
-        if table is not None and "$tenant_id" not in sql:
-            violations.append(_missing_tenant_violation(elt.lineno, table, "run_transaction"))
+        if table is None:
+            continue
+        if is_global:
+            violations.append(
+                Violation(
+                    elt.lineno,
+                    "missing_tenant_filter",
+                    f"global transaction touches tenant-scoped table '{table}' in {func_name}()",
+                )
+            )
+        elif "$tenant_id" not in sql:
+            violations.append(_missing_tenant_violation(elt.lineno, table, tx_name))
     return violations
 
 
@@ -328,7 +367,7 @@ def scan_module(
             )
         elif name in _TRANSACTION_FUNCS:
             violations.extend(
-                _check_transaction_call(node, parents, module_name, allowlist, constants)
+                _check_transaction_call(node, parents, module_name, allowlist, constants, name)
             )
 
     return violations

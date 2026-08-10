@@ -15,6 +15,7 @@ from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import client, migrations, tenancy
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     create_chat_message,
     create_topic,
@@ -44,20 +45,16 @@ def db() -> Iterator[Any]:
 
 def test_create_and_list_chat_messages(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Mensagens são persistidas e listadas em ordem cronológica."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         phase="draft",
         role="user",
         content="Quero estudar agentic coding.",
     )
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         phase="draft",
         role="assistant",
@@ -65,7 +62,7 @@ def test_create_and_list_chat_messages(db: Any, tenant_id: RecordID, user_id: Re
     )
 
     messages = list_chat_messages(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id, phase="draft"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id, phase="draft"
     )
     assert len(messages) == 2
     assert messages[0].role == "user"
@@ -77,21 +74,17 @@ def test_list_chat_messages_scoped_to_topic(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Mensagens de um Tema não vazam para outro."""
-    topic_a = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="A")
-    topic_b = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="B")
+    topic_a = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="A")
+    topic_b = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="B")
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_a.id,
         phase="draft",
         role="user",
         content="Mensagem A",
     )
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_b.id,
         phase="draft",
         role="user",
@@ -99,7 +92,7 @@ def test_list_chat_messages_scoped_to_topic(
     )
 
     messages_a = list_chat_messages(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_a.id, phase="draft"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_a.id, phase="draft"
     )
     assert len(messages_a) == 1
     assert messages_a[0].content == "Mensagem A"
@@ -109,20 +102,16 @@ def test_list_chat_messages_scoped_to_phase(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Mensagens da fase draft não aparecem na fase planning (e vice-versa)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         phase="draft",
         role="user",
         content="Mensagem draft",
     )
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         phase="planning",
         role="user",
@@ -130,7 +119,7 @@ def test_list_chat_messages_scoped_to_phase(
     )
 
     draft_msgs = list_chat_messages(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id, phase="draft"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id, phase="draft"
     )
     assert len(draft_msgs) == 1
     assert draft_msgs[0].content == "Mensagem draft"
@@ -140,11 +129,9 @@ def test_list_chat_messages_scoped_to_owner(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Outro membro do mesmo tenant não vê mensagens alheias."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Privado")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Privado")
     create_chat_message(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         phase="draft",
         role="user",
@@ -154,7 +141,7 @@ def test_list_chat_messages_scoped_to_owner(
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
 
     messages = list_chat_messages(
-        db, tenant_id=tenant_id, user_id=other.id, topic_id=topic.id, phase="draft"
+        scoped(db, tenant_id=tenant_id, user_id=other.id), topic_id=topic.id, phase="draft"
     )
     assert messages == []
 
@@ -166,18 +153,16 @@ def test_set_topic_fields_updates_focus_and_depth(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """set_topic_fields atualiza focus e depth no Tema."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     set_topic_fields(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         focus="Sistemas agênticos",
         depth="aprofundado",
     )
     from kubo.store.study import get_topic
 
-    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    updated = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert updated is not None
     assert updated.focus == "Sistemas agênticos"
     assert updated.depth == "aprofundado"
@@ -189,26 +174,22 @@ def test_set_topic_fields_partial_preserves_other_field(
     """set_topic_fields com _UNSET preserva o campo não passado (não clobber)."""
     from kubo.store.study import _UNSET, get_topic
 
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     # Seta os dois campos primeiro.
     set_topic_fields(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         focus="Rust",
         depth="aprofundado",
     )
     # Atualiza só focus — depth deve sobreviver (sentinela _UNSET).
     set_topic_fields(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         focus="Python",
         depth=_UNSET,
     )
-    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    updated = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert updated is not None
     assert updated.focus == "Python"
     assert updated.depth == "aprofundado"  # preservado, não clobber
@@ -220,24 +201,18 @@ def test_set_topic_fields_clears_field_with_none(
     """set_topic_fields com None limpa o campo (diferente de _UNSET)."""
     from kubo.store.study import get_topic
 
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     set_topic_fields(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         focus="Rust",
         depth="aprofundado",
     )
     # None limpa focus — depth deve sobreviver.
     set_topic_fields(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        topic_id=topic.id,
-        focus=None,
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id, focus=None
     )
-    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    updated = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert updated is not None
     assert updated.focus is None
     assert updated.depth == "aprofundado"
@@ -245,14 +220,12 @@ def test_set_topic_fields_clears_field_with_none(
 
 def test_set_topic_fields_rejects_archived(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Tema arquivado é só leitura — set_topic_fields recusa (StoreError)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     # Forçar estado archived diretamente no banco.
     db.query("UPDATE $topic SET state = 'archived';", {"topic": topic.id})
     with pytest.raises(StoreError):
         set_topic_fields(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             topic_id=topic.id,
             focus="X",
             depth=None,

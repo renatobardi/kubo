@@ -50,6 +50,7 @@ from kubo.store.flows import (
     transition_task,
 )
 from kubo.store.knowledge import insert_dispatch, run_status
+from kubo.store.scoped import scoped
 from kubo.workers import github_api
 from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
 from kubo.workers.dev import DevWorker, KuboDevWorker
@@ -210,26 +211,21 @@ def _run_analysis(
         raise ConfigError(f"template 'analysis' exige a persona '{_ANALYST_PERSONA}' no catálogo")
     _assert_permissions(analista, AnalystWorker.manifest)
     resolved_executor = executor if executor is not None else _build_executor(analista)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
 
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         template=template,
         personas=personas,
         question=question,
     )
     task = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=inst.flow,
         persona=inst.personas[_ANALYST_PERSONA],
         state=_CREATED,
     )
-    transition_task(
-        db, task, tenant_id=tenant_id, user_id=user_id, from_state=_CREATED, to_state=_ANALYZING
-    )
+    transition_task(session, task, from_state=_CREATED, to_state=_ANALYZING)
 
     worker = AnalystWorker(
         resolved_executor,
@@ -247,13 +243,11 @@ def _run_analysis(
         tenant_id=tenant_id,
         user_id=user_id,
     )
-    set_task_run(db, tenant_id=tenant_id, user_id=user_id, task=task, run=run_id)
+    set_task_run(session, task=task, run=run_id)
     final = (
         _DELIVERED if _run_succeeded(db, run_id, tenant_id=tenant_id, user_id=user_id) else _FAILED
     )
-    transition_task(
-        db, task, tenant_id=tenant_id, user_id=user_id, from_state=_ANALYZING, to_state=final
-    )
+    transition_task(session, task, from_state=_ANALYZING, to_state=final)
     return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=final)
 
 
@@ -282,26 +276,21 @@ def _run_analysis_review(
         )
     _assert_permissions(analista, AnalystWorker.manifest)
     resolved_executor = executor if executor is not None else _build_executor(analista)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
 
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         template=template,
         personas=personas,
         question=question,
     )
     task = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=inst.flow,
         persona=inst.personas[_ANALYST_PERSONA],
         state=_CREATED,
     )
-    transition_task(
-        db, task, tenant_id=tenant_id, user_id=user_id, from_state=_CREATED, to_state=_ANALYZING
-    )
+    transition_task(session, task, from_state=_CREATED, to_state=_ANALYZING)
 
     worker = AnalystWorker(
         resolved_executor,
@@ -319,17 +308,13 @@ def _run_analysis_review(
         tenant_id=tenant_id,
         user_id=user_id,
     )
-    set_task_run(db, tenant_id=tenant_id, user_id=user_id, task=task, run=run_id)
+    set_task_run(session, task=task, run=run_id)
     if not _run_succeeded(db, run_id, tenant_id=tenant_id, user_id=user_id):
-        transition_task(
-            db, task, tenant_id=tenant_id, user_id=user_id, from_state=_ANALYZING, to_state=_FAILED
-        )
+        transition_task(session, task, from_state=_ANALYZING, to_state=_FAILED)
         return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_FAILED)
 
     gate_task = open_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=task,
         analyst_from=_ANALYZING,
         analyst_to=_AWAITING,
@@ -380,26 +365,21 @@ def _run_dev(
         raise ConfigError(f"'dev-mini' exige as personas '{_DEV_PERSONA}' e '{_HUMAN_PERSONA}'")
     _assert_permissions(dev, target.worker_cls.manifest)
     runner = _build_cli_executor(dev, template)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
 
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         template=template,
         personas=personas,
         question=question,
     )
     task = create_task(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=inst.flow,
         persona=inst.personas[_DEV_PERSONA],
         state=_CREATED,
     )
-    transition_task(
-        db, task, tenant_id=tenant_id, user_id=user_id, from_state=_CREATED, to_state=_IMPLEMENTING
-    )
+    transition_task(session, task, from_state=_CREATED, to_state=_IMPLEMENTING)
 
     worker = target.worker_cls(runner, prompt=dev.prompt)
     config = _dev_config(
@@ -413,22 +393,18 @@ def _run_dev(
         tenant_id=tenant_id,
         user_id=user_id,
     )
-    set_task_run(db, tenant_id=tenant_id, user_id=user_id, task=task, run=run_id)
+    set_task_run(session, task=task, run=run_id)
     if not _run_succeeded(db, run_id, tenant_id=tenant_id, user_id=user_id):
         transition_task(
-            db,
+            session,
             task,
-            tenant_id=tenant_id,
-            user_id=user_id,
             from_state=_IMPLEMENTING,
             to_state=_FAILED,
         )
         return FlowRunResult(flow=inst.flow, task=task, run=run_id, state=_FAILED)
 
     gate_task = open_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=task,
         analyst_from=_IMPLEMENTING,
         analyst_to=_REVIEW,
@@ -495,13 +471,12 @@ def _resume_dev(
     """Aprovação do `dev-mini` (D38): move as 2 tasks a `done`. SEM envio e SEM merge — o Kubo não
     tem capacidade de merge (anti-bypass por construção, ADR-0018 §V-bis); o merge é clique do dono
     no GitHub. `destination`/`base_url`/`senders` existem só para casar o contrato do resume."""
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    ctx = read_gate_context(session, gate_task=gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow/deliverable")
     decide_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_DONE,
@@ -528,16 +503,15 @@ def _reject_dev(
     untrusted; owner/repo do ENV do `target`; o PAT da integração de escrita do `target`
     (`_write_integration`, o runtime resolve o segredo — §8). `ForgeError` (close falho) propaga:
     a rota reabre o board e o gate segue aberto."""
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    ctx = read_gate_context(session, gate_task=gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow")
     # Valida o par `(gate_state, rejected)` ∈ gates ANTES de qualquer I/O (ADR-0021 §9, trap c):
     # com dois gates no dev-mini v2, um reject roteado ao gate de PROMOÇÃO (par [done, rejected]
     # inexistente) passaria no read_gate_context e comentaria/fecharia um PR JÁ MESCLADO antes do
     # StateError do decide_gate. Barrar aqui mantém o PR mesclado intocado.
-    if (ctx.gate_state, _REJECTED) not in flow_gates(
-        db, tenant_id=tenant_id, user_id=user_id, flow=ctx.flow
-    ):
+    if (ctx.gate_state, _REJECTED) not in flow_gates(session, flow=ctx.flow):
         raise StateError(f"gate em '{ctx.gate_state}' não tem transição de rejeição — irrejeitável")
     if ctx.pr_number is None:
         raise StateError("gate dev sem PR estrutural — não é rejeitável pela API")
@@ -562,9 +536,7 @@ def _reject_dev(
         reason=reason,
     )
     decide_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_REJECTED,
@@ -595,12 +567,11 @@ def _promote_dev(
 
     Ordem I/O-externo-antes-do-commit (espelha `_reject_dev`): grava o `merge_commit_sha` (fato
     verdadeiro independente do gate, idempotente) e só ENTÃO decide o gate → `promoted`."""
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    ctx = read_gate_context(session, gate_task=gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow/deliverable")
-    if (ctx.gate_state, _PROMOTED) not in flow_gates(
-        db, tenant_id=tenant_id, user_id=user_id, flow=ctx.flow
-    ):
+    if (ctx.gate_state, _PROMOTED) not in flow_gates(session, flow=ctx.flow):
         raise StateError(f"gate em '{ctx.gate_state}' não tem transição de promoção")
     if ctx.pr_number is None:
         raise StateError("gate de promoção sem PR estrutural — nada para confirmar")
@@ -624,16 +595,12 @@ def _promote_dev(
         raise PromotionError("o PR ainda não foi mesclado no GitHub — aprovar não é mesclar (D38)")
     _validate_registered_worker(worker_name)
     set_merge_commit_sha(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=ctx.flow,
         merge_commit_sha=status.merge_commit_sha,
     )
     decide_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_PROMOTED,
@@ -689,7 +656,9 @@ def _write_integration(
     `github-kubo` do repo principal, conforme `_DevTarget.write_integration`) — o runtime resolve
     o segredo, o worker/behavior nunca lê env direto (§8). PAT ausente → ConfigError (config)."""
     catalog = load_integrations(db, tenant_id, user_id)
-    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id)[name]
+    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id, user_id=user_id)[
+        name
+    ]
     if not resolved.secret:
         raise ConfigError(f"integração {name!r} sem PAT resolvido")
     return resolved.base_url or "https://api.github.com", resolved.secret
@@ -720,7 +689,8 @@ def _run_succeeded(db: Any, run_id: RecordID, *, tenant_id: RecordID, user_id: R
     """True se o run fechou `ok` — decide delivered vs failed (o run é a fonte da verdade
     do resultado da execução; o flow runner só reflete no estado do task). A leitura passa
     pela store (`run_status`, invariante 2), não por `db.query` direto aqui."""
-    return run_status(db, run_id, tenant_id=tenant_id, user_id=user_id) == "ok"
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    return run_status(session, run_id) == "ok"
 
 
 def resume_gate(
@@ -795,7 +765,8 @@ def _behavior_for_gate(
     """Resolve o FlowBehavior pelo `template_name` do flow do gate (E4: comportamento keyed
     pelo nome). Gate sem template registrado → ConfigError. A leitura passa pela store
     (`template_of_task`, invariante 2), nunca `db.query` direto aqui."""
-    name = template_of_task(db, tenant_id=tenant_id, user_id=user_id, task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    name = template_of_task(session, task=gate_task)
     behavior = _FLOW_REGISTRY.get(name) if name is not None else None
     if behavior is None:
         raise ConfigError(f"gate sem template no FLOW_REGISTRY: {name!r}")
@@ -816,7 +787,8 @@ def _resume_review(
     relatório (mecânico, sem LLM — a prosa do deliverable + as fontes das arestas `consults`),
     registra o dispatch de report e — SÓ se o envio deu certo — decide o gate (delivered) numa
     transação. Envio falho → dispatch(error) e o gate segue aberto; espelha o `_deliver`."""
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    ctx = read_gate_context(session, gate_task=gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow/deliverable")
     items = [_distilled_rid(s.id) for s in ctx.sources]
@@ -838,9 +810,7 @@ def _resume_review(
         raise
     _dispatch_report(db, destination, items, status="ok", tenant_id=tenant_id, user_id=user_id)
     decide_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_DELIVERED,
@@ -858,13 +828,12 @@ def _reject_review(
 ) -> None:
     """Rejeição do `analysis-review` (ADR-0018 §IV): arquiva as 2 tasks → rejected com o motivo
     obrigatório. `decide_gate` valida o motivo e a atomicidade (transação)."""
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=gate_task)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    ctx = read_gate_context(session, gate_task=gate_task)
     if ctx is None:
         raise StateError("gate não resolve um flow")
     decide_gate(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         analyst_task=ctx.counterpart_task,
         gate_task=ctx.gate_task,
         to_state=_REJECTED,
@@ -888,6 +857,7 @@ def _notify_gate(
     """Avisa o dono que um gate abriu + grava o dispatch de gate (ADR-0018 §III). BEST-EFFORT:
     falha de notificação NÃO falha o gate (loga com flow_id/task_id e segue — o board é a fonte
     da verdade). O dispatch de gate NÃO move o watermark do digest (filtro artifact='digest')."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     try:
         text = (
             f"🔔 Um relatório aguarda sua aprovação no Kubo.\n\n{question}\n\n"
@@ -903,9 +873,7 @@ def _notify_gate(
             user_id=user_id,
         )
         insert_dispatch(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session,
             destination=destination.id,
             channel=destination.channel,
             status="ok",
@@ -934,10 +902,9 @@ def _dispatch_report(
 ) -> None:
     """Grava o dispatch de report da aprovação (artifact=report, watermark None — não move o
     watermark do digest). `items` = as fontes consultadas (auditoria, aparece em Envios)."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     insert_dispatch(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         destination=destination.id,
         channel=destination.channel,
         status=status,
@@ -975,7 +942,9 @@ def _telegram_token(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> str:
     """Resolve o token do Telegram do catálogo de integrações (mesmo seam do worker). Token
     ausente → SenderError (falha de ENTREGA, não crash)."""
     catalog = load_integrations(db, tenant_id, user_id)
-    resolved = resolve_integrations(["telegram"], catalog, db=db, tenant_id=tenant_id)
+    resolved = resolve_integrations(
+        ["telegram"], catalog, db=db, tenant_id=tenant_id, user_id=user_id
+    )
     secret = resolved["telegram"].secret
     if not secret:
         raise SenderError("integração 'telegram' sem segredo resolvido")

@@ -1,6 +1,6 @@
 # ADR-0053 — ScopedStore: escopo de tenant na sessão de store, não na assinatura
 
-> Status: **proposto** · Data: 2026-08-08 · Cumpre ADR-0039 §II (aceito); emenda a forma de enforcement, não a regra.
+> Status: **aceito** · Data: 2026-08-08 · Cumpre ADR-0039 §II (aceito); emenda a forma de enforcement, não a regra.
 > **Depende do ADR-0044 (ainda `proposto`)**: esta fatia fecha a dívida nomeada no §2 dele. O 0044 é aceito antes — ou no mesmo lote — do merge desta fatia.
 
 ## Contexto

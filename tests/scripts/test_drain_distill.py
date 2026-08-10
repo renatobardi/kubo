@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from kubo.contracts.models import EntityRef
 from kubo.store import knowledge
+from kubo.store.scoped import scoped
 from kubo.workers.distiller import (
     DaySummaryOutput,
     DistillerWorker,
@@ -101,7 +102,7 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
     (inicial 2 → final 0, drenados 2, motivo 'done'). Fecha o risco de wiring que só
     apareceria em execução real e gastaria API paga (achado CodeRabbit)."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A sobre a Anthropic")
     knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B sobre a Anthropic")
@@ -131,7 +132,10 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
     assert final == 0
     assert drained == 2
     assert reason == "done"
-    assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0
+    assert (
+        knowledge.count_items_without_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id))
+        == 0
+    )
 
 
 @pytest.mark.integration
@@ -145,7 +149,7 @@ def test_drain_treats_rejected_item_as_progress_not_stuck(
     leria isso como "sem progresso" e pararia o dreno com `reason='stuck'`
     mesmo o item tendo sido corretamente processado."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo irrelevante")
 

@@ -47,6 +47,7 @@ from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
 from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.history import sliding_window_history
@@ -151,16 +152,14 @@ def _session_of(request: Request) -> SessionContext | None:
         return resolve_session(request, db)
 
 
-def _topic_of(db: Any, key: str, ctx: SessionContext) -> study_store.Topic | None:
+def _topic_of(session: ScopedStore, key: str) -> study_store.Topic | None:
     """Tema do usuário pela chave da URL; None quando não existe ou é de outro."""
     topic_key = key.strip()
     if not topic_key:
         return None
     return study_store.get_topic(
-        db,
+        session,
         topic_id=RecordID(_TOPIC_TABLE, topic_key),
-        tenant_id=ctx.tenant_id,
-        user_id=ctx.user_id,
     )
 
 
@@ -194,12 +193,11 @@ def _render_plan_entries(
 ) -> Response:
     """Re-renderiza o partial da lista de lições (C3 — HTMX swap, não reload)."""
     with client.connect() as db:
-        plan, entries = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
         section_titles: dict[str, str] = {}
         if plan is not None:
-            for sec in _collect_all_sections(db, ctx, topic.id):
+            for sec in _collect_all_sections(session, topic.id):
                 section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
     return templates.TemplateResponse(
         request,
@@ -264,14 +262,14 @@ def _save_upload(directory: Path, ctx: SessionContext, fmt: MaterialFormat, data
     return path
 
 
-def _summarizer(ctx: SessionContext, db: Any | None = None) -> Summarizer:
+def _summarizer(ctx: SessionContext, session: ScopedStore | None = None) -> Summarizer:
     """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo).
 
-    Se `db` é passado (conexão já aberta pelo caller), reusa — evita conexão
-    aninhada (C4). Sem `db`, abre própria (backward compat).
+    Se `session` é passada (já aberta pelo caller), reusa — evita conexão
+    aninhada (C4). Sem session, abre própria (backward compat).
     """
-    if db is not None:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
+    if session is not None:
+        persona = resolve_persona(session, ctx.tenant_id, ctx.user_id, "summarizer")
     else:
         with client.connect() as db_conn:
             persona = resolve_persona(db_conn, ctx.tenant_id, ctx.user_id, "summarizer")
@@ -322,10 +320,9 @@ def _persist_pending_material(
     path = _save_upload(directory, ctx, fmt, data)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             return study_store.create_pending_material(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 title=Path(original).stem or original or "Material sem título",
                 fmt=fmt,
@@ -349,17 +346,18 @@ def list_topics_page(request: Request) -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         if archived:
             topics = study_store.list_archived_topics(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
+                session,
             )
         else:
-            topics = study_store.list_topics(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            topics = study_store.list_topics(
+                session,
+            )
         # Enriquece com progresso em lote (1 query de study_log global).
         progress_map = study_store.get_topics_progress_batch(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            session,
             topic_ids=[t.id for t in topics],
         )
         rows = [
@@ -390,10 +388,9 @@ def create_topic(
         return PlainTextResponse(_DENIED, status_code=403)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             topic = study_store.create_topic(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 title="Tema sem nome",
             )
     except ConfigError:
@@ -413,17 +410,14 @@ def topic_detail(request: Request, key: str) -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
-        materials = study_store.list_materials_by_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        materials = study_store.list_materials_by_topic(session, topic_id=topic.id)
         chat_messages = (
             study_store.list_chat_messages(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 phase="draft",
             )
@@ -432,9 +426,7 @@ def topic_detail(request: Request, key: str) -> Response:
         )
         planning_chat_messages = (
             study_store.list_chat_messages(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 phase="planning",
             )
@@ -442,9 +434,7 @@ def topic_detail(request: Request, key: str) -> Response:
             else []
         )
         plan, plan_entries = (
-            study_store.get_plan_for_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            study_store.get_plan_for_topic(session, topic_id=topic.id)
             if topic.state in ("planning", "scheduled", "running")
             else (None, [])
         )
@@ -453,15 +443,11 @@ def topic_detail(request: Request, key: str) -> Response:
         lessons: list[study_store.Lesson] = []
         logs: dict[str, study_store.StudyLog] = {}
         if topic.state in ("planning", "scheduled", "running"):
-            for sec in _collect_all_sections(db, ctx, topic.id):
+            for sec in _collect_all_sections(session, topic.id):
                 section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
         if topic.state in ("scheduled", "running") and plan is not None:
-            lessons = study_store.list_lessons_for_plan(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
-            )
-            logs = study_store.list_study_logs_for_plan(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, plan_id=plan.id
-            )
+            lessons = study_store.list_lessons_for_plan(session, plan_id=plan.id)
+            logs = study_store.list_study_logs_for_plan(session, plan_id=plan.id)
     return templates.TemplateResponse(
         request,
         _TOPIC_TEMPLATE,
@@ -502,13 +488,12 @@ def rename_topic(
         return PlainTextResponse(_DENIED, status_code=403)
     try:
         with client.connect_rw() as db:
-            topic = _topic_of(db, key, ctx)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            topic = _topic_of(session, key)
             if topic is None:
                 return _topic_missing(request, key)
             study_store.set_topic_name(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 title=title,
             )
@@ -584,16 +569,16 @@ def upload_material(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
     if topic is None:
         return _topic_missing(request, key)
     if topic.state != "draft":
         return PlainTextResponse(_TOPIC_NOT_DRAFT, status_code=400)
 
     with client.connect() as db:
-        count = study_store.count_materials_by_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        count = study_store.count_materials_by_topic(session, topic_id=topic.id)
     limit = _max_materials()
     if limit <= 0:
         return PlainTextResponse(
@@ -637,7 +622,8 @@ def delete_material(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
     if topic is None:
         return _topic_missing(request, key)
     # draft e planning: permitido (em planning, dono regenera o plano depois).
@@ -682,12 +668,11 @@ def materials_partial(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
-        materials = study_store.list_materials_by_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        materials = study_store.list_materials_by_topic(session, topic_id=topic.id)
     return templates.TemplateResponse(
         request,
         "study/_materials.html",
@@ -717,7 +702,8 @@ def retry_material(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
     if topic is None:
         return _topic_missing(request, key)
     if topic.state in ("scheduled", "running", "archived"):
@@ -726,9 +712,8 @@ def retry_material(
     material_id = RecordID("material", mkey.strip())
     try:
         with client.connect() as db:
-            material = study_store.get_material(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            material = study_store.get_material(session, material_id=material_id)
         if material is None or material.topic != topic.id:
             return PlainTextResponse("Material não encontrado.", status_code=404)
         if material.status != "failed":
@@ -736,9 +721,8 @@ def retry_material(
                 "Só é possível tentar de novo um material que falhou.", status_code=400
             )
         with client.connect_rw() as db:
-            study_store.retry_material_ingest(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            study_store.retry_material_ingest(session, material_id=material_id)
     except (ConfigError, StoreError):
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
@@ -753,18 +737,16 @@ def _fetch_and_delete_material(
     material_id = RecordID("material", mkey.strip())
     try:
         with client.connect() as db:
-            material = study_store.get_material(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            material = study_store.get_material(session, material_id=material_id)
         if material is None:
             return PlainTextResponse("Material não encontrado.", status_code=404)
         # Valida que o material pertence ao Tema da URL (não a outro Tema).
         if material.topic != topic_id:
             return PlainTextResponse("Material não encontrado.", status_code=404)
         with client.connect_rw() as db:
-            study_store.delete_material(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material_id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            study_store.delete_material(session, material_id=material_id)
     except ConfigError:
         _log.warning("study.write_unavailable")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
@@ -790,20 +772,18 @@ def _auto_revert_if_empty(
     if topic.state != "planning":
         return None
     with client.connect() as db:
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         remaining = study_store.count_materials_by_topic(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            session,
             topic_id=topic.id,
         )
     if remaining > 0:
         return None
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             reverted = study_store.revert_to_draft_if_planning(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
             )
     except (ConfigError, StoreError):
@@ -841,26 +821,24 @@ def _work_context_of(ctx: SessionContext) -> str:
     return (profile.work_context or "") if profile else ""
 
 
-def _material_summaries_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[str]:
+def _material_summaries_of(session: ScopedStore, topic_id: RecordID) -> list[str]:
     """Sumários dos Materiais do Tema (não conteúdo completo — contexto para o mentor)."""
-    materials = study_store.list_materials_by_topic(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
-    )
+    materials = study_store.list_materials_by_topic(session, topic_id=topic_id)
     return [m.summary for m in materials if m.summary]
 
 
-def _chat_history_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> list[tuple[str, str]]:
+def _chat_history_of(
+    session: ScopedStore, ctx: SessionContext, topic_id: RecordID
+) -> list[tuple[str, str]]:
     """Histórico da conversa como lista de (role, content) para o mentor.
 
     Aplica janela deslizante com resumo (KUBO-168, ADR-0047 Emenda 4): turnos
     antigos são resumidos em vez de truncados. Se o resumo falha, fallback
     para truncamento.
     """
-    messages = study_store.list_chat_messages(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
-    )
+    messages = study_store.list_chat_messages(session, topic_id=topic_id, phase="draft")
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx, db))
+    return sliding_window_history(history, lambda: _summarizer(ctx, session))
 
 
 def _chat_precheck(
@@ -872,18 +850,17 @@ def _chat_precheck(
     libera o chat (ADR-0047 §5).
     """
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CHAT, status_code=400)
-        ready = study_store.count_ready_materials_by_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        ready = study_store.count_ready_materials_by_topic(session, topic_id=topic.id)
         if ready == 0:
             return PlainTextResponse(_TOPIC_NO_MATERIALS, status_code=400)
-        summaries = _material_summaries_of(db, ctx, topic.id)
-        history = _chat_history_of(db, ctx, topic.id)
+        summaries = _material_summaries_of(session, topic.id)
+        history = _chat_history_of(session, ctx, topic.id)
     return topic, summaries, history
 
 
@@ -919,10 +896,9 @@ def chat_with_mentor(
 
     # Persiste a mensagem do dono antes de streamar.
     with client.connect_rw() as db:
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         study_store.create_chat_message(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            session,
             topic_id=topic.id,
             phase="draft",
             role="user",
@@ -958,10 +934,9 @@ def _persist_assistant(ctx: SessionContext, topic_id: RecordID, content: str, ke
     """Persiste a resposta do mentor; falha de store é logada, não derruba o stream."""
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic_id,
                 phase="draft",
                 role="assistant",
@@ -1008,7 +983,8 @@ def set_topic_fields(
     if field == "depth" and value and value not in VALID_DEPTHS:
         return PlainTextResponse(_INVALID_DEPTH, status_code=400)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
@@ -1016,10 +992,9 @@ def set_topic_fields(
     kwargs: dict[str, str | None] = {field: value or None}
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.set_topic_fields(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 **kwargs,  # type: ignore[arg-type]
             )
@@ -1056,7 +1031,7 @@ def _planner(ctx: SessionContext) -> tuple[Planner, ApiExecutor]:
 
 
 def _collect_all_chapters(
-    db: Any, ctx: SessionContext, topic_id: RecordID
+    session: ScopedStore, topic_id: RecordID
 ) -> list[study_store.MaterialChapter]:
     """Coleta todos os capítulos de todos os materiais do Tema, com seq GLOBAL.
 
@@ -1067,15 +1042,11 @@ def _collect_all_chapters(
     KUBO-185: usado apenas para compatibilidade (scheduler/tutor). O planner
     agora usa `_collect_all_sections`.
     """
-    materials = study_store.list_materials_by_topic(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
-    )
+    materials = study_store.list_materials_by_topic(session, topic_id=topic_id)
     all_chapters: list[study_store.MaterialChapter] = []
     global_seq = 0
     for material in materials:
-        chapters = study_store.list_all_chapters_light(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
-        )
+        chapters = study_store.list_all_chapters_light(session, material_id=material.id)
         for ch in chapters:
             global_seq += 1
             all_chapters.append(
@@ -1092,7 +1063,7 @@ def _collect_all_chapters(
 
 
 def _collect_all_sections(
-    db: Any, ctx: SessionContext, topic_id: RecordID
+    session: ScopedStore, topic_id: RecordID
 ) -> list[study_store.MaterialSection]:
     """Coleta todas as seções de todos os materiais do Tema, com chapter_seq GLOBAL.
 
@@ -1104,23 +1075,17 @@ def _collect_all_sections(
     material (ordem de criação), capítulo por capítulo (seq crescente). O
     section_seq vem do sectionizer (local ao capítulo, 1-based).
     """
-    materials = study_store.list_materials_by_topic(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
-    )
+    materials = study_store.list_materials_by_topic(session, topic_id=topic_id)
     all_sections: list[study_store.MaterialSection] = []
     global_ch_seq = 0
     for material in materials:
-        chapters = study_store.list_all_chapters_light(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
-        )
+        chapters = study_store.list_all_chapters_light(session, material_id=material.id)
         # Map: chapter RecordID → global chapter_seq.
         ch_id_to_global: dict[str, int] = {}
         for ch in chapters:
             global_ch_seq += 1
             ch_id_to_global[str(ch.id)] = global_ch_seq
-        sections = study_store.list_all_sections_light(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, material_id=material.id
-        )
+        sections = study_store.list_all_sections_light(session, material_id=material.id)
         for sec in sections:
             all_sections.append(
                 dc_replace(sec, chapter_seq=ch_id_to_global.get(str(sec.material_chapter), 0))
@@ -1128,16 +1093,14 @@ def _collect_all_sections(
     return all_sections
 
 
-def _mentor_transcript_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
+def _mentor_transcript_of(session: ScopedStore, topic_id: RecordID) -> str:
     """Transcript cru da conversa com mentor (KUBO-164)."""
-    messages = study_store.list_chat_messages(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="draft"
-    )
+    messages = study_store.list_chat_messages(session, topic_id=topic_id, phase="draft")
     lines = [f"{'Dono' if m.role == 'user' else 'Mentor'}: {m.content}" for m in messages]
     return "\n".join(lines)
 
 
-def _mentor_summary_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
+def _mentor_summary_of(session: ScopedStore, ctx: SessionContext, topic_id: RecordID) -> str:
     """Resumo da conversa com mentor para o planner (KUBO-168, ADR-0047 Emenda 4).
 
     Substitui o transcript cru no prompt do planner. Se a conversa é curta
@@ -1146,10 +1109,10 @@ def _mentor_summary_of(db: Any, ctx: SessionContext, topic_id: RecordID) -> str:
     fallback para o transcript truncado em 2000 chars (preserva a intenção
     do dono mesmo sem IA).
     """
-    transcript = _mentor_transcript_of(db, ctx, topic_id)
+    transcript = _mentor_transcript_of(session, topic_id)
     if len(transcript) <= 500:
         return transcript
-    summarizer = _summarizer(ctx)
+    summarizer = _summarizer(ctx, session)
     summary = summarizer.summarize_conversation(transcript)
     if summary:
         return summary
@@ -1175,20 +1138,19 @@ def close_topic(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "draft":
             return PlainTextResponse(_TOPIC_NOT_DRAFT_CLOSE, status_code=400)
-        ready = study_store.count_ready_materials_by_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        ready = study_store.count_ready_materials_by_topic(session, topic_id=topic.id)
         if ready == 0:
             return PlainTextResponse(_TOPIC_EMPTY_CLOSE, status_code=400)
         # Coleta input do planner.
-        sections = _collect_all_sections(db, ctx, topic.id)
-        transcript = _mentor_summary_of(db, ctx, topic.id)
-        summaries = _material_summaries_of(db, ctx, topic.id)
+        sections = _collect_all_sections(session, topic.id)
+        transcript = _mentor_summary_of(session, ctx, topic.id)
+        summaries = _material_summaries_of(session, topic.id)
 
     # Guarda defensiva: materiais sem seções (pré-migration 0037 sem backfill)
     # não devem crashar mechanical_proposal([]) — devolve 400 legível.
@@ -1217,17 +1179,14 @@ def close_topic(
 
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.save_plan_proposal(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 entries=entries,
             )
             study_store.set_topic_state(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 state="planning",
             )
@@ -1246,27 +1205,23 @@ _INVALID_ID = "Identificador inválido."
 
 
 def _planning_chat_history_of(
-    db: Any, ctx: SessionContext, topic_id: RecordID
+    session: ScopedStore, ctx: SessionContext, topic_id: RecordID
 ) -> list[tuple[str, str]]:
     """Histórico da conversa com planner (phase=planning), janela deslizante com resumo."""
-    messages = study_store.list_chat_messages(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id, phase="planning"
-    )
+    messages = study_store.list_chat_messages(session, topic_id=topic_id, phase="planning")
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx, db))
+    return sliding_window_history(history, lambda: _summarizer(ctx, session))
 
 
 def _current_plan_as_tuples(
-    db: Any, ctx: SessionContext, topic_id: RecordID
+    session: ScopedStore, topic_id: RecordID
 ) -> list[tuple[str, list[tuple[int, int]]]]:
     """Plano atual como lista de (title, section_pairs) para o planner (KUBO-185)."""
-    plan, entries = study_store.get_plan_for_topic(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
-    )
+    plan, entries = study_store.get_plan_for_topic(session, topic_id=topic_id)
     if plan is None:
         return []
     # Mapeia section RecordID → (chapter_seq, section_seq) global.
-    sections = _collect_all_sections(db, ctx, topic_id)
+    sections = _collect_all_sections(session, topic_id)
     id_to_pair = {str(sec.id): (sec.chapter_seq, sec.seq) for sec in sections}
     result: list[tuple[str, list[tuple[int, int]]]] = []
     for e in entries:
@@ -1298,10 +1253,9 @@ def _persist_planner_reply(
     """
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic_id,
                 phase="planning",
                 role="assistant",
@@ -1318,10 +1272,9 @@ def _persist_planner_reply(
     ]
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.replace_plan_entries(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic_id,
                 entries=entries,
             )
@@ -1339,13 +1292,9 @@ def _parse_record_id(raw: str, expected_table: str) -> RecordID | None:
     return RecordID(parts[0], parts[1])
 
 
-def _entry_belongs_to_plan(
-    db: Any, ctx: SessionContext, topic_id: RecordID, entry_id: RecordID
-) -> bool:
+def _entry_belongs_to_plan(session: ScopedStore, topic_id: RecordID, entry_id: RecordID) -> bool:
     """Verifica que a entry pertence ao plano do tópico da URL (não de outro tema)."""
-    _, entries = study_store.get_plan_for_topic(
-        db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic_id
-    )
+    _, entries = study_store.get_plan_for_topic(session, topic_id=topic_id)
     return any(str(e.id) == str(entry_id) for e in entries)
 
 
@@ -1372,23 +1321,23 @@ def chat_with_planner(
         return PlainTextResponse(_EMPTY_MESSAGE, status_code=400)
 
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        sections = _collect_all_sections(db, ctx, topic.id)
-        current_plan = _current_plan_as_tuples(db, ctx, topic.id)
-        history = _planning_chat_history_of(db, ctx, topic.id)
-        summaries = _material_summaries_of(db, ctx, topic.id)
+        sections = _collect_all_sections(session, topic.id)
+        current_plan = _current_plan_as_tuples(session, topic.id)
+        history = _planning_chat_history_of(session, ctx, topic.id)
+        summaries = _material_summaries_of(session, topic.id)
 
     # Persiste a mensagem do dono antes de chamar o planner.
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 phase="planning",
                 role="user",
@@ -1473,17 +1422,17 @@ def back_to_draft(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.set_topic_state(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 state="draft",
             )
@@ -1506,15 +1455,16 @@ def repropose_plan(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        sections = _collect_all_sections(db, ctx, topic.id)
-        transcript = _mentor_summary_of(db, ctx, topic.id)
-        summaries = _material_summaries_of(db, ctx, topic.id)
-        planning_history = _planning_chat_history_of(db, ctx, topic.id)
+        sections = _collect_all_sections(session, topic.id)
+        transcript = _mentor_summary_of(session, ctx, topic.id)
+        summaries = _material_summaries_of(session, topic.id)
+        planning_history = _planning_chat_history_of(session, ctx, topic.id)
 
     # Guarda defensiva (ADR-0047 Emenda 7): sem seções, não há sobre o que propor.
     # O auto-revert no delete deveria impedir este estado, mas a rota não confia —
@@ -1542,10 +1492,9 @@ def repropose_plan(
     ]
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.replace_plan_entries(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
                 entries=entries,
             )
@@ -1579,9 +1528,8 @@ def _do_move_entry(
 ) -> Response | None:
     """Executa o swap de entries. Devolve Response de erro, ou None se OK/no-op."""
     with client.connect() as db:
-        plan, entries = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
     if plan is None or not entries:
         return PlainTextResponse("Plano não encontrado.", status_code=400)
     try:
@@ -1593,10 +1541,9 @@ def _do_move_entry(
     idx, neighbor_idx = pair
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.swap_plan_entries(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 plan_id=plan.id,
                 entry_a=entries[idx].id,
                 entry_b=entries[neighbor_idx].id,
@@ -1624,7 +1571,8 @@ def move_entry(
     if direction not in ("up", "down"):
         return PlainTextResponse("Direção inválida.", status_code=400)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
@@ -1656,19 +1604,19 @@ def remove_section(
         return PlainTextResponse(_INVALID_ID, status_code=400)
     entry_id = RecordID("plan_entry", ekey)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        if not _entry_belongs_to_plan(db, ctx, topic.id, entry_id):
+        if not _entry_belongs_to_plan(session, topic.id, entry_id):
             return PlainTextResponse("Lição não encontrada.", status_code=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             ok = study_store.remove_section_from_entry(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 entry_id=entry_id,
                 section_id=sec_rid,
             )
@@ -1696,22 +1644,20 @@ def set_cadence(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING, status_code=400)
-        plan, _ = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        plan, _ = study_store.get_plan_for_topic(session, topic_id=topic.id)
     if plan is None:
         return PlainTextResponse("Plano não encontrado.", status_code=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.set_plan_cadence(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 plan_id=plan.id,
                 weekdays=weekdays or [],
             )
@@ -1756,25 +1702,23 @@ def activate_topic(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "planning":
             return PlainTextResponse(_TOPIC_NOT_PLANNING_ACTIVATE, status_code=400)
         # Pré-condições: plano existe e tem cadência.
-        plan, _ = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        plan, _ = study_store.get_plan_for_topic(session, topic_id=topic.id)
         if plan is None:
             return PlainTextResponse(_TOPIC_NO_PLAN, status_code=400)
         if not plan.weekdays:
             return PlainTextResponse(_TOPIC_NO_CADENCE, status_code=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.activate_plan(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
             )
     except (ConfigError, StoreError):
@@ -1803,7 +1747,8 @@ def edit_plan_back(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state == "running":
@@ -1812,10 +1757,9 @@ def edit_plan_back(
             return PlainTextResponse(_TOPIC_NOT_SCHEDULED_EDIT, status_code=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             study_store.deactivate_plan(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 topic_id=topic.id,
             )
     except (ConfigError, StoreError):
@@ -1834,12 +1778,11 @@ def delete_topic_confirm(request: Request, key: str) -> Response:
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
-        summary = study_store.get_topic_delete_summary(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        summary = study_store.get_topic_delete_summary(session, topic_id=topic.id)
     return templates.TemplateResponse(
         request,
         "study/delete_confirm.html",
@@ -1860,16 +1803,16 @@ def archive_topic(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state == "archived":
             return PlainTextResponse(_TOPIC_ALREADY_ARCHIVED, status_code=400)
     try:
         with client.connect_rw() as db:
-            study_store.archive_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            study_store.archive_topic(session, topic_id=topic.id)
     except StoreError as exc:
         if "concurrently" in str(exc):
             return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
@@ -1894,16 +1837,16 @@ def unarchive_topic(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
         if topic.state != "archived":
             return PlainTextResponse(_TOPIC_NOT_ARCHIVED, status_code=400)
     try:
         with client.connect_rw() as db:
-            study_store.unarchive_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            study_store.unarchive_topic(session, topic_id=topic.id)
     except StoreError as exc:
         if "concurrently" in str(exc):
             return PlainTextResponse(_TOPIC_STATE_CHANGED, status_code=409)
@@ -1929,7 +1872,8 @@ def delete_topic(
     if ctx is None:
         return PlainTextResponse(_DENIED, status_code=403)
     with client.connect() as db:
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
     if confirm != "yes":
@@ -1937,13 +1881,11 @@ def delete_topic(
     # Coleta arquivos de materiais para remover do volume (best-effort).
     try:
         with client.connect() as db:
-            materials = study_store.list_materials_by_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            materials = study_store.list_materials_by_topic(session, topic_id=topic.id)
         with client.connect_rw() as db:
-            study_store.delete_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            study_store.delete_topic(session, topic_id=topic.id)
     except (ConfigError, StoreError):
         _log.warning("study.delete.failed", topic=_log_key(key))
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
@@ -1967,16 +1909,13 @@ def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
-        topic = _topic_of(db, key, ctx)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topic = _topic_of(session, key)
         if topic is None:
             return _topic_missing(request, key)
-        plan, _ = study_store.get_plan_for_topic(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-        )
+        plan, _ = study_store.get_plan_for_topic(session, topic_id=topic.id)
         lesson_id = RecordID("lesson", lesson_key.strip())
-        lesson = study_store.get_lesson(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
-        )
+        lesson = study_store.get_lesson(session, lesson_id=lesson_id)
         if lesson is None or (plan is not None and lesson.study_plan != plan.id):
             return templates.TemplateResponse(
                 request,
@@ -1984,9 +1923,7 @@ def lesson_detail(request: Request, key: str, lesson_key: str) -> Response:
                 {"raw": f"{key}/lessons/{lesson_key}"},
                 status_code=404,
             )
-        study_log = study_store.get_study_log(
-            db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
-        )
+        study_log = study_store.get_study_log(session, lesson_id=lesson_id)
     return templates.TemplateResponse(
         request,
         _LESSON_TEMPLATE,
@@ -2014,16 +1951,13 @@ def generate_lesson(
         return PlainTextResponse(_DENIED, status_code=403)
     try:
         with client.connect_rw() as db:
-            topic = _topic_of(db, key, ctx)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            topic = _topic_of(session, key)
             if topic is None:
                 return _topic_missing(request, key)
-            plan, entries = study_store.get_plan_for_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
             lesson_id = RecordID("lesson", lesson_key.strip())
-            lesson = study_store.get_lesson(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
-            )
+            lesson = study_store.get_lesson(session, lesson_id=lesson_id)
             if lesson is None or (plan is not None and lesson.study_plan != plan.id):
                 return templates.TemplateResponse(
                     request,
@@ -2038,16 +1972,16 @@ def generate_lesson(
             entry = next((e for e in entries if e.id == lesson.plan_entry), None)
             if entry is None:
                 return PlainTextResponse("Entrada do plano não encontrada.", status_code=400)
-            from kubo.scheduler.study_lessons import _generate_lesson_content
+            from kubo.scheduler.study_lessons import _build_tutor, _generate_lesson_content
 
+            tutor = _build_tutor(db, ctx.tenant_id, ctx.user_id)
             _generate_lesson_content(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 plan_id=plan.id,
                 lesson_id=lesson_id,
                 entry=entry,
                 work_context=topic.title,
+                tutor=tutor,
             )
     except (ConfigError, StoreError):
         _log.warning("study.lesson.generate_failed", lesson=lesson_key)
@@ -2075,16 +2009,13 @@ def submit_quiz(
         return PlainTextResponse(_INVALID_REACTION, status_code=400)
     try:
         with client.connect_rw() as db:
-            topic = _topic_of(db, key, ctx)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            topic = _topic_of(session, key)
             if topic is None:
                 return _topic_missing(request, key)
-            plan, _ = study_store.get_plan_for_topic(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, topic_id=topic.id
-            )
+            plan, _ = study_store.get_plan_for_topic(session, topic_id=topic.id)
             lesson_id = RecordID("lesson", lesson_key.strip())
-            lesson = study_store.get_lesson(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id, lesson_id=lesson_id
-            )
+            lesson = study_store.get_lesson(session, lesson_id=lesson_id)
             if lesson is None or (plan is not None and lesson.study_plan != plan.id):
                 return templates.TemplateResponse(
                     request,
@@ -2094,9 +2025,7 @@ def submit_quiz(
                 )
             result = grade(lesson.quiz, answers)
             study_store.create_study_log(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 lesson_id=lesson_id,
                 answers=answers,
                 correct_count=result.correct_count,

@@ -16,6 +16,7 @@ from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import client, migrations, tenancy
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     count_materials_by_topic,
     create_material,
@@ -57,11 +58,9 @@ def test_create_material_with_topic_and_summary(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Material é criado dentro de um Tema com topic_id e sumário."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Meu estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Meu estudo")
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual de Kubo",
         fmt="epub",
@@ -81,11 +80,9 @@ def test_create_material_with_topic_and_summary(
 
 def test_create_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Outro membro do MESMO tenant não vê material alheio."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Privado")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Privado")
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Material privado",
         fmt="epub",
@@ -100,7 +97,7 @@ def test_create_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
 
     materials = list_materials_by_topic(
-        db, tenant_id=tenant_id, user_id=other.id, topic_id=topic.id
+        scoped(db, tenant_id=tenant_id, user_id=other.id), topic_id=topic.id
     )
     assert materials == []
 
@@ -110,11 +107,9 @@ def test_create_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
 
 def test_list_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Lista os materiais de um Tema, mais recentes primeiro."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     first = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Primeiro",
         fmt="epub",
@@ -126,9 +121,7 @@ def test_list_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID
         summary="R1",
     )
     second = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Segundo",
         fmt="pdf",
@@ -140,7 +133,9 @@ def test_list_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID
         summary="R2",
     )
 
-    materials = list_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    materials = list_materials_by_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id
+    )
     assert [m.id for m in materials] == [second.id, first.id]
 
 
@@ -148,12 +143,10 @@ def test_list_materials_by_topic_excludes_other_topics(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Materiais de outro Tema não aparecem na lista."""
-    topic_a = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema A")
-    topic_b = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema B")
+    topic_a = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema A")
+    topic_b = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema B")
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_a.id,
         title="A",
         fmt="epub",
@@ -165,9 +158,7 @@ def test_list_materials_by_topic_excludes_other_topics(
         summary="RA",
     )
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_b.id,
         title="B",
         fmt="epub",
@@ -180,7 +171,7 @@ def test_list_materials_by_topic_excludes_other_topics(
     )
 
     materials = list_materials_by_topic(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_a.id
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_a.id
     )
     assert len(materials) == 1
     assert materials[0].title == "A"
@@ -191,11 +182,9 @@ def test_list_materials_by_topic_excludes_other_topics(
 
 def test_delete_material_removes_record(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Delete remove o material e seus capítulos do banco."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Descartável",
         fmt="epub",
@@ -207,19 +196,19 @@ def test_delete_material_removes_record(db: Any, tenant_id: RecordID, user_id: R
         summary="RD",
     )
 
-    delete_material(db, tenant_id=tenant_id, user_id=user_id, material_id=material.id)
+    delete_material(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material.id)
 
-    materials = list_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    materials = list_materials_by_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id
+    )
     assert materials == []
 
 
 def test_delete_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Outro membro não pode deletar material alheio (StoreError)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Meu",
         fmt="epub",
@@ -234,7 +223,7 @@ def test_delete_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
 
     with pytest.raises(StoreError):
-        delete_material(db, tenant_id=tenant_id, user_id=other.id, material_id=material.id)
+        delete_material(scoped(db, tenant_id=tenant_id, user_id=other.id), material_id=material.id)
 
 
 # --- count_materials_by_topic -----------------------------------------------------------
@@ -242,15 +231,16 @@ def test_delete_material_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: 
 
 def test_count_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Conta os materiais de um Tema (para validação de limite)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Tema")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Tema")
     assert (
-        count_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id) == 0
+        count_materials_by_topic(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id
+        )
+        == 0
     )
 
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="A",
         fmt="epub",
@@ -262,9 +252,7 @@ def test_count_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordI
         summary="RA",
     )
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="B",
         fmt="pdf",
@@ -277,5 +265,8 @@ def test_count_materials_by_topic(db: Any, tenant_id: RecordID, user_id: RecordI
     )
 
     assert (
-        count_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id) == 2
+        count_materials_by_topic(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id
+        )
+        == 2
     )

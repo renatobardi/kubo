@@ -30,6 +30,7 @@ from kubo.errors import ConfigError, FirebaseTokenError, StoreError, TeamInviteE
 from kubo.store import client
 from kubo.store import team_invites as team_invites_store
 from kubo.store import tenancy as tenancy_store
+from kubo.store.scoped import scoped, scoped_superadmin
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -299,10 +300,26 @@ def _accept_invite(
         tenant_user = tenancy_store.get_user_by_firebase_uid(db, uid)
         if tenant_user is None:
             tenant_user = tenancy_store.create_user(db, firebase_uid=uid, email=email)
-        try:
-            accepted = team_invites_store.accept_team_invite(
-                db, token=invite, user_id=tenant_user.id
+        # The accepting user is not yet a member of the invite's tenant — the
+        # tenant_id comes from the invite, not from membership.  Look it up to
+        # construct a superadmin-scoped session (bypasses the membership check
+        # that `scoped` performs; the transaction still filters by $tenant_id).
+        invite_rows = db.query(
+            "SELECT tenant_id FROM team_invite WHERE token = $tk LIMIT 1;",
+            {"tk": invite},
+        )
+        if not invite_rows:
+            return _invite_denied(
+                request,
+                "Convite inválido, expirado ou já usado.",
+                next_path=next_path,
+                invite=invite,
             )
+        session = scoped_superadmin(
+            db, user_id=tenant_user.id, tenant_id=invite_rows[0]["tenant_id"]
+        )
+        try:
+            accepted = team_invites_store.accept_team_invite(session, token=invite)
         except TeamInviteError as exc:
             _log.warning("api.firebase.invite_failed", reason=str(exc))
             return _invite_denied(
@@ -462,11 +479,8 @@ def create_invite(request: Request) -> Response:
 
     try:
         with client.connect_rw() as db:
-            invite = team_invites_store.create_team_invite(
-                db,
-                tenant_id=tenant_record,
-                created_by=membership.user,
-            )
+            session = scoped(db, tenant_id=tenant_record, user_id=membership.user)
+            invite = team_invites_store.create_team_invite(session)
     except ConfigError:
         _log.warning(_WRITE_LOG, route="auth.invite")
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)

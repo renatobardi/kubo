@@ -6,6 +6,10 @@ flow é a FONTE das transições: `transition_task` valida contra ele, NUNCA con
 catálogo vivo (invariante 4). Escrita que precisa ser um fato único é atômica via
 `run_transaction`; a instanciação NÃO é transacionada — um flow meio-formado por
 crash é órfão inofensivo, re-execução = novo flow (ADR-0016 §III/§IV).
+
+Toda operação pública recebe uma `ScopedStore` (KUBO-212, ADR-0053): a sessão carrega
+`(tenant_id, user_id)`, checa membership na criação, e injeta `$tenant_id`/`$user_id`
+nos params de toda query. O caller não passa tenant_id/user_id — a sessão os fornece.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from surrealdb import RecordID
 from kubo.errors import ConfigError, StateError
 from kubo.runtime.flow_templates import FlowTemplate
 from kubo.runtime.personas import Persona
-from kubo.store import tenancy
+from kubo.store.scoped import ScopedStore
 from kubo.store.transaction import run_transaction
 
 
@@ -40,20 +44,20 @@ _REJECTED = "rejected"
 _HUMAN_CATALOG = "humano"
 
 
-# LIMIT/START não aceitam bind param neste SurrealDB; `list_flows` interpola SÓ ints
-# (paginação da store, nunca entrada coletada) via .format — S608 suprimido no call site.
-# `{where}` recebe "WHERE tenant_id = $t" ou string vazia; o bind `$t` é seguro.
+_GATE_MOVE_SQL = (
+    "UPDATE $gt SET state = $to, decision = $dec, reason = $rsn, "
+    "decided_at = time::now() WHERE state = $from AND tenant_id = $tenant_id"
+)
 _LIST_FLOWS_SQL = (
     "SELECT id, template_name, question, created_at, "
-    "<-belongs_to<-task[WHERE tenant_id = $t].state AS task_states, "
-    "<-belongs_to<-task[WHERE tenant_id = $t].decision AS task_decisions, "
+    "<-belongs_to<-task[WHERE tenant_id = $tenant_id].state AS task_states, "
+    "<-belongs_to<-task[WHERE tenant_id = $tenant_id].decision AS task_decisions, "
     "snapshot.board.gates AS gate_pairs, "
     "snapshot.board.transitions AS transition_pairs, "
-    "array::distinct(<-belongs_to<-task[WHERE tenant_id = $t]"
-    "->assigned_to->persona[WHERE tenant_id = $t].catalog_name) AS cast "
-    "FROM flow {where} ORDER BY created_at DESC LIMIT {limit} START {start};"
+    "array::distinct(<-belongs_to<-task[WHERE tenant_id = $tenant_id]"
+    "->assigned_to->persona[WHERE tenant_id = $tenant_id].catalog_name) AS cast "
+    "FROM flow WHERE tenant_id = $tenant_id ORDER BY created_at DESC LIMIT $limit START $start;"
 )
-_LIST_FLOWS_WHERE = "WHERE tenant_id = $t"
 
 
 @dataclass(frozen=True)
@@ -67,10 +71,8 @@ class InstantiatedFlow:
 
 
 def instantiate_flow(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     template: FlowTemplate,
     personas: Mapping[str, Persona],
     question: str,
@@ -79,47 +81,79 @@ def instantiate_flow(
     persona (snapshot congelado) por membro do elenco. Bookkeeping GENÉRICO — não
     decide quem recebe task (isso é comportamento do FLOW_REGISTRY, ADR-0016 §IV).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e `tenant_id` é gravado
-    no flow e nas personas materializadas (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    flow_data: dict[str, Any] = {
-        "template_name": template.name,
-        "template_version": template.version,
-        "question": question,
-        "snapshot": template.model_dump(mode="json"),
-        "tenant_id": tenant_id,
-    }
-    flow = _create(db, "flow", flow_data)
+    `tenant_id` é gravado no flow e nas personas materializadas (KUBO-123); a sessão
+    carrega `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
+    flow = _create_flow(
+        session,
+        template_name=template.name,
+        template_version=template.version,
+        question=question,
+        snapshot=template.model_dump(mode="json"),
+    )
     materialized: dict[str, RecordID] = {}
     for name in template.cast:
         persona = personas.get(name)
         if persona is None:
             raise ConfigError(f"elenco referencia persona '{name}' ausente do catálogo")
-        persona_data: dict[str, Any] = {
-            "name": persona.name,
-            "executor": persona.executor,
-            "model": persona.model,
-            "prompt": persona.prompt,
-            "permissions": list(persona.permissions),
-            "catalog_name": persona.name,
-            "tenant_id": tenant_id,
-        }
-        materialized[name] = _create(db, "persona", persona_data)
+        materialized[name] = _create_persona(
+            session,
+            name=persona.name,
+            executor=persona.executor,
+            model=persona.model,
+            prompt=persona.prompt,
+            permissions=list(persona.permissions),
+            catalog_name=persona.name,
+        )
     return InstantiatedFlow(flow=flow, personas=materialized)
 
 
-def _create(db: Any, table: str, data: dict[str, Any]) -> RecordID:
-    """CREATE de um registro a partir de um dict, devolvendo o id gerado. `table` é
-    literal INTERNO da store (nunca entrada externa) — interpolação segura."""
-    rows = db.query(f"CREATE {table} CONTENT $data;", {"data": data})  # noqa: S608
+def _create_flow(
+    session: ScopedStore,
+    *,
+    template_name: str,
+    template_version: int,
+    question: str,
+    snapshot: dict[str, Any],
+) -> RecordID:
+    """CREATE de um flow com snapshot congelado, devolvendo o id gerado."""
+    rows = session.query(
+        "CREATE flow SET template_name = $tn, template_version = $tv, "
+        "question = $q, snapshot = $s, tenant_id = $tenant_id;",
+        {"tn": template_name, "tv": template_version, "q": question, "s": snapshot},
+    )
+    return rows[0]["id"]
+
+
+def _create_persona(
+    session: ScopedStore,
+    *,
+    name: str,
+    executor: str,
+    model: str | None,
+    prompt: str,
+    permissions: list[str],
+    catalog_name: str,
+) -> RecordID:
+    """CREATE de uma persona materializada a partir de campos, devolvendo o id gerado."""
+    rows = session.query(
+        "CREATE persona SET name = $name, executor = $executor, model = $model, "
+        "prompt = $prompt, permissions = $permissions, catalog_name = $catalog_name, "
+        "tenant_id = $tenant_id;",
+        {
+            "name": name,
+            "executor": executor,
+            "model": model,
+            "prompt": prompt,
+            "permissions": permissions,
+            "catalog_name": catalog_name,
+        },
+    )
     return rows[0]["id"]
 
 
 def create_task(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     flow: RecordID,
     persona: RecordID,
     state: str,
@@ -130,23 +164,23 @@ def create_task(
     Chamado pelo código do FLOW_REGISTRY (não por `instantiate_flow`): QUEM ganha task
     e em que estado é comportamento do template, não bookkeeping genérico (ADR-0016 §IV).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task e as arestas
-    são escopados no tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    O task e as arestas são escopados no tenant (KUBO-123); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
     task = _fresh("task")
-    statements = [
-        "CREATE $t SET state = $state, tenant_id = $tenant",
-        "RELATE $t->belongs_to->$flow SET tenant_id = $tenant",
-        "RELATE $t->assigned_to->$persona SET tenant_id = $tenant",
-    ]
-    params: dict[str, Any] = {
-        "t": task,
-        "state": state,
-        "tenant": tenant_id,
-        "flow": flow,
-        "persona": persona,
-    }
-    run_transaction(db, statements, params)
+    run_transaction(
+        session,
+        [
+            "CREATE $t SET state = $state, tenant_id = $tenant_id",
+            "RELATE $t->belongs_to->$flow SET tenant_id = $tenant_id",
+            "RELATE $t->assigned_to->$persona SET tenant_id = $tenant_id",
+        ],
+        {
+            "t": task,
+            "state": state,
+            "flow": flow,
+            "persona": persona,
+        },
+    )
     return task
 
 
@@ -159,40 +193,35 @@ def _pairs(raw: Any) -> set[tuple[str, str]]:
 
 
 def _snapshot_board(
-    db: Any, flow: RecordID, *, tenant_id: RecordID
+    session: ScopedStore, flow: RecordID
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     """Lê `(transitions, gates)` do `flow.snapshot` congelado (invariante 4) como conjuntos
     de pares. Filtra o flow pelo tenant (KUBO-123)."""
-    rows = db.query(
+    rows = session.query(
         "SELECT snapshot.board.transitions AS transitions, snapshot.board.gates AS gates "
-        "FROM $f WHERE tenant_id = $tenant;",
-        {"f": flow, "tenant": tenant_id},
+        "FROM $f WHERE tenant_id = $tenant_id;",
+        {"f": flow},
     )
     row: dict[str, Any] = rows[0] if rows else {}
     return _pairs(row.get("transitions")), _pairs(row.get("gates"))
 
 
-def flow_gates(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, flow: RecordID
-) -> set[tuple[str, str]]:
+def flow_gates(session: ScopedStore, *, flow: RecordID) -> set[tuple[str, str]]:
     """Pares de gate do snapshot congelado de um flow (invariante 4). Serve o behavior que precisa
     validar o par de decisão PRETENDIDO antes de qualquer I/O externo (ADR-0021 §9, trap c:
     rejeitar um gate de promoção — par `[done, rejected]` inexistente — não pode tocar o PR já
     mesclado). Leitura pela store (invariante 2), nunca `db.query` no runtime.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o flow é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    _, gates = _snapshot_board(db, flow, tenant_id=tenant_id)
+    O flow é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    _, gates = _snapshot_board(session, flow)
     return gates
 
 
 def transition_task(
-    db: Any,
+    session: ScopedStore,
     task: RecordID,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     from_state: str,
     to_state: str,
 ) -> None:
@@ -204,12 +233,11 @@ def transition_task(
     humana, só `decide_gate` passa), ou se o par não está nas transições do snapshot.
     Sucesso grava `task.state = to_state`.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task é verificado
-    no tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    O task é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     if not rows:
         raise StateError(f"task {task} não existe")
@@ -219,7 +247,7 @@ def transition_task(
     flow_id: RecordID | None = next(iter(rows[0].get("flow") or []), None)
     if flow_id is None:
         raise StateError(f"task {task} sem flow (belongs_to ausente)")
-    pairs, gates = _snapshot_board(db, flow_id, tenant_id=tenant_id)
+    pairs, gates = _snapshot_board(session, flow_id)
     # Guarda de gate ANTES da validação genérica (ADR-0018 §II): um par gated dá o erro
     # específico "use decide_gate", não "fora do snapshot". `transition_task` NUNCA
     # atravessa um gate — não tem como portar contexto de decisão, então é sempre erro.
@@ -229,17 +257,15 @@ def transition_task(
         )
     if (from_state, to_state) not in pairs:
         raise StateError(f"transição ({from_state}, {to_state}) não está no snapshot do flow")
-    db.query(
-        "UPDATE $t SET state = $to WHERE tenant_id = $tenant;",
-        {"t": task, "to": to_state, "tenant": tenant_id},
+    session.query(
+        "UPDATE $t SET state = $to WHERE tenant_id = $tenant_id;",
+        {"t": task, "to": to_state},
     )
 
 
 def open_gate(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     analyst_task: RecordID,
     analyst_from: str,
     analyst_to: str,
@@ -258,12 +284,11 @@ def open_gate(
     (`WHERE state = $from`) fecha TOCTOU de dupla abertura. Devolve o id do task do
     humano criado.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e as tasks/arestas
-    são escopadas no tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant;",
-        {"t": analyst_task, "tenant": tenant_id},
+    As tasks/arestas são escopadas no tenant (KUBO-123); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": analyst_task},
     )
     if not rows:
         raise StateError(f"task {analyst_task} não existe")
@@ -275,7 +300,7 @@ def open_gate(
         raise StateError(f"task {analyst_task} sem flow (belongs_to ausente)")
     if flow_id != flow:
         raise StateError("flow informado não corresponde ao flow do task da analista")
-    pairs, gates = _snapshot_board(db, flow_id, tenant_id=tenant_id)
+    pairs, gates = _snapshot_board(session, flow_id)
     if (analyst_from, analyst_to) in gates:
         raise StateError(
             f"transição de gate ({analyst_from}, {analyst_to}) "
@@ -285,18 +310,17 @@ def open_gate(
         raise StateError(f"transição ({analyst_from}, {analyst_to}) não está no snapshot do flow")
     gate_task = _fresh("task")
     run_transaction(
-        db,
+        session,
         [
-            "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant",
-            "CREATE $gt SET state = $gate_state, tenant_id = $tenant",
-            "RELATE $gt->belongs_to->$flow SET tenant_id = $tenant",
-            "RELATE $gt->assigned_to->$persona SET tenant_id = $tenant",
+            "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant_id",
+            "CREATE $gt SET state = $gate_state, tenant_id = $tenant_id",
+            "RELATE $gt->belongs_to->$flow SET tenant_id = $tenant_id",
+            "RELATE $gt->assigned_to->$persona SET tenant_id = $tenant_id",
         ],
         {
             "at": analyst_task,
             "to": analyst_to,
             "from": analyst_from,
-            "tenant": tenant_id,
             "gt": gate_task,
             "gate_state": gate_state,
             "flow": flow,
@@ -306,12 +330,12 @@ def open_gate(
     return gate_task
 
 
-def _task_state_and_flow(db: Any, task: RecordID, *, tenant_id: RecordID) -> tuple[str, RecordID]:
+def _task_state_and_flow(session: ScopedStore, task: RecordID) -> tuple[str, RecordID]:
     """Estado atual + flow de um task; StateError se o task ou a aresta `belongs_to` falta.
     Filtra por tenant."""
-    rows = db.query(
-        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    rows = session.query(
+        "SELECT state, ->belongs_to->flow AS flow FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     if not rows:
         raise StateError(f"task {task} não existe")
@@ -321,13 +345,13 @@ def _task_state_and_flow(db: Any, task: RecordID, *, tenant_id: RecordID) -> tup
     return rows[0]["state"], flow_id
 
 
-def _gate_persona(db: Any, task: RecordID, *, tenant_id: RecordID) -> RecordID:
+def _gate_persona(session: ScopedStore, task: RecordID) -> RecordID:
     """Persona (materializada) a que um task está `assigned_to`; StateError se a aresta falta.
     Serve o auto-open: a PRÓXIMA task humana herda a persona do próprio gate task decidido.
     Filtra por tenant."""
-    rows = db.query(
-        "SELECT VALUE (->assigned_to->persona)[0] FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    rows = session.query(
+        "SELECT VALUE (->assigned_to->persona)[0] FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     persona: RecordID | None = rows[0] if rows and rows[0] is not None else None
     if persona is None:
@@ -336,10 +360,8 @@ def _gate_persona(db: Any, task: RecordID, *, tenant_id: RecordID) -> RecordID:
 
 
 def decide_gate(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     analyst_task: RecordID,
     gate_task: RecordID,
     to_state: str,
@@ -363,8 +385,8 @@ def decide_gate(
     $from`): uma corrida double-decide degrada para no-op total, nunca para decisão sobrescrita
     nem board incoerente (TOCTOU residual nomeado).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e as tasks/arestas são
-    escopadas no tenant (KUBO-123)."""
+    As tasks/arestas são escopadas no tenant (KUBO-123); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
     reason = (reason or "").strip()
     if decision not in ("approved", "rejected"):
         raise StateError(f"decisão '{decision}' inválida (só approved|rejected)")
@@ -379,9 +401,8 @@ def decide_gate(
     if decision == _REJECTED and not reason:
         raise StateError("rejeição de gate exige motivo")
 
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    gate_from, gate_flow = _task_state_and_flow(db, gate_task, tenant_id=tenant_id)
-    analyst_from, analyst_flow = _task_state_and_flow(db, analyst_task, tenant_id=tenant_id)
+    gate_from, gate_flow = _task_state_and_flow(session, gate_task)
+    analyst_from, analyst_flow = _task_state_and_flow(session, analyst_task)
     if analyst_flow != gate_flow:
         raise StateError("tasks do gate pertencem a flows distintos")
     if analyst_from != gate_from:
@@ -389,10 +410,12 @@ def decide_gate(
             f"tasks do gate em estados divergentes (analista '{analyst_from}', gate '{gate_from}')"
         )
 
-    _, gates = _snapshot_board(db, gate_flow, tenant_id=tenant_id)
+    _, gates = _snapshot_board(session, gate_flow)
     if (gate_from, to_state) not in gates:
         raise StateError(f"({gate_from}, {to_state}) não é uma transição de gate do snapshot")
 
+    next_gate = _fresh("task") if to_state in {src for src, _ in gates} else None
+    persona = _gate_persona(session, gate_task) if next_gate else None
     params: dict[str, Any] = {
         "at": analyst_task,
         "gt": gate_task,
@@ -400,36 +423,28 @@ def decide_gate(
         "from": gate_from,
         "dec": decision,
         "rsn": reason or None,
-        "tenant": tenant_id,
+        "ng": next_gate,
+        "flow": gate_flow,
+        "persona": persona,
     }
-    gate_move = (
-        "UPDATE $gt SET state = $to, decision = $dec, reason = $rsn, "
-        "decided_at = time::now() WHERE state = $from AND tenant_id = $tenant"
-    )
-    if to_state not in {src for src, _ in gates}:
+    if next_gate is None:
         run_transaction(
-            db,
+            session,
             [
-                "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant",
-                gate_move,
+                "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant_id",
+                _GATE_MOVE_SQL,
             ],
             params,
         )
         return None
-    next_gate = _fresh("task")
-    params |= {
-        "ng": next_gate,
-        "flow": gate_flow,
-        "persona": _gate_persona(db, gate_task, tenant_id=tenant_id),
-    }
     run_transaction(
-        db,
+        session,
         [
-            f"LET $moved = ({gate_move} RETURN AFTER)",
-            "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant",
-            "IF array::len($moved) > 0 { CREATE $ng SET state = $to, tenant_id = $tenant; "
-            "RELATE $ng->belongs_to->$flow SET tenant_id = $tenant; "
-            "RELATE $ng->assigned_to->$persona SET tenant_id = $tenant }",
+            f"LET $moved = ({_GATE_MOVE_SQL} RETURN AFTER)",
+            "UPDATE $at SET state = $to WHERE state = $from AND tenant_id = $tenant_id",
+            "IF array::len($moved) > 0 { CREATE $ng SET state = $to, tenant_id = $tenant_id; "
+            "RELATE $ng->belongs_to->$flow SET tenant_id = $tenant_id; "
+            "RELATE $ng->assigned_to->$persona SET tenant_id = $tenant_id }",
         ],
         params,
     )
@@ -437,94 +452,81 @@ def decide_gate(
     # transação commitar): o CREATE condicional pode não ter rodado nesta chamada, e devolver
     # `next_gate` sem confirmar existência seria um id FANTASMA (nunca criado) para o chamador.
     # Leitura extra barata pós-transação fecha o caso.
-    created = db.query("SELECT VALUE id FROM $ng WHERE tenant_id = $tenant;", params)
+    created = session.query("SELECT VALUE id FROM $ng WHERE tenant_id = $tenant_id;", params)
     return next_gate if created else None
 
 
-def set_merge_commit_sha(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, flow: RecordID, merge_commit_sha: str
-) -> None:
+def set_merge_commit_sha(session: ScopedStore, *, flow: RecordID, merge_commit_sha: str) -> None:
     """Grava o `merge_commit_sha` no deliverable de PR do flow (ADR-0021 §2): a âncora estrutural
     "este código foi mesclado por este commit", escrita no Confirmar promoção ANTES de decidir o
     gate e FORA da transação do gate — "o PR está mesclado" é fato verdadeiro independente do
     desfecho do gate; se o decide falhar, o SHA gravado é inofensivo e o retry é idempotente.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o flow/deliverable são
-    verificados no tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT VALUE (->produces->deliverable)[0] FROM $f WHERE tenant_id = $tenant;",
-        {"f": flow, "tenant": tenant_id},
+    O flow/deliverable são verificados no tenant (KUBO-123); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT VALUE (->produces->deliverable)[0] FROM $f WHERE tenant_id = $tenant_id;",
+        {"f": flow},
     )
     deliverable: RecordID | None = rows[0] if rows and rows[0] is not None else None
     if deliverable is None:
         raise StateError(f"flow {flow} has no deliverable — nowhere to record merge_commit_sha")
-    updated = db.query(
-        "UPDATE $d SET merge_commit_sha = $sha WHERE tenant_id = $tenant;",
-        {"d": deliverable, "sha": merge_commit_sha, "tenant": tenant_id},
+    updated = session.query(
+        "UPDATE $d SET merge_commit_sha = $sha WHERE tenant_id = $tenant_id;",
+        {"d": deliverable, "sha": merge_commit_sha},
     )
     if not updated:
         raise StateError(f"deliverable {deliverable} não pertence ao tenant")
 
 
-def set_task_run(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, task: RecordID, run: RecordID
-) -> None:
+def set_task_run(session: ScopedStore, *, task: RecordID, run: RecordID) -> None:
     """Grava `task.run` apontando para o run que executou o task (auditoria — liga
     o bookkeeping de flow ao ÚNICO mecanismo de execução, `run_worker`).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    updated = db.query(
-        "UPDATE $t SET run = $run WHERE tenant_id = $tenant;",
-        {"t": task, "run": run, "tenant": tenant_id},
+    O task é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    updated = session.query(
+        "UPDATE $t SET run = $run WHERE tenant_id = $tenant_id;",
+        {"t": task, "run": run},
     )
     if not updated:
         raise StateError(f"task {task} does not belong to tenant")
 
 
-def task_state(db: Any, *, tenant_id: RecordID, user_id: RecordID, task: RecordID) -> str | None:
+def task_state(session: ScopedStore, *, task: RecordID) -> str | None:
     """Estado atual de um task; `None` se não existe (staleness — invariante 2: a leitura é da
     store, não da rota).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT VALUE state FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    O task é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT VALUE state FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     return str(rows[0]) if rows else None
 
 
-def flow_of_task(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, task: RecordID
-) -> RecordID | None:
+def flow_of_task(session: ScopedStore, *, task: RecordID) -> RecordID | None:
     """O flow ao qual um task pertence (`belongs_to`), ou `None` (invariante 2).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT VALUE (->belongs_to->flow)[0] FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    O task é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT VALUE (->belongs_to->flow)[0] FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     return rows[0] if rows and rows[0] is not None else None
 
 
-def template_of_task(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, task: RecordID
-) -> str | None:
+def template_of_task(session: ScopedStore, *, task: RecordID) -> str | None:
     """O `template_name` do flow ao qual um task pertence — binding gate→comportamento keyed
     pelo nome (E4). `None` se o task/flow não resolve (invariante 2).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o task é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    rows = db.query(
-        "SELECT VALUE (->belongs_to->flow.template_name)[0] FROM $t WHERE tenant_id = $tenant;",
-        {"t": task, "tenant": tenant_id},
+    O task é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    rows = session.query(
+        "SELECT VALUE (->belongs_to->flow.template_name)[0] FROM $t WHERE tenant_id = $tenant_id;",
+        {"t": task},
     )
     name = rows[0] if rows else None
     return str(name) if isinstance(name, str) else None
@@ -574,9 +576,7 @@ def _first_title(titles: Any) -> str | None:
     return str(titles) if titles else None
 
 
-def read_gate_context(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, gate_task: RecordID
-) -> GateContext | None:
+def read_gate_context(session: ScopedStore, *, gate_task: RecordID) -> GateContext | None:
     """Reúne o contexto de um gate a partir do task do gate (ADR-0018 §I/§V, ADR-0019 §VII): o
     flow, a pergunta, a task NÃO-HUMANA (contraparte, para transicionar junto), o deliverable
     (kind + prosa untrusted + ref PR estrutural) e — no report — as fontes consultadas.
@@ -589,10 +589,9 @@ def read_gate_context(
     efeitos externos. A contraparte é exigida NÃO-humana, distinta do gate, e ÚNICA — duas
     tasks não-humanas (template ambíguo) falham alto (StateError), nunca "pega a primeira".
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o gate é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    head = db.query(
+    O gate é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    head = session.query(
         "SELECT VALUE {"
         "flow: (->belongs_to->flow)[0], "
         "question: (->belongs_to->flow.question)[0], "
@@ -604,8 +603,8 @@ def read_gate_context(
         "state: state, "
         "decision: decision, "
         "persona: (->assigned_to->persona.catalog_name)[0]"
-        "} FROM $g WHERE tenant_id = $tenant;",
-        {"g": gate_task, "tenant": tenant_id},
+        "} FROM $g WHERE tenant_id = $tenant_id;",
+        {"g": gate_task},
     )
     row: dict[str, Any] = head[0] if head else {}
     flow = row.get("flow")
@@ -621,21 +620,21 @@ def read_gate_context(
         or row.get("decision") is not None
     ):
         return None
-    counterpart = db.query(
+    counterpart = session.query(
         "SELECT VALUE id FROM $flow<-belongs_to<-task "
-        "WHERE tenant_id = $tenant AND "
+        "WHERE tenant_id = $tenant_id AND "
         "(->assigned_to->persona.catalog_name)[0] != $human AND id != $g;",
-        {"flow": flow, "g": gate_task, "human": _HUMAN_CATALOG, "tenant": tenant_id},
+        {"flow": flow, "g": gate_task, "human": _HUMAN_CATALOG},
     )
     if not counterpart:
         return None
     if len(counterpart) > 1:
         raise StateError("flow com múltiplas tasks não-humanas — gate ambíguo")
     counterpart_task: RecordID = counterpart[0]
-    src_rows = db.query(
+    src_rows = session.query(
         "SELECT id, ->derived_from->item.title AS titles "
-        "FROM $a->consults->distilled WHERE tenant_id = $tenant;",
-        {"a": counterpart_task, "tenant": tenant_id},
+        "FROM $a->consults->distilled WHERE tenant_id = $tenant_id;",
+        {"a": counterpart_task},
     )
     sources = [GateSource(id=str(r["id"]), title=_first_title(r.get("titles"))) for r in src_rows]
     pr_number = row.get("pr_number")
@@ -728,11 +727,8 @@ def _flow_status(
 
 
 def list_flows(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
-    superadmin: bool = False,
     limit: int,
     start: int,
 ) -> list[FlowListRow]:
@@ -740,13 +736,13 @@ def list_flows(
     dos tasks (ADR-0018 §V). `limit`/`start` são ints internos (paginação da store),
     interpolados como literais.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada (ou bypassada para
-    `superadmin`) e a lista é filtrada pelo tenant ativo (KUBO-123, KUBO-126)."""
-    tenancy.assert_membership_or_superadmin(
-        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
+    A lista é filtrada pelo tenant ativo (KUBO-123, KUBO-126); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053). O bypass de
+    superadmin é `scoped_superadmin` na fronteira — sítio de código greppável."""
+    rows = session.query(
+        _LIST_FLOWS_SQL,
+        {"limit": int(limit), "start": int(start)},
     )
-    query = _LIST_FLOWS_SQL.format(where=_LIST_FLOWS_WHERE, limit=int(limit), start=int(start))
-    rows = db.query(query, {"t": tenant_id})  # noqa: S608
     result: list[FlowListRow] = []
     for r in rows:
         states = [str(s) for s in _as_list(r.get("task_states"))]
@@ -774,42 +770,36 @@ def list_flows(
 
 
 def count_flows(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, superadmin: bool = False
+    session: ScopedStore,
 ) -> int:
     """Total de flows do tenant (paginação da lista). `count()` com GROUP ALL; 0 quando vazio.
-    Membership checada (ou bypassada para `superadmin`, KUBO-126)."""
-    tenancy.assert_membership_or_superadmin(
-        db, user_id=user_id, tenant_id=tenant_id, superadmin=superadmin
-    )
-    rows = db.query(
-        "SELECT count() FROM flow WHERE tenant_id = $t GROUP ALL;",
-        {"t": tenant_id},
+    Membership checada na criação da sessão (ADR-0053); bypass de superadmin é
+    `scoped_superadmin` na fronteira (KUBO-126)."""
+    rows = session.query(
+        "SELECT count() FROM flow WHERE tenant_id = $tenant_id GROUP ALL;",
     )
     return rows[0]["count"] if rows else 0
 
 
-def flow_board(
-    db: Any, *, tenant_id: RecordID, user_id: RecordID, flow: RecordID
-) -> FlowBoardView | None:
+def flow_board(session: ScopedStore, *, flow: RecordID) -> FlowBoardView | None:
     """O board de um flow: pergunta, template, COLUNAS (estados do snapshot) e os cards (tasks
     com estado + persona + flag de gate). `None` se o flow não existe.
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o flow é verificado no
-    tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-    head = db.query(
+    O flow é verificado no tenant (KUBO-123); a sessão carrega `(tenant_id, user_id)` e
+    checa membership na criação (ADR-0053)."""
+    head = session.query(
         "SELECT question, template_name, snapshot.board.states AS states, "
-        "snapshot.board.gates AS gates FROM $f WHERE tenant_id = $tenant;",
-        {"f": flow, "tenant": tenant_id},
+        "snapshot.board.gates AS gates FROM $f WHERE tenant_id = $tenant_id;",
+        {"f": flow},
     )
     if not head:
         return None
     row: dict[str, Any] = head[0]
     gate_from = {pair[0] for pair in _pairs(row.get("gates"))}
-    task_rows = db.query(
+    task_rows = session.query(
         "SELECT id, state, decision, created_at, (->assigned_to->persona.catalog_name)[0] "
-        "AS persona FROM $f<-belongs_to<-task WHERE tenant_id = $tenant ORDER BY created_at;",
-        {"f": flow, "tenant": tenant_id},
+        "AS persona FROM $f<-belongs_to<-task WHERE tenant_id = $tenant_id ORDER BY created_at;",
+        {"f": flow},
     )
     cards = [
         FlowTaskCard(
@@ -845,10 +835,8 @@ _HUMAN = "humano"
 
 
 def insert_deliverable(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     flow: RecordID,
     task: RecordID,
     kind: str,
@@ -869,26 +857,27 @@ def insert_deliverable(
     da API do GitHub (E3) — campos `option<...>` (migration 0007) só preenchidos para PR; o
     report não os carrega. `content` segue sendo o resumo untrusted do agente (E4).
 
-    `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o deliverable e as
-    arestas são escopados no tenant (KUBO-123)."""
-    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    O deliverable e as arestas são escopados no tenant (KUBO-123); a sessão carrega
+    `(tenant_id, user_id)` e checa membership na criação (ADR-0053)."""
     deliverable = _fresh("deliverable")
-    create = "CREATE $d SET kind = $kind, content = $content, tenant_id = $tenant"
-    params: dict[str, Any] = {
-        "d": deliverable,
-        "kind": kind,
-        "content": content,
-        "tenant": tenant_id,
-        "f": flow,
-        "t": task,
-    }
-    if pr_url is not None:
-        create += ", pr_url = $pr_url, pr_number = $pr_number"
-        params["pr_url"] = pr_url
-        params["pr_number"] = pr_number
-    stmts = [create, "RELATE $f->produces->$d SET tenant_id = $tenant"]
-    for i, distilled in enumerate(consulted):
-        stmts.append(f"RELATE $t->consults->$c{i} SET tenant_id = $tenant")
-        params[f"c{i}"] = distilled
-    run_transaction(db, stmts, params)
+    run_transaction(
+        session,
+        [
+            "CREATE $d SET kind = $kind, content = $content, tenant_id = $tenant_id, "
+            "pr_url = IF $pr_url IS NONE { NONE } ELSE { $pr_url }, "
+            "pr_number = IF $pr_number IS NONE { NONE } ELSE { $pr_number };",
+            "RELATE $f->produces->$d SET tenant_id = $tenant_id;",
+            "FOR $x IN $consulted { RELATE $t->consults->$x SET tenant_id = $tenant_id };",
+        ],
+        {
+            "d": deliverable,
+            "kind": kind,
+            "content": content,
+            "pr_url": pr_url,
+            "pr_number": pr_number,
+            "f": flow,
+            "t": task,
+            "consulted": list(consulted),
+        },
+    )
     return deliverable

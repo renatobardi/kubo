@@ -32,7 +32,7 @@ from kubo.errors import (
     MembershipRequiredError,
     StoreError,
 )
-from kubo.store import transaction
+from kubo.store import client, transaction
 
 Role = Literal["owner", "member"]
 _VALID_ROLES: set[str] = {"owner", "member"}
@@ -149,7 +149,7 @@ def _map_internal_error(exc: InternalError, message: str) -> KuboError:
     return StoreError(message)
 
 
-def create_user(db: Any, *, firebase_uid: str, email: str | None = None) -> User:
+def create_user(db: client.UnscopedDb, *, firebase_uid: str, email: str | None = None) -> User:
     """Cria um `user` novo com firebase_uid único."""
     normalized_uid = firebase_uid.strip()
     if get_user_by_firebase_uid(db, normalized_uid) is not None:
@@ -174,7 +174,7 @@ def create_user(db: Any, *, firebase_uid: str, email: str | None = None) -> User
     return user
 
 
-def get_user_by_firebase_uid(db: Any, firebase_uid: str) -> User | None:
+def get_user_by_firebase_uid(db: client.UnscopedDb, firebase_uid: str) -> User | None:
     """Busca um user pelo firebase_uid, ou None se não existe."""
     rows = db.query(
         "SELECT * FROM user WHERE firebase_uid = $uid LIMIT 1;",
@@ -183,19 +183,19 @@ def get_user_by_firebase_uid(db: Any, firebase_uid: str) -> User | None:
     return _user_from_row(rows[0]) if rows else None
 
 
-def get_user(db: Any, user_id: RecordID) -> User | None:
+def get_user(db: client.UnscopedDb, user_id: RecordID) -> User | None:
     """Lê um user pelo id."""
     rows = db.query("SELECT * FROM $u;", {"u": user_id})
     return _user_from_row(rows[0]) if rows else None
 
 
-def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
+def create_tenant(db: client.DbConnection, *, name: str, owner_user_id: RecordID) -> Tenant:
     """Cria um tenant novo e uma membership `owner` para o usuário indicado.
 
     A criação é atômica: tenant + membership(owner) numa única transação.
     """
     tenant_id = _fresh_id("tenant")
-    transaction.run_transaction(
+    transaction.run_global_transaction(
         db,
         [
             "CREATE $t SET name = $name, created_at = time::now()",
@@ -217,13 +217,13 @@ def create_tenant(db: Any, *, name: str, owner_user_id: RecordID) -> Tenant:
     return tenant
 
 
-def get_tenant(db: Any, tenant_id: RecordID) -> Tenant | None:
+def get_tenant(db: client.UnscopedDb, tenant_id: RecordID) -> Tenant | None:
     """Lê um tenant pelo id."""
     rows = db.query("SELECT * FROM $t;", {"t": tenant_id})
     return _tenant_from_row(rows[0]) if rows else None
 
 
-def list_tenants(db: Any, tenant_ids: list[RecordID]) -> list[Tenant]:
+def list_tenants(db: client.UnscopedDb, tenant_ids: list[RecordID]) -> list[Tenant]:
     """Fetch multiple tenants by id in a single query."""
     if not tenant_ids:
         return []
@@ -234,7 +234,7 @@ def list_tenants(db: Any, tenant_ids: list[RecordID]) -> list[Tenant]:
     return [_tenant_from_row(r) for r in rows]
 
 
-def _find_existing_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> Any:
+def _find_existing_membership(db: client.UnscopedDb, user_id: RecordID, tenant_id: RecordID) -> Any:
     """Busca a membership pelo par (user, tenant), ou None."""
     rows = db.query(
         _MEMBERSHIP_BY_USER_TENANT,
@@ -243,7 +243,7 @@ def _find_existing_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -
     return rows[0] if rows else None
 
 
-def _find_existing_owner(db: Any, tenant_id: RecordID) -> Any:
+def _find_existing_owner(db: client.UnscopedDb, tenant_id: RecordID) -> Any:
     """Busca a membership de owner de um tenant, ou None."""
     rows = db.query(
         "SELECT * FROM membership WHERE out = $t AND role = 'owner' LIMIT 1;",
@@ -252,7 +252,9 @@ def _find_existing_owner(db: Any, tenant_id: RecordID) -> Any:
     return rows[0] if rows else None
 
 
-def _create_owner_membership(db: Any, user_id: RecordID, tenant_id: RecordID) -> None:
+def _create_owner_membership(
+    db: client.DbConnection, user_id: RecordID, tenant_id: RecordID
+) -> None:
     """Cria uma membership de owner, rejeitando atomicamente se já houver um.
 
     A checagem e a escrita rodam numa única transação para reduzir a janela de
@@ -261,7 +263,7 @@ def _create_owner_membership(db: Any, user_id: RecordID, tenant_id: RecordID) ->
     parcial do SurrealDB (suporte não confirmado na v3.1.5 pinada pelo ADR-0005).
     """
     try:
-        transaction.run_transaction(
+        transaction.run_global_transaction(
             db,
             [
                 "LET $existing = (SELECT * FROM membership WHERE out = $t AND role = 'owner' LIMIT 1);",  # noqa: E501
@@ -276,7 +278,9 @@ def _create_owner_membership(db: Any, user_id: RecordID, tenant_id: RecordID) ->
         raise
 
 
-def create_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID, role: Role) -> Membership:
+def create_membership(
+    db: client.DbConnection, *, user_id: RecordID, tenant_id: RecordID, role: Role
+) -> Membership:
     """Cria uma membership `user -> tenant` com papel `owner` ou `member`.
 
     Rejeita `role='owner'` se o tenant já tiver um owner (`DuplicateOwnerError`).
@@ -310,7 +314,7 @@ def create_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID, role: 
     return _membership_from_row(rows[0])
 
 
-def list_memberships_for_user(db: Any, user_id: RecordID) -> list[Membership]:
+def list_memberships_for_user(db: client.UnscopedDb, user_id: RecordID) -> list[Membership]:
     """Lista todas as memberships de um user."""
     rows = db.query(
         "SELECT * FROM membership WHERE in = $u;",
@@ -319,7 +323,7 @@ def list_memberships_for_user(db: Any, user_id: RecordID) -> list[Membership]:
     return [_membership_from_row(r) for r in rows]
 
 
-def list_memberships_for_tenant(db: Any, tenant_id: RecordID) -> list[Membership]:
+def list_memberships_for_tenant(db: client.UnscopedDb, tenant_id: RecordID) -> list[Membership]:
     """Lista todas as memberships de um tenant."""
     rows = db.query(
         "SELECT * FROM membership WHERE out = $t;",
@@ -328,7 +332,7 @@ def list_memberships_for_tenant(db: Any, tenant_id: RecordID) -> list[Membership
     return [_membership_from_row(r) for r in rows]
 
 
-def assert_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> None:
+def assert_membership(db: client.UnscopedDb, *, user_id: RecordID, tenant_id: RecordID) -> None:
     """Garante que o user pertence ao tenant; levanta `MembershipRequiredError` se não.
 
     Esta é a primitiva de autorização do ADR-0039 §II: toda operação tenant-scoped
@@ -347,26 +351,8 @@ def is_superadmin(uid: str, superadmin_uids: set[str]) -> bool:
     return uid in superadmin_uids
 
 
-def assert_membership_if_given(
-    db: Any,
-    *,
-    user_id: RecordID | None,
-    tenant_id: RecordID | None,
-) -> None:
-    """Garante membership quando os dois ids são fornecidos; silencia se ambos forem None.
-
-    Levanta `ConfigError` se apenas um dos dois for passado (uso interno inconsistente).
-    Usada pelas store functions durante a transição para tenancy obrigatório (KUBO-117).
-    """
-    if tenant_id is None and user_id is None:
-        return
-    if tenant_id is None or user_id is None:
-        raise ConfigError("tenant_id e user_id devem ser fornecidos juntos")
-    assert_membership(db, user_id=user_id, tenant_id=tenant_id)
-
-
 def assert_membership_or_superadmin(
-    db: Any,
+    db: client.UnscopedDb,
     *,
     user_id: RecordID,
     tenant_id: RecordID,
@@ -382,7 +368,7 @@ def assert_membership_or_superadmin(
     assert_membership(db, user_id=user_id, tenant_id=tenant_id)
 
 
-def is_member(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> bool:
+def is_member(db: client.UnscopedDb, *, user_id: RecordID, tenant_id: RecordID) -> bool:
     """True se `user_id` tem membership em `tenant_id`."""
     return _find_existing_membership(db, user_id, tenant_id) is not None
 
@@ -399,7 +385,7 @@ def parse_tenant_id(raw: str) -> RecordID | None:
     return RecordID("tenant", key)
 
 
-def get_first_tenant(db: Any) -> RecordID:
+def get_first_tenant(db: client.UnscopedDb) -> RecordID:
     """Devolve o id do primeiro tenant do banco, ou levanta ConfigError se não houver."""
     rows = db.query("SELECT id FROM tenant ORDER BY id LIMIT 1;")
     if not rows:
@@ -407,7 +393,7 @@ def get_first_tenant(db: Any) -> RecordID:
     return rows[0]["id"]
 
 
-def get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
+def get_tenant_owner(db: client.UnscopedDb, tenant_id: RecordID) -> RecordID:
     """Devolve o user owner de um tenant, ou levanta ConfigError se não houver."""
     rows = db.query(
         "SELECT in AS user FROM membership WHERE out = $t AND role = 'owner' LIMIT 1;",
@@ -418,7 +404,7 @@ def get_tenant_owner(db: Any, tenant_id: RecordID) -> RecordID:
     return rows[0]["user"]
 
 
-def get_tenant_work_context(db: Any, tenant_id: RecordID) -> str:
+def get_tenant_work_context(db: client.UnscopedDb, tenant_id: RecordID) -> str:
     """Contexto de trabalho do DONO do tenant (ADR-0051 §I.1/Nota de compatibilidade)
     — a nota de relevância do destilador é do tenant inteiro, ancorada em quem
     administra o workspace, não em cada membro. Sem perfil ou sem work_context
@@ -430,7 +416,7 @@ def get_tenant_work_context(db: Any, tenant_id: RecordID) -> str:
 
 
 def get_or_create_user_and_tenant(
-    db: Any, *, firebase_uid: str, email: str | None = None
+    db: client.DbConnection, *, firebase_uid: str, email: str | None = None
 ) -> tuple[User, Tenant]:
     """Garante que uma identidade Firebase tenha um user e um tenant owner.
 
@@ -531,7 +517,7 @@ def _validate_profile_input(
     return display_name, language, timezone, validated_work_context
 
 
-def get_user_profile(db: Any, user_id: RecordID) -> UserProfile | None:
+def get_user_profile(db: client.UnscopedDb, user_id: RecordID) -> UserProfile | None:
     """Reads the global user profile, or None if it does not exist yet."""
     rows = db.query(
         "SELECT id, user, display_name, language, timezone, created_at, updated_at, "
@@ -542,7 +528,7 @@ def get_user_profile(db: Any, user_id: RecordID) -> UserProfile | None:
 
 
 def update_user_profile(
-    db: Any,
+    db: client.DbConnection,
     *,
     user_id: RecordID,
     display_name: str,
@@ -575,7 +561,7 @@ def update_user_profile(
     existing = get_user_profile(db, user_id)
     if existing is not None:
         if validated_work_context is _UNSET:
-            transaction.run_transaction(
+            transaction.run_global_transaction(
                 db,
                 [
                     "UPDATE $p SET display_name = $dn, language = $l, "
@@ -584,7 +570,7 @@ def update_user_profile(
                 {"p": existing.id, "dn": display_name, "l": language, "tz": timezone},
             )
         else:
-            transaction.run_transaction(
+            transaction.run_global_transaction(
                 db,
                 [
                     "UPDATE $p SET display_name = $dn, language = $l, "
@@ -599,7 +585,7 @@ def update_user_profile(
                 },
             )
     else:
-        transaction.run_transaction(
+        transaction.run_global_transaction(
             db,
             [
                 "CREATE user_profile SET user = $u, display_name = $dn, "
@@ -621,14 +607,16 @@ def update_user_profile(
     return profile
 
 
-def get_membership(db: Any, *, user_id: RecordID, tenant_id: RecordID) -> Membership | None:
+def get_membership(
+    db: client.UnscopedDb, *, user_id: RecordID, tenant_id: RecordID
+) -> Membership | None:
     """Reads a user's membership in a tenant, or None if it does not exist."""
     row = _find_existing_membership(db, user_id, tenant_id)
     return _membership_from_row(row) if row else None
 
 
 def update_membership_theme(
-    db: Any,
+    db: client.DbConnection,
     *,
     user_id: RecordID,
     tenant_id: RecordID,
@@ -642,7 +630,7 @@ def update_membership_theme(
     if row is None:
         raise MembershipRequiredError("user does not belong to tenant")
 
-    transaction.run_transaction(
+    transaction.run_global_transaction(
         db,
         ["UPDATE $m SET theme = $t"],
         {"m": row["id"], "t": theme},

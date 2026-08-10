@@ -24,6 +24,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, knowledge, migrations, tenancy
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -57,7 +58,9 @@ def _make_item(
     published_at: datetime,
 ) -> RecordID:
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{external_id}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical=f"src::{external_id}",
     )
     return knowledge.upsert_item(
         db,
@@ -80,15 +83,15 @@ def _score_and_distill(
     summary: str = "resumo do item",
     entities: tuple[str, ...] = (),
 ) -> None:
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item, score=score)
+    knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, score=score)
     entity_ids: list[RecordID] = []
     for name in entities:
-        ent = knowledge.get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name=name)
+        ent = knowledge.get_or_create_entity(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), name=name
+        )
         entity_ids.append(ent)
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary=summary,
         chunks=[],
@@ -107,9 +110,7 @@ def _dispatch_ok(
     channel: str = "telegram",
 ) -> None:
     knowledge.insert_dispatch(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         destination=destination,
         channel=channel,
         status="ok",
@@ -153,7 +154,7 @@ def test_window_normal_selects_only_yesterday(
     _score_and_distill(db, tenant_id, user_id, yest_item, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "normal"
     assert len(selection.items) == 1
@@ -203,7 +204,7 @@ def test_window_normal_after_successful_dispatch(
     _score_and_distill(db, tenant_id, user_id, yest_item, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "normal"
     assert len(selection.items) == 1
@@ -265,7 +266,7 @@ def test_window_recovery_after_send_failure(
     _score_and_distill(db, tenant_id, user_id, yest_item, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "recovery"
     # KUBO-179: recovery só leva os itens do dia mais recente (ontem),
@@ -330,7 +331,7 @@ def test_window_7_day_cap_after_long_failure(
     _score_and_distill(db, tenant_id, user_id, yest_item, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     # Recovery cobre 7 dias do dia seguinte ao último ok até ontem
     assert selection.form == "recovery"
@@ -381,7 +382,7 @@ def test_excludes_items_sent_to_same_destination_in_last_7_days(
     )
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     ids = {str(i.id) for i in selection.items}
     assert str(item_b) in ids
@@ -417,7 +418,7 @@ def test_exclusion_is_per_destination(db: Any, tenant_id: RecordID, user_id: Rec
 
     # E-mail ainda não enviou A → deve incluir
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("email"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("email"), limit=10
     )
     ids = {str(i.id) for i in selection.items}
     assert str(item_a) in ids
@@ -454,7 +455,7 @@ def test_dedup_by_normalized_url(db: Any, tenant_id: RecordID, user_id: RecordID
     _score_and_distill(db, tenant_id, user_id, item2, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert len(selection.items) == 1  # dedup — só um entra
 
@@ -486,7 +487,7 @@ def test_dedup_strips_tracking_params(db: Any, tenant_id: RecordID, user_id: Rec
     _score_and_distill(db, tenant_id, user_id, item2, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert len(selection.items) == 1
 
@@ -514,7 +515,7 @@ def test_ordering_by_score_descending(db: Any, tenant_id: RecordID, user_id: Rec
         items.append((item, score))
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     scores = [i.score for i in selection.items]
     assert scores == sorted(scores, reverse=True)
@@ -564,7 +565,7 @@ def test_cut_at_limit_within_recovery_latest_day(
         _score_and_distill(db, tenant_id, user_id, item, score=score)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=3
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=3
     )
     assert selection.form == "recovery"
     assert len(selection.items) == 3
@@ -579,7 +580,7 @@ def test_cut_at_limit_within_recovery_latest_day(
 def test_form_empty_window_no_publications(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Forma 2: nada foi publicado na janela."""
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "empty_window"
     assert selection.items == []
@@ -603,11 +604,11 @@ def test_form_none_passed_cut(db: Any, tenant_id: RecordID, user_id: RecordID) -
             url=f"https://a.com/low{i}",
             published_at=yesterday,
         )
-        knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item, score=3)
+        knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, score=3)
         # NÃO destila — score < min_score
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "none_passed"
     assert selection.items == []
@@ -631,7 +632,7 @@ def test_form_normal_with_items(db: Any, tenant_id: RecordID, user_id: RecordID)
     _score_and_distill(db, tenant_id, user_id, item, score=8)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "normal"
     assert len(selection.items) == 1
@@ -667,7 +668,7 @@ def test_form_recovery_identifies_itself(db: Any, tenant_id: RecordID, user_id: 
     _score_and_distill(db, tenant_id, user_id, yest, score=7)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "recovery"
     assert selection.window_start is not None
@@ -688,7 +689,7 @@ def test_empty_window_watermark_advances(db: Any, tenant_id: RecordID, user_id: 
     e o próximo dispatch não tenta recuperar o mesmo período."""
     # Primeira chamada: janela vazia
     selection1 = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection1.form == "empty_window"
     assert selection1.window_end is not None
@@ -705,7 +706,7 @@ def test_empty_window_watermark_advances(db: Any, tenant_id: RecordID, user_id: 
 
     # Segunda chamada: não deve ser recovery — a janela resetou
     selection2 = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection2.form == "empty_window"  # ainda vazia, mas não recovery
 
@@ -734,7 +735,7 @@ def test_watermark_is_window_end_not_max_published_at(
     _score_and_distill(db, tenant_id, user_id, item, score=8)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tg"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tg"), limit=10
     )
     assert selection.form == "normal"
     assert selection.window_end is not None
@@ -772,7 +773,7 @@ def test_tenant_timezone_non_utc_exercises_profile_path(
     _score_and_distill(db, tenant_id, user_id, item, score=8)
 
     selection = knowledge.items_for_digest(
-        db, tenant_id=tenant_id, user_id=user_id, destination=_dest("tz"), limit=10
+        scoped(db, tenant_id=tenant_id, user_id=user_id), destination=_dest("tz"), limit=10
     )
     # Não importa se é normal/empty — o ponto é que não quebra com fuso não-UTC
     assert selection.window_end is not None

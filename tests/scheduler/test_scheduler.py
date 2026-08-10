@@ -33,6 +33,7 @@ from kubo.contracts.models import RunResult, SourcePayload
 from kubo.contracts.worker import RunContext, WorkerManifest
 from kubo.errors import ConfigError
 from kubo.store import client, migrations, tenancy
+from kubo.store.scoped import scoped
 from kubo.store.settings import Settings
 
 _JOB_DB = "test_scheduler_job"
@@ -729,43 +730,35 @@ def test_execute_sweep_job_honors_active_filter_against_real_db(
     job_cfg = replace(client.config(), database=_JOB_DB)
     monkeypatch.setattr(scheduler.client, "config", lambda: job_cfg)
     knowledge.create_source(
-        scheduler_db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://a.test/feed",
         title="A",
     )
     knowledge.create_source(
-        scheduler_db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://b.test/feed",
         title="B",
     )
     paused = knowledge.create_source(
-        scheduler_db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://p.test/feed",
     )
     knowledge.set_source_enabled(
-        scheduler_db, tenant_id=tenant_id, user_id=user_id, id=paused, enabled=False
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id), id=paused, enabled=False
     )
     archived = knowledge.create_source(
-        scheduler_db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x.test/feed",
     )
-    knowledge.archive_source(scheduler_db, tenant_id=tenant_id, user_id=user_id, id=archived)
+    knowledge.archive_source(
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id), id=archived
+    )
     knowledge.create_source(
-        scheduler_db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(scheduler_db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )

@@ -23,6 +23,7 @@ from surrealdb import RecordID
 from kubo.distribution.email import SmtpConfig
 from kubo.runtime.runner import run_worker
 from kubo.store import client, destinations, knowledge, migrations
+from kubo.store.scoped import scoped
 from kubo.workers.digest import TelegramDigestWorker
 from tests.workers._digest_fixtures import _FakeOpinionExecutor
 
@@ -59,9 +60,7 @@ def _seed_items(db: Any, tenant_id: RecordID, user_id: RecordID, summaries: list
     """Cria itens com published_at=ontem, score=8 e distilled — prontos para o digest."""
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     src = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical=f"src::{secrets.token_hex(4)}",
     )
@@ -75,14 +74,9 @@ def _seed_items(db: Any, tenant_id: RecordID, user_id: RecordID, summaries: list
             url=f"https://example.com/{secrets.token_hex(4)}",
             published_at=yesterday,
         )
-        knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item, score=8)
+        knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, score=8)
         knowledge.insert_distilled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            item=item,
-            summary=summary,
-            chunks=[],
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary=summary, chunks=[]
         )
 
 

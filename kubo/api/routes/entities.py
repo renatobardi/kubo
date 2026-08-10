@@ -20,6 +20,7 @@ from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
 from kubo.api.session import SessionContext, resolve_session
 from kubo.store import client, knowledge
+from kubo.store.scoped import scoped, scoped_superadmin
 
 router = APIRouter()
 
@@ -46,20 +47,16 @@ def list_page(
         if ctx is None:
             return PlainTextResponse("Acesso negado.", status_code=403)
         is_superadmin = ctx.role == "superadmin"
+        session_factory = scoped_superadmin if is_superadmin else scoped
+        session = session_factory(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         entities = knowledge.list_entities(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
+            session,
             limit=size,
             start=start,
             query=query,
         )
         total = knowledge.count_entities(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            superadmin=is_superadmin,
+            session,
             query=query,
         )
     return templates.TemplateResponse(
@@ -95,7 +92,9 @@ def detail(request: Request, entity_id: str) -> Response:
         elif not guard:
             return PlainTextResponse("Acesso negado.", status_code=403)
         else:
-            view = knowledge.read_entity(db, rid, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            session_factory = scoped_superadmin if ctx.role == "superadmin" else scoped
+            session = session_factory(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            view = knowledge.read_entity(session, rid)
     if view is None:
         return templates.TemplateResponse(
             request, "entities/not_found.html", {"raw": entity_id}, status_code=404

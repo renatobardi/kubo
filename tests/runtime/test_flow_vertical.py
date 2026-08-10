@@ -20,6 +20,7 @@ from kubo.runtime.flow_runner import run_flow
 from kubo.store import client, knowledge, migrations
 from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
+from kubo.store.scoped import scoped
 from kubo.workers.analyst import ReportOutput
 
 pytestmark = pytest.mark.integration
@@ -94,7 +95,7 @@ def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: 
     """Semeia um distilled buscável: source+item (título) + um chunk embeddado em [0.1]*768,
     o mesmo vetor que o embedder falso devolve para a pergunta (KNN acha)."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical=f"src::{title}"
     )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
@@ -108,7 +109,7 @@ def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: 
         task_type="SEMANTIC_SIMILARITY",
     )
     return knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=[chunk]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary=summary, chunks=[chunk]
     )
 
 
@@ -162,7 +163,9 @@ def test_flow_delivers_report_with_full_provenance(
     assert dispatch["status"] == "ok"
     assert dispatch["watermark"] is None
     assert (
-        knowledge.last_dispatch_watermark(db, _DEST.id, tenant_id=tenant_id, user_id=user_id)
+        knowledge.last_dispatch_watermark(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), _DEST.id
+        )
         is None
     )
     assert len(sender.calls) == 1

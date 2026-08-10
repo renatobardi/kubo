@@ -15,7 +15,9 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
+from kubo.errors import MembershipRequiredError
 from kubo.store import client, knowledge, migrations, tenancy
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -46,7 +48,9 @@ def _make_item(
     if published_at is None:
         published_at = datetime.now(timezone.utc) - timedelta(days=1)
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{external_id}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical=f"src::{external_id}",
     )
     return knowledge.upsert_item(
         db,
@@ -67,9 +71,11 @@ class TestOpinion:
         """upsert_opinion grava e get_opinion lê de volta."""
         item = _make_item(db, tenant_id, user_id, external_id="op-1")
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item, opinion="Importante porque X"
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            item=item,
+            opinion="Importante porque X",
         )
-        result = knowledge.get_opinion(db, tenant_id=tenant_id, item=item)
+        result = knowledge.get_opinion(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item)
         assert result == "Importante porque X"
 
     def test_upsert_opinion_is_idempotent(
@@ -78,19 +84,25 @@ class TestOpinion:
         """Reescrever o parecer sobrescreve, não duplica (last-wins, como apply_score)."""
         item = _make_item(db, tenant_id, user_id, external_id="op-2")
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item, opinion="Primeiro"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, opinion="Primeiro"
         )
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item, opinion="Segundo"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, opinion="Segundo"
         )
-        assert knowledge.get_opinion(db, tenant_id=tenant_id, item=item) == "Segundo"
+        assert (
+            knowledge.get_opinion(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item)
+            == "Segundo"
+        )
 
     def test_get_opinion_returns_none_when_absent(
         self, db: Any, tenant_id: RecordID, user_id: RecordID
     ) -> None:
         """Item sem parecer → None (não erro)."""
         item = _make_item(db, tenant_id, user_id, external_id="op-3")
-        assert knowledge.get_opinion(db, tenant_id=tenant_id, item=item) is None
+        assert (
+            knowledge.get_opinion(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item)
+            is None
+        )
 
     def test_get_opinions_batch(self, db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
         """get_opinions lê múltiplos pareceres de uma vez (chave = str(item_id))."""
@@ -98,15 +110,13 @@ class TestOpinion:
         item_b = _make_item(db, tenant_id, user_id, external_id="op-batch-b")
         item_c = _make_item(db, tenant_id, user_id, external_id="op-batch-c")
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item_a, opinion="Parecer A"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_a, opinion="Parecer A"
         )
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item_b, opinion="Parecer B"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_b, opinion="Parecer B"
         )
         opinions = knowledge.get_opinions(
-            db,
-            tenant_id=tenant_id,
-            items=[item_a, item_b, item_c],
+            scoped(db, tenant_id=tenant_id, user_id=user_id), items=[item_a, item_b, item_c]
         )
         assert opinions[str(item_a)] == "Parecer A"
         assert opinions[str(item_b)] == "Parecer B"
@@ -118,13 +128,14 @@ class TestOpinion:
         """Parecer do tenant A não é visível pelo tenant B."""
         item = _make_item(db, tenant_id, user_id, external_id="op-iso")
         knowledge.upsert_opinion(
-            db, tenant_id=tenant_id, user_id=user_id, item=item, opinion="Do tenant A"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, opinion="Do tenant A"
         )
 
         # Cria segundo tenant
         other_user = tenancy.create_user(db, firebase_uid="editorial-other-uid")
         other_tenant = tenancy.create_tenant(db, name="Other Tenant", owner_user_id=other_user.id)
-        assert knowledge.get_opinion(db, tenant_id=other_tenant.id, item=item) is None
+        with pytest.raises(MembershipRequiredError):
+            knowledge.get_opinion(scoped(db, tenant_id=other_tenant.id, user_id=user_id), item=item)
 
 
 # ── Resumo do dia (day_summary) ────────────────────────────────────────────────
@@ -137,14 +148,14 @@ class TestDaySummary:
         """upsert_day_summary grava e get_day_summary lê de volta."""
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
         knowledge.upsert_day_summary(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             day=yesterday,
             summary="Ontem saíram 5 publicações; o eixo foi IA agents",
             publication_count=5,
         )
-        result = knowledge.get_day_summary(db, tenant_id=tenant_id, day=yesterday)
+        result = knowledge.get_day_summary(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), day=yesterday
+        )
         assert result is not None
         assert result.summary == "Ontem saíram 5 publicações; o eixo foi IA agents"
         assert result.publication_count == 5
@@ -155,22 +166,20 @@ class TestDaySummary:
         """Reescrever o resumo sobrescreve, não duplica (fallback race-safe)."""
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
         knowledge.upsert_day_summary(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             day=yesterday,
             summary="Primeiro",
             publication_count=3,
         )
         knowledge.upsert_day_summary(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             day=yesterday,
             summary="Segundo",
             publication_count=3,
         )
-        result = knowledge.get_day_summary(db, tenant_id=tenant_id, day=yesterday)
+        result = knowledge.get_day_summary(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), day=yesterday
+        )
         assert result is not None
         assert result.summary == "Segundo"
 
@@ -179,7 +188,12 @@ class TestDaySummary:
     ) -> None:
         """Dia sem resumo → None (não erro)."""
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-        assert knowledge.get_day_summary(db, tenant_id=tenant_id, day=yesterday) is None
+        assert (
+            knowledge.get_day_summary(
+                scoped(db, tenant_id=tenant_id, user_id=user_id), day=yesterday
+            )
+            is None
+        )
 
     def test_day_summary_isolated_per_tenant(
         self, db: Any, tenant_id: RecordID, user_id: RecordID
@@ -187,9 +201,7 @@ class TestDaySummary:
         """Resumo do tenant A não é visível pelo tenant B."""
         yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
         knowledge.upsert_day_summary(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             day=yesterday,
             summary="Do tenant A",
             publication_count=2,
@@ -197,4 +209,7 @@ class TestDaySummary:
 
         other_user = tenancy.create_user(db, firebase_uid="editorial-other-uid-2")
         other_tenant = tenancy.create_tenant(db, name="Other Tenant 2", owner_user_id=other_user.id)
-        assert knowledge.get_day_summary(db, tenant_id=other_tenant.id, day=yesterday) is None
+        with pytest.raises(MembershipRequiredError):
+            knowledge.get_day_summary(
+                scoped(db, tenant_id=other_tenant.id, user_id=user_id), day=yesterday
+            )

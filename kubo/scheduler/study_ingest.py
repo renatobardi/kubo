@@ -21,6 +21,7 @@ from kubo.errors import ConfigError, ExecutorError, MaterialParseError, StoreErr
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import study as study_store
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
 from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
@@ -45,8 +46,8 @@ _LLM_TIMEOUT = 30.0
 # --- seams para testes (monkeypatcháveis sem tocar no banco/API real) -------------------
 
 
-def _list_pending(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[study_store.Material]:
-    return study_store.list_pending_materials(db, tenant_id=tenant_id, user_id=user_id)
+def _list_pending(session: ScopedStore) -> list[study_store.Material]:
+    return study_store.list_pending_materials(session)
 
 
 def _parse_material(fmt: MaterialFormat, path: str) -> ParsedMaterial:
@@ -84,19 +85,15 @@ def _build_sectionizer(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple
 
 
 def _ingest_material(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     material_id: RecordID,
     chapters: Any,
     sections: Any,
     summary: str | None,
 ) -> study_store.Material:
     return study_store.ingest_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         material_id=material_id,
         chapters=chapters,
         sections=sections,
@@ -105,17 +102,13 @@ def _ingest_material(
 
 
 def _mark_failed(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     material_id: RecordID,
     error: str,
 ) -> study_store.Material:
     return study_store.mark_material_failed(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         material_id=material_id,
         error=error,
     )
@@ -131,7 +124,8 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
     summarizer/sectionizer é feito uma vez por execução (não por material) —
     se falhar, todos os pending viram `failed` com o motivo de setup.
     """
-    pending = _list_pending(db, tenant_id=tenant_id, user_id=user_id)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    pending = _list_pending(session)
     if not pending:
         return
 
@@ -142,9 +136,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
         _log.warning("study.ingest.summarizer_setup_failed", worker="study_ingest", exc_info=True)
         for material in pending:
             _mark_failed(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 material_id=material.id,
                 error=f"summarizer indisponível: {exc}",
             )
@@ -170,9 +162,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
                     executor=executor, prompt=prompt, chapters=parsed.chapters
                 )
             _ingest_material(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 material_id=material.id,
                 chapters=parsed.chapters,
                 sections=sections_map,
@@ -188,9 +178,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
                 exc_info=True,
             )
             _mark_failed(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 material_id=material.id,
                 error=f"parse: {exc}",
             )
@@ -203,9 +191,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
                 exc_info=True,
             )
             _mark_failed(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 material_id=material.id,
                 error=f"LLM: {exc}",
             )
@@ -215,9 +201,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
                 "study.ingest.unexpected", worker="study_ingest", material=str(material.id)
             )
             _mark_failed(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 material_id=material.id,
                 error="erro inesperado na ingestão",
             )

@@ -29,6 +29,7 @@ from kubo.errors import MalformedOutputError, RateLimitExhausted
 from kubo.runtime.runner import run_worker
 from kubo.store import client, migrations
 from kubo.store.knowledge import distilled_for, upsert_item, upsert_source
+from kubo.store.scoped import scoped
 from kubo.workers.distiller import (
     DaySummaryOutput,
     DistillerConfig,
@@ -144,9 +145,7 @@ def test_run_worker_distills_pending_items_into_graph(
     embeddado, a entidade citada vira `entity`/`mentions`, `produced_by` liga
     cada distilled ao run, e o run fecha em 'ok'."""
     source = upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
@@ -192,8 +191,8 @@ def test_run_worker_distills_pending_items_into_graph(
 
     assert _count(db, "distilled") == 2
     assert _count(db, "chunk") >= 2
-    assert distilled_for(db, item_a, tenant_id=tenant_id, user_id=user_id) != []
-    assert distilled_for(db, item_b, tenant_id=tenant_id, user_id=user_id) != []
+    assert distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_a) != []
+    assert distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_b) != []
     assert _count(db, "entity") == 1
     assert _count(db, "mentions") == 1
     assert _count(db, "produced_by") == 2
@@ -216,7 +215,7 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
     store devolve os pendentes (hash do record id, não o external_id) — o
     teste não assume essa correlação; assume só "1 pulado + 1 persistido"."""
     source = upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = upsert_item(db, source=source, external_id="a", content="conteúdo bruto A")
     item_b = upsert_item(db, source=source, external_id="b", content="conteúdo bruto B")
@@ -240,8 +239,8 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
 
     assert _count(db, "distilled") == 1
     assert _run_status(db, run_id)["status"] == "ok"
-    distilled_a = distilled_for(db, item_a, tenant_id=tenant_id, user_id=user_id)
-    distilled_b = distilled_for(db, item_b, tenant_id=tenant_id, user_id=user_id)
+    distilled_a = distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_a)
+    distilled_b = distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_b)
     # Exatamente um dos dois foi destilado (o outro veio malformado do fake) —
     # comportamento sob teste é "1 pulado, 1 persistido", não QUAL dos dois.
     assert sorted([len(distilled_a), len(distilled_b)]) == [0, 1]
@@ -254,7 +253,7 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
     chamado): só o 1º item é persistido, e o run fecha em 'error' com o erro
     kind 'rate_limit_exhausted' (ADR-0013 §V, falha sistêmica, não por-item)."""
     source = upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     upsert_item(db, source=source, external_id="a", content="conteúdo bruto A")
     upsert_item(db, source=source, external_id="b", content="conteúdo bruto B")

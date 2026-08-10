@@ -16,8 +16,10 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.api.session import resolve_session as _real_resolve_session
 from kubo.store import client, migrations
 from kubo.store.client import connect as _real_connect
+from kubo.store.scoped import scoped
 from tests.api.conftest import UI_PASSWORD
 
 pytestmark = pytest.mark.integration
@@ -28,16 +30,28 @@ _RW_PASS = secrets.token_urlsafe(24)
 
 @pytest.fixture
 def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """App real apontado a um db efêmero com kubo_rw."""
+    """App real apontado a um db efêmero com kubo_rw e usuário/tenant breakglass reais."""
     monkeypatch.setenv("SURREAL_DB", _DB)
     monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
+    monkeypatch.setenv("KUBO_BREAKGLASS_TENANT_ID", "tenant:breakglass")
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
+    # Restaura ScopedStore + resolve_session reais (conftest substitui por fakes).
+    monkeypatch.setattr("kubo.api.routes.destinations.resolve_session", _real_resolve_session)
+    monkeypatch.setattr("kubo.api.routes.destinations.scoped", scoped)
     root_cfg = replace(client.config(), database=_DB)
+    user_id = RecordID("user", "breakglass-owner")
+    tenant_id = RecordID("tenant", "breakglass")
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
+        root.query(
+            "CREATE $u SET firebase_uid = $uid;",
+            {"u": user_id, "uid": "user:breakglass-owner"},
+        )
+        root.query("CREATE $t SET name = $name;", {"t": tenant_id, "name": "Breakglass"})
+        root.query("RELATE $u->membership->$t SET role = 'owner';", {"u": user_id, "t": tenant_id})
         try:
             yield create_app()
         finally:

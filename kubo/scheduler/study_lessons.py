@@ -27,6 +27,7 @@ from kubo.errors import StoreError
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.runtime.personas import resolve_persona
 from kubo.store import study as study_store
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.study.planning import next_study_day
 from kubo.study.tutor import Tutor
 
@@ -60,14 +61,13 @@ def _build_tutor(db: Any, tenant_id: RecordID, user_id: RecordID) -> Tutor:
 
 
 def _generate_lesson_content(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID,
-    user_id: RecordID,
     plan_id: RecordID,
     lesson_id: RecordID,
     entry: study_store.PlanEntry,
     work_context: str,
+    tutor: Tutor,
 ) -> None:
     """Gera conteúdo de IA para uma lição e preenche o registro (KUBO-168, KUBO-189).
 
@@ -75,16 +75,11 @@ def _generate_lesson_content(
     e preenche a lição. Se o Tutor falha (None) ou não há seções, a lição fica
     como placeholder.
     """
-    sections = study_store.get_sections_for_entry(
-        db, tenant_id=tenant_id, user_id=user_id, entry=entry
-    )
+    sections = study_store.get_sections_for_entry(session, entry=entry)
     if not sections:
         _log.warning("study.lesson.no_sections", entry=str(entry.id))
         return
-    misses = study_store.recent_misses_for_plan(
-        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id
-    )
-    tutor = _build_tutor(db, tenant_id, user_id)
+    misses = study_store.recent_misses_for_plan(session, plan_id=plan_id)
     lesson = tutor.generate(
         entry_title=entry.title,
         sections=sections,
@@ -95,9 +90,7 @@ def _generate_lesson_content(
         _log.info("study.lesson.tutor_failed", entry=str(entry.id))
         return
     study_store.fill_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         lesson_id=lesson_id,
         concept=lesson.concept,
         scenario=lesson.scenario,
@@ -131,14 +124,12 @@ def execute_study_transition_job(
     tolerante a downtime), transiciona para `running` e cria a 1ª lição
     (registro + conteúdo com IA). Atômico via `transition_to_running`.
     """
-    topics = study_store.list_topics_by_state(
-        db, tenant_id=tenant_id, user_id=user_id, state="scheduled"
-    )
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    topics = study_store.list_topics_by_state(session, state="scheduled")
+    tutor = _build_tutor(db, tenant_id, user_id)
     for topic in topics:
         try:
-            plan, entries = study_store.get_plan_for_topic(
-                db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id
-            )
+            plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
             if plan is None or plan.activated_at is None or not entries:
                 continue
             if not plan.weekdays:
@@ -153,9 +144,7 @@ def execute_study_transition_job(
             first_entry = entries[0]
             lesson_date = datetime(first_day.year, first_day.month, first_day.day)
             lesson_id = study_store.transition_to_running(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 topic_id=topic.id,
                 plan_id=plan.id,
                 plan_entry_id=first_entry.id,
@@ -170,13 +159,12 @@ def execute_study_transition_job(
             if lesson_id is not None:
                 work_context = _work_context_for(db, user_id)
                 _generate_lesson_content(
-                    db,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
+                    session,
                     plan_id=plan.id,
                     lesson_id=lesson_id,
                     entry=first_entry,
                     work_context=work_context,
+                    tutor=tutor,
                 )
         except StoreError:
             _log.exception("study.transition.failed", topic=str(topic.id))
@@ -203,19 +191,15 @@ def execute_study_lesson_job(
     (concept, scenario, application, quiz, provenance). Se o Tutor falha,
     a lição fica como placeholder (vazia).
     """
-    topics = study_store.list_topics_by_state(
-        db, tenant_id=tenant_id, user_id=user_id, state="running"
-    )
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    topics = study_store.list_topics_by_state(session, state="running")
+    tutor = _build_tutor(db, tenant_id, user_id)
     for topic in topics:
         try:
-            plan, entries = study_store.get_plan_for_topic(
-                db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id
-            )
+            plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
             if plan is None or not entries or not plan.weekdays:
                 continue
-            done = study_store.count_lessons_for_plan(
-                db, tenant_id=tenant_id, user_id=user_id, plan_id=plan.id
-            )
+            done = study_store.count_lessons_for_plan(session, plan_id=plan.id)
             if done >= len(entries):
                 continue  # plano concluído
             next_entry = entries[done]
@@ -228,17 +212,13 @@ def execute_study_lesson_job(
             lesson_date = datetime(next_day.year, next_day.month, next_day.day)
             # Re-tenta lição placeholder (Tutor falhou antes) antes de criar nova.
             lesson_id = study_store.get_pending_lesson_for_entry(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 plan_id=plan.id,
                 plan_entry_id=next_entry.id,
             )
             if lesson_id is None:
                 lesson_id = study_store.create_lesson(
-                    db,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
+                    session,
                     plan_id=plan.id,
                     plan_entry_id=next_entry.id,
                     scheduled_for=lesson_date,
@@ -259,13 +239,12 @@ def execute_study_lesson_job(
             # KUBO-168: gera conteúdo com IA.
             work_context = _work_context_for(db, user_id)
             _generate_lesson_content(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                session,
                 plan_id=plan.id,
                 lesson_id=lesson_id,
                 entry=next_entry,
                 work_context=work_context,
+                tutor=tutor,
             )
         except StoreError:
             # StoreError = duplicata (UNIQUE lesson_plan_day) ou falha de DB.

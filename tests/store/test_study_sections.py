@@ -15,6 +15,7 @@ import pytest
 from surrealdb import RecordID
 
 from kubo.store import client, migrations, tenancy
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     create_material,
     create_topic,
@@ -79,7 +80,9 @@ def _material_id(
     db: Any, *, tenant_id: RecordID, user_id: RecordID, topic_id: RecordID
 ) -> RecordID:
     """Busca o material_id real (criado no teste) via list_materials_by_topic."""
-    materials = list_materials_by_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    materials = list_materials_by_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert len(materials) == 1
     return materials[0].id
 
@@ -89,12 +92,10 @@ def _material_id(
 
 def test_create_material_persists_sections(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """create_material persiste seções junto com capítulos na mesma transação."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(2)
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual",
         fmt="epub",
@@ -107,7 +108,7 @@ def test_create_material_persists_sections(db: Any, tenant_id: RecordID, user_id
     )
 
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    sections = list_all_sections(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid)
     assert len(sections) == 4  # 2 capítulos × 2 seções
 
 
@@ -115,12 +116,10 @@ def test_create_material_without_sections_falls_back_to_one_per_chapter(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """sections=None → 1 seção fallback por capítulo (content = capítulo inteiro)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(2)
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual",
         fmt="epub",
@@ -133,7 +132,7 @@ def test_create_material_without_sections_falls_back_to_one_per_chapter(
     )
 
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    sections = list_all_sections(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid)
     assert len(sections) == 2  # 1 seção fallback por capítulo
     # A seção fallback cobre o capítulo inteiro.
     assert all(s.content.startswith("Conteúdo do capítulo") for s in sections)
@@ -146,12 +145,10 @@ def test_list_all_sections_returns_in_chapter_then_seq_order(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """list_all_sections devolve seções ordenadas por (chapter.seq, section.seq)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(2)
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual",
         fmt="epub",
@@ -164,7 +161,7 @@ def test_list_all_sections_returns_in_chapter_then_seq_order(
     )
 
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    sections = list_all_sections(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid)
 
     # Ordenadas por (chapter.seq, section.seq): cap 1 seção 1, cap 1 seção 2,
     # cap 2 seção 1, cap 2 seção 2.
@@ -181,12 +178,10 @@ def test_list_all_sections_returns_in_chapter_then_seq_order(
 
 def test_list_all_sections_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Seções de outro usuário no mesmo tenant são invisíveis."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(1)
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual",
         fmt="epub",
@@ -204,7 +199,9 @@ def test_list_all_sections_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
 
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
     # Outro usuário não vê as seções do material do primeiro usuário.
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=other_user.id, material_id=mid)
+    sections = list_all_sections(
+        scoped(db, tenant_id=tenant_id, user_id=other_user.id), material_id=mid
+    )
     assert sections == []
 
 
@@ -213,12 +210,10 @@ def test_list_all_sections_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
 
 def test_delete_material_removes_sections(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """delete_material apaga as seções junto com capítulos e material (cascade)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters(1)
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Manual",
         fmt="epub",
@@ -231,11 +226,16 @@ def test_delete_material_removes_sections(db: Any, tenant_id: RecordID, user_id:
     )
 
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
-    assert len(list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)) == 2
+    assert (
+        len(list_all_sections(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid))
+        == 2
+    )
 
-    delete_material(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    delete_material(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid)
 
-    assert list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=mid) == []
+    assert (
+        list_all_sections(scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid) == []
+    )
 
 
 def test_list_all_sections_light_returns_empty_content(
@@ -246,12 +246,10 @@ def test_list_all_sections_light_returns_empty_content(
     Bug KUBO-189: _section_from_row acessava row["content"] direto, mas a query light
     não seleciona content → KeyError → 500 no close_topic.
     """
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Light sections")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Light sections")
     chapters = [ParsedChapter(seq=1, title="Cap 1", part=None, content="Conteúdo do cap 1.")]
     create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Livro",
         fmt="pdf",
@@ -270,7 +268,9 @@ def test_list_all_sections_light_returns_empty_content(
     )
     mid = _material_id(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
 
-    sections = list_all_sections_light(db, tenant_id=tenant_id, user_id=user_id, material_id=mid)
+    sections = list_all_sections_light(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=mid
+    )
     assert len(sections) == 1
     assert sections[0].title == "Sec 1"
     assert sections[0].content == ""  # light = sem content

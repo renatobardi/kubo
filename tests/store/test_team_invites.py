@@ -14,6 +14,7 @@ import pytest
 
 from kubo.errors import TeamInviteError
 from kubo.store import client, migrations, team_invites, tenancy
+from kubo.store.scoped import scoped, scoped_superadmin
 
 pytestmark = pytest.mark.integration
 
@@ -38,7 +39,8 @@ def test_create_team_invite(db: Any) -> None:
     owner = tenancy.create_user(db, firebase_uid="uid-owner", email="owner@example.com")
     tenant = tenancy.create_tenant(db, name="Equipe", owner_user_id=owner.id)
 
-    invite = team_invites.create_team_invite(db, tenant_id=tenant.id, created_by=owner.id)
+    session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
+    invite = team_invites.create_team_invite(session)
 
     assert invite.tenant_id == tenant.id
     assert invite.created_by == owner.id
@@ -52,22 +54,25 @@ def test_get_team_invite_by_token(db: Any) -> None:
     """Lookup by token returns the right invite; missing token returns None."""
     owner = tenancy.create_user(db, firebase_uid="uid-owner-2", email="owner2@example.com")
     tenant = tenancy.create_tenant(db, name="Equipe", owner_user_id=owner.id)
-    invite = team_invites.create_team_invite(db, tenant_id=tenant.id, created_by=owner.id)
+    session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
+    invite = team_invites.create_team_invite(session)
 
-    found = team_invites.get_team_invite_by_token(db, invite.token)
+    found = team_invites.get_team_invite_by_token(session, invite.token)
     assert found is not None
     assert found.id == invite.id
-    assert team_invites.get_team_invite_by_token(db, "does-not-exist") is None
+    assert team_invites.get_team_invite_by_token(session, "does-not-exist") is None
 
 
 def test_accept_team_invite_creates_member(db: Any) -> None:
     """Acceptance creates a member membership in the invite's tenant and marks accepted."""
     owner = tenancy.create_user(db, firebase_uid="uid-owner-3", email="owner3@example.com")
     tenant = tenancy.create_tenant(db, name="Equipe", owner_user_id=owner.id)
-    invite = team_invites.create_team_invite(db, tenant_id=tenant.id, created_by=owner.id)
+    owner_session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
+    invite = team_invites.create_team_invite(owner_session)
     guest = tenancy.create_user(db, firebase_uid="uid-guest", email="guest@example.com")
 
-    accepted = team_invites.accept_team_invite(db, token=invite.token, user_id=guest.id)
+    guest_session = scoped_superadmin(db, user_id=guest.id, tenant_id=tenant.id)
+    accepted = team_invites.accept_team_invite(guest_session, token=invite.token)
 
     assert accepted.id == invite.id
     assert accepted.status == "accepted"
@@ -81,26 +86,28 @@ def test_accept_team_invite_rejects_expired(db: Any) -> None:
     """Expired invite cannot be accepted."""
     owner = tenancy.create_user(db, firebase_uid="uid-owner-4", email="owner4@example.com")
     tenant = tenancy.create_tenant(db, name="Equipe", owner_user_id=owner.id)
+    owner_session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
     expired = datetime.now(timezone.utc) - timedelta(days=1)
-    invite = team_invites.create_team_invite(
-        db, tenant_id=tenant.id, created_by=owner.id, expires_at=expired
-    )
+    invite = team_invites.create_team_invite(owner_session, expires_at=expired)
     guest = tenancy.create_user(db, firebase_uid="uid-guest-2", email="guest2@example.com")
 
+    guest_session = scoped_superadmin(db, user_id=guest.id, tenant_id=tenant.id)
     with pytest.raises(TeamInviteError):
-        team_invites.accept_team_invite(db, token=invite.token, user_id=guest.id)
+        team_invites.accept_team_invite(guest_session, token=invite.token)
 
 
 def test_accept_team_invite_rejects_already_accepted(db: Any) -> None:
     """Already-accepted invite cannot be accepted again."""
     owner = tenancy.create_user(db, firebase_uid="uid-owner-5", email="owner5@example.com")
     tenant = tenancy.create_tenant(db, name="Equipe", owner_user_id=owner.id)
-    invite = team_invites.create_team_invite(db, tenant_id=tenant.id, created_by=owner.id)
+    owner_session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
+    invite = team_invites.create_team_invite(owner_session)
     guest = tenancy.create_user(db, firebase_uid="uid-guest-3", email="guest3@example.com")
 
-    team_invites.accept_team_invite(db, token=invite.token, user_id=guest.id)
+    guest_session = scoped_superadmin(db, user_id=guest.id, tenant_id=tenant.id)
+    team_invites.accept_team_invite(guest_session, token=invite.token)
     with pytest.raises(TeamInviteError):
-        team_invites.accept_team_invite(db, token=invite.token, user_id=guest.id)
+        team_invites.accept_team_invite(guest_session, token=invite.token)
 
 
 def test_accept_team_invite_is_idempotent_for_existing_member(db: Any) -> None:
@@ -110,8 +117,10 @@ def test_accept_team_invite_is_idempotent_for_existing_member(db: Any) -> None:
     guest = tenancy.create_user(db, firebase_uid="uid-guest-5", email="guest5@example.com")
     tenancy.create_membership(db, user_id=guest.id, tenant_id=tenant.id, role="member")
 
-    invite = team_invites.create_team_invite(db, tenant_id=tenant.id, created_by=owner.id)
-    accepted = team_invites.accept_team_invite(db, token=invite.token, user_id=guest.id)
+    owner_session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
+    invite = team_invites.create_team_invite(owner_session)
+    guest_session = scoped(db, tenant_id=tenant.id, user_id=guest.id)
+    accepted = team_invites.accept_team_invite(guest_session, token=invite.token)
 
     assert accepted.status == "accepted"
     memberships = tenancy.list_memberships_for_user(db, guest.id)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +155,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0041_dispatch_items_record_item.surql",
         # 0042 (KUBO-195, ADR-0052): opinion_for edge + day_summary table.
         "0042_opinion_day_summary.surql",
+        # 0043 (KUBO-207): invite vinculado a tenant.
+        "0043_invite_tenant_id.surql",
     }
 
 
@@ -244,7 +246,9 @@ def test_published_at_value_clamps_future_on_direct_write(db: Any) -> None:
     time::now() pela cláusula VALUE — não só o helper Python da store."""
     db.query("CREATE item:i SET external_id='e', content='c', published_at = time::now() + 1d;")
     row = db.query("SELECT published_at FROM item:i;")[0]
-    assert row["published_at"] <= datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    assert row["published_at"] <= now + timedelta(seconds=1)
+    assert abs((row["published_at"] - now).total_seconds()) < 1
 
 
 def test_published_at_value_preserves_valid_past_on_direct_write(db: Any) -> None:

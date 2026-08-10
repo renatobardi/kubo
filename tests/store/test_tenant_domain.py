@@ -19,6 +19,7 @@ from kubo.runtime.personas import load_personas_from_dir
 from kubo.store import client, migrations, tenancy
 from kubo.store.flows import instantiate_flow, list_flows
 from kubo.store.knowledge import get_or_create_entity, list_entities
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -51,9 +52,7 @@ def _instantiate(db: Any, tenant_id: RecordID, user_id: RecordID) -> Any:
         Path(__file__).parents[2] / "catalogs" / "flow_templates" / "analysis.yaml"
     )
     return instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         template=template,
         personas=_PERSONAS,
         question="q?",
@@ -67,12 +66,12 @@ def test_flow_is_tenant_scoped(db: Any) -> None:
 
     inst = _instantiate(db, tenant_a.id, owner_a.id)
 
-    flows_a = list_flows(db, tenant_id=tenant_a.id, user_id=owner_a.id, limit=20, start=0)
+    flows_a = list_flows(scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id), limit=20, start=0)
     assert len(flows_a) == 1
     assert flows_a[0].id == str(inst.flow)
 
     with pytest.raises(MembershipRequiredError):
-        list_flows(db, tenant_id=tenant_a.id, user_id=owner_b.id, limit=20, start=0)
+        list_flows(scoped(db, tenant_id=tenant_a.id, user_id=owner_b.id), limit=20, start=0)
 
 
 def test_entity_is_tenant_scoped(db: Any) -> None:
@@ -81,16 +80,20 @@ def test_entity_is_tenant_scoped(db: Any) -> None:
     owner_a, tenant_a = _tenant_owner(db, firebase_uid="uid-entity-a")
     owner_b, tenant_b = _tenant_owner(db, firebase_uid="uid-entity-b")
 
-    get_or_create_entity(db, tenant_id=tenant_a.id, user_id=owner_a.id, name="Rust")
-    get_or_create_entity(db, tenant_id=tenant_b.id, user_id=owner_b.id, name="Rust")
+    get_or_create_entity(scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id), name="Rust")
+    get_or_create_entity(scoped(db, tenant_id=tenant_b.id, user_id=owner_b.id), name="Rust")
 
-    entities_a = list_entities(db, tenant_id=tenant_a.id, user_id=owner_a.id, limit=20, start=0)
+    entities_a = list_entities(
+        scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id), limit=20, start=0
+    )
     assert len(entities_a) == 1
     assert entities_a[0].name == "Rust"
 
-    entities_b = list_entities(db, tenant_id=tenant_b.id, user_id=owner_b.id, limit=20, start=0)
+    entities_b = list_entities(
+        scoped(db, tenant_id=tenant_b.id, user_id=owner_b.id), limit=20, start=0
+    )
     assert len(entities_b) == 1
     assert entities_b[0].name == "Rust"
 
     with pytest.raises(MembershipRequiredError):
-        list_entities(db, tenant_id=tenant_a.id, user_id=owner_b.id, limit=20, start=0)
+        list_entities(scoped(db, tenant_id=tenant_a.id, user_id=owner_b.id), limit=20, start=0)

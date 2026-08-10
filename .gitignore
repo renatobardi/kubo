@@ -225,6 +225,7 @@ planning/
 
 # config local do Claude Code (por maquina, nao versionada)
 .claude/settings.local.json
+.claude/rules/
 
 # config de MCP local — launcher macOS-only (le o token do Keychain), nao versionada
 .mcp.json

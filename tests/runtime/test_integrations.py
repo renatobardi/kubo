@@ -201,20 +201,32 @@ def test_resolve_secret_from_tenant_credential(
     """secret_ref tenant_credential:<nome> resolve contra a store de credenciais do tenant."""
     fake_db = object()
     fake_tenant = object()
+    fake_user = object()
+    fake_session = object()
 
-    def _fake_get_credential(db: Any, *, tenant_id: Any, provider: str, user_id: Any = None) -> str:
+    def _fake_scoped(db: Any, *, tenant_id: Any, user_id: Any) -> Any:
         assert db is fake_db
         assert tenant_id is fake_tenant
+        assert user_id is fake_user
+        return fake_session
+
+    def _fake_get_credential(session: Any, *, provider: str) -> str:
+        assert session is fake_session
         assert provider == "openai"
         return "tenant-openai-key"
 
+    monkeypatch.setattr("kubo.store.scoped.scoped", _fake_scoped)
     monkeypatch.setattr(
         "kubo.runtime.integrations.tenant_credentials.get_credential",
         _fake_get_credential,
     )
 
     resolved = resolve_integrations(
-        ["openai"], _tenant_credential_catalog(), db=fake_db, tenant_id=fake_tenant
+        ["openai"],
+        _tenant_credential_catalog(),
+        db=fake_db,
+        tenant_id=fake_tenant,
+        user_id=fake_user,
     )
 
     assert resolved["openai"].secret == "tenant-openai-key"  # pragma: allowlist secret

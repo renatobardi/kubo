@@ -100,7 +100,7 @@ def stub_lesson_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(study_routes.study_store, "list_study_logs_for_plan", lambda db, **kw: {})
     monkeypatch.setattr(study_routes.study_store, "list_materials_by_topic", lambda db, **kw: [])
     monkeypatch.setattr(study_routes.study_store, "list_chat_messages", lambda db, **kw: [])
-    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda db, ctx, topic_id: [])
+    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda session, topic_id: [])
     monkeypatch.setattr(
         study_routes.study_store,
         "create_study_log",
