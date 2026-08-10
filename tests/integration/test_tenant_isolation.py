@@ -22,6 +22,7 @@ from kubo.api.app import create_app  # noqa: E402
 from kubo.api.auth import hash_password  # noqa: E402
 from kubo.store import client as store_client  # noqa: E402
 from kubo.store import migrations, tenancy
+from kubo.store.knowledge import start_run  # noqa: E402
 from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
@@ -276,8 +277,6 @@ def test_dashboard_recent_runs_are_tenant_scoped(db: Any, test_client: TestClien
 
     tenant_a = tenancy.create_tenant(db, name="Dash Tenant A", owner_user_id=_BREAKGLASS_USER_ID)
     tenant_b = tenancy.create_tenant(db, name="Dash Tenant B", owner_user_id=_BREAKGLASS_USER_ID)
-
-    from kubo.store.knowledge import start_run
 
     start_run(scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID), worker="dash-a")
     start_run(scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID), worker="dash-b")

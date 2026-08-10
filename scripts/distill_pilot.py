@@ -155,7 +155,9 @@ def render_pilot(
 # ── Camada de I/O ───────────────────────────────────────────────────────────
 
 
-def _load_sample(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[list[tuple[str, str]], dict[str, str]]:
+def _load_sample(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> tuple[list[tuple[str, str]], dict[str, str]]:
     """Reconstrói a MESMA amostra da auditoria e casa cada item com seu content e
     o baseline (summary do llama gravado). Devolve `(items, baselines)`."""
     session = scoped(db, tenant_id=tenant_id, user_id=user_id)
