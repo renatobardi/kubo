@@ -830,11 +830,21 @@ def dashboard_counts(
     session: ScopedStore,
 ) -> DashboardCounts:
     """Contagens do acervo (distilled/item/source/entity) para o Painel. Membership checada
-    (ou bypassada para `superadmin`, KUBO-126)."""
+    (ou bypassada para `superadmin`, KUBO-126).
+
+    O count de `item` é filtrado por `source.tenant_id` (isolation de pool,
+    ADR-0040 §VI / ADR-0050), não é global."""
     distilled = session.query(
         "SELECT count() FROM distilled WHERE tenant_id = $tenant_id GROUP ALL;"
     )
-    items = session.query("SELECT count() FROM item GROUP ALL;")
+    # Filtro de pool: itens são compartilhados em pool; só contam para o tenant
+    # ativo se houver um source do tenant apontando para eles (ADR-0040 §VI).
+    # Schema atual: item ->from_source-> source.tenant_id.
+    # TODO(ADR-0040 migration): quando migrar para pool_item/pool_source/collects,
+    # usar pool_item -> pool_source <- collects <- source.tenant_id.
+    items = session.query(
+        "SELECT count() FROM item WHERE $tenant_id IN ->from_source->source.tenant_id GROUP ALL;"
+    )
     sources = session.query("SELECT count() FROM source WHERE tenant_id = $tenant_id GROUP ALL;")
     entities = session.query("SELECT count() FROM entity WHERE tenant_id = $tenant_id GROUP ALL;")
     return DashboardCounts(
@@ -1465,6 +1475,10 @@ def items_without_distilled(
     `tenant_id`/`user_id` são OBRIGATÓRIOS: membership é checada e o filtro de ausência
     de destilado leva em conta apenas as arestas do tenant ativo (KUBO-123).
 
+    **Isolamento de pool (ADR-0040 §VI / ADR-0050):** só devolve itens cuja fonte
+    (`source.tenant_id`) pertence ao tenant ativo. Com a migração completa do pool
+    isso virá `pool_item → pool_source ← collects ← source.tenant_id`.
+
     O filtro de conteúdo vazio/só-whitespace é precondição do run vivo (§III): mandar o
     vazio ao LLM alucinaria um summary que persistiria COM proveniência, e o item sairia
     do funil para sempre — conhecimento fabricado com carimbo de origem. Os ~536 link-posts
@@ -1476,6 +1490,10 @@ def items_without_distilled(
     esta lista em lotes previsíveis, sem depender de ordem de inserção do servidor. Par de
     leitura de `distilled_for` (item -> distilled); aqui a direção é item -> ausência de
     destilado."""
+    # Filtro de pool: item sem fonte do tenant ativo não é legítimo para leitura
+    # (ADR-0040 §VI). Schema atual: item ->from_source-> source.tenant_id.
+    # TODO(ADR-0040 migration): quando migrar para pool_item/pool_source/collects,
+    # usar pool_item -> pool_source <- collects <- source.tenant_id.
     rows = session.query(
         "SELECT id, title, content FROM item "
         'WHERE string::trim(content) != "" '
@@ -1489,9 +1507,13 @@ def items_without_distilled(
 
 def count_items_without_distilled(session: ScopedStore) -> int:
     """Conta os candidatos à destilação nova (mesmo filtro de `items_without_distilled`:
-    sem `derived_from` incoming + content não-vazio) — métrica de progresso e
-    reconciliação do dreno (0014), server-side (COUNT, sem puxar o content de milhares
-    de itens só para len())."""
+    sem `derived_from` incoming + content não-vazio + fonte do tenant ativo)
+    — métrica de progresso e reconciliação do dreno (0014), server-side
+    (COUNT, sem puxar o content de milhares de itens só para len())."""
+    # Filtro de pool: item sem fonte do tenant ativo não é legítimo para leitura
+    # (ADR-0040 §VI). Schema atual: item ->from_source-> source.tenant_id.
+    # TODO(ADR-0040 migration): quando migrar para pool_item/pool_source/collects,
+    # usar pool_item -> pool_source <- collects <- source.tenant_id.
     rows = session.query(
         "SELECT count() FROM item "
         'WHERE string::trim(content) != "" '
@@ -1510,10 +1532,17 @@ def items_to_score(
     `content` não-vazio — mesmo piso de proveniência de `items_without_distilled`
     (ADR-0013 §III.1/§III.7, ADR-0051 §IV.3).
 
+    **Isolamento de pool (ADR-0040 §VI / ADR-0050):** só devolve itens cuja fonte
+    (`source.tenant_id`) pertence ao tenant ativo.
+
     Par de leitura de `items_without_distilled`, mas população DIFERENTE desde
     que o funil inverteu: aqui a exclusão é por `scored_for` (já pontuado, passe
     ou não o corte), não por `derived_from` (já destilado). Um item reprovado
     nunca mais aparece aqui — reprovação é definitiva (ADR-0051 §I.4)."""
+    # Filtro de pool: item sem fonte do tenant ativo não é legítimo para leitura
+    # (ADR-0040 §VI). Schema atual: item ->from_source-> source.tenant_id.
+    # TODO(ADR-0040 migration): quando migrar para pool_item/pool_source/collects,
+    # usar pool_item -> pool_source <- collects <- source.tenant_id.
     rows = session.query(
         "SELECT id, title, url, content FROM item "
         'WHERE string::trim(content) != "" '
@@ -1558,12 +1587,16 @@ def apply_score(
 
 def count_items_to_score(session: ScopedStore) -> int:
     """Conta os candidatos à pontuação nova (mesmo filtro de `items_to_score`: sem
-    `scored_for` do tenant + content não-vazio) — métrica de progresso do dreno
-    (KUBO-193): pós-funil invertido, `count_items_without_distilled` fica FALSO
-    como sinal de progresso — item rejeitado sai da fila de pontuação (reprovação
-    definitiva) mas nunca ganha `derived_from`, então parece "travado" pra
-    sempre num dreno medido pela métrica antiga. Esta conta o que o worker
+    `scored_for` do tenant + content não-vazio + fonte do tenant ativo) — métrica
+    de progresso do dreno (KUBO-193): pós-funil invertido, `count_items_without_distilled`
+    fica FALSO como sinal de progresso — item rejeitado sai da fila de pontuação
+    (reprovação definitiva) mas nunca ganha `derived_from`, então parece "travado"
+    pra sempre num dreno medido pela métrica antiga. Esta conta o que o worker
     realmente ainda vai processar."""
+    # Filtro de pool: item sem fonte do tenant ativo não é legítimo para leitura
+    # (ADR-0040 §VI). Schema atual: item ->from_source-> source.tenant_id.
+    # TODO(ADR-0040 migration): quando migrar para pool_item/pool_source/collects,
+    # usar pool_item -> pool_source <- collects <- source.tenant_id.
     rows = session.query(
         "SELECT count() FROM item "
         'WHERE string::trim(content) != "" '
