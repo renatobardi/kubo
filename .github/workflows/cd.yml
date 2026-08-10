@@ -59,7 +59,7 @@ jobs:
     # deploy-prd), e um redeploy do DEV em paralelo corre com a leitura do digest
     # vivo em collect-digest — já aconteceu (digest capturado vazio, container no
     # meio da troca).
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     environment: dev
     concurrency:
       group: cd-dev
