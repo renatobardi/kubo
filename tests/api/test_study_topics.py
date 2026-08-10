@@ -206,7 +206,35 @@ def test_topics_page_renders_pagination_links(
         ),
     )
     html = authed_client.get("/study/topics").text
-    assert 'href="/study/topics?page=2"' in html
+    assert 'href="/study/topics?page=2&per_page=20"' in html
+
+
+def test_topics_page_redirects_when_page_exceeds_total(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """page=99 com só 1 página redireciona para a última página válida (303)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: ([_topic(title="Único", state="draft")], 1),
+    )
+    resp = authed_client.get("/study/topics?page=99", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/study/topics?page=1&per_page=20"
+
+
+def test_topics_page_preserves_per_page_in_pagination_links(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """?per_page=1 faz o link da próxima página incluir per_page=1."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: (
+            [_topic(title="Página 1", state="draft")],
+            3,
+        ),
+    )
+    html = authed_client.get("/study/topics?per_page=1").text
+    assert 'href="/study/topics?page=2&per_page=1"' in html
 
 
 # --- Criar Tema vazio --------------------------------------------------------------------

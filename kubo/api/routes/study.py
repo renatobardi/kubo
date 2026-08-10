@@ -369,6 +369,7 @@ def list_topics_page(request: Request) -> Response:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        # Primeiro descobre o total para clampar page antes de buscar a página.
         topics, total = study_store.list_topics_paginated(
             db,
             tenant_id=ctx.tenant_id,
@@ -377,6 +378,15 @@ def list_topics_page(request: Request) -> Response:
             page=page,
             per_page=per_page,
         )
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        if page > total_pages:
+            # Redireciona para a última página válida, preservando filter e per_page.
+            qs = f"page={total_pages}&per_page={per_page}"
+            if archived:
+                qs += "&filter=archived"
+            return RedirectResponse(
+                url=f"/study/topics?{qs}", status_code=303
+            )
         # Enriquece com progresso em lote (1 query de study_log global).
         progress_map = study_store.get_topics_progress_batch(
             db,
@@ -392,7 +402,6 @@ def list_topics_page(request: Request) -> Response:
             }
             for t in topics
         ]
-    total_pages = max(1, (total + per_page - 1) // per_page)
     return templates.TemplateResponse(
         request,
         _TOPICS_LIST_TEMPLATE,

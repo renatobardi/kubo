@@ -173,21 +173,22 @@ def test_chat_persists_turn_at_end(
 def test_chat_stream_failure_does_not_persist_orphan(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Se o SSE do mentor falha, nenhuma mensagem é persistida (não fica órfã)."""
+    """Se o SSE do mentor falha após chunks parciais, nenhum turno é persistido."""
     from kubo.errors import ExecutorError
 
     def _failing_stream(self: Any, **kw: Any) -> Any:
+        yield "Resposta parcial."
         raise ExecutorError("mentor indisponível")
 
     monkeypatch.setattr("kubo.api.routes.study.Mentor.stream_chat", _failing_stream)
 
-    calls: list[dict[str, Any]] = []
+    turn_calls: list[dict[str, Any]] = []
 
-    def _track_create(db: Any, **kw: Any) -> ChatMessage:
-        calls.append(kw)
-        return _chat_msg(kw.get("role", "user"), "")
+    def _track_turn(db: Any, **kw: Any) -> tuple[ChatMessage, ChatMessage]:
+        turn_calls.append(kw)
+        return _chat_msg("user", ""), _chat_msg("assistant", "")
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_message", _track_create)
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_turn", _track_turn)
 
     resp = authed_client.post(
         "/study/topics/abc123/chat",
@@ -196,7 +197,7 @@ def test_chat_stream_failure_does_not_persist_orphan(
 
     assert resp.status_code == 200
     assert "event: error" in resp.text
-    assert calls == []
+    assert turn_calls == []
 
 
 def test_chat_requires_csrf(authed_client: TestClient) -> None:
