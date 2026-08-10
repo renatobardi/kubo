@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.errors import StoreError
-from kubo.store.study import StudyPlan, Topic, TopicProgress
+from kubo.store.study import Material, StudyPlan, Topic, TopicProgress
 
 _TENANT = RecordID("tenant", "breakglass")
 _USER = RecordID("user", "breakglass-owner")
@@ -34,12 +34,35 @@ def _topic(**kw: object) -> Topic:
     return Topic(**base)  # type: ignore[arg-type]
 
 
+def _material(**kw: object) -> Material:
+    base: dict[str, object] = {
+        "id": RecordID("material", "mat1"),
+        "tenant_id": _TENANT,
+        "user_id": _USER,
+        "topic": RecordID("topic", "abc123"),
+        "title": "Manual de Kubo",
+        "fmt": "epub",
+        "original_filename": "manual.epub",
+        "file_path": "/data/materials/manual.epub",
+        "size_bytes": 1024,
+        "chapter_count": 3,
+        "summary": "Um guia.",
+        "created_at": datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        "status": "ready",
+    }
+    base.update(kw)
+    return Material(**base)  # type: ignore[arg-type]
+
+
 @pytest.fixture(autouse=True)
 def stub_study_topic_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leituras vazias por padrão; a store de study antiga é desacoplada."""
     from tests.api.conftest import _fake_connect
 
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
     monkeypatch.setattr(
@@ -131,11 +154,14 @@ def test_topics_page_lists_topics_with_name_and_state(
 ) -> None:
     """A lista mostra o nome e o estado de cada Tema."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_topics",
-        lambda db, **kw: [
-            _topic(title="Agentic Coding", state="draft"),
-            _topic(title="Rust", state="running"),
-        ],
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: (
+            [
+                _topic(title="Agentic Coding", state="draft"),
+                _topic(title="Rust", state="running"),
+            ],
+            2,
+        ),
     )
     html = authed_client.get("/study/topics").text
     assert "Agentic Coding" in html
@@ -149,20 +175,38 @@ def test_topics_page_state_badge_has_semantic_color(
 ) -> None:
     """Badge de estado tem cor semântica (D2): ativos=primary, archived=muted."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_topics",
-        lambda db, **kw: [
-            _topic(title="Rascunho", state="draft"),
-            _topic(title="Planejando", state="planning"),
-            _topic(title="Agendado", state="scheduled"),
-            _topic(title="Em andamento", state="running"),
-            _topic(title="Arquivado", state="archived"),
-        ],
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: (
+            [
+                _topic(title="Rascunho", state="draft"),
+                _topic(title="Planejando", state="planning"),
+                _topic(title="Agendado", state="scheduled"),
+                _topic(title="Em andamento", state="running"),
+                _topic(title="Arquivado", state="archived"),
+            ],
+            5,
+        ),
     )
     html = authed_client.get("/study/topics").text
     # estados ativos (draft/planning/scheduled/running) = primary
     assert "bg-primary/10" in html
     # archived = muted (neutro)
     assert "bg-muted" in html and "text-muted-foreground" in html
+
+
+def test_topics_page_renders_pagination_links(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lista de Temas mostra links de paginação quando há mais de uma página."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: (
+            [_topic(title="Página 1", state="draft")],
+            25,
+        ),
+    )
+    html = authed_client.get("/study/topics").text
+    assert 'href="/study/topics?page=2"' in html
 
 
 # --- Criar Tema vazio --------------------------------------------------------------------
@@ -207,6 +251,27 @@ def test_topic_detail_404_for_missing_topic(
     resp = authed_client.get("/study/topics/naoexiste")
     assert resp.status_code == 404
     assert "text/html" in resp.headers["content-type"]
+
+
+def test_topic_detail_draft_chat_messages_are_live_region(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chat do mentor é anunciado por leitores de tela (role='log' + aria-live)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="draft"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_materials_by_topic",
+        lambda db, **kw: [_material()],
+    )
+    html = authed_client.get("/study/topics/abc123").text
+    # O contêiner de mensagens do mentor deve ter role="log" e aria-live="polite".
+    chat = re.search(r'<div[^>]+id="chat-messages"[^>]*>', html)
+    assert chat, "chat-messages não encontrado"
+    tag = chat.group(0)
+    assert 'role="log"' in tag, "chat-messages sem role=log"
+    assert 'aria-live="polite"' in tag, "chat-messages sem aria-live=polite"
 
 
 def test_topic_detail_planning_sr_only_inside_main(

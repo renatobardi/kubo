@@ -709,6 +709,42 @@ def list_topics(db: Any, *, tenant_id: RecordID, user_id: RecordID) -> list[Topi
     return [_topic_from_row(row) for row in rows]
 
 
+def list_topics_paginated(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    archived: bool = False,
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[Topic], int]:
+    """Lista paginada de temas (ativos ou arquivados) ordenados por created_at DESC.
+
+    Retorna a página de `Topic`s e o total de registros para a aba ativa.
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    page = max(1, page)
+    per_page = max(1, min(per_page, _MAX_PAGE))
+    state_filter = "state = 'archived'" if archived else "state != 'archived'"
+    count_rows = db.query(
+        f"SELECT count() FROM topic WHERE {_USER_SCOPE} AND {state_filter} GROUP ALL;",  # noqa: S608
+        {"tenant": tenant_id, "user": user_id},
+    )
+    total = int(count_rows[0]["count"]) if count_rows else 0
+    start = (page - 1) * per_page
+    rows = db.query(
+        f"SELECT * FROM topic WHERE {_USER_SCOPE} AND {state_filter} "  # noqa: S608
+        "ORDER BY created_at DESC LIMIT $limit START $start;",
+        {
+            "tenant": tenant_id,
+            "user": user_id,
+            "limit": per_page,
+            "start": start,
+        },
+    )
+    return [_topic_from_row(row) for row in rows], total
+
+
 # --- Materiais dentro de um Tema (KUBO-162) ---------------------------------------------
 
 
@@ -843,6 +879,54 @@ def create_chat_message(
         raise StoreError("chat message vanished during creation")
     _log.info("store.chat.created", msg=str(msg_id), topic=str(topic_id), role=role)
     return _chat_from_row(rows[0])
+
+
+def create_chat_turn(
+    db: Any,
+    *,
+    tenant_id: RecordID,
+    user_id: RecordID,
+    topic_id: RecordID,
+    phase: str,
+    user_content: str,
+    assistant_content: str,
+) -> tuple[ChatMessage, ChatMessage]:
+    """Persiste um turno completo (user + assistant) numa única transação.
+
+    Falha em qualquer etapa cancela toda a transação, garantindo que nunca
+    fique um turno órfão no banco (KUBO-204).
+    """
+    tenancy.assert_membership(db, user_id=user_id, tenant_id=tenant_id)
+    user_msg_id = _fresh("study_chat")
+    assistant_msg_id = _fresh("study_chat")
+    transaction.run_transaction(
+        db,
+        [
+            "CREATE $user_msg SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+            "phase = $phase, role = 'user', content = $user_content",
+            "CREATE $assistant_msg SET tenant_id = $tenant, user_id = $user, topic = $topic, "
+            "phase = $phase, role = 'assistant', content = $assistant_content",
+        ],
+        {
+            "user_msg": user_msg_id,
+            "assistant_msg": assistant_msg_id,
+            "tenant": tenant_id,
+            "user": user_id,
+            "topic": topic_id,
+            "phase": phase,
+            "user_content": user_content,
+            "assistant_content": assistant_content,
+        },
+    )
+    rows = db.query(
+        "SELECT * FROM study_chat WHERE id = $user OR id = $assistant;",
+        {"user": user_msg_id, "assistant": assistant_msg_id},
+    )
+    if len(rows) != 2:
+        raise StoreError("chat turn vanished during creation")
+    # Ordem: user primeiro, assistant depois.
+    by_id = {str(r["id"]): _chat_from_row(r) for r in rows}
+    return by_id[str(user_msg_id)], by_id[str(assistant_msg_id)]
 
 
 def list_chat_messages(

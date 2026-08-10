@@ -40,6 +40,30 @@
       </a>
     {% endfor %}
   </div>
+
+  {% if total_pages > 1 %}
+  <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground" aria-label="Paginação">
+    {% set base = '/study/topics' %}
+    {% set filter = '&filter=archived' if archived else '' %}
+    {% if has_prev %}
+      <a href="{{ base }}?page={{ prev_page }}{{ filter }}"
+         class="rounded-4xl px-3 py-1 ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+        ← Anterior
+      </a>
+    {% else %}
+      <span class="rounded-4xl px-3 py-1 opacity-50">← Anterior</span>
+    {% endif %}
+    <span aria-live="polite">Página {{ page }} de {{ total_pages }}</span>
+    {% if has_next %}
+      <a href="{{ base }}?page={{ next_page }}{{ filter }}"
+         class="rounded-4xl px-3 py-1 ring-1 ring-foreground/10 transition-colors hover:bg-muted">
+        Próxima →
+      </a>
+    {% else %}
+      <span class="rounded-4xl px-3 py-1 opacity-50">Próxima →</span>
+    {% endif %}
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if not archived %}

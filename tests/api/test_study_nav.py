@@ -40,6 +40,9 @@ def _content(html: str) -> str:
 @pytest.fixture(autouse=True)
 def stub_study_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leituras vazias por padrão; cada teste com dado sobrescreve o que precisa."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
     monkeypatch.setattr(
@@ -109,8 +112,8 @@ def test_topics_page_lists_topics_with_name_and_state(
 ) -> None:
     """Cada tema aparece com título, badge do estado e link."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_topics",
-        lambda db, **kw: [_topic("t1", "Agentic Coding", "draft")],
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: ([_topic("t1", "Agentic Coding", "draft")], 1),
     )
 
     resp = authed_client.get("/study/topics")

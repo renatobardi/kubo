@@ -20,6 +20,7 @@ from kubo.store.study import (
     create_topic,
     get_topic,
     list_topics,
+    list_topics_paginated,
     set_topic_name,
 )
 
@@ -123,3 +124,51 @@ def test_set_topic_name_rejects_archived(db: Any, tenant_id: RecordID, user_id: 
         set_topic_name(
             db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id, title="Novo nome"
         )
+
+
+# --- Paginação (KUBO-206) ----------------------------------------------------------------
+
+
+def test_list_topics_paginated_returns_page_and_total(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """list_topics_paginated retorna a página e o total de temas ativos."""
+    create_topic(db, tenant_id=tenant_id, user_id=user_id, title="T1")
+    create_topic(db, tenant_id=tenant_id, user_id=user_id, title="T2")
+    archived = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Arq")
+    db.query("UPDATE $topic SET state = 'archived';", {"topic": archived.id})
+
+    topics, total = list_topics_paginated(
+        db, tenant_id=tenant_id, user_id=user_id, page=1, per_page=1
+    )
+    assert total == 2
+    assert len(topics) == 1
+    assert topics[0].title == "T2"
+
+
+def test_list_topics_paginated_archived_filter(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """list_topics_paginated com archived=True lista só arquivados."""
+    create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Ativo")
+    archived = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Arq")
+    db.query("UPDATE $topic SET state = 'archived';", {"topic": archived.id})
+
+    topics, total = list_topics_paginated(
+        db, tenant_id=tenant_id, user_id=user_id, archived=True, page=1, per_page=10
+    )
+    assert total == 1
+    assert [t.id for t in topics] == [archived.id]
+
+
+def test_list_topics_paginated_out_of_range_returns_empty(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """Página além do total retorna lista vazia, mas com total correto."""
+    create_topic(db, tenant_id=tenant_id, user_id=user_id, title="T1")
+
+    topics, total = list_topics_paginated(
+        db, tenant_id=tenant_id, user_id=user_id, page=99, per_page=10
+    )
+    assert total == 1
+    assert topics == []

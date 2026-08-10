@@ -32,6 +32,9 @@ def stub_study_store(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.api.conftest import _fake_connect
 
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
 
@@ -48,7 +51,7 @@ def test_list_refuses_with_403_when_not_a_member(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Leitura de lista: recusa da store vira 403 explicando o caso, não 500."""
-    monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", _refuse)
+    monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics_paginated", _refuse)
 
     resp = authed_client.get("/study/topics")
 

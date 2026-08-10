@@ -145,6 +145,21 @@ def _log_key(raw: str) -> str:
     return raw.strip()[:_MAX_LOG_KEY]
 
 
+def _parse_int(
+    value: str | None, *, default: int, min_value: int = 0, max_value: int | None = None
+) -> int:
+    """Converte query param para int, com clamp nos limites."""
+    try:
+        result = int(value) if value else default
+    except (TypeError, ValueError):
+        result = default
+    if result < min_value:
+        result = min_value
+    if max_value is not None and result > max_value:
+        result = max_value
+    return result
+
+
 def _session_of(request: Request) -> SessionContext | None:
     """Só a sessão — sem leitura de lista, que as escritas não usam."""
     with client.connect() as db:
@@ -340,21 +355,28 @@ def _persist_pending_material(
 
 @router.get("/topics")
 def list_topics_page(request: Request) -> Response:
-    """Lista os temas do usuário com nome, estado e progresso.
+    """Lista os temas do usuário com nome, estado e progresso (paginado).
 
     `?filter=archived` mostra a aba de arquivados; sem filter, ativos.
+    `?page=N` e `?per_page=N` controlam a paginação.
     """
     archived = request.query_params.get("filter") == "archived"
+    page = _parse_int(request.query_params.get("page"), default=1, min_value=1)
+    per_page = _parse_int(
+        request.query_params.get("per_page"), default=20, min_value=1, max_value=100
+    )
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
-        if archived:
-            topics = study_store.list_archived_topics(
-                db, tenant_id=ctx.tenant_id, user_id=ctx.user_id
-            )
-        else:
-            topics = study_store.list_topics(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        topics, total = study_store.list_topics_paginated(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            archived=archived,
+            page=page,
+            per_page=per_page,
+        )
         # Enriquece com progresso em lote (1 query de study_log global).
         progress_map = study_store.get_topics_progress_batch(
             db,
@@ -370,10 +392,23 @@ def list_topics_page(request: Request) -> Response:
             }
             for t in topics
         ]
+    total_pages = max(1, (total + per_page - 1) // per_page)
     return templates.TemplateResponse(
         request,
         _TOPICS_LIST_TEMPLATE,
-        {"rows": rows, "csrf": csrf_token(request), "archived": archived},
+        {
+            "rows": rows,
+            "csrf": csrf_token(request),
+            "archived": archived,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
+            "prev_page": page - 1,
+            "next_page": page + 1,
+        },
     )
 
 
@@ -917,20 +952,8 @@ def chat_with_mentor(
     work_context = _work_context_of(ctx)
     mentor = _mentor(ctx)
 
-    # Persiste a mensagem do dono antes de streamar.
-    with client.connect_rw() as db:
-        study_store.create_chat_message(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
-            topic_id=topic.id,
-            phase="draft",
-            role="user",
-            content=message,
-        )
-
     def _stream() -> Any:
-        """Generator que envia chunks SSE e persiste a resposta ao final."""
+        """Generator que envia chunks SSE e persiste o turno ao final."""
         chunks: list[str] = []
         try:
             for chunk in mentor.stream_chat(
@@ -947,28 +970,25 @@ def chat_with_mentor(
             return
         full = "".join(chunks)
         reply = extract_reply(full)
-        # Persiste o texto LIMPO (sem marcações internas do protocolo).
-        _persist_assistant(ctx, topic.id, reply.text, key)
+        # Persiste user + assistant juntos, somente ao final (KUBO-204).
+        try:
+            with client.connect_rw() as db:
+                study_store.create_chat_turn(
+                    db,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    topic_id=topic.id,
+                    phase="draft",
+                    user_content=message,
+                    assistant_content=reply.text,
+                )
+        except (ConfigError, StoreError):
+            _log.warning("study.chat.persist_failed", topic=_log_key(key))
+            yield {"event": "error", "data": "Falha ao salvar resposta."}
+            return
         yield {"event": "done", "data": json.dumps(_done_data(reply))}
 
     return EventSourceResponse(_stream())
-
-
-def _persist_assistant(ctx: SessionContext, topic_id: RecordID, content: str, key: str) -> None:
-    """Persiste a resposta do mentor; falha de store é logada, não derruba o stream."""
-    try:
-        with client.connect_rw() as db:
-            study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                topic_id=topic_id,
-                phase="draft",
-                role="assistant",
-                content=content,
-            )
-    except (ConfigError, StoreError):
-        _log.warning("study.chat.assistant_persist_failed", topic=_log_key(key))
 
 
 def _done_data(reply: MentorReply) -> dict[str, str | None]:
@@ -1285,31 +1305,27 @@ def _current_plan_as_tuples(
 def _persist_planner_reply(
     ctx: SessionContext,
     topic_id: RecordID,
+    message: str,
     reply: PlannerChatReply,
     sections: list[study_store.MaterialSection],
     key: str,
 ) -> bool:
-    """Persiste a resposta do planner (texto + plano se atualizado). Devolve plan_updated.
+    """Persiste o turno do planner (user + assistant) e o plano se atualizado.
 
     Usa `replace_plan_entries` (não `save_plan_proposal`) para preservar a cadência
     definida manualmente — o chat incremental não pode descartar weekdays/target_date.
-    Se a persistência da mensagem assistant falhar, o plano NÃO é salvo — o dono vê
-    o texto na tela, mas ao recarregar a conversa e o plano estão consistentes.
+    O turno é persistido numa única transação; se falhar, nada fica órfão (KUBO-204).
     """
-    try:
-        with client.connect_rw() as db:
-            study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                topic_id=topic_id,
-                phase="planning",
-                role="assistant",
-                content=reply.text,
-            )
-    except (ConfigError, StoreError):
-        _log.warning("study.planner_chat.persist_failed", topic=_log_key(key))
-        return False
+    with client.connect_rw() as db:
+        study_store.create_chat_turn(
+            db,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            topic_id=topic_id,
+            phase="planning",
+            user_content=message,
+            assistant_content=reply.text,
+        )
     if not reply.lessons:
         return False
     pair_to_id = {(sec.chapter_seq, sec.seq): sec.id for sec in sections}
@@ -1382,22 +1398,6 @@ def chat_with_planner(
         history = _planning_chat_history_of(db, ctx, topic.id)
         summaries = _material_summaries_of(db, ctx, topic.id)
 
-    # Persiste a mensagem do dono antes de chamar o planner.
-    try:
-        with client.connect_rw() as db:
-            study_store.create_chat_message(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                topic_id=topic.id,
-                phase="planning",
-                role="user",
-                content=message,
-            )
-    except (ConfigError, StoreError):
-        _log.warning("study.planner_chat.user_persist_failed", topic=_log_key(key))
-        return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
-
     planner, stream_executor = _planner(ctx)
 
     return EventSourceResponse(
@@ -1444,16 +1444,16 @@ def _planner_stream(
         ):
             chunks.append(chunk)
             yield {"event": "chunk", "data": chunk}
+        full = "".join(chunks)
+        reply = extract_planner_reply(full, sections)
+        if reply is None:
+            yield {"event": "error", "data": "Falha ao gerar resposta."}
+            return
+        plan_updated = _persist_planner_reply(ctx, topic.id, message, reply, sections, key)
     except (ExecutorError, StoreError, ConfigError) as exc:
         _log.warning("study.planner_chat.stream_failed", topic=_log_key(key), error=str(exc))
         yield {"event": "error", "data": "Falha ao gerar resposta."}
         return
-    full = "".join(chunks)
-    reply = extract_planner_reply(full, sections)
-    if reply is None:
-        yield {"event": "error", "data": "Falha ao gerar resposta."}
-        return
-    plan_updated = _persist_planner_reply(ctx, topic.id, reply, sections, key)
     yield {
         "event": "done",
         "data": json.dumps({"text": reply.text, "plan_updated": plan_updated}),
