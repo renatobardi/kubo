@@ -269,6 +269,30 @@ def test_runs_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
     assert "feed-a" not in html_b
 
 
+def test_dashboard_recent_runs_are_tenant_scoped(db: Any, test_client: TestClient) -> None:
+    """Sessão no tenant A só enxerga runs de A no Painel;
+    após switch para B, só a de B (KUBO-214)."""
+    _login(test_client)
+
+    tenant_a = tenancy.create_tenant(db, name="Dash Tenant A", owner_user_id=_BREAKGLASS_USER_ID)
+    tenant_b = tenancy.create_tenant(db, name="Dash Tenant B", owner_user_id=_BREAKGLASS_USER_ID)
+
+    from kubo.store.knowledge import start_run
+
+    start_run(scoped(db, tenant_id=tenant_a.id, user_id=_BREAKGLASS_USER_ID), worker="dash-a")
+    start_run(scoped(db, tenant_id=tenant_b.id, user_id=_BREAKGLASS_USER_ID), worker="dash-b")
+
+    _switch(test_client, tenant_a.id)
+    html_a = test_client.get("/").text
+    assert "dash-a" in html_a
+    assert "dash-b" not in html_a
+
+    _switch(test_client, tenant_b.id)
+    html_b = test_client.get("/").text
+    assert "dash-b" in html_b
+    assert "dash-a" not in html_b
+
+
 def test_dispatches_route_is_tenant_scoped(db: Any, test_client: TestClient) -> None:
     """Sessão no tenant A só enxerga dispatch de A; após switch para B, só a de B (KUBO-128)."""
     _login(test_client)

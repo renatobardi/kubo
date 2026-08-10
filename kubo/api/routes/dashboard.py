@@ -58,9 +58,8 @@ def _workspaces_for_session(
 def dashboard(request: Request) -> Response:
     """Home page: collection counts, latest runs, workspace switcher and invite card.
 
-    Filtra as contagens pelo tenant ativo da sessão (KUBO-126): superadmin lê
-    qualquer tenant, owner/member só o seu. `recent_runs` ainda é global (a tabela
-    `run` não tem `tenant_id` — KUBO-117 pendente)."""
+    Filtra as contagens e as últimas execuções pelo tenant ativo da sessão (KUBO-126,
+    KUBO-214): superadmin lê qualquer tenant, owner/member só o seu."""
     with client.connect() as db:
         ctx = resolve_session(request, db)
         if ctx is None:
@@ -69,7 +68,7 @@ def dashboard(request: Request) -> Response:
         session_factory = scoped_superadmin if is_superadmin else scoped
         session = session_factory(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         counts = knowledge.dashboard_counts(session)
-        runs = knowledge.recent_runs(db, limit=_RECENT_RUNS)
+        runs = knowledge.recent_runs(session, limit=_RECENT_RUNS)
         workspaces, current_tenant_id, role = _workspaces_for_session(request, db)
         # Superadmin pode acessar tenant sem membership — lesson_for_today chama
         # assert_membership, então omitimos o card nesse caso (CR1).
