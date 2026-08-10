@@ -18,6 +18,7 @@ from kubo.store import client, migrations, tenancy
 from kubo.store.scoped import scoped
 from kubo.store.study import (
     create_chat_message,
+    create_chat_turn,
     create_topic,
     list_chat_messages,
     set_topic_fields,
@@ -230,3 +231,28 @@ def test_set_topic_fields_rejects_archived(db: Any, tenant_id: RecordID, user_id
             focus="X",
             depth=None,
         )
+
+
+def test_create_chat_turn_persists_user_and_assistant_together(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """create_chat_turn cria user + assistant numa única transação."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    topic = create_topic(session, title="Tema")
+    user_msg, assistant_msg = create_chat_turn(
+        session,
+        topic_id=topic.id,
+        phase="draft",
+        user_content="Pergunta",
+        assistant_content="Resposta",
+    )
+
+    assert user_msg.role == "user"
+    assert user_msg.content == "Pergunta"
+    assert assistant_msg.role == "assistant"
+    assert assistant_msg.content == "Resposta"
+
+    messages = list_chat_messages(session, topic_id=topic.id, phase="draft")
+    assert len(messages) == 2
+    assert messages[0].role == "user"
+    assert messages[1].role == "assistant"

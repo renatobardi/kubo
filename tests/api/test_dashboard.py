@@ -140,15 +140,17 @@ def test_dashboard_today_lesson_card_present(
     assert "/study/topics/t1/lessons/l1" in html
 
 
-def test_dashboard_today_lesson_card_absent_when_none(
+def test_dashboard_today_lesson_empty_state_when_none(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Sem lesson_for_today (None), o card não aparece."""
+    """Sem lição agendada, o card mostra estado vazio honesto com link para temas."""
     monkeypatch.setattr(
         "kubo.api.routes.dashboard.study_store.lesson_for_today", lambda db, **kw: None
     )
     html = authed_client.get("/").text
-    assert "Lição de hoje" not in html
+    assert "Lição de hoje" in html
+    assert "Nenhuma lição agendada para hoje" in html
+    assert 'href="/study/topics"' in html
 
 
 def test_dashboard_today_lesson_card_placeholder(

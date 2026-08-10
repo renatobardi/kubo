@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -110,6 +111,9 @@ def stub_archive_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.client.connect", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic())
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_archived_topics", lambda db, **kw: []
@@ -397,8 +401,8 @@ def test_list_topics_shows_progress(
 ) -> None:
     """GET /topics mostra progresso (lições feitas/total) de cada tema."""
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_topics",
-        lambda db, **kw: [_topic(state="running")],
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        lambda db, **kw: ([_topic(state="running")], 1),
     )
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.get_topics_progress_batch",
@@ -413,9 +417,13 @@ def test_list_topics_shows_progress(
 
 def test_list_archived_topics(authed_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """GET /topics?filter=archived mostra só os arquivados."""
+
+    def _archived_paginated(db: Any, **kw: Any) -> tuple[list[Any], int]:
+        return ([_topic(state="archived")], 1) if kw.get("archived") else ([], 0)
+
     monkeypatch.setattr(
-        "kubo.api.routes.study.study_store.list_archived_topics",
-        lambda db, **kw: [_topic(state="archived")],
+        "kubo.api.routes.study.study_store.list_topics_paginated",
+        _archived_paginated,
     )
     html = authed_client.get("/study/topics?filter=archived").text
     assert "Estudo de Agentic Coding" in html

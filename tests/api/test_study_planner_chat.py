@@ -112,6 +112,9 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.client.connect", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic())
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.count_materials_by_topic", lambda db, **kw: 1
@@ -125,6 +128,10 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.tenancy.assert_membership", lambda db, **kw: None)
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.create_chat_message", lambda db, **kw: None
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.create_chat_turn",
+        lambda db, **kw: (None, None),
     )
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.save_plan_proposal",
@@ -266,28 +273,54 @@ def test_planner_chat_requires_csrf(authed_client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-def test_planner_chat_persists_assistant_message(
+def test_planner_chat_persists_user_and_assistant_together(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A resposta do planner é persistida como assistant message (phase=planning)."""
+    """O turno do planner (user + assistant) é persistido ao final do SSE."""
     persisted: list[dict[str, Any]] = []
 
-    def _capture_create(db: Any, **kw: Any) -> Any:
+    def _capture_turn(db: Any, **kw: Any) -> Any:
         persisted.append(kw)
-        return None
+        return (None, None)
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_message", _capture_create)
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_turn", _capture_turn)
     authed_client.post(
         "/study/topics/abc123/planner-chat",
         data={"csrf": _csrf(authed_client), "message": "junta"},
         follow_redirects=False,
     )
-    # Pelo menos 2 chamadas: user message + assistant message.
-    assert len(persisted) >= 2
-    assert persisted[0]["role"] == "user"
+    assert len(persisted) == 1
     assert persisted[0]["phase"] == "planning"
-    assert persisted[1]["role"] == "assistant"
-    assert persisted[1]["phase"] == "planning"
+    assert persisted[0]["user_content"] == "junta"
+    assert persisted[0]["assistant_content"] == "Juntei as lições 1 e 2."
+
+
+def test_planner_chat_stream_failure_does_not_persist_orphan(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Se o SSE do planner falha, nenhuma mensagem é persistida."""
+    from kubo.errors import ExecutorError
+
+    def _failing_stream(self: Any, executor: Any, **kw: Any) -> Any:
+        raise ExecutorError("planner indisponível")
+
+    monkeypatch.setattr("kubo.study.planner.Planner.stream_chat", _failing_stream)
+
+    calls: list[dict[str, Any]] = []
+
+    def _track_turn(db: Any, **kw: Any) -> Any:
+        calls.append(kw)
+        return (None, None)
+
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_turn", _track_turn)
+    resp = authed_client.post(
+        "/study/topics/abc123/planner-chat",
+        data={"csrf": _csrf(authed_client), "message": "junta"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert calls == []
 
 
 # --- POST /topics/{key}/back-to-draft ----------------------------------------------------

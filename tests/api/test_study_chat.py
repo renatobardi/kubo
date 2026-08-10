@@ -76,6 +76,9 @@ def stub_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.client.connect", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: _topic())
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.list_materials_by_topic",
@@ -89,6 +92,13 @@ def stub_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "kubo.api.routes.study.study_store.create_chat_message",
         lambda db, **kw: _chat_msg(kw.get("role", "user"), kw.get("content", "")),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.create_chat_turn",
+        lambda db, **kw: (
+            _chat_msg("user", kw.get("user_content", "")),
+            _chat_msg("assistant", kw.get("assistant_content", "")),
+        ),
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_fields", lambda db, **kw: None)
     monkeypatch.setattr(
@@ -135,28 +145,59 @@ def test_chat_returns_sse_stream(authed_client: TestClient) -> None:
     assert "data:" in body
 
 
-def test_chat_persists_user_and_assistant_messages(
+def test_chat_persists_turn_at_end(
     authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A rota persiste a mensagem do dono e a resposta do mentor."""
+    """A rota persiste o turno (user + assistant) somente ao final do SSE."""
     persisted: list[dict[str, Any]] = []
 
-    def _track_create(db: Any, **kw: Any) -> ChatMessage:
+    def _track_turn(db: Any, **kw: Any) -> tuple[ChatMessage, ChatMessage]:
         persisted.append(kw)
-        return _chat_msg(kw.get("role", "user"), kw.get("content", ""))
+        return (
+            _chat_msg("user", kw.get("user_content", "")),
+            _chat_msg("assistant", kw.get("assistant_content", "")),
+        )
 
-    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_message", _track_create)
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_turn", _track_turn)
 
     authed_client.post(
         "/study/topics/abc123/chat",
         data={"message": "Quero estudar agentes.", "csrf": _csrf(authed_client)},
     )
 
-    roles = [p["role"] for p in persisted]
-    assert "user" in roles
-    assert "assistant" in roles
-    user_msg = next(p for p in persisted if p["role"] == "user")
-    assert user_msg["content"] == "Quero estudar agentes."
+    assert len(persisted) == 1
+    assert persisted[0]["user_content"] == "Quero estudar agentes."
+    assert persisted[0]["assistant_content"] == "Olá! Posso ajudar."
+
+
+def test_chat_stream_failure_does_not_persist_orphan(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Se o SSE do mentor falha após chunks parciais, nenhum turno é persistido."""
+    from kubo.errors import ExecutorError
+
+    def _failing_stream(self: Any, **kw: Any) -> Any:
+        yield "Resposta parcial."
+        raise ExecutorError("mentor indisponível")
+
+    monkeypatch.setattr("kubo.api.routes.study.Mentor.stream_chat", _failing_stream)
+
+    turn_calls: list[dict[str, Any]] = []
+
+    def _track_turn(db: Any, **kw: Any) -> tuple[ChatMessage, ChatMessage]:
+        turn_calls.append(kw)
+        return _chat_msg("user", ""), _chat_msg("assistant", "")
+
+    monkeypatch.setattr("kubo.api.routes.study.study_store.create_chat_turn", _track_turn)
+
+    resp = authed_client.post(
+        "/study/topics/abc123/chat",
+        data={"message": "Quero estudar agentes.", "csrf": _csrf(authed_client)},
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert turn_calls == []
 
 
 def test_chat_requires_csrf(authed_client: TestClient) -> None:

@@ -680,6 +680,47 @@ def list_topics(session: ScopedStore) -> list[Topic]:
     return [_topic_from_row(row) for row in rows]
 
 
+def list_topics_paginated(
+    session: ScopedStore,
+    *,
+    archived: bool = False,
+    page: int = 1,
+    per_page: int = 20,
+) -> tuple[list[Topic], int]:
+    """Lista paginada de temas (ativos ou arquivados) ordenados por created_at DESC.
+
+    Retorna a página de `Topic`s e o total de registros para a aba ativa.
+    """
+    page = max(1, page)
+    per_page = max(1, min(per_page, _MAX_PAGE))
+    start = (page - 1) * per_page
+    # Dois caminhos literais (não variável local) para satisfazer o guard de SQL não-literal.
+    if archived:
+        count_rows = session.query(
+            f"SELECT count() FROM topic WHERE {_USER_SCOPE} "  # noqa: S608
+            "AND state = 'archived' GROUP ALL;"
+        )
+        rows = session.query(
+            f"SELECT * FROM topic WHERE {_USER_SCOPE} "  # noqa: S608
+            "AND state = 'archived' "
+            "ORDER BY created_at DESC LIMIT $limit START $start;",
+            {"limit": per_page, "start": start},
+        )
+    else:
+        count_rows = session.query(
+            f"SELECT count() FROM topic WHERE {_USER_SCOPE} "  # noqa: S608
+            "AND state != 'archived' GROUP ALL;"
+        )
+        rows = session.query(
+            f"SELECT * FROM topic WHERE {_USER_SCOPE} "  # noqa: S608
+            "AND state != 'archived' "
+            "ORDER BY created_at DESC LIMIT $limit START $start;",
+            {"limit": per_page, "start": start},
+        )
+    total = int(count_rows[0]["count"]) if count_rows else 0
+    return [_topic_from_row(row) for row in rows], total
+
+
 # --- Materiais dentro de um Tema (KUBO-162) ---------------------------------------------
 
 
@@ -800,6 +841,50 @@ def create_chat_message(
         raise StoreError("chat message vanished during creation")
     _log.info("store.chat.created", msg=str(msg_id), topic=str(topic_id), role=role)
     return _chat_from_row(rows[0])
+
+
+def create_chat_turn(
+    session: ScopedStore,
+    *,
+    topic_id: RecordID,
+    phase: str,
+    user_content: str,
+    assistant_content: str,
+) -> tuple[ChatMessage, ChatMessage]:
+    """Persiste um turno completo (user + assistant) numa única transação.
+
+    Falha em qualquer etapa cancela toda a transação, garantindo que nunca
+    fique um turno órfão no banco (KUBO-204).
+    """
+    user_msg_id = _fresh("study_chat")
+    assistant_msg_id = _fresh("study_chat")
+    transaction.run_transaction(
+        session,
+        [
+            "CREATE $user_msg SET tenant_id = $tenant_id, user_id = $user_id, topic = $topic, "
+            "phase = $phase, role = 'user', content = $user_content",
+            "CREATE $assistant_msg SET tenant_id = $tenant_id, user_id = $user_id, topic = $topic, "
+            "phase = $phase, role = 'assistant', content = $assistant_content",
+        ],
+        {
+            "user_msg": user_msg_id,
+            "assistant_msg": assistant_msg_id,
+            "topic": topic_id,
+            "phase": phase,
+            "user_content": user_content,
+            "assistant_content": assistant_content,
+        },
+    )
+    rows = session.query(
+        "SELECT * FROM study_chat WHERE (id = $user OR id = $assistant) "
+        "AND tenant_id = $tenant_id;",
+        {"user": user_msg_id, "assistant": assistant_msg_id},
+    )
+    if len(rows) != 2:
+        raise StoreError("chat turn vanished during creation")
+    # Ordem: user primeiro, assistant depois.
+    by_id = {str(r["id"]): _chat_from_row(r) for r in rows}
+    return by_id[str(user_msg_id)], by_id[str(assistant_msg_id)]
 
 
 def list_chat_messages(

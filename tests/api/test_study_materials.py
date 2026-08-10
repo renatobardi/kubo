@@ -61,6 +61,9 @@ def stub_study_material_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     monkeypatch.setattr("kubo.api.routes.study.client.connect_rw", _fake_connect)
     monkeypatch.setattr("kubo.api.routes.study.study_store.get_topic", lambda db, **kw: None)
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_topics_paginated", lambda db, **kw: ([], 0)
+    )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_topics", lambda db, **kw: [])
     monkeypatch.setattr("kubo.api.routes.study.study_store.create_topic", lambda db, **kw: _topic())
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_name", lambda db, **kw: None)
