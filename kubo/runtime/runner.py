@@ -138,7 +138,7 @@ def _persist(
     unresolved = 0
     for payload in payloads:
         if isinstance(payload, ItemPayload):
-            _persist_item(db, session, payload, run_id, tenant_id=tenant_id, user_id=user_id)
+            _persist_item(session, payload, run_id)
         elif isinstance(payload, DistilledPayload):
             unresolved += _persist_distilled(
                 session, payload, run_id, knowledge, tenant_id=tenant_id, user_id=user_id
@@ -166,13 +166,9 @@ def _persist(
 
 
 def _persist_item(
-    db: Any,
     session: ScopedStore,
     payload: ItemPayload,
     run_id: RecordID,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> None:
     """Persiste um ItemPayload: upserta a source (embutida inline) antes do item,
     grava a proveniência `item -[collected_by]-> run` (ADR-0008 §VI)."""
@@ -183,9 +179,7 @@ def _persist_item(
         title=payload.source.title,
     )
     upsert_item(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         source=source,
         external_id=payload.external_id,
         content=payload.content,

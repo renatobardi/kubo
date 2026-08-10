@@ -28,7 +28,6 @@ BASELINE_NOT_MIGRATED: frozenset[str] = frozenset(
         "client",
         "invites",
         "tenancy",
-        "transaction",
     }
 )
 
@@ -70,6 +69,14 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
             justification=(
                 "k/ef are bounded integers computed by the store, not user input; "
                 "the search vector goes via bind param"
+            ),
+        ),
+        AllowlistEntry(
+            module="transaction",
+            function="run_transaction",
+            justification=(
+                "surql is assembled from literal BEGIN/COMMIT and caller-supplied "
+                "statements; all variable content enters via bind params"
             ),
         ),
     }
@@ -417,6 +424,7 @@ MIGRATED: frozenset[str] = frozenset(
         "study",
         "team_invites",
         "tenant_credentials",
+        "transaction",
     }
 )
 
@@ -437,7 +445,7 @@ def test_baseline_only_shrinks() -> None:
 
 # Tetos de tamanho: a baseline só encolhe e a allowlist não vira bypass geral.
 # Ao migrar um módulo, BAIXE o teto da baseline junto.
-_BASELINE_MAX_SIZE = 4
+_BASELINE_MAX_SIZE = 3
 _ALLOWLIST_MAX_SIZE = 6
 
 

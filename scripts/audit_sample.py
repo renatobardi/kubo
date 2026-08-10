@@ -37,7 +37,7 @@ from typing import Any
 import structlog
 
 from kubo.store import client, knowledge, tenancy
-from kubo.store.scoped import scoped
+from kubo.store.scoped import PoolReader, scoped
 from scripts.backfill_chunks import language_guess
 
 _log = structlog.get_logger().bind(worker="audit_sample")
@@ -213,7 +213,7 @@ def main(
         contents = {
             str(i): content
             for i, _title, content in knowledge.items_by_ids(
-                db, [c.item_id for c in sample], tenant_id=tenant_id, user_id=user_id
+                PoolReader(db), [c.item_id for c in sample]
             )
         }
 

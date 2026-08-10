@@ -11,7 +11,7 @@ Conteúdo coletado é hostil: entra sempre por bind param, nunca interpolado.
 Funções tenant-scoped recebem `ScopedStore` (ADR-0053): a sessão carrega
 `(tenant_id, user_id)`, checa membership na criação e injeta `$tenant_id`/
 `$user_id` nos params de toda query. Funções que operam na tabela global `item`
-permanecem com `db: Any` (sem `tenant_id` no schema do `item`).
+recebem `PoolReader` (sem `tenant_id` no schema do `item`).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from kubo.errors import (
     StoreError,
 )
 from kubo.store import tenancy
-from kubo.store.scoped import ScopedStore
+from kubo.store.scoped import PoolReader, ScopedStore
 from kubo.store.transaction import run_transaction
 
 _log = structlog.get_logger(__name__)
@@ -299,10 +299,8 @@ def _resolve_published_at(published_at: datetime | None) -> datetime:
 
 
 def upsert_item(
-    db: Any,
+    session: ScopedStore,
     *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
     source: RecordID,
     external_id: str,
     content: str,
@@ -324,13 +322,10 @@ def upsert_item(
     RELATE na MESMA transação, como `from_source`). Um upsert SEM run não toca a aresta
     — não pode apagar a proveniência de uma coleta anterior nem inventar uma agora.
 
-    Fica com `db: Any` (não `ScopedStore`): a tabela `item` é global (sem `tenant_id`
-    no schema, KUBO-123) e `tenant_id`/`user_id` são opcionais — apenas validam
-    membership quando fornecidos."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
+    `ScopedStore`: a source é tenant-scoped e a criação do item exige membership."""
     rid = _rid("item", f"{source}|{external_id}")
     run_transaction(
-        db,
+        session,
         [
             "UPSERT $r SET external_id = $external_id, content = $content, "
             "url = $url, title = $title, metadata = $metadata, published_at = $published_at",
@@ -1356,16 +1351,14 @@ def delete_source(session: ScopedStore, *, id: RecordID) -> None:
         raise StaleSourceError(f"fonte inexistente: {id}")
 
 
-def item_index(
-    db: Any, *, tenant_id: RecordID | None = None, user_id: RecordID | None = None
-) -> dict[str, RecordID]:
+def item_index(reader: PoolReader) -> dict[str, RecordID]:
     """Mapa `external_id -> item` de todos os itens numa leitura.
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `item` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    A tabela `item` é global (sem `tenant_id` no schema, KUBO-123), logo nenhum
+    filtro de tenant é aplicado e nenhuma checagem de membership é necessária.
 
-    Fica com `db: Any` (não `ScopedStore`): `tenant_id`/`user_id` são opcionais e a
-    tabela `item` é global (sem `tenant_id` no schema, KUBO-123).
+    `PoolReader` (não `ScopedStore`) é o caminho de leitura do pool (ADR-0053 §8),
+    distinguível por tipo.
 
     O import resolve `derived_from` (distilled -> item pela chave natural do legado)
     e detecta itens já presentes por aqui — sem 1 query por linha nem SELECT de `item`
@@ -1373,9 +1366,8 @@ def item_index(
     esperada (é parte da chave natural do item) e ligaria uma destilação ao item
     errado — então é LOGADA (warning), não descartada em silêncio; a 1ª ocorrência
     vence (escolha determinística: a query ordena por id)."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     index: dict[str, RecordID] = {}
-    for r in db.query("SELECT external_id, id FROM item ORDER BY id;"):
+    for r in reader.query("SELECT external_id, id FROM item ORDER BY id;"):
         ext = r.get("external_id")
         if not ext:
             continue
@@ -1585,28 +1577,22 @@ _MAX_AUDIT_SCAN = 10000
 
 
 def items_by_ids(
-    db: Any,
-    ids: Sequence[RecordID],
-    *,
-    tenant_id: RecordID | None = None,
-    user_id: RecordID | None = None,
+    reader: PoolReader, ids: Sequence[RecordID]
 ) -> list[tuple[RecordID, str | None, str]]:
     """Lê `(item_id, title, content)` dos itens em `ids` — read-only (invariante 2).
 
-    `tenant_id`/`user_id` são opcionais: quando fornecidos, membership é verificado.
-    A tabela `item` é global, logo nenhum filtro de tenant é aplicado (KUBO-123).
+    A tabela `item` é global (sem `tenant_id` no schema, KUBO-123), logo nenhum
+    filtro de tenant é aplicado e nenhuma checagem de membership é necessária.
 
-    Fica com `db: Any` (não `ScopedStore`): `tenant_id`/`user_id` são opcionais e a
-    tabela `item` é global (sem `tenant_id` no schema, KUBO-123).
+    `PoolReader` (não `ScopedStore`) é o caminho de leitura do pool (ADR-0053 §8).
 
     Serve o piloto do dreno (0014 B2): reenviar os MESMOS itens da amostra ao modelo
     candidato exige o content bruto por id, que os reads de proveniência não expõem.
     `ids` vazio devolve [] sem tocar o banco; id inexistente simplesmente não volta
     (sem erro). Ordem por id (determinística); o chamador correlaciona por id."""
-    tenancy.assert_membership_if_given(db, user_id=user_id, tenant_id=tenant_id)
     if not ids:
         return []
-    rows = db.query(
+    rows = reader.query(
         "SELECT id, title, content FROM item WHERE id IN $ids ORDER BY id;",
         {"ids": list(ids)},
     )

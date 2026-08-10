@@ -9,13 +9,16 @@ levanta `StoreError` (a transação já reverteu no servidor).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kubo.errors import StoreError
 
+if TYPE_CHECKING:
+    from kubo.store.scoped import ScopedStore
+
 
 def run_transaction(
-    db: Any,
+    session: ScopedStore,
     statements: list[str],
     params: dict[str, Any] | None = None,
 ) -> None:
@@ -37,7 +40,7 @@ def run_transaction(
     structlog.get_logger("kubo.store.transaction").info(
         "run_transaction.surql", surql=surql, params=params
     )
-    raw = db.query_raw(surql, params or {})  # noqa: S608 (surql montado só de literais + bind params)
+    raw = session.query_raw(surql, params or {})  # noqa: S608 (surql montado só de literais + bind params)
     structlog.get_logger("kubo.store.transaction").info("run_transaction.raw", raw=raw)
     failed = [r for r in raw["result"] if r.get("status") == "ERR"]
     if failed:
