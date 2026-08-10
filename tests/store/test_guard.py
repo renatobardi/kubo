@@ -11,6 +11,7 @@ PR2 (KUBO-212): catalog.py migra; a baseline encolhe de um módulo.
 
 from __future__ import annotations
 
+import ast
 import textwrap
 from pathlib import Path
 
@@ -23,13 +24,7 @@ from kubo.store.guard import (
 
 # Módulos da store que ainda NÃO foram migrados para ScopedStore.
 # Só encolhe — quando um módulo migra, sai daqui e entra no escopo do guard.
-BASELINE_NOT_MIGRATED: frozenset[str] = frozenset(
-    {
-        "client",
-        "invites",
-        "tenancy",
-    }
-)
+BASELINE_NOT_MIGRATED: frozenset[str] = frozenset()
 
 # Allowlist de SQL não-literal justificado para módulos já migrados.
 # Cada entrada é nominal: módulo + função + justificativa.
@@ -79,12 +74,23 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
                 "statements; all variable content enters via bind params"
             ),
         ),
+        AllowlistEntry(
+            module="transaction",
+            function="run_global_transaction",
+            justification=(
+                "surql is assembled from literal BEGIN/COMMIT and caller-supplied "
+                "statements for global (non-tenant-scoped) tables; "
+                "all variable content enters via bind params"
+            ),
+        ),
     }
 )
 
 # Módulos que não têm queries tenant-scoped (infraestrutura, não migráveis).
 # `scoped` é o wrapper; `guard` é o scanner do próprio guard.
-_EXEMPT: frozenset[str] = frozenset({"scoped", "guard"})
+# `client`, `tenancy` e `invites` operam tabelas globais (user/tenant/membership/invite)
+# e usam `DbReader`/`run_global_transaction` sem escopo de tenant (ADR-0053 §5).
+_EXEMPT: frozenset[str] = frozenset({"client", "guard", "invites", "scoped", "tenancy"})
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +451,8 @@ def test_baseline_only_shrinks() -> None:
 
 # Tetos de tamanho: a baseline só encolhe e a allowlist não vira bypass geral.
 # Ao migrar um módulo, BAIXE o teto da baseline junto.
-_BASELINE_MAX_SIZE = 3
-_ALLOWLIST_MAX_SIZE = 6
+_BASELINE_MAX_SIZE = 0
+_ALLOWLIST_MAX_SIZE = 7
 
 
 def test_baseline_size_does_not_grow() -> None:
@@ -481,4 +487,31 @@ def test_guard_migrated_modules_pass() -> None:
 
     assert not all_violations, "Guard violations in migrated modules:\n" + "\n".join(
         f"  {mod}:{v.lineno} [{v.kind}] {v.message}" for mod, v in all_violations
+    )
+
+
+def test_migrated_modules_do_not_expose_db_any() -> None:
+    """A API pública dos módulos migrados não aceita `db: Any` (ADR-0053 §7/§68).
+
+    O tipo `Any` como parâmetro de conexão deixa de ser o shape do bypass;
+    `DbReader`, `DbConnection`, `ScopedStore` e `PoolReader` carregam a
+    garantia no tipo.
+    """
+    bad: list[tuple[str, int, str]] = []
+    for mod_name in sorted(MIGRATED | _EXEMPT):
+        path = STORE_DIR / f"{mod_name}.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name.startswith("_") and node.name != "__init__":
+                continue
+            for arg in node.args.args + node.args.kwonlyargs:
+                if arg.arg == "db" and arg.annotation is not None:
+                    ann = ast.unparse(arg.annotation)
+                    if "Any" in ann:
+                        bad.append((mod_name, node.lineno, node.name))
+    assert not bad, "Public store API must not use `db: Any`:\n" + "\n".join(
+        f"  {mod}:{line} {func}" for mod, line, func in bad
     )

@@ -11,12 +11,32 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, cast
 from urllib.parse import urlparse
 
 from surrealdb import Surreal
 
 from kubo.errors import ConfigError
+
+
+class DbReader(Protocol):
+    """Protocolo mínimo de leitura/escrita da store sem gerenciamento de tenant.
+
+    Usado por funções globais (`settings`, `seed`, `migrations`) e pelos
+    wrappers `ScopedStore`/`PoolReader` (ADR-0053 §7/§8)."""
+
+    def query(self, sql: str, params: dict[str, Any] | None = None) -> Any: ...
+    def query_raw(self, sql: str, params: dict[str, Any] | None = None) -> Any: ...
+
+
+class DbConnection(DbReader, Protocol):
+    """Conexão bruta do SDK com namespace/database selecionáveis.
+
+    Esconde o tipo concreto (ws/http/embedded) e dá um nome próprio ao
+    caminho pool/admin (ADR-0053 §5)."""
+
+    def use(self, namespace: str, database: str) -> None: ...
+
 
 _DEFAULT_URL = "ws://127.0.0.1:8000/rpc"
 # Usuário de ESCRITA da UI (ROOT-level EDITOR). Nome fixo (não é segredo); a senha vem por
@@ -89,12 +109,12 @@ def config() -> Config:
 
 
 @contextmanager
-def connect(cfg: Config | None = None) -> Generator[Any, None, None]:
+def connect(cfg: Config | None = None) -> Generator[DbConnection, None, None]:
     """Abre uma conexão autenticada e com ns/db selecionados; fecha ao sair.
 
-    `Any` no yield é deliberado: o tipo concreto do SDK varia por scheme de URL
-    (ws/http/embedded) e sua API de query é dinâmica. A store encapsula esse
-    acesso — nenhum consumidor fora de `kubo/store/` toca a conexão crua.
+    O tipo concreto do SDK varia por scheme de URL (ws/http/embedded). A store
+    usa o protocolo `DbConnection` — nenhum consumidor fora de `kubo/store/`
+    toca a conexão crua.
     """
     cfg = cfg or config()
     db = Surreal(cfg.url)
@@ -103,7 +123,7 @@ def connect(cfg: Config | None = None) -> Generator[Any, None, None]:
     try:
         db.signin({"username": cfg.user, "password": cfg.password})
         db.use(cfg.namespace, cfg.database)
-        yield db
+        yield cast(DbConnection, db)
     finally:
         db.close()
 
@@ -131,7 +151,7 @@ def rw_config() -> Config:
 
 
 @contextmanager
-def connect_rw() -> Generator[Any, None, None]:
+def connect_rw() -> Generator[DbConnection, None, None]:
     """Conexão de ESCRITA por-request (kubo_rw, EDITOR). Mesma forma de signin do root/kubo_ro
     (Path A — zero branch no caminho de conexão). Chamada EXCLUSIVAMENTE dentro dos handlers
     POST de escrita da UI (as 2 ações do D38), nunca em app state (ADR-0018 §I)."""

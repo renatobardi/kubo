@@ -23,7 +23,7 @@ _RECENT_RUNS = 10
 
 
 def _workspaces_for_session(
-    request: Request, db: object
+    request: Request, db: client.DbConnection
 ) -> tuple[list[dict[str, object]], str, str]:
     """Build workspace list, current tenant id and role for the current session."""
     uid = request.session.get("uid")

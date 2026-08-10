@@ -13,7 +13,7 @@ import secrets
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from surrealdb import RecordID
@@ -69,17 +69,18 @@ def db() -> Iterator[Any]:
     `conn.user_id` para os testes passarem pelo membership (KUBO-123)."""
     cfg = replace(client.config(), database=_FLOWS_DB)
     with client.connect(cfg) as conn:
-        conn.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
-        conn.use(cfg.namespace, cfg.database)
+        conn_any = cast(Any, conn)
+        conn_any.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
+        conn_any.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(conn)
         user = tenancy.create_user(
             conn, firebase_uid=f"test-{secrets.token_hex(8)}", email="test@example.com"
         )
         tenant = tenancy.create_tenant(conn, name="Test Tenant", owner_user_id=user.id)
-        conn.tenant_id = tenant.id
-        conn.user_id = user.id
-        yield conn
-        conn.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
+        conn_any.tenant_id = tenant.id
+        conn_any.user_id = user.id
+        yield conn_any
+        conn_any.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
 
 
 _PERSONAS = load_personas_from_dir(Path(__file__).parents[2] / "catalogs" / "personas")

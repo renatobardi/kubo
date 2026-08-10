@@ -15,7 +15,6 @@ Para executar no ambiente de produção:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import structlog
 
@@ -155,7 +154,7 @@ FEEDS: list[FeedSeed] = [
 ]
 
 
-def seed_extra_rss_sources(db: Any) -> int:
+def seed_extra_rss_sources(db: client.DbConnection) -> int:
     """Semeia os feeds adicionais como Cadastros rss ativos.
 
     Idempotente por (tenant_id, kind, canonical) e não-destrutivo: títulos/tags/pausa do

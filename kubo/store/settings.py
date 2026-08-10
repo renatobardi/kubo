@@ -14,6 +14,7 @@ from typing import Any
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
+from kubo.store import client
 from kubo.store import destinations as destination_store
 from kubo.store.scoped import ScopedStore
 from kubo.store.transaction import run_transaction
@@ -54,7 +55,7 @@ def _settings_from_row(row: dict[str, Any]) -> Settings:
     )
 
 
-def get_settings(db: Any) -> Settings | None:
+def get_settings(db: client.DbReader) -> Settings | None:
     """Lê o singleton `settings:global`, ou `None` se ainda não existe.
 
     O singleton é global (não tenant-scoped) — lido por id fixo, sem filtro de tenant.
@@ -64,7 +65,7 @@ def get_settings(db: Any) -> Settings | None:
 
 
 def put_settings(
-    db: Any,
+    db: client.DbReader,
     *,
     digest_cron: str,
     distribution_paused: bool,

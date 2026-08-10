@@ -53,7 +53,13 @@ def ro_env() -> Iterator[tuple[Any, Any, RecordID, RecordID]]:
             canonical="https://x/feed",
             title="Feed",
         )
-        item = knowledge.upsert_item(root, source=src, external_id="e1", content="c", title="Post")
+        item = knowledge.upsert_item(
+            scoped(root, tenant_id=tenant.id, user_id=user.id),
+            source=src,
+            external_id="e1",
+            content="c",
+            title="Post",
+        )
         ent = knowledge.get_or_create_entity(
             scoped(root, tenant_id=tenant.id, user_id=user.id), name="Python", kind="tecnologia"
         )

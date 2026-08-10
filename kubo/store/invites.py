@@ -19,7 +19,7 @@ from kubo.errors import (
     StaleInviteError,
     StoreError,
 )
-from kubo.store import transaction
+from kubo.store import client, transaction
 from kubo.store.destinations import normalize_address
 
 
@@ -78,7 +78,7 @@ def _invite_from_row(row: dict[str, Any]) -> Invite:
     )
 
 
-def create_invite(db: Any, *, name: str, email: str | None = None) -> Invite:
+def create_invite(db: client.DbReader, *, name: str, email: str | None = None) -> Invite:
     """Cria um convite com token único e TTL de 7 dias.
 
     `email` é opcional: quando ausente, a entrega cai no link copiável.
@@ -101,13 +101,13 @@ def create_invite(db: Any, *, name: str, email: str | None = None) -> Invite:
     return invite
 
 
-def get_invite(db: Any, id: RecordID) -> Invite | None:
+def get_invite(db: client.DbReader, id: RecordID) -> Invite | None:
     """Lê um convite pelo id."""
     rows = db.query("SELECT * FROM $r;", {"r": id})
     return _invite_from_row(rows[0]) if rows else None
 
 
-def get_invite_by_token(db: Any, token: str) -> Invite | None:
+def get_invite_by_token(db: client.DbReader, token: str) -> Invite | None:
     """Busca um convite pelo token único."""
     rows = db.query(
         "SELECT * FROM invite WHERE token = $invite_token LIMIT 1;",
@@ -116,13 +116,13 @@ def get_invite_by_token(db: Any, token: str) -> Invite | None:
     return _invite_from_row(rows[0]) if rows else None
 
 
-def list_invites(db: Any) -> list[Invite]:
+def list_invites(db: client.DbReader) -> list[Invite]:
     """Lista todos os convites, do mais recente para o mais antigo."""
     rows = db.query("SELECT * FROM invite ORDER BY created_at DESC;")
     return [_invite_from_row(r) for r in rows]
 
 
-def resend_invite(db: Any, id: RecordID) -> Invite:
+def resend_invite(db: client.DbReader, id: RecordID) -> Invite:
     """Reenvia um convite expirado: gera token novo e reconta o TTL de 7 dias.
 
     Rejeita convites pendentes ou já aceitos (`InviteNotResendableError`).
@@ -138,7 +138,7 @@ def resend_invite(db: Any, id: RecordID) -> Invite:
     return _invite_from_row(rows[0])
 
 
-def accept_invite(db: Any, *, invite_id: RecordID, chat_id: str) -> RecordID:
+def accept_invite(db: client.DbReader, *, invite_id: RecordID, chat_id: str) -> RecordID:
     """Aceita um convite pendente/não-expirado e cria o destination Telegram.
 
     A operação é atômica: verifica `UNIQUE(channel, address)` ANTES de marcar
@@ -160,7 +160,7 @@ def accept_invite(db: Any, *, invite_id: RecordID, chat_id: str) -> RecordID:
         "address = $address, enabled = true, archived_at = NONE",
     ]
     try:
-        transaction.run_transaction(
+        transaction.run_global_transaction(
             db,
             statements,
             {

@@ -217,6 +217,9 @@ class _SpyDb:
         self.calls.append((sql, params))
         return {"result": []}
 
+    def use(self, namespace: str, database: str) -> None:
+        pass
+
 
 def test_scoped_store_injection_overrides_caller_params() -> None:
     """tenant_id/user_id do caller NUNCA vencem os da sessão (segurança)."""

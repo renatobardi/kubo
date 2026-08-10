@@ -12,10 +12,12 @@ from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
+from surrealdb import RecordID
 
 from kubo.api.app import create_app
 from kubo.store import client, destinations, invites, migrations
 from kubo.store.client import connect as _real_connect
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -114,8 +116,24 @@ def test_webhook_duplicate_chat_id_returns_200(app_db: Any) -> None:
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.use(root_cfg.namespace, root_cfg.database)
+        # cria user/tenant na mão para não depender dos stubs de conftest
+        user_id = RecordID("user", secrets.token_hex(16))
+        tenant_id = RecordID("tenant", secrets.token_hex(16))
+        root.query(
+            "CREATE $u SET firebase_uid = $uid, email = $email, created_at = time::now();",
+            {"u": user_id, "uid": "telegram-webhook-test", "email": "t@kubo.local"},
+        )
+        root.query(
+            "CREATE $t SET name = $name, created_at = time::now();",
+            {"t": tenant_id, "name": "Webhook Test"},
+        )
+        root.query(
+            "RELATE $u->membership->$t SET role = 'owner', created_at = time::now();",
+            {"u": user_id, "t": tenant_id},
+        )
+        session = scoped(root, tenant_id=tenant_id, user_id=user_id)
         destinations.create_destination(
-            root, name="Dono", kind="pessoa", channel="telegram", address="123456"
+            session, name="Dono", kind="pessoa", channel="telegram", address="123456"
         )
         invite = invites.create_invite(root, name="Marina")
 
