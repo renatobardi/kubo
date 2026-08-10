@@ -476,12 +476,16 @@ def topic_detail(request: Request, key: str) -> Response:
             else (None, [])
         )
         # Mapa section_id → título para exibir nomes legíveis no plano (KUBO-185).
+        # KUBO-205: em scheduled/running o plano está congelado — usa versão
+        # light (_collect_section_titles) que não carrega content/summary.
         section_titles: dict[str, str] = {}
         lessons: list[study_store.Lesson] = []
         logs: dict[str, study_store.StudyLog] = {}
-        if topic.state in ("planning", "scheduled", "running"):
+        if topic.state == "planning":
             for sec in _collect_all_sections(session, topic.id):
                 section_titles[str(sec.id)] = f"{sec.chapter_seq}.{sec.seq} {sec.title}"
+        elif topic.state in ("scheduled", "running"):
+            section_titles = _collect_section_titles(session, topic.id)
         if topic.state in ("scheduled", "running") and plan is not None:
             lessons = study_store.list_lessons_for_plan(session, plan_id=plan.id)
             logs = study_store.list_study_logs_for_plan(session, plan_id=plan.id)
@@ -1114,6 +1118,29 @@ def _collect_all_sections(
                 dc_replace(sec, chapter_seq=ch_id_to_global.get(str(sec.material_chapter), 0))
             )
     return all_sections
+
+
+def _collect_section_titles(session: ScopedStore, topic_id: RecordID) -> dict[str, str]:
+    """Mapa section_id → "chapter_seq.seq title" para exibição no plano (KUBO-205).
+
+    Versão light de _collect_all_sections: em scheduled/running o plano está
+    congelado e só precisamos dos títulos legíveis das seções, não dos objetos
+    MaterialSection completos. Evita carregar anchor_text/summary/content.
+    """
+    titles: dict[str, str] = {}
+    materials = study_store.list_materials_by_topic(session, topic_id=topic_id)
+    global_ch_seq = 0
+    for material in materials:
+        chapters = study_store.list_all_chapters_light(session, material_id=material.id)
+        ch_id_to_global: dict[str, int] = {}
+        for ch in chapters:
+            global_ch_seq += 1
+            ch_id_to_global[str(ch.id)] = global_ch_seq
+        sections = study_store.list_all_sections_light(session, material_id=material.id)
+        for sec in sections:
+            ch_seq = ch_id_to_global.get(str(sec.material_chapter), 0)
+            titles[str(sec.id)] = f"{ch_seq}.{sec.seq} {sec.title}"
+    return titles
 
 
 def _mentor_transcript_of(session: ScopedStore, topic_id: RecordID) -> str:

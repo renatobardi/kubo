@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -356,6 +357,111 @@ def test_topic_detail_planning_sr_only_inside_main(
 
 
 # --- Editar nome do Tema -----------------------------------------------------------------
+
+
+def test_topic_detail_running_skips_full_section_load(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-205: topic_detail em running não carrega conteúdo de seção.
+
+    Em running o plano está congelado — só precisamos dos títulos das seções
+    para o mapa section_titles, não do content/summary pesado. A rota deve
+    chamar _collect_section_titles (light), não _collect_all_sections (full).
+    """
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="running"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_for_topic",
+        lambda db, **kw: (
+            StudyPlan(
+                id=RecordID("study_plan", "p1"),
+                tenant_id=_TENANT,
+                user_id=_USER,
+                topic=RecordID("topic", "abc123"),
+                status="active",
+                weekdays=["mon"],
+                target_date=None,
+                activated_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+                created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_lessons_for_plan", lambda db, **kw: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_study_logs_for_plan", lambda db, **kw: {}
+    )
+
+    full_calls: list[Any] = []
+    light_calls: list[Any] = []
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study._collect_all_sections",
+        lambda session, topic_id: full_calls.append(topic_id) or [],
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study._collect_section_titles",
+        lambda session, topic_id: light_calls.append(topic_id) or [],
+    )
+
+    authed_client.get("/study/topics/abc123")
+
+    assert full_calls == [], "running não deve chamar _collect_all_sections (carrega content)"
+    assert len(light_calls) == 1, "running deve chamar _collect_section_titles (light)"
+
+
+def test_topic_detail_planning_still_loads_full_sections(
+    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KUBO-205: planning ainda carrega seções completas (planner precisa do content)."""
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_topic",
+        lambda db, **kw: _topic(state="planning"),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.get_plan_for_topic",
+        lambda db, **kw: (
+            StudyPlan(
+                id=RecordID("study_plan", "p1"),
+                tenant_id=_TENANT,
+                user_id=_USER,
+                topic=RecordID("topic", "abc123"),
+                status="proposed",
+                weekdays=[],
+                target_date=None,
+                activated_at=None,
+                created_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_lessons_for_plan", lambda db, **kw: []
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.study_store.list_study_logs_for_plan", lambda db, **kw: {}
+    )
+
+    full_calls: list[Any] = []
+    light_calls: list[Any] = []
+
+    monkeypatch.setattr(
+        "kubo.api.routes.study._collect_all_sections",
+        lambda session, topic_id: full_calls.append(topic_id) or [],
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study._collect_section_titles",
+        lambda session, topic_id: light_calls.append(topic_id) or [],
+    )
+
+    authed_client.get("/study/topics/abc123")
+
+    assert len(full_calls) == 1, "planning deve chamar _collect_all_sections (planner precisa)"
+    assert light_calls == [], "planning não deve chamar _collect_section_titles"
 
 
 def test_rename_topic_requires_csrf(authed_client: TestClient) -> None:
