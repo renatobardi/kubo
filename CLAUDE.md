@@ -70,10 +70,12 @@ Conexão vem só de env (invariante 8): `SURREAL_URL` (default `ws://127.0.0.1:8
 
 O par **SDK `surrealdb==2.0.0` ↔ server `v3.1.5`** é pinado por evidência (ADR-0005) e sobe junto: bump de um exige revalidar o outro.
 
-**Deploy DEV** (kubo-test, ADR-0011): use SEMPRE o script — nunca dite os passos manuais de rsync/build/up numa sessão.
-```bash
-./scripts/deploy.sh   # deploy DEV no kubo-test: rsync + build + migrations + up + smoke /healthz (falha se não-ok)
-```
+**Deploy via CI/CD — OBRIGATÓRIO (DEV e PRD)**
+
+- **DEV (`kubo-test`)** e **PRD (`kubo-prd` / OCI)**: deploy SEMPRE via CI/CD. O pipeline builda a imagem no GitHub Actions, publica no GHCR e o `deploy-remote.sh` aplica por **digest** (`deploy-remote.sh <sha256>`) no ambiente alvo.
+- **NUNCA fazer build local na máquina de desenvolvimento, no `kubo-test`, no `oute-server` ou dentro do LXC `kubo-prd` para deploy.** Build local é aceitável apenas para teste local (`docker compose up`) com o perfil de desenvolvimento, nunca para promover para DEV/PRD.
+- Enquanto a esteira CI/CD não estiver ativa (`KUBO-99..KUBO-103`), **não fazer deploy em DEV/PRD sem autorização explícita do dono**. A exceção é manutenção de emergência documentada, e ainda assim sem build local no ambiente de destino.
+- Scripts `scripts/ops/` podem validar ambiente, aplicar `.env` ou rodar smoke, mas **não** devem executar `docker compose build`, `docker build` ou `deploy-remote.sh --build-id` em `kubo-test`/`kubo-prd`.
 
 ## Estrutura do repositório
 
@@ -159,7 +161,7 @@ Ordem de execução local e no CI (falhou, parou):
 - **Entrada externa é hostil por padrão:** todo conteúdo coletado (RSS, HTML, transcrição) é dado não-confiável — validado com pydantic nas bordas, sanitizado antes de virar prompt (prompt injection em conteúdo coletado é ameaça de primeira classe neste projeto: agentes leem o que os workers coletam).
 - **Código gerado por agente** (fase 4): além do gate humano (invariante 5), roda os mesmos gates de qualidade + validação de contrato antes do PR sequer ser aberto.
 - **Superfície de rede (OCI):** serviços do compose não expõem portas além do necessário; SurrealDB nunca exposto fora da VCN — sem regra de ingress na security list/NSG para ele; API com auth mesmo sendo pessoal, exposta apenas pelas portas explicitamente liberadas na security list da OCI.
-- **Deploy DEV (fase 1 — oute-server, ADR-0011):** a fase 1 roda num container LXC (`kubo-test`, `10.173.117.18`) no `oute-server` com Docker aninhado, **não** direto na OCI. É **Tailscale-only**: a fronteira de segurança é o bind no IP Tailscale (`100.66.254.24`), **não** o firewall (a faixa DEV 3000-3999 é pública) — logo nada escuta em `0.0.0.0`. Alocação de portas no `PORTS.md` do host (Kubo: 3900 DEV, 2900 PRD reservada). Operação, setup do ambiente (IP estático, DNS do dockerd, AppArmor via `dpkg-divert`) e restore: `docs/runbook-deploy.md`. PRD (OCI) permanece a produção-alvo (direção não-normativa no ADR-0011).
+- **Deploy DEV/PRD:** via CI/CD e imagem publicada no GHCR. Build local é só para teste local. Ver regra obrigatória na seção "Deploy via CI/CD".
 - **Permissões de persona** (YAML) são o mecanismo de least-privilege: worker/persona só acessa as integrações declaradas. O loader valida e o runtime nega o resto.
 
 ## Orquestração de modelos (premissa do projeto)
