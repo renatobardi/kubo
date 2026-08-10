@@ -76,11 +76,10 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
         ),
         AllowlistEntry(
             module="transaction",
-            function="run_global_transaction",
+            function="_execute_transaction",
             justification=(
                 "surql is assembled from literal BEGIN/COMMIT and caller-supplied "
-                "statements for global (non-tenant-scoped) tables; "
-                "all variable content enters via bind params"
+                "statements; all variable content enters via bind params"
             ),
         ),
     }
@@ -88,9 +87,9 @@ _ALLOWLIST: frozenset[AllowlistEntry] = frozenset(
 
 # Módulos que não têm queries tenant-scoped (infraestrutura, não migráveis).
 # `scoped` é o wrapper; `guard` é o scanner do próprio guard.
-# `client`, `tenancy` e `invites` operam tabelas globais (user/tenant/membership/invite)
-# e usam `DbReader`/`run_global_transaction` sem escopo de tenant (ADR-0053 §5).
-_EXEMPT: frozenset[str] = frozenset({"client", "guard", "invites", "scoped", "tenancy"})
+# `client` e `tenancy` operam tabelas globais (user/tenant/membership/user_profile).
+# `invites` migrou para tenant-scoped e está em `MIGRATED`.
+_EXEMPT: frozenset[str] = frozenset({"client", "guard", "scoped", "tenancy"})
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +422,7 @@ MIGRATED: frozenset[str] = frozenset(
         "catalog",
         "destinations",
         "flows",
+        "invites",
         "knowledge",
         "seed",
         "seed_extra_rss",
@@ -491,13 +491,13 @@ def test_guard_migrated_modules_pass() -> None:
 
 
 def test_migrated_modules_do_not_expose_db_any() -> None:
-    """A API pública dos módulos migrados não aceita `db: Any` (ADR-0053 §7/§68).
+    """A API pública dos módulos migrados não aceita conexão sem tipo (ADR-0053 §3/§7).
 
-    O tipo `Any` como parâmetro de conexão deixa de ser o shape do bypass;
-    `DbReader`, `DbConnection`, `ScopedStore` e `PoolReader` carregam a
+    O tipo `Any`/`Unknown` como parâmetro de conexão deixa de ser o shape do bypass;
+    `UnscopedDb`, `DbConnection`, `ScopedStore` e `PoolReader` carregam a
     garantia no tipo.
     """
-    bad: list[tuple[str, int, str]] = []
+    bad: list[tuple[str, int, str, str]] = []
     for mod_name in sorted(MIGRATED | _EXEMPT):
         path = STORE_DIR / f"{mod_name}.py"
         source = path.read_text(encoding="utf-8")
@@ -507,11 +507,16 @@ def test_migrated_modules_do_not_expose_db_any() -> None:
                 continue
             if node.name.startswith("_") and node.name != "__init__":
                 continue
-            for arg in node.args.args + node.args.kwonlyargs:
-                if arg.arg == "db" and arg.annotation is not None:
-                    ann = ast.unparse(arg.annotation)
-                    if "Any" in ann:
-                        bad.append((mod_name, node.lineno, node.name))
-    assert not bad, "Public store API must not use `db: Any`:\n" + "\n".join(
-        f"  {mod}:{line} {func}" for mod, line, func in bad
+            all_args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            for arg in all_args:
+                if arg.arg not in ("db", "conn", "database", "session"):
+                    continue
+                if arg.annotation is None:
+                    bad.append((mod_name, node.lineno, node.name, f"{arg.arg}: untyped"))
+                    continue
+                ann = ast.unparse(arg.annotation)
+                if "Any" in ann:
+                    bad.append((mod_name, node.lineno, node.name, f"{arg.arg}: {ann}"))
+    assert not bad, "Public store API must not use untyped/Any connection:\n" + "\n".join(
+        f"  {mod}:{line} {func} ({reason})" for mod, line, func, reason in bad
     )

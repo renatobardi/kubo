@@ -11,18 +11,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from kubo.store.client import DbReader
+    from kubo.store.client import UnscopedDb
 
 MIGRATIONS_DIR = Path(__file__).parent
 
 
-def _applied(db: DbReader) -> set[str]:
+def _applied(db: UnscopedDb) -> set[str]:
     """Nomes de migrations já registrados na tabela `migration`."""
     rows: list[dict[str, Any]] = db.query("SELECT name FROM migration;") or []
     return {str(row["name"]) for row in rows}
 
 
-def apply_migrations(db: DbReader, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
+def apply_migrations(db: UnscopedDb, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """Aplica migrations pendentes em ordem de nome; retorna as recém-aplicadas.
 
     Cada `.surql` e o registro na tabela `migration` rodam numa ÚNICA transação:

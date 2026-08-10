@@ -262,14 +262,14 @@ def _save_upload(directory: Path, ctx: SessionContext, fmt: MaterialFormat, data
     return path
 
 
-def _summarizer(ctx: SessionContext, db: Any | None = None) -> Summarizer:
+def _summarizer(ctx: SessionContext, session: ScopedStore | None = None) -> Summarizer:
     """Constrói o sumarizador com a persona `summarizer` (modelo vem do catálogo).
 
-    Se `db` é passado (conexão já aberta pelo caller), reusa — evita conexão
-    aninhada (C4). Sem `db`, abre própria (backward compat).
+    Se `session` é passada (já aberta pelo caller), reusa — evita conexão
+    aninhada (C4). Sem session, abre própria (backward compat).
     """
-    if db is not None:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "summarizer")
+    if session is not None:
+        persona = resolve_persona(session, ctx.tenant_id, ctx.user_id, "summarizer")
     else:
         with client.connect() as db_conn:
             persona = resolve_persona(db_conn, ctx.tenant_id, ctx.user_id, "summarizer")
@@ -838,7 +838,7 @@ def _chat_history_of(
     """
     messages = study_store.list_chat_messages(session, topic_id=topic_id, phase="draft")
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx, session.db))
+    return sliding_window_history(history, lambda: _summarizer(ctx, session))
 
 
 def _chat_precheck(
@@ -1112,7 +1112,7 @@ def _mentor_summary_of(session: ScopedStore, ctx: SessionContext, topic_id: Reco
     transcript = _mentor_transcript_of(session, topic_id)
     if len(transcript) <= 500:
         return transcript
-    summarizer = _summarizer(ctx, session.db)
+    summarizer = _summarizer(ctx, session)
     summary = summarizer.summarize_conversation(transcript)
     if summary:
         return summary
@@ -1210,7 +1210,7 @@ def _planning_chat_history_of(
     """Histórico da conversa com planner (phase=planning), janela deslizante com resumo."""
     messages = study_store.list_chat_messages(session, topic_id=topic_id, phase="planning")
     history = [(m.role, m.content) for m in messages]
-    return sliding_window_history(history, lambda: _summarizer(ctx, session.db))
+    return sliding_window_history(history, lambda: _summarizer(ctx, session))
 
 
 def _current_plan_as_tuples(

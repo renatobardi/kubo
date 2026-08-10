@@ -170,7 +170,9 @@ def _render_list(
         return PlainTextResponse(_DENIED, status_code=403)
     session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     db_destinations = destination_store.list_destinations(session)
-    db_invites = [i for i in invite_store.list_invites(db) if i.accepted_at is None]
+    db_invites = [
+        i for i in invite_store.list_invites(db, tenant_id=ctx.tenant_id) if i.accepted_at is None
+    ]
     settings = settings_store.get_settings(db)
     active = destination_store.active_destinations(session)
     cron = settings.digest_cron if settings else None
@@ -293,7 +295,15 @@ def create_invite(
         return _render_list(request, notice=format_validation_error(exc), status=400)
     try:
         with client.connect_rw() as db:
-            invite = invite_store.create_invite(db, name=payload.name, email=payload.email)
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
+            invite = invite_store.create_invite(
+                db,
+                tenant_id=ctx.tenant_id,
+                name=payload.name,
+                email=payload.email,
+            )
     except ConfigError:
         _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
@@ -322,8 +332,11 @@ def resend_invite(request: Request, iid: str, csrf: Annotated[str, Form()] = "")
     invite_id = RecordID("invite", iid)
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
-                invite = invite_store.resend_invite(db, invite_id)
+                invite = invite_store.resend_invite(db, tenant_id=ctx.tenant_id, id=invite_id)
             except InviteNotResendableError:
                 return _render_list(request, notice=_INVITE_RESEND_NOT_EXPIRED, status=409, db=db)
     except ConfigError:

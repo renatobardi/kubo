@@ -23,7 +23,7 @@ from typing import Any
 
 from surrealdb import RecordID
 
-from kubo.store.client import DbReader
+from kubo.store.client import UnscopedDb
 from kubo.store.tenancy import assert_membership
 
 _TENANT_PARAM = "tenant_id"
@@ -48,7 +48,7 @@ class ScopedStore:
 
     def __init__(
         self,
-        db: DbReader,
+        db: UnscopedDb,
         *,
         tenant_id: RecordID,
         user_id: RecordID,
@@ -85,7 +85,7 @@ class ScopedStore:
         return self._db.query_raw(sql, self._inject(params))
 
     @property
-    def db(self) -> DbReader:
+    def global_db(self) -> UnscopedDb:
         """Conexão crua subjacente: só para leituras globais (tabelas sem tenant_id)."""
         return self._db
 
@@ -97,7 +97,7 @@ class PoolReader:
     de ser o shape do bypass na API pública da store.
     """
 
-    def __init__(self, db: DbReader) -> None:
+    def __init__(self, db: UnscopedDb) -> None:
         self._db = db
 
     def query(self, sql: str, params: dict[str, Any] | None = None) -> Any:
@@ -109,7 +109,7 @@ class PoolReader:
         return self._db.query_raw(sql, params)
 
 
-def scoped(db: DbReader, *, tenant_id: RecordID, user_id: RecordID) -> ScopedStore:
+def scoped(db: UnscopedDb, *, tenant_id: RecordID, user_id: RecordID) -> ScopedStore:
     """Factory de acesso comum: a checagem de membership roda no construtor.
 
     Membership é checada na mesma conexão da operação. A revogação só passa
@@ -118,7 +118,7 @@ def scoped(db: DbReader, *, tenant_id: RecordID, user_id: RecordID) -> ScopedSto
     return ScopedStore(db, tenant_id=tenant_id, user_id=user_id)
 
 
-def scoped_superadmin(db: DbReader, *, user_id: RecordID, tenant_id: RecordID) -> ScopedStore:
+def scoped_superadmin(db: UnscopedDb, *, user_id: RecordID, tenant_id: RecordID) -> ScopedStore:
     """Factory de acesso administrativo: dispensa membership, exige tenant explícito.
 
     O que o superadmin pula é a linha de `membership`, não o predicado

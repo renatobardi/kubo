@@ -200,31 +200,6 @@ def edit_destination(session: ScopedStore, *, id: RecordID, name: str, address: 
         raise StaleDestinationError(f"destination archived during edit: {id}")
 
 
-def reset_watermark_statement(
-    *, prefix: str, destination: Destination
-) -> tuple[str, dict[str, Any]]:
-    """Return a zero-item `CREATE dispatch` statement (watermark=time::now()) and its params.
-
-    `prefix` scopes the bind keys ($d, $dest, $ch) so the caller can build a
-    multi-statement transaction without key collisions. `$tenant_id` is injected
-    by the `ScopedStore` session (ADR-0053).
-    """
-    d = f"{prefix}d"
-    dest = f"{prefix}dest"
-    ch = f"{prefix}ch"
-    rid = RecordID("dispatch", secrets.token_hex(16))
-    return (
-        f"CREATE ${d} SET tenant_id = $tenant_id, destination = ${dest}, channel = ${ch}, "
-        f"status = 'ok', artifact = 'digest', watermark = time::now(), "
-        f"item_count = 0, items = [], error = NONE;",
-        {
-            d: rid,
-            dest: destination.id,
-            ch: destination.channel,
-        },
-    )
-
-
 def set_destination_enabled(
     session: ScopedStore,
     *,

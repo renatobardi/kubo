@@ -155,6 +155,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0041_dispatch_items_record_item.surql",
         # 0042 (KUBO-195, ADR-0052): opinion_for edge + day_summary table.
         "0042_opinion_day_summary.surql",
+        # 0043 (KUBO-207): invite vinculado a tenant.
+        "0043_invite_tenant_id.surql",
     }
 
 

@@ -18,6 +18,7 @@ from typing import Any, Literal, Self
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from surrealdb import RecordID
 
 from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
 from kubo.runtime.catalog_loader import (
@@ -85,7 +86,15 @@ def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
     Leitura direta a cada chamada, sem cache. Cria a sessão escopada internamente
     — o caller não muda (KUBO-212)."""
     from kubo.store import catalog as _catalog_store
-    from kubo.store.scoped import scoped
+    from kubo.store.scoped import ScopedStore, scoped
+
+    if isinstance(db, ScopedStore):
+        return load_items_from_db(
+            db,
+            _catalog_store.list_personas,
+            Persona,
+            _KIND,
+        )
 
     session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     return load_items_from_db(
@@ -96,7 +105,7 @@ def load_personas(db: Any, tenant_id: Any, user_id: Any) -> dict[str, Persona]:
     )
 
 
-def resolve_persona(db: Any, tenant_id: Any, user_id: Any, name: str) -> Persona:
+def resolve_persona(db: Any, tenant_id: RecordID, user_id: RecordID, name: str) -> Persona:
     """Persona do catálogo do tenant por nome; ausente, o default de CÓDIGO.
 
     O seed não retro-semeia tenants criados antes de uma persona nova (ADR-0042), e

@@ -54,9 +54,11 @@ def _seconds_from_now(value: datetime) -> float:
     return (value - now).total_seconds()
 
 
-def test_create_invite_generates_token_and_seven_day_expiry(db: Any) -> None:
+def test_create_invite_generates_token_and_seven_day_expiry(db: Any, tenant_id: RecordID) -> None:
     """Criar convite gera token, deixa accepted_at vazio e expira em ~7 dias."""
-    invite = invites.create_invite(db, name="Marina", email="marina@exemplo.com")
+    invite = invites.create_invite(
+        db, tenant_id=tenant_id, name="Marina", email="marina@exemplo.com"
+    )
 
     assert invite.name == "Marina"
     assert invite.email == "marina@exemplo.com"
@@ -67,16 +69,16 @@ def test_create_invite_generates_token_and_seven_day_expiry(db: Any) -> None:
     assert 7 * 24 * 3600 - 60 < _seconds_from_now(invite.expires_at) < 7 * 24 * 3600 + 60
 
 
-def test_create_invite_without_email_is_allowed(db: Any) -> None:
+def test_create_invite_without_email_is_allowed(db: Any, tenant_id: RecordID) -> None:
     """Convite sem e-mail é válido — entrega cai no link copiável."""
-    invite = invites.create_invite(db, name="Sem email")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Sem email")
     assert invite.email is None
     assert invite.status == "pending"
 
 
-def test_get_invite_by_token(db: Any) -> None:
+def test_get_invite_by_token(db: Any, tenant_id: RecordID) -> None:
     """Busca por token devolve o convite correto."""
-    created = invites.create_invite(db, name="Marina")
+    created = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     found = invites.get_invite_by_token(db, created.token)
     assert found is not None
     assert str(found.id) == str(created.id)
@@ -87,20 +89,20 @@ def test_get_invite_by_token_missing_returns_none(db: Any) -> None:
     assert invites.get_invite_by_token(db, "não-existe") is None
 
 
-def test_list_invites_orders_by_created_desc(db: Any) -> None:
+def test_list_invites_orders_by_created_desc(db: Any, tenant_id: RecordID) -> None:
     """Listagem traz convites do mais recente para o mais antigo."""
-    invites.create_invite(db, name="Primeiro")
-    invites.create_invite(db, name="Segundo")
+    invites.create_invite(db, tenant_id=tenant_id, name="Primeiro")
+    invites.create_invite(db, tenant_id=tenant_id, name="Segundo")
 
-    rows = invites.list_invites(db)
+    rows = invites.list_invites(db, tenant_id=tenant_id)
     assert [r.name for r in rows] == ["Segundo", "Primeiro"]
     assert all(r.status == "pending" for r in rows)
     assert all(len(r.token) == 32 for r in rows)
 
 
-def test_status_expired_when_expires_at_passed(db: Any) -> None:
+def test_status_expired_when_expires_at_passed(db: Any, tenant_id: RecordID) -> None:
     """Status vira 'expired' depois do prazo."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     # Simula passagem do tempo alterando expires_at para o passado.
     db.query(
         "UPDATE $r SET expires_at = time::now() - 1s;",
@@ -111,45 +113,42 @@ def test_status_expired_when_expires_at_passed(db: Any) -> None:
     assert updated.status == "expired"
 
 
-def test_resend_rejects_non_expired_invite(db: Any) -> None:
+def test_resend_rejects_non_expired_invite(db: Any, tenant_id: RecordID) -> None:
     """Reenviar só é permitido quando o convite já expirou."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     with pytest.raises(InviteNotResendableError):
-        invites.resend_invite(db, invite.id)
+        invites.resend_invite(db, tenant_id=tenant_id, id=invite.id)
 
 
-def test_resend_updates_token_and_expires_at(db: Any) -> None:
+def test_resend_updates_token_and_expires_at(db: Any, tenant_id: RecordID) -> None:
     """Reenviar de convite expirado gera token novo e reconta o prazo."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     db.query(
         "UPDATE $r SET expires_at = time::now() - 1s;",
         {"r": invite.id},
     )
     old_token = invite.token
 
-    resent = invites.resend_invite(db, invite.id)
+    resent = invites.resend_invite(db, tenant_id=tenant_id, id=invite.id)
     assert resent.token != old_token
     assert resent.status == "pending"
     assert 7 * 24 * 3600 - 60 < _seconds_from_now(resent.expires_at) < 7 * 24 * 3600 + 60
 
 
-def test_resend_rejects_already_accepted_invite(db: Any) -> None:
+def test_resend_rejects_already_accepted_invite(db: Any, tenant_id: RecordID) -> None:
     """Convite aceito não pode ser reenviado."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
     with pytest.raises(InviteNotResendableError):
-        invites.resend_invite(db, invite.id)
+        invites.resend_invite(db, tenant_id=tenant_id, id=invite.id)
 
 
 def test_accept_invite_creates_destination_and_marks_accepted(
     db: Any,
+    tenant_id: RecordID,
 ) -> None:
-    """Aceite cria destination ativo e marca accepted_at.
-
-    O destination criado pelo aceite é global (sem tenant_id, ADR-0033) — lê
-    direto do banco, não via ScopedStore.
-    """
-    invite = invites.create_invite(db, name="Marina")
+    """Aceite cria destination ativo dentro do tenant do convite e marca accepted_at."""
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     destination_id = invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
 
     updated = invites.get_invite(db, invite.id)
@@ -165,14 +164,17 @@ def test_accept_invite_creates_destination_and_marks_accepted(
     assert destination["channel"] == "telegram"
     assert destination["address"] == "123456"
     assert destination["enabled"] is True
+    assert destination["tenant_id"] == tenant_id
 
 
-def test_accept_invite_rejects_duplicate_chat_id(db: Any, session: ScopedStore) -> None:
+def test_accept_invite_rejects_duplicate_chat_id(
+    db: Any, tenant_id: RecordID, session: ScopedStore
+) -> None:
     """chat_id já cadastrado em outro destination recusa o aceite."""
     destinations.create_destination(
         session, name="Dono", kind="pessoa", channel="telegram", address="123456"
     )
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
 
     with pytest.raises(DuplicateDestinationError):
         invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
@@ -182,9 +184,9 @@ def test_accept_invite_rejects_duplicate_chat_id(db: Any, session: ScopedStore) 
     assert updated.accepted_at is None
 
 
-def test_accept_invite_rejects_expired_invite(db: Any) -> None:
+def test_accept_invite_rejects_expired_invite(db: Any, tenant_id: RecordID) -> None:
     """Convite expirado não pode ser aceito."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     db.query(
         "UPDATE $r SET expires_at = time::now() - 1s;",
         {"r": invite.id},
@@ -193,9 +195,9 @@ def test_accept_invite_rejects_expired_invite(db: Any) -> None:
         invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
 
 
-def test_accept_invite_rejects_reused_invite(db: Any) -> None:
+def test_accept_invite_rejects_reused_invite(db: Any, tenant_id: RecordID) -> None:
     """Convite já aceito não pode ser aceito de novo."""
-    invite = invites.create_invite(db, name="Marina")
+    invite = invites.create_invite(db, tenant_id=tenant_id, name="Marina")
     invites.accept_invite(db, invite_id=invite.id, chat_id="123456")
     with pytest.raises(StaleInviteError):
         invites.accept_invite(db, invite_id=invite.id, chat_id="999999")

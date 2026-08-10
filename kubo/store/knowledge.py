@@ -2021,8 +2021,8 @@ def _tenant_timezone(session: ScopedStore) -> ZoneInfo:
     """Fuso horário do DONO do tenant (ADR-0050 §I: dia de calendário no fuso do tenant).
     Default UTC se não houver perfil ou timezone."""
     try:
-        owner = tenancy.get_tenant_owner(session.db, session.tenant_id)
-        profile = tenancy.get_user_profile(session.db, owner)
+        owner = tenancy.get_tenant_owner(session.global_db, session.tenant_id)
+        profile = tenancy.get_user_profile(session.global_db, owner)
         tz_name = profile.timezone if profile else "UTC"
     except (ConfigError, StoreError, KeyError) as exc:
         _log.warning(

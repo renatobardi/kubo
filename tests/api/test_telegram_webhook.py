@@ -74,7 +74,17 @@ def test_webhook_valid_start_accepts_invite(app_db: Any) -> None:
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.use(root_cfg.namespace, root_cfg.database)
-        invite = invites.create_invite(root, name="Marina")
+        user_id = RecordID("user", secrets.token_hex(16))
+        tenant_id = RecordID("tenant", secrets.token_hex(16))
+        root.query(
+            "CREATE $u SET firebase_uid = $uid, created_at = time::now();",
+            {"u": user_id, "uid": "telegram-webhook-test"},
+        )
+        root.query(
+            "CREATE $t SET name = $name, created_at = time::now();",
+            {"t": tenant_id, "name": "Webhook Test"},
+        )
+        invite = invites.create_invite(root, tenant_id=tenant_id, name="Marina")
 
     tc = TestClient(app_db)
     resp = tc.post(
@@ -93,7 +103,9 @@ def test_webhook_valid_start_accepts_invite(app_db: Any) -> None:
 
         # A store retorna o destination_id; verificamos pela presença do endereço.
         rows = root.query(
-            "SELECT * FROM destination WHERE channel = 'telegram' AND address = '123456';"
+            "SELECT * FROM destination "
+            "WHERE channel = 'telegram' AND address = '123456' AND tenant_id = $t;",
+            {"t": tenant_id},
         )
         assert len(rows) == 1
         assert rows[0]["name"] == "Marina"
@@ -135,7 +147,7 @@ def test_webhook_duplicate_chat_id_returns_200(app_db: Any) -> None:
         destinations.create_destination(
             session, name="Dono", kind="pessoa", channel="telegram", address="123456"
         )
-        invite = invites.create_invite(root, name="Marina")
+        invite = invites.create_invite(root, tenant_id=tenant_id, name="Marina")
 
     tc = TestClient(app_db)
     resp = tc.post(

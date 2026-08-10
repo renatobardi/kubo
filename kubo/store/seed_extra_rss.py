@@ -154,7 +154,7 @@ FEEDS: list[FeedSeed] = [
 ]
 
 
-def seed_extra_rss_sources(db: client.DbConnection) -> int:
+def seed_extra_rss_sources(db: client.UnscopedDb) -> int:
     """Semeia os feeds adicionais como Cadastros rss ativos.
 
     Idempotente por (tenant_id, kind, canonical) e não-destrutivo: títulos/tags/pausa do

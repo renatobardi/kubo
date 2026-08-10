@@ -19,7 +19,7 @@ from surrealdb import Surreal
 from kubo.errors import ConfigError
 
 
-class DbReader(Protocol):
+class UnscopedDb(Protocol):
     """Protocolo mínimo de leitura/escrita da store sem gerenciamento de tenant.
 
     Usado por funções globais (`settings`, `seed`, `migrations`) e pelos
@@ -29,7 +29,7 @@ class DbReader(Protocol):
     def query_raw(self, sql: str, params: dict[str, Any] | None = None) -> Any: ...
 
 
-class DbConnection(DbReader, Protocol):
+class DbConnection(UnscopedDb, Protocol):
     """Conexão bruta do SDK com namespace/database selecionáveis.
 
     Esconde o tipo concreto (ws/http/embedded) e dá um nome próprio ao

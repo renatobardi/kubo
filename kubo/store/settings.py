@@ -55,7 +55,7 @@ def _settings_from_row(row: dict[str, Any]) -> Settings:
     )
 
 
-def get_settings(db: client.DbReader) -> Settings | None:
+def get_settings(db: client.UnscopedDb) -> Settings | None:
     """Lê o singleton `settings:global`, ou `None` se ainda não existe.
 
     O singleton é global (não tenant-scoped) — lido por id fixo, sem filtro de tenant.
@@ -65,7 +65,7 @@ def get_settings(db: client.DbReader) -> Settings | None:
 
 
 def put_settings(
-    db: client.DbReader,
+    db: client.UnscopedDb,
     *,
     digest_cron: str,
     distribution_paused: bool,

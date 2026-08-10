@@ -13,7 +13,8 @@ import secrets
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from surrealdb import RecordID
@@ -65,44 +66,42 @@ _ANALYSIS_V2 = (
 def db() -> Iterator[Any]:
     """Database próprio do teste, removido antes e depois — schema aplicado do zero.
 
-    Cria um user/tenant owner por conexão e expõe os ids em `conn.tenant_id` e
-    `conn.user_id` para os testes passarem pelo membership (KUBO-123)."""
+    Cria um user/tenant owner por conexão e expõe os ids em `ctx.tenant_id` e
+    `ctx.user_id` para os testes passarem pelo membership (KUBO-123)."""
     cfg = replace(client.config(), database=_FLOWS_DB)
     with client.connect(cfg) as conn:
-        conn_any = cast(Any, conn)
-        conn_any.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
-        conn_any.use(cfg.namespace, cfg.database)
+        conn.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
+        conn.use(cfg.namespace, cfg.database)
         migrations.apply_migrations(conn)
         user = tenancy.create_user(
             conn, firebase_uid=f"test-{secrets.token_hex(8)}", email="test@example.com"
         )
         tenant = tenancy.create_tenant(conn, name="Test Tenant", owner_user_id=user.id)
-        conn_any.tenant_id = tenant.id
-        conn_any.user_id = user.id
-        yield conn_any
-        conn_any.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
+        ctx = SimpleNamespace(db=conn, tenant_id=tenant.id, user_id=user.id)
+        yield ctx
+        ctx.db.query(f"REMOVE DATABASE IF EXISTS {_FLOWS_DB};")
 
 
 _PERSONAS = load_personas_from_dir(Path(__file__).parents[2] / "catalogs" / "personas")
 
 
-def _tenant_owner(db: Any) -> tuple[RecordID, RecordID]:
+def _tenant_owner(ctx: Any) -> tuple[RecordID, RecordID]:
     """Devolve (tenant_id, user_id) do teste atual, criando se a fixture ainda não o fez."""
-    if hasattr(db, "tenant_id") and hasattr(db, "user_id"):
-        return db.tenant_id, db.user_id
+    if hasattr(ctx, "tenant_id") and hasattr(ctx, "user_id"):
+        return ctx.tenant_id, ctx.user_id
     user = tenancy.create_user(
-        db, firebase_uid=f"test-{secrets.token_hex(8)}", email="test@example.com"
+        ctx.db, firebase_uid=f"test-{secrets.token_hex(8)}", email="test@example.com"
     )
-    tenant = tenancy.create_tenant(db, name="Test Tenant", owner_user_id=user.id)
-    db.tenant_id = tenant.id
-    db.user_id = user.id
+    tenant = tenancy.create_tenant(ctx.db, name="Test Tenant", owner_user_id=user.id)
+    ctx.tenant_id = tenant.id
+    ctx.user_id = user.id
     return tenant.id, user.id
 
 
-def _session(db: Any) -> ScopedStore:
+def _session(ctx: Any) -> ScopedStore:
     """ScopedStore para o tenant/user do fixture de teste."""
-    tenant_id, user_id = _tenant_owner(db)
-    return scoped(db, tenant_id=tenant_id, user_id=user_id)
+    tenant_id, user_id = _tenant_owner(ctx)
+    return scoped(ctx.db, tenant_id=tenant_id, user_id=user_id)
 
 
 def _instantiate(db: Any, template_yaml: str, tmp_path: Path) -> Any:
@@ -125,7 +124,7 @@ def test_instantiate_freezes_the_snapshot_and_materializes_personas(
     membro do elenco, com config frozen + catalog_name de proveniência."""
     inst = _instantiate(db, _ANALYSIS_V1, tmp_path)
 
-    snap = db.query("SELECT VALUE snapshot FROM $f;", {"f": inst.flow})[0]
+    snap = db.db.query("SELECT VALUE snapshot FROM $f;", {"f": inst.flow})[0]
     assert snap["name"] == "analysis"
     assert snap["board"]["states"] == ["created", "analyzing", "delivered", "failed"]
     assert [list(t) for t in snap["board"]["transitions"]] == [
@@ -135,7 +134,7 @@ def test_instantiate_freezes_the_snapshot_and_materializes_personas(
     ]
     # Ambas as personas do elenco materializadas (humano incluso — D33).
     assert set(inst.personas) == {"analista", "humano"}
-    analista = db.query("SELECT * FROM $p;", {"p": inst.personas["analista"]})[0]
+    analista = db.db.query("SELECT * FROM $p;", {"p": inst.personas["analista"]})[0]
     assert analista["catalog_name"] == "analista"
     assert analista["executor"] == "api"
     assert "telegram" in analista["permissions"]
@@ -182,7 +181,7 @@ def test_honest_invariant_4_live_flow_obeys_frozen_snapshot_not_catalog(
         from_state="analyzing",
         to_state="delivered",
     )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": task})[0] == "delivered"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": task})[0] == "delivered"
 
 
 def test_transition_rejects_pair_not_in_snapshot(db: Any, tmp_path: Path) -> None:
@@ -242,9 +241,9 @@ def test_create_task_wires_belongs_to_and_assigned_to(db: Any, tmp_path: Path) -
         state="created",
     )
 
-    flow_of = db.query("SELECT VALUE ->belongs_to->flow FROM $t;", {"t": task})[0]
+    flow_of = db.db.query("SELECT VALUE ->belongs_to->flow FROM $t;", {"t": task})[0]
     assert flow_of[0] == inst.flow
-    persona_of = db.query("SELECT VALUE ->assigned_to->persona FROM $t;", {"t": task})[0]
+    persona_of = db.db.query("SELECT VALUE ->assigned_to->persona FROM $t;", {"t": task})[0]
     assert persona_of[0] == inst.personas["analista"]
 
 
@@ -259,7 +258,7 @@ def test_set_task_run_links_task_to_run(db: Any, tmp_path: Path) -> None:
     )
     run = knowledge.start_run(_session(db), worker="analista")
     set_task_run(_session(db), task=task, run=run)
-    assert db.query("SELECT VALUE run FROM $t;", {"t": task})[0] == run
+    assert db.db.query("SELECT VALUE run FROM $t;", {"t": task})[0] == run
 
 
 def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path) -> None:
@@ -273,10 +272,10 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
         persona=inst.personas["analista"],
         state="created",
     )
-    d1 = db.query("CREATE distilled SET summary = 'a', tenant_id = $t;", {"t": db.tenant_id})[0][
+    d1 = db.db.query("CREATE distilled SET summary = 'a', tenant_id = $t;", {"t": db.tenant_id})[0][
         "id"
     ]
-    d2 = db.query("CREATE distilled SET summary = 'b', tenant_id = $t;", {"t": db.tenant_id})[0][
+    d2 = db.db.query("CREATE distilled SET summary = 'b', tenant_id = $t;", {"t": db.tenant_id})[0][
         "id"
     ]
 
@@ -289,12 +288,12 @@ def test_insert_deliverable_wires_produces_and_consults(db: Any, tmp_path: Path)
         consulted=[d1, d2],
     )
 
-    body = db.query("SELECT kind, content FROM $d;", {"d": deliverable})[0]
+    body = db.db.query("SELECT kind, content FROM $d;", {"d": deliverable})[0]
     assert body["kind"] == "report"
     assert body["content"] == "# Relatório"
-    produced = db.query("SELECT VALUE ->produces->deliverable FROM $f;", {"f": inst.flow})[0]
+    produced = db.db.query("SELECT VALUE ->produces->deliverable FROM $f;", {"f": inst.flow})[0]
     assert deliverable in produced
-    consulted = db.query("SELECT VALUE ->consults->distilled FROM $t;", {"t": task})[0]
+    consulted = db.db.query("SELECT VALUE ->consults->distilled FROM $t;", {"t": task})[0]
     assert {str(x) for x in consulted} == {str(d1), str(d2)}
 
 
@@ -321,7 +320,7 @@ def test_insert_deliverable_pr_stores_typed_url_and_number(db: Any, tmp_path: Pa
         pr_number=7,
     )
 
-    body = db.query("SELECT kind, content, pr_url, pr_number FROM $d;", {"d": deliverable})[0]
+    body = db.db.query("SELECT kind, content, pr_url, pr_number FROM $d;", {"d": deliverable})[0]
     assert body["kind"] == "pr"
     assert body["content"] == "resumo do agente"
     assert body["pr_url"] == "https://github.com/owner/kubo-forge/pull/7"
@@ -399,8 +398,8 @@ def test_decide_gate_approves_both_tasks_atomically(db: Any, tmp_path: Path) -> 
         to_state="delivered",
         decision="approved",
     )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "delivered"
-    g = db.query("SELECT state, decision, reason, decided_at FROM $t;", {"t": gate})[0]
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "delivered"
+    g = db.db.query("SELECT state, decision, reason, decided_at FROM $t;", {"t": gate})[0]
     assert g["state"] == "delivered"
     assert g["decision"] == "approved"
     assert g["decided_at"] is not None
@@ -418,8 +417,8 @@ def test_decide_gate_rejects_with_reason(db: Any, tmp_path: Path) -> None:
         decision="rejected",
         reason="fontes fracas",
     )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "rejected"
-    g = db.query("SELECT state, decision, reason FROM $t;", {"t": gate})[0]
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "rejected"
+    g = db.db.query("SELECT state, decision, reason FROM $t;", {"t": gate})[0]
     assert g["state"] == "rejected"
     assert g["decision"] == "rejected"
     assert g["reason"] == "fontes fracas"
@@ -438,7 +437,7 @@ def test_decide_gate_rejection_requires_reason(db: Any, tmp_path: Path) -> None:
             decision="rejected",
             reason="   ",
         )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "awaiting_review"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "awaiting_review"
 
 
 def _seed_distilled(db: Any, title: str) -> Any:
@@ -447,7 +446,7 @@ def _seed_distilled(db: Any, title: str) -> Any:
     session = _session(db)
     src = knowledge.upsert_source(session, kind="rss", canonical=f"src::{title}")
     item = knowledge.upsert_item(
-        db, source=src, external_id=f"ext::{title}", content="x", title=title
+        session, source=src, external_id=f"ext::{title}", content="x", title=title
     )
     chunk = Chunk(text="s", seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
     return knowledge.insert_distilled(
@@ -488,7 +487,7 @@ def test_read_gate_context_gathers_flow_deliverable_and_sources(db: Any, tmp_pat
 
 def test_read_gate_context_none_for_orphan_task(db: Any) -> None:
     """Um task sem flow (belongs_to ausente) → None, nunca crash (registro órfão/manual)."""
-    orphan = db.query(
+    orphan = db.db.query(
         "CREATE task SET state = 'awaiting_review', tenant_id = $t;", {"t": db.tenant_id}
     )[0]["id"]
     assert read_gate_context(_session(db), gate_task=orphan) is None
@@ -515,7 +514,7 @@ def test_decide_gate_rejects_contradictory_decision(db: Any, tmp_path: Path) -> 
             to_state="rejected",
             decision="approved",
         )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "awaiting_review"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "awaiting_review"
 
 
 def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
@@ -541,7 +540,7 @@ def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
         from_state="created",
         to_state="analyzing",
     )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
 
     def boom(*_args: Any, **_kw: Any) -> None:
         raise StoreError("transação revertida: simulação de falha na criação do gate")
@@ -559,9 +558,9 @@ def test_open_gate_is_atomic_rolls_back_analyst_on_failure(
             gate_state="awaiting_review",
         )
     # A transição da analista REVERTEU: segue em `analyzing`, não em `awaiting_review`.
-    assert db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": analyst})[0] == "analyzing"
     # Nenhuma task do humano foi criada (rollback integral).
-    human_tasks = db.query(
+    human_tasks = db.db.query(
         "SELECT VALUE id FROM $flow<-belongs_to<-task "
         "WHERE ->assigned_to->persona.catalog_name CONTAINS $human;",
         {"flow": inst.flow, "human": "humano"},
@@ -732,8 +731,8 @@ def test_decide_gate_approves_non_delivered_target_by_convention(db: Any, tmp_pa
         to_state="done",
         decision="approved",
     )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
-    g = db.query("SELECT state, decision FROM $t;", {"t": gate})[0]
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
+    g = db.db.query("SELECT state, decision FROM $t;", {"t": gate})[0]
     assert g["state"] == "done"
     assert g["decision"] == "approved"
 
@@ -750,7 +749,7 @@ def test_decide_gate_rejects_approved_to_reject_state_dev(db: Any, tmp_path: Pat
             to_state="rejected",
             decision="approved",
         )
-    assert db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "review"
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": gate})[0] == "review"
 
 
 def test_read_gate_context_dev_pr_deliverable(db: Any, tmp_path: Path) -> None:
@@ -915,7 +914,7 @@ def _dev_flow_v2(db: Any, tmp_path: Path) -> tuple[Any, Any, Any]:
 
 def _open_human_gates(db: Any, flow: Any, state: str) -> list[Any]:
     """Tasks humanas ABERTAS (sem decisão) num estado — o gate real vs a task decidida parada."""
-    return db.query(
+    return db.db.query(
         "SELECT VALUE id FROM $f<-belongs_to<-task WHERE state = $s AND decision IS NONE "
         "AND (->assigned_to->persona.catalog_name)[0] = 'humano';",
         {"f": flow, "s": state},
@@ -935,10 +934,10 @@ def test_dev_v2_approve_auto_opens_promotion_gate(db: Any, tmp_path: Path) -> No
         decision="approved",
     )
     assert next_gate is not None
-    assert db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
-    rg = db.query("SELECT state, decision FROM $t;", {"t": review_gate})[0]
+    assert db.db.query("SELECT VALUE state FROM $t;", {"t": dev})[0] == "done"
+    rg = db.db.query("SELECT state, decision FROM $t;", {"t": review_gate})[0]
     assert rg == {"state": "done", "decision": "approved"}
-    ng = db.query(
+    ng = db.db.query(
         "SELECT state, decision, (->assigned_to->persona.catalog_name)[0] AS p FROM $t;",
         {"t": next_gate},
     )[0]
