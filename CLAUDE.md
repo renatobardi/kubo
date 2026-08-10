@@ -122,7 +122,7 @@ Cinco papéis canônicos, label = nome (`needs-triage`, `needs-info`, `ready-for
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` (sob demanda) + `docs/adr/` na raiz. See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` (glossário) + `docs/adr/` na raiz. See `docs/agents/domain.md`.
 
 ## TDD — Red/Green/Refactor (obrigatório)
 

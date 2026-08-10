@@ -15,8 +15,9 @@ sugira criá-los de antemão. A skill `/domain-modeling` (alcançada via `/grill
 `/improve-codebase-architecture`) os cria de forma preguiçosa, quando termos ou decisões são
 de fato resolvidos.
 
-Nota Kubo: as fontes de verdade de escopo/conceitos hoje são `docs/kubo-spec-funcional.md`
-e `docs/kubo-design-system.md` (ver CLAUDE.md). `CONTEXT.md` não existe ainda — e tudo bem.
+Nota Kubo: `CONTEXT.md` existe na raiz e é o **glossário** (linguagem ubíqua) — define o que os
+termos são, não como são implementados. As fontes de verdade de escopo/conceitos seguem sendo
+`docs/kubo-spec-funcional.md` e `docs/kubo-design-system.md` (ver CLAUDE.md).
 
 ## Estrutura de arquivos
 
@@ -24,7 +25,7 @@ Repo single-context (a maioria — inclui o Kubo):
 
 ```
 /
-├── CONTEXT.md           (ausente por ora; criado sob demanda por /domain-modeling)
+├── CONTEXT.md           (glossário; mantido sob demanda por /domain-modeling)
 ├── docs/adr/
 │   ├── 0001-....md
 │   └── 0002-....md
