@@ -19,7 +19,7 @@ from kubo.errors import (
     StaleInviteError,
     StoreError,
 )
-from kubo.store import transaction
+from kubo.store import client, transaction
 from kubo.store.destinations import normalize_address
 
 
@@ -41,6 +41,7 @@ class Invite:
     """
 
     id: RecordID
+    tenant_id: RecordID
     name: str
     email: str | None = field(repr=False)
     token: str = field(repr=False)
@@ -69,6 +70,7 @@ def _invite_from_row(row: dict[str, Any]) -> Invite:
     accepted = row.get("accepted_at")
     return Invite(
         id=row["id"],
+        tenant_id=row["tenant_id"],
         name=row["name"],
         email=row.get("email"),
         token=row["token"],
@@ -78,8 +80,14 @@ def _invite_from_row(row: dict[str, Any]) -> Invite:
     )
 
 
-def create_invite(db: Any, *, name: str, email: str | None = None) -> Invite:
-    """Cria um convite com token único e TTL de 7 dias.
+def create_invite(
+    db: client.UnscopedDb,
+    *,
+    tenant_id: RecordID,
+    name: str,
+    email: str | None = None,
+) -> Invite:
+    """Cria um convite com token único e TTL de 7 dias vinculado a um tenant.
 
     `email` é opcional: quando ausente, a entrega cai no link copiável.
     """
@@ -87,12 +95,14 @@ def create_invite(db: Any, *, name: str, email: str | None = None) -> Invite:
     token = secrets.token_hex(16)
     db.query(
         "CREATE $r SET name = $name, email = $email, token = $invite_token, "
-        "expires_at = time::now() + 7d, accepted_at = NONE, created_at = time::now();",
+        "tenant_id = $tenant_id, expires_at = time::now() + 7d, "
+        "accepted_at = NONE, created_at = time::now();",
         {
             "r": rid,
             "name": name.strip(),
             "email": email.strip() if email else None,
             "invite_token": token,
+            "tenant_id": tenant_id,
         },
     )
     invite = get_invite(db, rid)
@@ -101,13 +111,13 @@ def create_invite(db: Any, *, name: str, email: str | None = None) -> Invite:
     return invite
 
 
-def get_invite(db: Any, id: RecordID) -> Invite | None:
+def get_invite(db: client.UnscopedDb, id: RecordID) -> Invite | None:
     """Lê um convite pelo id."""
     rows = db.query("SELECT * FROM $r;", {"r": id})
     return _invite_from_row(rows[0]) if rows else None
 
 
-def get_invite_by_token(db: Any, token: str) -> Invite | None:
+def get_invite_by_token(db: client.UnscopedDb, token: str) -> Invite | None:
     """Busca um convite pelo token único."""
     rows = db.query(
         "SELECT * FROM invite WHERE token = $invite_token LIMIT 1;",
@@ -116,13 +126,16 @@ def get_invite_by_token(db: Any, token: str) -> Invite | None:
     return _invite_from_row(rows[0]) if rows else None
 
 
-def list_invites(db: Any) -> list[Invite]:
-    """Lista todos os convites, do mais recente para o mais antigo."""
-    rows = db.query("SELECT * FROM invite ORDER BY created_at DESC;")
+def list_invites(db: client.UnscopedDb, *, tenant_id: RecordID) -> list[Invite]:
+    """Lista os convites pendentes do tenant, do mais recente para o mais antigo."""
+    rows = db.query(
+        "SELECT * FROM invite WHERE tenant_id = $t ORDER BY created_at DESC;",
+        {"t": tenant_id},
+    )
     return [_invite_from_row(r) for r in rows]
 
 
-def resend_invite(db: Any, id: RecordID) -> Invite:
+def resend_invite(db: client.UnscopedDb, *, tenant_id: RecordID, id: RecordID) -> Invite:
     """Reenvia um convite expirado: gera token novo e reconta o TTL de 7 dias.
 
     Rejeita convites pendentes ou já aceitos (`InviteNotResendableError`).
@@ -130,39 +143,53 @@ def resend_invite(db: Any, id: RecordID) -> Invite:
     new_token = secrets.token_hex(16)
     rows = db.query(
         "UPDATE $r SET token = $new_token, expires_at = time::now() + 7d "
-        "WHERE accepted_at IS NONE AND expires_at <= time::now() RETURN AFTER;",
-        {"r": id, "new_token": new_token},
+        "WHERE accepted_at IS NONE AND expires_at <= time::now() "
+        "AND tenant_id = $tenant_id RETURN AFTER;",
+        {"r": id, "new_token": new_token, "tenant_id": tenant_id},
     )
     if not rows:
         raise InviteNotResendableError("invite not resendable")
     return _invite_from_row(rows[0])
 
 
-def accept_invite(db: Any, *, invite_id: RecordID, chat_id: str) -> RecordID:
+def accept_invite(db: client.DbConnection, *, invite_id: RecordID, chat_id: str) -> RecordID:
     """Aceita um convite pendente/não-expirado e cria o destination Telegram.
 
-    A operação é atômica: verifica `UNIQUE(channel, address)` ANTES de marcar
-    o convite, depois cria o `destination`. Em colisão de chat_id levanta
-    `DuplicateDestinationError`; em convite inválido/expirado/reusado levanta
-    `StaleInviteError`.
+    O convite carrega o `tenant_id` de origem; o destination nasce dentro desse
+    tenant. A operação é atômica e escopada: verifica a unicidade por
+    `(tenant_id, channel, address)` ANTES de marcar o convite, depois cria o
+    destination. Em colisão de chat_id levanta `DuplicateDestinationError`; em
+    convite inválido/expirado/reusado levanta `StaleInviteError`.
     """
+    invite = get_invite(db, invite_id)
+    if invite is None:
+        raise StaleInviteError("invite invalid or expired")
+
     normalized = normalize_address("telegram", chat_id)
     destination_id = RecordID("destination", secrets.token_hex(16))
 
-    statements = [
-        "LET $existing = (SELECT id FROM destination "
-        "WHERE channel = $channel AND address = $address)",
-        "IF count($existing) > 0 { THROW 'DuplicateChatIdError' }",
-        "LET $updated = (UPDATE $r SET accepted_at = time::now() "
-        "WHERE accepted_at IS NONE AND expires_at > time::now() RETURN AFTER)",
-        "IF count($updated) == 0 { THROW 'StaleInviteError' }",
-        "CREATE $dest SET name = $updated[0].name, kind = 'pessoa', channel = $channel, "
-        "address = $address, enabled = true, archived_at = NONE",
-    ]
+    from kubo.store.scoped import scoped_superadmin
+
+    # O endpoint de webhook é anônimo; o convite (token) é a autorização.
+    # O user_id do operador anônimo não interessa na escrita — a sessão superadmin
+    # pula a checagem de membership, mas injeta o tenant_id do convite.
+    system_user = RecordID("user", "system")
+    session = scoped_superadmin(db, tenant_id=invite.tenant_id, user_id=system_user)
+
     try:
         transaction.run_transaction(
-            db,
-            statements,
+            session,
+            [
+                "LET $existing = (SELECT id FROM destination "
+                "WHERE channel = $channel AND address = $address AND tenant_id = $tenant_id)",
+                "IF count($existing) > 0 { THROW 'DuplicateChatIdError' }",
+                "LET $updated = (UPDATE $r SET accepted_at = time::now() "
+                "WHERE accepted_at IS NONE AND expires_at > time::now() RETURN AFTER)",
+                "IF count($updated) == 0 { THROW 'StaleInviteError' }",
+                "CREATE $dest SET name = $updated[0].name, kind = 'pessoa', "
+                "channel = $channel, address = $address, enabled = true, "
+                "archived_at = NONE, tenant_id = $tenant_id",
+            ],
             {
                 "r": invite_id,
                 "channel": "telegram",

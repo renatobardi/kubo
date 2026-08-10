@@ -24,6 +24,7 @@ from kubo.runtime import flow_runner
 from kubo.runtime.flow_runner import promote_gate, reject_gate, resume_gate, run_flow
 from kubo.store.destinations import Destination
 from kubo.store.flows import read_gate_context
+from kubo.store.scoped import scoped
 from kubo.workers import github_api
 from kubo.workers.github_api import PrRef, PrStatus
 from tests.runtime.conftest import FakeCli, fake_gitops, promotion_gate
@@ -195,7 +196,7 @@ def test_approve_auto_opens_promotion_gate_v2(
 
     promo = promotion_gate(db, result.flow)
     assert promo is not None
-    ctx = read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo)
+    ctx = read_gate_context(scoped(db, tenant_id=tenant_id, user_id=user_id), gate_task=promo)
     assert ctx is not None
     assert ctx.gate_state == "done"
     assert ctx.counterpart_task == result.task  # a dev, única não-humana
@@ -287,7 +288,8 @@ def test_promote_rejects_when_pr_not_merged(
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
     assert (
-        read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo) is not None
+        read_gate_context(scoped(db, tenant_id=tenant_id, user_id=user_id), gate_task=promo)
+        is not None
     )  # ainda um gate aberto
 
 
@@ -310,7 +312,8 @@ def test_promote_rejects_unknown_worker_name(
 
     assert db.query("SELECT VALUE state FROM $t;", {"t": promo})[0] == "done"
     assert (
-        read_gate_context(db, tenant_id=tenant_id, user_id=user_id, gate_task=promo) is not None
+        read_gate_context(scoped(db, tenant_id=tenant_id, user_id=user_id), gate_task=promo)
+        is not None
     )  # ainda um gate aberto
 
 

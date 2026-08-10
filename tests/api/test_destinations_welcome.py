@@ -18,6 +18,7 @@ from kubo.api.session import resolve_session as _real_resolve_session
 from kubo.distribution.email import SmtpConfig
 from kubo.store import client, destinations, migrations, tenancy
 from kubo.store.client import connect as _real_connect
+from kubo.store.scoped import scoped
 from tests.api.conftest import UI_PASSWORD
 
 pytestmark = pytest.mark.integration
@@ -49,6 +50,8 @@ def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     monkeypatch.setattr("kubo.store.tenancy.list_memberships_for_user", _real_list_memberships)
     monkeypatch.setattr("kubo.store.tenancy.get_tenant", _real_get_tenant)
     monkeypatch.setattr("kubo.store.tenancy.list_tenants", _real_list_tenants)
+    # Restaura ScopedStore real na rota (o conftest o substitui por um fake).
+    monkeypatch.setattr("kubo.api.routes.destinations.scoped", scoped)
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
@@ -81,13 +84,14 @@ def test_welcome_sends_telegram(app_db: Any, monkeypatch: pytest.MonkeyPatch) ->
     tc, csrf = _login_csrf(app_db)
     tenant = RecordID(*os.environ["KUBO_BREAKGLASS_TENANT_ID"].split(":"))
     with _real_connect(replace(client.config(), database=_DB)) as root:
+        user = tenancy.get_user_by_firebase_uid(root, _BREAKGLASS_UID)
+        assert user is not None
         rid = destinations.create_destination(
-            root,
+            scoped(root, tenant_id=tenant, user_id=user.id),
             name="Renato Bardi",
             kind="pessoa",
             channel="telegram",
             address="123456",
-            tenant_id=tenant,
         )
     did = rid.id
 
@@ -126,13 +130,14 @@ def test_welcome_sends_email(app_db: Any, monkeypatch: pytest.MonkeyPatch) -> No
     tc, csrf = _login_csrf(app_db)
     tenant = RecordID(*os.environ["KUBO_BREAKGLASS_TENANT_ID"].split(":"))
     with _real_connect(replace(client.config(), database=_DB)) as root:
+        user = tenancy.get_user_by_firebase_uid(root, _BREAKGLASS_UID)
+        assert user is not None
         rid = destinations.create_destination(
-            root,
+            scoped(root, tenant_id=tenant, user_id=user.id),
             name="Claudia",
             kind="pessoa",
             channel="email",
             address="claudia@example.com",
-            tenant_id=tenant,
         )
     did = rid.id
 

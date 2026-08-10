@@ -142,12 +142,14 @@ def _resolve_secret(
     *,
     db: Any = None,
     tenant_id: Any = None,
+    user_id: Any = None,
 ) -> str | None:
     """Resolve a referência de segredo para o valor concreto; falha alto se ausente.
 
     `env:VAR` resolve contra ambiente. `tenant_credential:<nome>` resolve contra
-    a tabela `tenant_credential` do tenant ativo (KUBO-115) — requer `db` e
-    `tenant_id`. Qualquer outro formato já foi rejeitado pelo schema.
+    a tabela `tenant_credential` do tenant ativo (KUBO-115) — requer `db`,
+    `tenant_id` e `user_id` (a sessão escopada checa membership na criação).
+    Qualquer outro formato já foi rejeitado pelo schema.
     """
     if auth.secret_ref is None:
         return None
@@ -158,16 +160,13 @@ def _resolve_secret(
             raise ConfigError(f"variável de ambiente {var} (secret_ref) não está definida")
         return value
     if auth.secret_ref.startswith("tenant_credential:"):
-        if db is None or tenant_id is None:
+        if db is None or tenant_id is None or user_id is None:
             raise ConfigError("secret_ref tenant_credential requer contexto de tenant ativo")
         name = auth.secret_ref.removeprefix("tenant_credential:")
-        # Runtime sem user_id: membership já foi checada na borda da requisição.
-        secret = tenant_credentials.get_credential(
-            db,
-            tenant_id=tenant_id,
-            provider=name,
-            user_id=None,
-        )
+        from kubo.store.scoped import scoped
+
+        session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+        secret = tenant_credentials.get_credential(session, provider=name)
         if secret is None:
             raise ConfigError(f"credencial de tenant '{name}' não encontrada para o tenant ativo")
         return secret
@@ -180,6 +179,7 @@ def resolve_integrations(
     *,
     db: Any = None,
     tenant_id: Any = None,
+    user_id: Any = None,
 ) -> dict[str, ResolvedIntegration]:
     """Injeta só as integrações DECLARADAS ∩ existentes; nega o resto.
 
@@ -197,7 +197,7 @@ def resolve_integrations(
             name=integ.name,
             kind=integ.kind,
             auth_type=integ.auth.type,
-            secret=_resolve_secret(integ.auth, db=db, tenant_id=tenant_id),
+            secret=_resolve_secret(integ.auth, db=db, tenant_id=tenant_id, user_id=user_id),
             rate_limit=integ.rate_limit,
             base_url=integ.base_url,
         )
@@ -216,7 +216,9 @@ def resolve_readonly_secret(
     aqui, junto de `load_integrations`/`resolve_integrations`, não em nenhum dos
     dois domínios que a consomem."""
     catalog = load_integrations(db, tenant_id, user_id)
-    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id)[name]
+    resolved = resolve_integrations([name], catalog, db=db, tenant_id=tenant_id, user_id=user_id)[
+        name
+    ]
     if not resolved.secret:
         raise ConfigError(f"integração '{name}' sem token resolvido")
     return resolved.base_url or default_base_url, resolved.secret

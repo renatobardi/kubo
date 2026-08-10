@@ -37,7 +37,8 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
-from kubo.store import client, knowledge
+from kubo.store import client, knowledge, tenancy
+from kubo.store.scoped import PoolReader, ScopedStore, scoped
 
 _log = structlog.get_logger().bind(worker="neon_import")
 
@@ -578,12 +579,12 @@ def _playlist_canonicals(neon: Any) -> dict[Any, tuple[str, str | None]]:
     return index
 
 
-def _source_index(db: Any) -> dict[str, RecordID]:
+def _source_index(session: Any) -> dict[str, RecordID]:
     """dict canonical->source (uma leitura via `knowledge.list_sources`, invariante
     2: nenhum SELECT cru de `source` no script) para os handlers de item RESOLVEREM
     a source sem upsert — upsertar por linha reescreveria title/kind de source já
     viva (achado do advisor #1)."""
-    index = {s.canonical: s.id for s in knowledge.list_sources(db)}
+    index = {s.canonical: s.id for s in knowledge.list_sources(session)}
     _log.info("neon_import.source_index_built", count=len(index))
     return index
 
@@ -613,36 +614,42 @@ def _report_stats(report: ReconReport) -> dict[str, Any]:
 
 
 @contextmanager
-def _run_context(db: Any, report: ReconReport) -> Iterator[RecordID]:
+def _run_context(session: ScopedStore, report: ReconReport) -> Iterator[RecordID]:
     """Envolve cada handler de corpus: abre/fecha o run, redige o erro antes de
     persistir (invariante 8) e imprime o relatório no fim. Centraliza o boilerplate
     idêntico dos 7 handlers — o corpo do `with` só faz a lógica de linhas do corpus."""
-    run = knowledge.start_run(db, worker="neon_import")
+    run = knowledge.start_run(session, worker="neon_import")
     try:
         yield run
-        knowledge.finish_run(db, run, stats=_report_stats(report))
+        knowledge.finish_run(session, run, stats=_report_stats(report))
     except Exception as exc:
-        knowledge.fail_run(db, run, error=_safe_error(exc))
+        knowledge.fail_run(session, run, error=_safe_error(exc))
         raise
     finally:
         print(report.render())
 
 
 def _write_source(
-    db: Any, *, report: ReconReport, known: set[str], kind: str, canonical: str, title: str | None
+    session: ScopedStore,
+    *,
+    report: ReconReport,
+    known: set[str],
+    kind: str,
+    canonical: str,
+    title: str | None,
 ) -> None:
     """Grava (ou conta preexisting) uma source: `known` é o snapshot+dedupe
     intra-run (ADR-0012 §VIII aplicado a `source`)."""
     if canonical in known:
         report.record_preexisting()
         return
-    knowledge.upsert_source(db, kind=kind, canonical=canonical, title=title)
+    knowledge.upsert_source(session, kind=kind, canonical=canonical, title=title)
     known.add(canonical)
     report.record_imported()
 
 
 def _write_item(
-    db: Any,
+    session: ScopedStore,
     *,
     report: ReconReport,
     run: RecordID,
@@ -666,7 +673,7 @@ def _write_item(
         report.record_preexisting()
         return
     knowledge.upsert_item(
-        db,
+        session,
         source=source,
         external_id=args.external_id,
         content=args.content,
@@ -691,7 +698,9 @@ _TARGET_CHANNELS_QUERY = (
 _PLAYLISTS_QUERY = "SELECT id, youtube_playlist_id, title, deleted_at FROM playlists ORDER BY id"
 
 
-def _import_feed_sources(neon: Any, db: Any, report: ReconReport, known: set[str]) -> None:
+def _import_feed_sources(
+    neon: Any, session: ScopedStore, report: ReconReport, known: set[str]
+) -> None:
     """feed_sources -> source (kind = source_type do Neon: rss/html/hn), resolvida
     pelo mapa manual do dono (checkpoint 2026-07-06): nome sem mapeamento é rejeitado
     — o dono não confirmou o canonical, então não se inventa um a partir do endpoint."""
@@ -706,7 +715,7 @@ def _import_feed_sources(neon: Any, db: Any, report: ReconReport, known: set[str
             report.record_skipped(legacy_id, f"sem mapeamento manual: {row['name']!r}")
             continue
         _write_source(
-            db,
+            session,
             report=report,
             known=known,
             kind=row["source_type"],
@@ -715,7 +724,9 @@ def _import_feed_sources(neon: Any, db: Any, report: ReconReport, known: set[str
         )
 
 
-def _import_podcast_feeds(neon: Any, db: Any, report: ReconReport, known: set[str]) -> None:
+def _import_podcast_feeds(
+    neon: Any, session: ScopedStore, report: ReconReport, known: set[str]
+) -> None:
     """podcast_feeds -> source (kind=podcast, canonical=feed_url)."""
     for row in _iter_rows(neon, "ni_podcast_feeds", _PODCAST_FEEDS_QUERY):
         report.source_count += 1
@@ -724,7 +735,7 @@ def _import_podcast_feeds(neon: Any, db: Any, report: ReconReport, known: set[st
             report.record_skipped(legacy_id, "deleted")
             continue
         _write_source(
-            db,
+            session,
             report=report,
             known=known,
             kind="podcast",
@@ -733,7 +744,9 @@ def _import_podcast_feeds(neon: Any, db: Any, report: ReconReport, known: set[st
         )
 
 
-def _import_target_channels(neon: Any, db: Any, report: ReconReport, known: set[str]) -> None:
+def _import_target_channels(
+    neon: Any, session: ScopedStore, report: ReconReport, known: set[str]
+) -> None:
     """target_channels -> source (kind=youtube)."""
     for row in _iter_rows(neon, "ni_target_channels", _TARGET_CHANNELS_QUERY):
         report.source_count += 1
@@ -743,7 +756,7 @@ def _import_target_channels(neon: Any, db: Any, report: ReconReport, known: set[
             continue
         canonical = youtube_channel_canonical(row["youtube_channel_id"])
         _write_source(
-            db,
+            session,
             report=report,
             known=known,
             kind="youtube",
@@ -752,7 +765,9 @@ def _import_target_channels(neon: Any, db: Any, report: ReconReport, known: set[
         )
 
 
-def _import_playlists(neon: Any, db: Any, report: ReconReport, known: set[str]) -> None:
+def _import_playlists(
+    neon: Any, session: ScopedStore, report: ReconReport, known: set[str]
+) -> None:
     """playlists -> source (kind=youtube-playlist)."""
     for row in _iter_rows(neon, "ni_playlists", _PLAYLISTS_QUERY):
         report.source_count += 1
@@ -762,7 +777,7 @@ def _import_playlists(neon: Any, db: Any, report: ReconReport, known: set[str]) 
             continue
         canonical = youtube_playlist_canonical(row["youtube_playlist_id"])
         _write_source(
-            db,
+            session,
             report=report,
             known=known,
             kind="youtube-playlist",
@@ -771,7 +786,7 @@ def _import_playlists(neon: Any, db: Any, report: ReconReport, known: set[str]) 
         )
 
 
-def _import_synthetic_sources(db: Any, report: ReconReport, known: set[str]) -> None:
+def _import_synthetic_sources(session: ScopedStore, report: ReconReport, known: set[str]) -> None:
     """As 3 sources sintéticas sem cadastro no legado (email/linkedin/youtube,
     ADR-0012 §VII) — a HN única é absorvida pelo mapa manual em
     `_import_feed_sources`. `legacy:youtube` mora aqui (não em `_import_videos`)
@@ -779,7 +794,7 @@ def _import_synthetic_sources(db: Any, report: ReconReport, known: set[str]) -> 
     (advisor #1: handlers de item nunca upsertam)."""
     report.source_count += 1
     _write_source(
-        db,
+        session,
         report=report,
         known=known,
         kind="email",
@@ -788,7 +803,7 @@ def _import_synthetic_sources(db: Any, report: ReconReport, known: set[str]) -> 
     )
     report.source_count += 1
     _write_source(
-        db,
+        session,
         report=report,
         known=known,
         kind="linkedin",
@@ -797,7 +812,7 @@ def _import_synthetic_sources(db: Any, report: ReconReport, known: set[str]) -> 
     )
     report.source_count += 1
     _write_source(
-        db,
+        session,
         report=report,
         known=known,
         kind="youtube",
@@ -806,18 +821,21 @@ def _import_synthetic_sources(db: Any, report: ReconReport, known: set[str]) -> 
     )
 
 
-def _import_sources(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_sources(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """Corpus 'sources' (ADR-0012 §VII): cria/atualiza todas as sources do grafo a
     partir de feed_sources, podcast_feeds, target_channels, playlists + as
     sintéticas email/linkedin/youtube. Roda ANTES de qualquer item (§X: sources ->
     itens -> distillations)."""
-    with _run_context(db, report):
-        known = {s.canonical for s in knowledge.list_sources(db)}
-        _import_feed_sources(neon, db, report, known)
-        _import_podcast_feeds(neon, db, report, known)
-        _import_target_channels(neon, db, report, known)
-        _import_playlists(neon, db, report, known)
-        _import_synthetic_sources(db, report, known)
+    del reader  # leitura do pool não é usada no corpus de sources
+    with _run_context(session, report):
+        known = {s.canonical for s in knowledge.list_sources(session)}
+        _import_feed_sources(neon, session, report, known)
+        _import_podcast_feeds(neon, session, report, known)
+        _import_target_channels(neon, session, report, known)
+        _import_playlists(neon, session, report, known)
+        _import_synthetic_sources(session, report, known)
 
 
 _NEWS_QUERY = (
@@ -827,7 +845,7 @@ _NEWS_QUERY = (
 
 def _import_news_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     transcripts: Mapping[str, str],
@@ -852,7 +870,7 @@ def _import_news_row(
         legacy_id=row["url"],
     )
     _write_item(
-        db,
+        session,
         report=report,
         run=run,
         existing_external_ids=existing,
@@ -862,25 +880,25 @@ def _import_news_row(
     )
 
 
-def _import_news(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_news(neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport) -> None:
     """news_items -> item (ADR-0012 §VII): source resolvida pelo mapa manual do
     dono com fallback ao endpoint do feed_sources homônimo; content por
     prioridade transcript(news, source_ref=url) > body > excerpt."""
-    with _run_context(db, report) as run:
+    with _run_context(session, report) as run:
         transcripts = _transcript_map(neon, "news")
         feed_by_name = _feed_sources_by_name(neon)
-        existing = set(knowledge.item_index(db).keys())
-        source_index = _source_index(db)
+        existing = set(knowledge.item_index(reader).keys())
+        source_index = _source_index(session)
         for row in _iter_rows(neon, "ni_news_items", _NEWS_QUERY):
             report.source_count += 1
             _import_news_row(
-                row, db, report, run, transcripts, feed_by_name, source_index, existing
+                row, session, report, run, transcripts, feed_by_name, source_index, existing
             )
 
 
 def _import_video_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     channels: Mapping[Any, tuple[str, str | None]],
@@ -910,7 +928,7 @@ def _import_video_row(
         legacy_id=row["video_id"],
     )
     _write_item(
-        db,
+        session,
         report=report,
         run=run,
         existing_external_ids=existing,
@@ -935,21 +953,31 @@ _VIDEOS_QUERY = (
 )
 
 
-def _import_videos(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_videos(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """videos <- transcripts WHERE source_type='youtube' (ADR-0012 §VII: dirigido
     por transcripts, nunca por channel_videos/playlist_videos — senão orfanaria
     destilados de vídeos sem linha de cadastro). LEFT JOIN por youtube_video_id
     para título/data/url; canal > playlist > source sintética `legacy:youtube`."""
-    with _run_context(db, report) as run:
-        source_index = _source_index(db)
+    with _run_context(session, report) as run:
+        source_index = _source_index(session)
         legacy_source = _resolve_source(source_index, _SOURCE_YOUTUBE_CANONICAL)
         channels = _channel_canonicals(neon)
         playlists = _playlist_canonicals(neon)
-        existing = set(knowledge.item_index(db).keys())
+        existing = set(knowledge.item_index(reader).keys())
         for row in _iter_rows(neon, "ni_videos", _VIDEOS_QUERY):
             report.source_count += 1
             _import_video_row(
-                row, db, report, run, channels, playlists, source_index, legacy_source, existing
+                row,
+                session,
+                report,
+                run,
+                channels,
+                playlists,
+                source_index,
+                legacy_source,
+                existing,
             )
 
 
@@ -961,7 +989,7 @@ _PODCASTS_QUERY = (
 
 def _import_podcast_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     feeds: Mapping[Any, tuple[str, str | None]],
@@ -987,7 +1015,7 @@ def _import_podcast_row(
         legacy_id=row["guid"],
     )
     _write_item(
-        db,
+        session,
         report=report,
         run=run,
         existing_external_ids=existing,
@@ -997,16 +1025,20 @@ def _import_podcast_row(
     )
 
 
-def _import_podcasts(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_podcasts(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """podcast_episodes -> item; source = podcast_feeds via feed_id."""
-    with _run_context(db, report) as run:
+    with _run_context(session, report) as run:
         feeds = _podcast_feed_map(neon)
         transcripts = _transcript_map(neon, "podcast")
-        existing = set(knowledge.item_index(db).keys())
-        source_index = _source_index(db)
+        existing = set(knowledge.item_index(reader).keys())
+        source_index = _source_index(session)
         for row in _iter_rows(neon, "ni_podcast_episodes", _PODCASTS_QUERY):
             report.source_count += 1
-            _import_podcast_row(row, db, report, run, feeds, transcripts, source_index, existing)
+            _import_podcast_row(
+                row, session, report, run, feeds, transcripts, source_index, existing
+            )
 
 
 _EMAILS_QUERY = "SELECT id, message_id, sender, subject, body, received_at FROM emails ORDER BY id"
@@ -1014,7 +1046,7 @@ _EMAILS_QUERY = "SELECT id, message_id, sender, subject, body, received_at FROM 
 
 def _import_email_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     source: RecordID,
@@ -1033,7 +1065,7 @@ def _import_email_row(
         extra={"sender": row["sender"]},
     )
     _write_item(
-        db,
+        session,
         report=report,
         run=run,
         existing_external_ids=existing,
@@ -1043,16 +1075,18 @@ def _import_email_row(
     )
 
 
-def _import_emails(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_emails(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """emails -> item; source sintética `legacy:email`; sender preservado no
     metadata (ADR-0012 §VII: parsing de remetente em sources é scope creep)."""
-    with _run_context(db, report) as run:
-        source = _resolve_source(_source_index(db), _SOURCE_EMAIL_CANONICAL)
+    with _run_context(session, report) as run:
+        source = _resolve_source(_source_index(session), _SOURCE_EMAIL_CANONICAL)
         transcripts = _transcript_map(neon, "email")
-        existing = set(knowledge.item_index(db).keys())
+        existing = set(knowledge.item_index(reader).keys())
         for row in _iter_rows(neon, "ni_emails", _EMAILS_QUERY):
             report.source_count += 1
-            _import_email_row(row, db, report, run, source, transcripts, existing)
+            _import_email_row(row, session, report, run, source, transcripts, existing)
 
 
 _LINKEDIN_QUERY = "SELECT id, url, author, body, created_at FROM linkedin_posts ORDER BY id"
@@ -1060,7 +1094,7 @@ _LINKEDIN_QUERY = "SELECT id, url, author, body, created_at FROM linkedin_posts 
 
 def _import_linkedin_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     source: RecordID,
@@ -1079,7 +1113,7 @@ def _import_linkedin_row(
         extra={"author": row["author"]},
     )
     _write_item(
-        db,
+        session,
         report=report,
         run=run,
         existing_external_ids=existing,
@@ -1089,16 +1123,18 @@ def _import_linkedin_row(
     )
 
 
-def _import_linkedin(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_linkedin(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """linkedin_posts -> item; source sintética `legacy:linkedin`; content por
     prioridade transcript(linkedin, source_ref=url) > body; author no metadata."""
-    with _run_context(db, report) as run:
-        source = _resolve_source(_source_index(db), _SOURCE_LINKEDIN_CANONICAL)
+    with _run_context(session, report) as run:
+        source = _resolve_source(_source_index(session), _SOURCE_LINKEDIN_CANONICAL)
         transcripts = _transcript_map(neon, "linkedin")
-        existing = set(knowledge.item_index(db).keys())
+        existing = set(knowledge.item_index(reader).keys())
         for row in _iter_rows(neon, "ni_linkedin_posts", _LINKEDIN_QUERY):
             report.source_count += 1
-            _import_linkedin_row(row, db, report, run, source, transcripts, existing)
+            _import_linkedin_row(row, session, report, run, source, transcripts, existing)
 
 
 _DISTILLATIONS_QUERY = "SELECT id, source_key, content, structured FROM distillations ORDER BY id"
@@ -1106,7 +1142,7 @@ _DISTILLATIONS_QUERY = "SELECT id, source_key, content, structured FROM distilla
 
 def _import_distillation_row(
     row: Mapping[str, Any],
-    db: Any,
+    session: ScopedStore,
     report: ReconReport,
     run: RecordID,
     item_by_external_id: Mapping[str, RecordID],
@@ -1117,7 +1153,7 @@ def _import_distillation_row(
     if item is None:
         report.record_skipped(legacy_id, "órfã: item inexistente")
         return
-    if knowledge.distilled_for(db, item):
+    if knowledge.distilled_for(session, item):
         report.record_preexisting()
         return
     args = distilled_args(
@@ -1127,25 +1163,27 @@ def _import_distillation_row(
         report.record_skipped(legacy_id, "sem summary")
         return
     knowledge.insert_distilled(
-        db, item=item, summary=args.summary, chunks=[], claims=args.claims, run=run
+        session, item=item, summary=args.summary, chunks=[], claims=args.claims, run=run
     )
     report.record_imported()
 
 
-def _import_distillations(neon: Any, db: Any, report: ReconReport) -> None:
+def _import_distillations(
+    neon: Any, session: ScopedStore, reader: PoolReader, report: ReconReport
+) -> None:
     """distillations -> distilled (ADR-0012 §III/§XI): derived_from resolvido por
     dict em memória external_id->item (uma query); distillation cujo source_key
     não resolve a um item vira órfã (skipped); item já destilado (distilled_for
     não vazio) marca preexisting (idempotência do re-run). Roda POR ÚLTIMO —
     derived_from é ENFORCED (§X)."""
-    with _run_context(db, report) as run:
-        item_by_external_id = knowledge.item_index(db)
+    with _run_context(session, report) as run:
+        item_by_external_id = knowledge.item_index(reader)
         for row in _iter_rows(neon, "ni_distillations", _DISTILLATIONS_QUERY):
             report.source_count += 1
-            _import_distillation_row(row, db, report, run, item_by_external_id)
+            _import_distillation_row(row, session, report, run, item_by_external_id)
 
 
-def _feed_map(neon: Any, db: Any) -> None:
+def _feed_map(neon: Any, session: ScopedStore) -> None:
     """Corpus 'feed-map', READ-ONLY: lista feed_sources do Neon lado a lado com as
     sources do grafo (kind=rss) + sugestão de correspondência automática — SÓ
     dica, o dono decide (ADR-0012 §VII)."""
@@ -1157,13 +1195,13 @@ def _feed_map(neon: Any, db: Any) -> None:
     ]
     graph = [
         GraphSource(id=str(s.id), canonical=s.canonical, title=s.title)
-        for s in knowledge.list_sources(db)
+        for s in knowledge.list_sources(session)
         if s.kind == "rss"
     ]
     print(render_feed_map(feeds, graph))
 
 
-_HANDLERS: dict[str, Callable[[Any, Any, ReconReport], None]] = {
+_HANDLERS: dict[str, Callable[[Any, ScopedStore, PoolReader, ReconReport], None]] = {
     "sources": _import_sources,
     "news": _import_news,
     "videos": _import_videos,
@@ -1191,11 +1229,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     neon = _connect_neon()
     try:
         with client.connect(client.config()) as db:
+            user, tenant = tenancy.get_or_create_user_and_tenant(
+                db, firebase_uid="neon-import", email="neon-import@kubo.local"
+            )
+            session = scoped(db, tenant_id=tenant.id, user_id=user.id)
+            reader = PoolReader(db)
             if args.corpus == "feed-map":
-                _feed_map(neon, db)
+                _feed_map(neon, session)
             else:
                 report = ReconReport(corpus=args.corpus)
-                _HANDLERS[args.corpus](neon, db, report)
+                _HANDLERS[args.corpus](neon, session, reader, report)
         return 0
     finally:
         neon.close()

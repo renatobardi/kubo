@@ -22,7 +22,7 @@ from surrealdb import RecordID
 
 from kubo.api.csrf import csrf_token, verify_csrf
 from kubo.api.rendering import templates
-from kubo.api.session import SessionContext, resolve_session
+from kubo.api.session import resolve_session
 from kubo.distribution import email as email_distribution
 from kubo.distribution import telegram as telegram_distribution
 from kubo.distribution import welcome as welcome_distribution
@@ -41,6 +41,7 @@ from kubo.store import destinations as destination_store
 from kubo.store import invites as invite_store
 from kubo.store import settings as settings_store
 from kubo.store.knowledge import insert_dispatch
+from kubo.store.scoped import ScopedStore, scoped
 
 _log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -164,10 +165,16 @@ def _render_list(
     if db is None:
         with client.connect() as ro:
             return _render_list(request, notice=notice, status=status, db=ro)
-    db_destinations = destination_store.list_destinations(db)
-    db_invites = [i for i in invite_store.list_invites(db) if i.accepted_at is None]
+    ctx = resolve_session(request, db)
+    if ctx is None:
+        return PlainTextResponse(_DENIED, status_code=403)
+    session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+    db_destinations = destination_store.list_destinations(session)
+    db_invites = [
+        i for i in invite_store.list_invites(db, tenant_id=ctx.tenant_id) if i.accepted_at is None
+    ]
     settings = settings_store.get_settings(db)
-    active = destination_store.active_destinations(db)
+    active = destination_store.active_destinations(session)
     cron = settings.digest_cron if settings else None
     artefatos = _digest_artefatos(cron, [d.name for d in active])
 
@@ -222,13 +229,13 @@ def create(
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
             try:
+                session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
                 destination_store.create_destination(
-                    db,
+                    session,
                     name=payload.name,
                     kind=payload.kind,
                     channel=payload.channel,
                     address=payload.address,
-                    tenant_id=ctx.tenant_id,
                 )
             except DuplicateDestinationError:
                 return _render_list(
@@ -288,7 +295,15 @@ def create_invite(
         return _render_list(request, notice=format_validation_error(exc), status=400)
     try:
         with client.connect_rw() as db:
-            invite = invite_store.create_invite(db, name=payload.name, email=payload.email)
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
+            invite = invite_store.create_invite(
+                db,
+                tenant_id=ctx.tenant_id,
+                name=payload.name,
+                email=payload.email,
+            )
     except ConfigError:
         _log.warning(_WRITE_LOG)
         return PlainTextResponse(_WRITE_UNAVAILABLE, status_code=503)
@@ -317,8 +332,11 @@ def resend_invite(request: Request, iid: str, csrf: Annotated[str, Form()] = "")
     invite_id = RecordID("invite", iid)
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
             try:
-                invite = invite_store.resend_invite(db, invite_id)
+                invite = invite_store.resend_invite(db, tenant_id=ctx.tenant_id, id=invite_id)
             except InviteNotResendableError:
                 return _render_list(request, notice=_INVITE_RESEND_NOT_EXPIRED, status=409, db=db)
     except ConfigError:
@@ -361,7 +379,11 @@ def _render_edit(
 def edit_page(request: Request, did: str) -> Response:
     """Edit form for ONE destination. Archived/missing redirects back to the list."""
     with client.connect() as ro:
-        detail = destination_store.get_destination(ro, RecordID("destination", did))
+        ctx = resolve_session(request, ro)
+        if ctx is None:
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        detail = destination_store.get_destination(session, RecordID("destination", did))
     if detail is None or detail.archived_at is not None:
         return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
     return _render_edit(request, detail)
@@ -383,12 +405,20 @@ def edit(
         payload = EditDestination(name=name, address=address)  # type: ignore[arg-type]
     except ValidationError as exc:
         with client.connect() as ro:
-            detail = destination_store.get_destination(ro, destination_id)
+            ctx = resolve_session(request, ro)
+            if ctx is None:
+                return _render_list(request, notice=_STALE_NOTICE, status=409)
+            session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            detail = destination_store.get_destination(session, destination_id)
         if detail is None or detail.archived_at is not None:
             return _render_list(request, notice=_STALE_NOTICE, status=409)
         return _render_edit(request, detail, notice=format_validation_error(exc), status=400)
     with client.connect() as ro:
-        detail = destination_store.get_destination(ro, destination_id)
+        ctx = resolve_session(request, ro)
+        if ctx is None:
+            return _render_list(request, notice=_STALE_NOTICE, status=409)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        detail = destination_store.get_destination(session, destination_id)
     if detail is None or detail.archived_at is not None:
         return _render_list(request, notice=_STALE_NOTICE, status=409)
     return _apply_edit(request, destination_id, detail, payload)
@@ -400,9 +430,13 @@ def _apply_edit(
     """Apply the edit, mapping duplicate (409 on the form) and staleness (409 on the list)."""
     try:
         with client.connect_rw() as db:
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
                 destination_store.edit_destination(
-                    db, id=destination_id, name=payload.name, address=payload.address
+                    session, id=destination_id, name=payload.name, address=payload.address
                 )
             except DuplicateDestinationError:
                 return _render_edit(
@@ -422,7 +456,7 @@ def _apply_edit(
 def _lifecycle_action(
     request: Request,
     csrf: str,
-    action: Callable[[SessionContext, Any], None],
+    action: Callable[[ScopedStore], None],
 ) -> Response:
     """Run a lifecycle action following ADR-0018:
     CSRF (403) → connect_rw (503) → store action → redirect 303."""
@@ -433,8 +467,9 @@ def _lifecycle_action(
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
-                action(ctx, db)
+                action(session)
             except StaleDestinationError:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
             return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
@@ -450,11 +485,10 @@ def disable(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: destination_store.set_destination_enabled(
-            db,
+        lambda session: destination_store.set_destination_enabled(
+            session,
             id=rid,
             enabled=False,
-            tenant_id=ctx.tenant_id,
         ),
     )
 
@@ -469,17 +503,16 @@ def enable(
     """Resume a paused destination (`enabled=true`). mode=recente advances the watermark."""
     rid = RecordID("destination", did)
 
-    def _action(ctx: SessionContext, db: Any) -> None:
-        destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
+    def _action(session: ScopedStore) -> None:
+        destination = destination_store.get_destination(session, rid)
         if destination is None:
             raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.set_destination_enabled(
-            db,
+            session,
             id=rid,
             enabled=True,
             mode=mode,
             destination=destination,
-            tenant_id=ctx.tenant_id,
         )
 
     return _lifecycle_action(request, csrf, _action)
@@ -492,7 +525,7 @@ def archive(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Re
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: destination_store.archive_destination(db, id=rid, tenant_id=ctx.tenant_id),
+        lambda session: destination_store.archive_destination(session, id=rid),
     )
 
 
@@ -506,16 +539,15 @@ def restore(
     """Restore an archived destination. mode=recente advances the watermark."""
     rid = RecordID("destination", did)
 
-    def _action(ctx: SessionContext, db: Any) -> None:
-        destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
+    def _action(session: ScopedStore) -> None:
+        destination = destination_store.get_destination(session, rid)
         if destination is None:
             raise StaleDestinationError(f"destination not found: {rid}")
         destination_store.restore_destination(
-            db,
+            session,
             id=rid,
             mode=mode,
             destination=destination,
-            tenant_id=ctx.tenant_id,
         )
 
     return _lifecycle_action(request, csrf, _action)
@@ -543,9 +575,13 @@ def delete_page(request: Request, did: str) -> Response:
     """Delete confirmation screen: the double-check."""
     rid = RecordID("destination", did)
     with client.connect() as ro:
-        detail = destination_store.get_destination(ro, rid)
+        ctx = resolve_session(request, ro)
+        if ctx is None:
+            return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        detail = destination_store.get_destination(session, rid)
         dispatches = (
-            destination_store.destination_dispatch_count(ro, rid) if detail is not None else 0
+            destination_store.destination_dispatch_count(session, rid) if detail is not None else 0
         )
     if detail is None:
         return RedirectResponse(_DESTINATIONS_ROUTE, status_code=303)
@@ -560,10 +596,14 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
     rid = RecordID("destination", did)
     try:
         with client.connect_rw() as db:
-            detail = destination_store.get_destination(db, rid)
+            ctx = resolve_session(request, db)
+            if ctx is None:
+                return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            detail = destination_store.get_destination(session, rid)
             if detail is None:
                 return _render_list(request, notice=_STALE_NOTICE, status=409, db=db)
-            dispatches = destination_store.destination_dispatch_count(db, rid)
+            dispatches = destination_store.destination_dispatch_count(session, rid)
             if dispatches > 0:
                 return _render_delete(
                     request,
@@ -573,12 +613,12 @@ def delete(request: Request, did: str, csrf: Annotated[str, Form()] = "") -> Res
                     status=409,
                 )
             try:
-                destination_store.delete_destination(db, id=rid)
+                destination_store.delete_destination(session, id=rid)
             except DestinationHasHistoryError:
                 return _render_delete(
                     request,
                     detail,
-                    destination_store.destination_dispatch_count(db, rid),
+                    destination_store.destination_dispatch_count(session, rid),
                     notice="Esse destino tem envios e não pode ser apagado — arquive.",
                     status=409,
                 )
@@ -623,7 +663,8 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
-            destination = destination_store.get_destination(db, rid, tenant_id=ctx.tenant_id)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            destination = destination_store.get_destination(session, rid)
             if (
                 destination is None
                 or destination.archived_at is not None
@@ -652,9 +693,7 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
                     error_kind="SenderError",
                 )
                 insert_dispatch(
-                    db,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
+                    session,
                     destination=rid,
                     channel=destination.channel,
                     status="error",
@@ -668,9 +707,7 @@ def send_welcome(request: Request, did: str, csrf: Annotated[str, Form()] = "") 
                     request, notice="Falha ao enviar a mensagem de boas-vindas.", status=502, db=db
                 )
             insert_dispatch(
-                db,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
+                session,
                 destination=rid,
                 channel=destination.channel,
                 status="ok",

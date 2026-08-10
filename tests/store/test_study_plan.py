@@ -21,6 +21,7 @@ from surrealdb import RecordID
 
 from kubo.errors import StoreError
 from kubo.store import client, migrations, tenancy
+from kubo.store.scoped import scoped
 from kubo.store.study import (
     activate_plan,
     create_lesson,
@@ -95,12 +96,10 @@ def _topic_with_material(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> tuple[RecordID, RecordID]:
     """Cria um tema com 1 material, 3 capítulos e 6 seções (2 por capítulo)."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
     chapters = _chapters()
     material = create_material(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic.id,
         title="Livro",
         fmt="epub",
@@ -118,7 +117,9 @@ def _section_ids(
     db: Any, tenant_id: RecordID, user_id: RecordID, material_id: RecordID
 ) -> list[RecordID]:
     """Busca os RecordIDs das seções do material, na ordem (chapter_seq, section_seq)."""
-    sections = list_all_sections(db, tenant_id=tenant_id, user_id=user_id, material_id=material_id)
+    sections = list_all_sections(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), material_id=material_id
+    )
     return [s.id for s in sections]
 
 
@@ -129,23 +130,25 @@ def test_set_topic_state_transitions_draft_to_planning(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Transição draft → planning."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Estudo")
-    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id, state="planning")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Estudo")
+    set_topic_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id, state="planning"
+    )
 
-    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    updated = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id)
     assert updated is not None
     assert updated.state == "planning"
 
 
 def test_set_topic_state_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Outro membro não pode transicionar tema alheio."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Meu")
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Meu")
     other = tenancy.create_user(db, firebase_uid="other-plan-uid")
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
 
     with pytest.raises(StoreError):
         set_topic_state(
-            db, tenant_id=tenant_id, user_id=other.id, topic_id=topic.id, state="planning"
+            scoped(db, tenant_id=tenant_id, user_id=other.id), topic_id=topic.id, state="planning"
         )
 
 
@@ -160,9 +163,7 @@ def test_save_plan_proposal_creates_plan_and_entries(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[
             ("Lição 1: Intro", [sids[0], sids[1], sids[2]]),
@@ -185,8 +186,10 @@ def test_get_plan_for_topic_returns_none_if_no_plan(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Tema sem plano devolve (None, [])."""
-    topic = create_topic(db, tenant_id=tenant_id, user_id=user_id, title="Sem plano")
-    plan, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic.id)
+    topic = create_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), title="Sem plano")
+    plan, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic.id
+    )
     assert plan is None
     assert entries == []
 
@@ -199,14 +202,14 @@ def test_get_plan_for_topic_returns_saved_plan(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Lição única", sids)],
     )
 
-    plan, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    plan, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert plan is not None
     assert plan.status == "proposed"
     assert len(entries) == 1
@@ -222,21 +225,19 @@ def test_save_plan_proposal_replaces_existing(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Velha", sids)],
     )
     save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Nova 1", [sids[0]]), ("Nova 2", [sids[1], sids[2]])],
     )
 
-    plan, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    plan, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert plan is not None
     assert len(entries) == 2
     assert entries[0].title == "Nova 1"
@@ -254,23 +255,19 @@ def test_set_plan_cadence_updates_weekdays_and_target_date(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]]), ("L2", [sids[1]]), ("L3", [sids[2]])],
     )
 
     set_plan_cadence(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan.id,
         weekdays=["mon", "wed", "fri"],
     )
 
     updated_plan, _ = get_plan_for_topic(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
     )
     assert updated_plan is not None
     assert sorted(updated_plan.weekdays) == ["fri", "mon", "wed"]
@@ -285,20 +282,12 @@ def test_set_plan_cadence_rejects_invalid_weekday(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        topic_id=topic_id,
-        entries=[("L1", sids)],
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id, entries=[("L1", sids)]
     )
 
     with pytest.raises(ValueError, match="inválido"):
         set_plan_cadence(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            plan_id=plan.id,
-            weekdays=["funday"],
+            scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan.id, weekdays=["funday"]
         )
 
 
@@ -311,23 +300,21 @@ def test_swap_plan_entries_swaps_seqs(db: Any, tenant_id: RecordID, user_id: Rec
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]]), ("L2", [sids[1]]), ("L3", [sids[2]])],
     )
 
     swap_plan_entries(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan.id,
         entry_a=entries[0].id,
         entry_b=entries[2].id,
     )
 
-    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, updated = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert updated[0].seq == 1
     assert updated[0].title == "L3"
     assert updated[1].seq == 2
@@ -341,9 +328,7 @@ def test_swap_plan_entries_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
     sids = _section_ids(db, tenant_id, user_id, material_id)
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
@@ -352,9 +337,7 @@ def test_swap_plan_entries_scoped_to_owner(db: Any, tenant_id: RecordID, user_id
 
     with pytest.raises(StoreError):
         swap_plan_entries(
-            db,
-            tenant_id=tenant_id,
-            user_id=other.id,
+            scoped(db, tenant_id=tenant_id, user_id=other.id),
             plan_id=plan.id,
             entry_a=entries[0].id,
             entry_b=entries[1].id,
@@ -369,23 +352,19 @@ def test_remove_section_from_entry_updates_sections(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0], sids[1]]), ("L2", [sids[2]])],
     )
 
     ok = remove_section_from_entry(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        entry_id=entries[0].id,
-        section_id=sids[1],
+        scoped(db, tenant_id=tenant_id, user_id=user_id), entry_id=entries[0].id, section_id=sids[1]
     )
 
     assert ok is True
-    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, updated = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert updated[0].sections == [sids[0]]
     assert updated[1].sections == [sids[2]]
 
@@ -398,23 +377,19 @@ def test_remove_section_from_entry_rejects_last_section(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]])],
     )
 
     ok = remove_section_from_entry(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        entry_id=entries[0].id,
-        section_id=sids[0],
+        scoped(db, tenant_id=tenant_id, user_id=user_id), entry_id=entries[0].id, section_id=sids[0]
     )
 
     assert ok is False
-    _, updated = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, updated = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert updated[0].sections == [sids[0]]
 
 
@@ -425,9 +400,7 @@ def test_remove_section_from_entry_scoped_to_owner(
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
     sids = _section_ids(db, tenant_id, user_id, material_id)
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0], sids[1]])],
     )
@@ -436,9 +409,7 @@ def test_remove_section_from_entry_scoped_to_owner(
 
     with pytest.raises(StoreError):
         remove_section_from_entry(
-            db,
-            tenant_id=tenant_id,
-            user_id=other.id,
+            scoped(db, tenant_id=tenant_id, user_id=other.id),
             entry_id=entries[0].id,
             section_id=sids[0],
         )
@@ -452,31 +423,23 @@ def test_replace_plan_entries_preserves_cadence(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
     set_plan_cadence(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        plan_id=plan.id,
-        weekdays=["mon", "wed"],
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan.id, weekdays=["mon", "wed"]
     )
 
     # Replace entries — cadência deve sobreviver.
     replace_plan_entries(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Tudo junto", sids)],
     )
 
     updated_plan, updated_entries = get_plan_for_topic(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
     )
     assert updated_plan is not None
     assert sorted(updated_plan.weekdays) == ["mon", "wed"]
@@ -499,9 +462,7 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     plan, _ = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0]]), ("L2", [sids[1]])],
     )
@@ -517,15 +478,13 @@ def test_replace_plan_entries_without_cadence_does_not_crash(
 
     # Replace entries — não deve crashar mesmo sem cadência.
     replace_plan_entries(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Tudo junto", sids)],
     )
 
     updated_plan, updated_entries = get_plan_for_topic(
-        db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
     )
     assert updated_plan is not None
     assert updated_plan.weekdays == []
@@ -545,14 +504,14 @@ def test_get_sections_for_entry_returns_sections_in_order(
     sids = _section_ids(db, tenant_id, user_id, material_id)
 
     _, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("L1", [sids[0], sids[1], sids[2]])],
     )
 
-    sections = get_sections_for_entry(db, tenant_id=tenant_id, user_id=user_id, entry=entries[0])
+    sections = get_sections_for_entry(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), entry=entries[0]
+    )
     assert len(sections) == 3
     assert [str(s.id) for s in sections] == [str(sids[0]), str(sids[1]), str(sids[2])]
     # Cada seção tem título e sumário.
@@ -566,10 +525,14 @@ def test_get_sections_for_entry_returns_sections_in_order(
 def test_set_topic_state_planning_to_draft(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Transição planning → draft preserva materiais."""
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
-    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="planning")
-    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="draft")
+    set_topic_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id, state="planning"
+    )
+    set_topic_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id, state="draft"
+    )
 
-    updated = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    updated = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     assert updated is not None
     assert updated.state == "draft"
 
@@ -586,16 +549,16 @@ def _plan_with_entries(
     """
     topic_id, material_id = _topic_with_material(db, tenant_id, user_id)
     sids = _section_ids(db, tenant_id, user_id, material_id)
-    set_topic_state(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id, state="planning")
+    set_topic_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id, state="planning"
+    )
     plan, entries = save_plan_proposal(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         entries=[("Lição 1", [sids[0]])],
     )
     set_plan_cadence(
-        db, tenant_id=tenant_id, user_id=user_id, plan_id=plan.id, weekdays=["mon", "wed"]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan.id, weekdays=["mon", "wed"]
     )
     return topic_id, plan.id
 
@@ -605,13 +568,15 @@ def test_activate_plan_transitions_to_scheduled(
 ) -> None:
     """activate_plan seta topic.state='scheduled', plan.status='active', activated_at."""
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
 
-    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    topic = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     assert topic is not None
     assert topic.state == "scheduled"
 
-    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    plan, _ = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert plan is not None
     assert plan.status == "active"
     assert plan.activated_at is not None
@@ -623,7 +588,7 @@ def test_activate_plan_scoped_to_owner(db: Any, tenant_id: RecordID, user_id: Re
     other = tenancy.create_user(db, firebase_uid="other-activate-uid")
     tenancy.create_membership(db, user_id=other.id, tenant_id=tenant_id, role="member")
     with pytest.raises(StoreError):
-        activate_plan(db, tenant_id=tenant_id, user_id=other.id, topic_id=topic_id)
+        activate_plan(scoped(db, tenant_id=tenant_id, user_id=other.id), topic_id=topic_id)
 
 
 def test_list_topics_by_state_returns_only_matching(
@@ -631,32 +596,38 @@ def test_list_topics_by_state_returns_only_matching(
 ) -> None:
     """list_topics_by_state filtra por estado e por owner."""
     topic_id, _ = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
 
-    scheduled = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="scheduled")
+    scheduled = list_topics_by_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), state="scheduled"
+    )
     assert len(scheduled) == 1
     assert str(scheduled[0].id) == str(topic_id)
 
-    running = list_topics_by_state(db, tenant_id=tenant_id, user_id=user_id, state="running")
+    running = list_topics_by_state(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), state="running"
+    )
     assert running == []
 
 
 def test_create_lesson_persists_lesson(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """create_lesson cria registro de lesson para um plan_entry."""
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     from datetime import date, datetime
 
     lesson_date = date(2026, 8, 4)
     create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
         scheduled_for=datetime(lesson_date.year, lesson_date.month, lesson_date.day),
     )
-    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    lessons = list_lessons_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert len(lessons) == 1
     assert lessons[0].is_placeholder is True
 
@@ -664,23 +635,21 @@ def test_create_lesson_persists_lesson(db: Any, tenant_id: RecordID, user_id: Re
 def test_create_lesson_unique_per_day(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Não pode criar duas lições para o mesmo dia (UNIQUE lesson_plan_day)."""
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    _, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     from datetime import datetime
 
     lesson_dt = datetime(2026, 8, 4)
     create_lesson(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
         scheduled_for=lesson_dt,
     )
     with pytest.raises(StoreError):
         create_lesson(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             plan_id=plan_id,
             plan_entry_id=entries[0].id,
             scheduled_for=lesson_dt,
@@ -692,15 +661,17 @@ def test_deactivate_plan_reverts_to_planning(
 ) -> None:
     """deactivate_plan: scheduled → planning, reverte status + activated_at."""
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
 
-    deactivate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    deactivate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
 
-    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    topic = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     assert topic is not None
     assert topic.state == "planning"
 
-    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    plan, _ = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert plan is not None
     assert plan.status == "proposed"
     assert plan.activated_at is None
@@ -713,13 +684,13 @@ def test_deactivate_plan_cas_blocks_running(
     from datetime import datetime
 
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
-    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
+    _, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     # Simula scheduler: transiciona scheduled → running + congela plano.
     transition_to_running(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
@@ -727,13 +698,15 @@ def test_deactivate_plan_cas_blocks_running(
     )
 
     # deactivate_plan não reverte (CAS AND state='scheduled' + AND status='active' falham).
-    deactivate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    deactivate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
 
-    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    topic = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     assert topic is not None
     assert topic.state == "running"  # não reverteu
 
-    plan, _ = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    plan, _ = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
     assert plan is not None
     assert plan.status == "running"  # transition_to_running congelou o plano
     assert plan.activated_at is not None
@@ -744,23 +717,25 @@ def test_transition_to_running_atomic(db: Any, tenant_id: RecordID, user_id: Rec
     from datetime import datetime
 
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
-    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
+    _, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
 
     transition_to_running(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
         scheduled_for=datetime(2026, 8, 4),
     )
 
-    topic = get_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    topic = get_topic(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
     assert topic is not None
     assert topic.state == "running"
-    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    lessons = list_lessons_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert len(lessons) == 1
     assert lessons[0].is_placeholder is True
 
@@ -772,13 +747,13 @@ def test_transition_to_running_cas_idempotent(
     from datetime import datetime
 
     topic_id, plan_id = _plan_with_entries(db, tenant_id, user_id)
-    activate_plan(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
-    _, entries = get_plan_for_topic(db, tenant_id=tenant_id, user_id=user_id, topic_id=topic_id)
+    activate_plan(scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id)
+    _, entries = get_plan_for_topic(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), topic_id=topic_id
+    )
 
     transition_to_running(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
@@ -786,13 +761,13 @@ def test_transition_to_running_cas_idempotent(
     )
     # 2ª chamada: CAS AND state='scheduled' falha → não cria 2ª lição.
     transition_to_running(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         topic_id=topic_id,
         plan_id=plan_id,
         plan_entry_id=entries[0].id,
         scheduled_for=datetime(2026, 8, 4),
     )
-    lessons = list_lessons_for_plan(db, tenant_id=tenant_id, user_id=user_id, plan_id=plan_id)
+    lessons = list_lessons_for_plan(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), plan_id=plan_id
+    )
     assert len(lessons) == 1

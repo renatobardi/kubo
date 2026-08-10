@@ -24,6 +24,7 @@ from kubo.runtime.flow_templates import load_flow_template
 from kubo.runtime.personas import load_personas_from_dir
 from kubo.store import client, migrations, tenancy
 from kubo.store.flows import create_task, decide_gate, instantiate_flow, transition_task
+from kubo.store.scoped import scoped
 
 _RW_DB = "test_rw_user"
 _RW_USER = "kubo_rw"
@@ -82,55 +83,44 @@ def test_editor_role_suffices_for_gate_writes(rw_env: tuple[Any, Any, RecordID, 
     footgun do no-op silencioso no nível da credencial): se EDITOR não bastasse, nada gravaria."""
     root, rw, tenant_id, user_id = rw_env
     template = load_flow_template(_CATALOG / "flow_templates" / "analysis-review.yaml")
+    session = scoped(rw, tenant_id=tenant_id, user_id=user_id)
 
     inst = instantiate_flow(
-        rw,
+        session,
         template=template,
         personas=_PERSONAS,
         question="q?",
-        tenant_id=tenant_id,
-        user_id=user_id,
     )
     analyst = create_task(
-        rw,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=inst.flow,
         persona=inst.personas["analista"],
         state="created",
     )
     transition_task(
-        rw,
+        session,
         analyst,
         from_state="created",
         to_state="analyzing",
-        tenant_id=tenant_id,
-        user_id=user_id,
     )
     transition_task(
-        rw,
+        session,
         analyst,
         from_state="analyzing",
         to_state="awaiting_review",
-        tenant_id=tenant_id,
-        user_id=user_id,
     )
     gate = create_task(
-        rw,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         flow=inst.flow,
         persona=inst.personas["humano"],
         state="awaiting_review",
     )
     decide_gate(
-        rw,
+        session,
         analyst_task=analyst,
         gate_task=gate,
         to_state="delivered",
         decision="approved",
-        tenant_id=tenant_id,
-        user_id=user_id,
     )
 
     # lê COMO ROOT: as escritas do EDITOR persistiram de verdade

@@ -20,6 +20,7 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.api.session import resolve_session as _real_resolve_session
 from kubo.runtime.flow_runner import run_flow
 from kubo.store import catalog as catalog_store
 from kubo.store import client, knowledge, migrations
@@ -63,14 +64,14 @@ class _FakeEmbedder:
 
 def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, title: str) -> None:
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical=f"src::{title}"
     )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"e::{title}", content="x", title=title
     )
     chunk = Chunk(text="s", seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="s", chunks=[chunk]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary="s", chunks=[chunk]
     )
 
 
@@ -85,6 +86,9 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
     monkeypatch.setenv("KUBO_BASE_URL", "https://kubo.example")
     # Restaura a conexão REAL (a conftest stuba client.connect por default para as leituras).
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
+    # Restaura session real na rota (conftest substitui por fakes).
+    monkeypatch.setattr("kubo.api.routes.flows.resolve_session", _real_resolve_session)
+    monkeypatch.setattr("kubo.api.routes.flows.scoped", scoped)
     sent: list[Any] = []
     monkeypatch.setattr("kubo.runtime.flow_runner.send_telegram", lambda **kw: sent.append(kw))
 
@@ -115,7 +119,11 @@ def gated(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any, Any, list
             )
             catalog_store.seed_catalog(scoped(root, tenant_id=tenant_id, user_id=user_id))
             dest_rid = destinations_store.create_destination(
-                root, name="Renato", kind="pessoa", channel="telegram", address="chat-1"
+                scoped(root, tenant_id=tenant_id, user_id=user_id),
+                name="Renato",
+                kind="pessoa",
+                channel="telegram",
+                address="chat-1",
             )
             settings_store.put_settings(
                 root,

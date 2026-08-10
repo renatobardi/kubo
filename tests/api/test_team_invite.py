@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,6 +24,12 @@ _FAKE_BREAKGLASS_TENANT_ID = "tenant:breakglass"
 _FAKE_INVITE_TENANT_ID = "tenant:team-a"
 _FAKE_USER_ID = "user:owner-a"
 _FAKE_INVITE_TOKEN = "invite-token-123"
+
+
+@contextmanager
+def _fake_connect_with_invite(tenant_id: RecordID) -> Any:
+    """Fake ``connect_rw`` yielding a db whose ``.query`` returns the invite's tenant."""
+    yield SimpleNamespace(query=lambda sql, params=None: [{"tenant_id": tenant_id}])
 
 
 @pytest.fixture(autouse=True)
@@ -76,11 +83,11 @@ def test_create_invite_generates_token_and_link(
         called["memberships_user"] = str(user)
         return [_fake_membership()]
 
-    def _fake_create_invite(db: Any, *, tenant_id: RecordID, created_by: RecordID) -> Any:
-        called["create"] = (str(tenant_id), str(created_by))
+    def _fake_create_invite(session: Any) -> Any:
+        called["create"] = (str(session.tenant_id), str(session.user_id))
         return SimpleNamespace(
             id=RecordID("team_invite", "abc"),
-            tenant_id=tenant_id,
+            tenant_id=session.tenant_id,
             token=_FAKE_INVITE_TOKEN,
             role="member",
         )
@@ -96,6 +103,12 @@ def test_create_invite_generates_token_and_link(
     monkeypatch.setattr(
         "kubo.api.routes.auth.team_invites_store.create_team_invite",
         _fake_create_invite,
+    )
+    # ``scoped`` checks membership against the db; the stubbed db has no ``.query``,
+    # so mock it to return a bare session with the right tenant/user ids.
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.scoped",
+        lambda db, *, tenant_id, user_id: SimpleNamespace(tenant_id=tenant_id, user_id=user_id),
     )
 
     resp = authed_client.post("/auth/invite", follow_redirects=False)
@@ -126,8 +139,8 @@ def test_firebase_login_with_invite_creates_member(
         called["create_user"] = (firebase_uid, email)
         return _fake_user(uid=firebase_uid, user_id="newmember")
 
-    def _fake_accept_invite(db: Any, *, token: str, user_id: RecordID) -> Any:
-        called["accept"] = (token, str(user_id))
+    def _fake_accept_invite(session: Any, *, token: str) -> Any:
+        called["accept"] = (token, str(session.user_id))
         return SimpleNamespace(
             id=RecordID("team_invite", "abc"),
             tenant_id=RecordID("tenant", "team-a"),
@@ -153,6 +166,13 @@ def test_firebase_login_with_invite_creates_member(
     monkeypatch.setattr(
         "kubo.api.routes.auth.team_invites_store.accept_team_invite",
         _fake_accept_invite,
+    )
+    # The route does a raw ``db.query`` to look up the invite's tenant before
+    # constructing a ``scoped_superadmin`` session; override ``connect_rw`` so
+    # the fake db supports that query.
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.client.connect_rw",
+        lambda cfg=None: _fake_connect_with_invite(RecordID("tenant", "team-a")),
     )
 
     resp = client.post(
@@ -180,12 +200,18 @@ def test_firebase_login_with_invalid_invite_is_401(
     respx_mock.get(_JWKS_URL).respond(200, json={"keys": [jwk]})
     token = _firebase_token(private_pem=private_pem, uid="new-member-uid")
 
-    def _reject(db: Any, *, token: str, user_id: RecordID) -> Any:
+    def _reject(session: Any, *, token: str) -> Any:
         raise TeamInviteError("team invite is invalid, expired, or already used")
 
     monkeypatch.setattr(
         "kubo.api.routes.auth.team_invites_store.accept_team_invite",
         _reject,
+    )
+    # The route looks up the invite's tenant before calling accept_team_invite;
+    # provide a fake db so the lookup succeeds and the reject mock is reached.
+    monkeypatch.setattr(
+        "kubo.api.routes.auth.client.connect_rw",
+        lambda cfg=None: _fake_connect_with_invite(RecordID("tenant", "team-a")),
     )
 
     resp = client.post(

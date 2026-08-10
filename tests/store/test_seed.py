@@ -79,7 +79,7 @@ def test_seed_creates_six_active_rss_feeds_with_tags(
     processed = seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
 
     assert processed == 6
-    active = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+    active = knowledge.active_sources(scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss")
     assert len(active) == 6
     by_canonical = {s.canonical: s for s in active}
     openai = by_canonical["https://openai.com/news/rss.xml"]
@@ -105,18 +105,18 @@ def test_seed_first_run_coalesces_owner_pause_and_title(
     legado onde o #106/#107 já rodou): pausa e título editado sobrevivem, e as tags legadas
     (`[]`) são preenchidas — este é o único momento em que `[]` significa 'legado'."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://openai.com/news/rss.xml",
         title="Meu título",
     )
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
+    )
 
     assert seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id) == 6
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Meu título"  # coalesce title ?? $title → edição do dono sobrevive
     assert got.enabled is False  # coalesce enabled ?? true → pausa do dono sobrevive
@@ -133,12 +133,12 @@ def test_seed_once_per_env_preserves_later_tag_clear(
     seed_feed_cadastros(db, tenant_id=tenant_id, user_id=user_id)
     tgt = {
         s.canonical: s
-        for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+        for s in knowledge.active_sources(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss"
+        )
     }["https://openai.com/news/rss.xml"]
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=tgt.id,
         title="OpenAI News",
         tags=[],
@@ -150,7 +150,9 @@ def test_seed_once_per_env_preserves_later_tag_clear(
 
     (again,) = [
         s
-        for s in knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+        for s in knowledge.active_sources(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss"
+        )
         if s.canonical == "https://openai.com/news/rss.xml"
     ]
     assert again.tags == []  # o 'limpar tudo' do dono sobreviveu ao re-deploy
@@ -221,7 +223,9 @@ def test_seed_owner_destination_creates_owner_telegram_and_default(
     assert settings_obj is not None
     assert settings_obj.default_destination is not None
 
-    dest = destination_store.get_destination(db, settings_obj.default_destination)
+    dest = destination_store.get_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), settings_obj.default_destination
+    )
     assert dest is not None
     assert dest.channel == "telegram"
     assert dest.kind == "pessoa"
@@ -271,12 +275,11 @@ def test_seed_owner_destination_preserves_owner_edits(
 
     # Dono cria outro destino e muda o default pela UI.
     other = destination_store.create_destination(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         name="Outro",
         kind="pessoa",
         channel="telegram",
         address="999999",
-        tenant_id=tenant_id,
     )
     settings.put_settings(
         db,
@@ -306,11 +309,16 @@ def test_seed_owner_destination_preserves_destination_edits(
 
     # Dono edita nome e endereço do destino semeado.
     destination_store.edit_destination(
-        db, id=original.default_destination, name="Renomeado", address="999999"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        id=original.default_destination,
+        name="Renomeado",
+        address="999999",
     )
 
     assert seed_owner_destination(db, tenant_id=tenant_id, user_id=user_id) is False
-    edited = destination_store.get_destination(db, original.default_destination)
+    edited = destination_store.get_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), original.default_destination
+    )
     assert edited is not None
     assert edited.name == "Renomeado"
     assert edited.address == "999999"
@@ -343,7 +351,9 @@ def test_main_seeds_settings_owner_destination_and_feeds_idempotently(
     settings_obj = get_settings(db)
     assert settings_obj is not None
     assert settings_obj.default_destination is not None
-    dest = destination_store.get_destination(db, settings_obj.default_destination)
+    dest = destination_store.get_destination(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), settings_obj.default_destination
+    )
     assert dest is not None
     assert dest.address == "12345678"
 

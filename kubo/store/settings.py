@@ -7,17 +7,31 @@ that the destination exists and is not archived (paused resolves normally).
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError
+from kubo.store import client
 from kubo.store import destinations as destination_store
-from kubo.store.destinations import reset_watermark_statement
+from kubo.store.scoped import ScopedStore
 from kubo.store.transaction import run_transaction
 
 _SETTINGS_ID = RecordID("settings", "global")
+
+# Transação atômica: UPSERT do singleton + watermarks de dispatch via FOR.
+# O guard vê literais fixos; os dados variáveis entram por bind params.
+_PUT_SETTINGS_AND_RESET_SQL = (
+    "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
+    "default_destination = $dest; "
+    "FOR $x IN $destinations { "
+    "CREATE $x.id SET tenant_id = $tenant_id, destination = $x.destination, "
+    "channel = $x.channel, status = 'ok', artifact = 'digest', "
+    "watermark = time::now(), item_count = 0, items = [], error = NONE "
+    "}"
+)
 
 
 @dataclass(frozen=True)
@@ -41,20 +55,26 @@ def _settings_from_row(row: dict[str, Any]) -> Settings:
     )
 
 
-def get_settings(db: Any) -> Settings | None:
-    """Lê o singleton `settings:global`, ou `None` se ainda não existe."""
+def get_settings(db: client.UnscopedDb) -> Settings | None:
+    """Lê o singleton `settings:global`, ou `None` se ainda não existe.
+
+    O singleton é global (não tenant-scoped) — lido por id fixo, sem filtro de tenant.
+    """
     rows = db.query("SELECT * FROM $r;", {"r": _SETTINGS_ID})
     return _settings_from_row(rows[0]) if rows else None
 
 
 def put_settings(
-    db: Any,
+    db: client.UnscopedDb,
     *,
     digest_cron: str,
     distribution_paused: bool,
     default_destination: RecordID | None,
 ) -> None:
-    """Cria ou atualiza `settings:global` com os três campos."""
+    """Cria ou atualiza `settings:global` com os três campos.
+
+    O singleton é global (não tenant-scoped) — escrito por id fixo, sem filtro de tenant.
+    """
     db.query(
         "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
         "default_destination = $dest;",
@@ -68,38 +88,37 @@ def put_settings(
 
 
 def put_settings_and_reset(
-    db: Any,
+    session: ScopedStore,
     *,
     digest_cron: str,
     distribution_paused: bool,
     default_destination: RecordID | None,
     unpause_recent: bool,
     destinations: list[destination_store.Destination],
-    tenant_id: RecordID,
 ) -> None:
     """Update `settings:global` and, if `unpause_recent`, reset watermarks in a
-    single atomic transaction. `tenant_id` is written on each dispatch (KUBO-128)."""
-    statements: list[str] = [
-        "UPSERT $r SET digest_cron = $cron, distribution_paused = $paused, "
-        "default_destination = $dest",
+    single atomic transaction. `$tenant_id` is injected by the session (KUBO-128, ADR-0053)."""
+    watermark_entries = [
+        {
+            "id": RecordID("dispatch", secrets.token_hex(16)),
+            "destination": destination.id,
+            "channel": destination.channel,
+        }
+        for destination in (destinations if unpause_recent else [])
     ]
     params: dict[str, Any] = {
         "r": _SETTINGS_ID,
         "cron": digest_cron,
         "paused": distribution_paused,
         "dest": default_destination,
+        "destinations": watermark_entries,
     }
-    if unpause_recent:
-        for i, destination in enumerate(destinations):
-            stmt, p = reset_watermark_statement(
-                prefix=f"d{i}_", destination=destination, tenant_id=tenant_id
-            )
-            statements.append(stmt)
-            params |= p
-    run_transaction(db, statements, params)
+    run_transaction(session, [_PUT_SETTINGS_AND_RESET_SQL], params)
 
 
-def resolve_default_destination(db: Any, settings: Settings) -> destination_store.Destination:
+def resolve_default_destination(
+    session: ScopedStore, settings: Settings
+) -> destination_store.Destination:
     """Resolve the default destination from the settings singleton.
 
     Raises a clear `ConfigError` when there is no default, when the record is
@@ -108,7 +127,7 @@ def resolve_default_destination(db: Any, settings: Settings) -> destination_stor
     """
     if settings.default_destination is None:
         raise ConfigError("destino padrão não definido — configure em Configurações")
-    dest = destination_store.get_destination(db, settings.default_destination)
+    dest = destination_store.get_destination(session, settings.default_destination)
     if dest is None:
         raise ConfigError("destino padrão não existe mais — escolha outro em Configurações")
     if dest.archived_at is not None:
@@ -118,10 +137,10 @@ def resolve_default_destination(db: Any, settings: Settings) -> destination_stor
     return dest
 
 
-def default_destination_choices(db: Any) -> list[destination_store.Destination]:
+def default_destination_choices(session: ScopedStore) -> list[destination_store.Destination]:
     """Destinations eligible as default: active or paused, never archived.
 
     The UI uses `name`/`channel` for the dropdown; the address (PII) is not shown,
     but it is part of the object as in all destination store usage (repr=False).
     """
-    return [d for d in destination_store.list_destinations(db) if d.archived_at is None]
+    return [d for d in destination_store.list_destinations(session) if d.archived_at is None]

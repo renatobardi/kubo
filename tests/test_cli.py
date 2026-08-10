@@ -33,6 +33,7 @@ from kubo.errors import ConfigError
 from kubo.runtime.flow_runner import FlowRunResult
 from kubo.store import client, knowledge, migrations, tenancy
 from kubo.store.knowledge import Chunk, DistilledView, ProvenanceItem, RunRef, SearchHit
+from kubo.store.scoped import scoped
 
 _CLI_DB = "test_cli"
 _DIM = 768
@@ -238,22 +239,18 @@ def test_run_query_orders_results_by_real_proximity(
     """O KNN roda de verdade — o fake NÃO mascara a ordenação: o distilled cujo
     chunk é IDÊNTICO ao vetor da pergunta aparece antes do ortogonal."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_a,
         summary="resumo A perto",
         chunks=[_chunk(0, _vec(1.0))],
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_b,
         summary="resumo B longe",
         chunks=[_chunk(0, _vec(0.0, 1.0))],
@@ -272,13 +269,11 @@ def test_run_query_deduplicates_hits_from_the_same_distilled(
     """Um distilled com 2 chunks perto do vetor da pergunta aparece UMA vez na
     saída — dois chunks do mesmo destilado não duplicam o summary."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo único",
         chunks=[_chunk(0, _vec(1.0)), _chunk(1, _vec(0.9, 0.1))],
@@ -297,9 +292,7 @@ def test_run_show_with_provenance_contains_full_chain(
     """`run_show(..., provenance=True)` traz summary + a cadeia item->source
     (canonical/url) + o worker do run — a proveniência completa."""
     source_id = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
@@ -312,11 +305,9 @@ def test_run_show_with_provenance_contains_full_chain(
         url="https://x/ep-1",
         title="Episódio 1",
     )
-    run_id = knowledge.start_run(db, worker="scribe", tenant_id=tenant_id, user_id=user_id)
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="scribe")
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo destilado",
         chunks=[],
@@ -339,13 +330,11 @@ def test_run_show_without_provenance_omits_source_canonical(
     """Sem `provenance`, o canonical da source não aparece — sucinto por design,
     mesma regra de `format_distilled`."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo simples",
         chunks=[],

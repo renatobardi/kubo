@@ -16,15 +16,19 @@ from starlette.testclient import TestClient
 from surrealdb import RecordID
 
 from kubo.api.app import create_app
+from kubo.api.session import resolve_session as _real_resolve_session
 from kubo.store import client, destinations, migrations
 from kubo.store import settings as settings_store
 from kubo.store.client import connect as _real_connect
+from kubo.store.scoped import scoped
 from tests.api.conftest import UI_PASSWORD
 
 pytestmark = pytest.mark.integration
 
 _DB = "test_settings_write"
 _RW_PASS = secrets.token_urlsafe(24)
+_TENANT_ID = RecordID("tenant", "breakglass")
+_USER_ID = RecordID("user", "breakglass-owner")
 
 # Captura a implementação real antes do conftest sobrescrever atributos da store.
 _real_get_settings_impl = settings_store.get_settings
@@ -38,20 +42,33 @@ def _real_get_settings(db: Any) -> settings_store.Settings | None:
 
 @pytest.fixture
 def app_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """App real apontado a um db efêmero com kubo_rw."""
+    """App real apontado a um db efêmero com kubo_rw e usuário/tenant reais."""
     monkeypatch.setenv("SURREAL_DB", _DB)
     monkeypatch.setenv("KUBO_RW_SURREAL_PASS", _RW_PASS)
+    monkeypatch.setenv("KUBO_BREAKGLASS_TENANT_ID", str(_TENANT_ID))
     monkeypatch.setattr("kubo.store.client.connect", _real_connect)
     monkeypatch.setattr("kubo.store.settings.get_settings", _real_get_settings)
     monkeypatch.setattr(
         "kubo.store.destinations.active_destinations", _real_active_destinations_impl
     )
+    # Restaura session real na rota (conftest substitui por fakes).
+    monkeypatch.setattr("kubo.api.routes.settings.resolve_session", _real_resolve_session)
+    monkeypatch.setattr("kubo.api.routes.settings.scoped", scoped)
     root_cfg = replace(client.config(), database=_DB)
     with _real_connect(root_cfg) as root:
         root.query(f"REMOVE DATABASE IF EXISTS {_DB};")
         root.use(root_cfg.namespace, root_cfg.database)
         migrations.apply_migrations(root)
         root.query(f"DEFINE USER OVERWRITE kubo_rw ON ROOT PASSWORD '{_RW_PASS}' ROLES EDITOR;")
+        root.query(
+            "CREATE $u SET firebase_uid = $uid;",
+            {"u": _USER_ID, "uid": "user:breakglass-owner"},
+        )
+        root.query("CREATE $t SET name = $name;", {"t": _TENANT_ID, "name": "Breakglass"})
+        root.query(
+            "RELATE $u->membership->$t SET role = 'owner';",
+            {"u": _USER_ID, "t": _TENANT_ID},
+        )
         try:
             yield create_app()
         finally:
@@ -86,7 +103,11 @@ def test_settings_page_shows_current_values(app_db: Any) -> None:
     tc, _ = _login_csrf(app_db)
     with _real_connect(replace(client.config(), database=_DB)) as root:
         dest_rid = destinations.create_destination(
-            root, name="Renato", kind="pessoa", channel="telegram", address="123"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="Renato",
+            kind="pessoa",
+            channel="telegram",
+            address="123",
         )
         settings_store.put_settings(
             root,
@@ -107,7 +128,11 @@ def test_update_settings_changes_cron_and_pause(app_db: Any) -> None:
     tc, csrf = _login_csrf(app_db)
     with _real_connect(replace(client.config(), database=_DB)) as root:
         dest_rid = destinations.create_destination(
-            root, name="Renato", kind="pessoa", channel="telegram", address="123"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="Renato",
+            kind="pessoa",
+            channel="telegram",
+            address="123",
         )
 
     resp = tc.post(
@@ -213,10 +238,18 @@ def test_unpause_global_recent_resets_watermarks(app_db: Any) -> None:
     tc, csrf = _login_csrf(app_db)
     with _real_connect(replace(client.config(), database=_DB)) as root:
         dest_a = destinations.create_destination(
-            root, name="A", kind="pessoa", channel="telegram", address="111"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="A",
+            kind="pessoa",
+            channel="telegram",
+            address="111",
         )
         dest_b = destinations.create_destination(
-            root, name="B", kind="pessoa", channel="telegram", address="222"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="B",
+            kind="pessoa",
+            channel="telegram",
+            address="222",
         )
         settings_store.put_settings(
             root,
@@ -246,7 +279,11 @@ def test_unpause_global_backlog_keeps_watermarks(app_db: Any) -> None:
     tc, csrf = _login_csrf(app_db)
     with _real_connect(replace(client.config(), database=_DB)) as root:
         dest = destinations.create_destination(
-            root, name="A", kind="pessoa", channel="telegram", address="111"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="A",
+            kind="pessoa",
+            channel="telegram",
+            address="111",
         )
         settings_store.put_settings(
             root,
@@ -274,7 +311,11 @@ def test_unpause_without_change_does_nothing(app_db: Any) -> None:
     tc, csrf = _login_csrf(app_db)
     with _real_connect(replace(client.config(), database=_DB)) as root:
         dest = destinations.create_destination(
-            root, name="A", kind="pessoa", channel="telegram", address="111"
+            scoped(root, tenant_id=_TENANT_ID, user_id=_USER_ID),
+            name="A",
+            kind="pessoa",
+            channel="telegram",
+            address="111",
         )
         settings_store.put_settings(
             root,

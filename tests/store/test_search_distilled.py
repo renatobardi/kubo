@@ -22,6 +22,7 @@ from kubo.store.knowledge import (
     upsert_item,
     upsert_source,
 )
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -58,7 +59,7 @@ def _distilled(
 ) -> RecordID:
     """Cria source+item (com título) e um distilled com um chunk por vetor dado."""
     src = upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical=f"src::{title}"
     )
     item = upsert_item(db, source=src, external_id=f"ext::{title}", content="x", title=title)
     chunks = [
@@ -66,7 +67,7 @@ def _distilled(
         for i, v in enumerate(vectors)
     ]
     return insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=chunks
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary=summary, chunks=chunks
     )
 
 
@@ -78,7 +79,9 @@ def test_search_returns_closest_first_with_title_and_summary(
     d0 = _distilled(db, tenant_id, user_id, title="Rust", summary="sobre Rust", vectors=[_vec(0)])
     _distilled(db, tenant_id, user_id, title="Python", summary="sobre Python", vectors=[_vec(1)])
 
-    docs = search_distilled(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(0), k=5)
+    docs = search_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), embedding=_vec(0), k=5
+    )
 
     assert docs[0].id == d0
     assert docs[0].title == "Rust"
@@ -91,6 +94,8 @@ def test_search_dedups_by_distilled(db: Any, tenant_id: RecordID, user_id: Recor
         db, tenant_id, user_id, title="Rust", summary="sobre Rust", vectors=[_vec(0), _vec(2)]
     )
 
-    docs = search_distilled(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(0), k=10)
+    docs = search_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), embedding=_vec(0), k=10
+    )
 
     assert [d.id for d in docs] == [d0]

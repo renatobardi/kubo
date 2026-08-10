@@ -60,8 +60,11 @@ def remove_orphans(orphans: set[str]) -> int:
     """Remove os arquivos órfãos do volume (best-effort). Devolve o count removido."""
     removed = 0
     for path_str in sorted(orphans):
+        path = Path(path_str)
+        if not path.exists():
+            continue
         try:
-            Path(path_str).unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
             removed += 1
             _log.info("reconcile.orphan_removed", path=path_str)
         except OSError as exc:

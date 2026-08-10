@@ -1,7 +1,9 @@
 """Contrato de tenancy obrigatório nos domínios centrais (KUBO-123).
 
-Integração (SurrealDB real): toda função pública de flows.py e knowledge.py exige
-`tenant_id`/`user_id` e escopa leitura/escrita no tenant.
+Integração (SurrealDB real): toda função pública de flows.py recebe uma
+`ScopedStore` que carrega `(tenant_id, user_id)`, checa membership na criação
+e injeta `$tenant_id`/`$user_id` em toda query. knowledge.py segue com
+`tenant_id`/`user_id` explícitos (migração pendente).
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from typing import Any
 import pytest
 from surrealdb import RecordID
 
-from kubo.errors import ConfigError, MembershipRequiredError
+from kubo.errors import MembershipRequiredError
 from kubo.runtime.flow_templates import load_flow_template
 from kubo.runtime.personas import load_personas_from_dir
 from kubo.store import client, migrations, tenancy
@@ -26,6 +28,7 @@ from kubo.store.flows import (
     list_flows,
 )
 from kubo.store.knowledge import Chunk, get_or_create_entity, insert_distilled, list_entities
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -57,39 +60,22 @@ def _analysis_template() -> Any:
     )
 
 
-def test_instantiate_flow_requires_tenant_id_and_user_id(db: Any) -> None:
-    """instantiate_flow sem tenant_id/user_id deve falhar antes de tocar o banco."""
-    template = _analysis_template()
-    with pytest.raises((TypeError, ConfigError)):
-        instantiate_flow(  # type: ignore[reportCallIssue]
-            db, template=template, personas=_PERSONAS, question="q?"
-        )
-
-
 def test_instantiate_flow_rejects_user_from_other_tenant(db: Any) -> None:
-    """instantiate_flow com user que não pertence ao tenant levanta MembershipRequiredError."""
+    """scoped() com user que não pertence ao tenant levanta MembershipRequiredError
+    na criação da sessão — antes de qualquer query de flows."""
     owner_a, tenant_a = _tenant_owner(db, firebase_uid="uid-a")
     owner_b, _ = _tenant_owner(db, firebase_uid="uid-b")
-    template = _analysis_template()
     with pytest.raises(MembershipRequiredError):
-        instantiate_flow(
-            db,
-            tenant_id=tenant_a.id,
-            user_id=owner_b.id,
-            template=template,
-            personas=_PERSONAS,
-            question="q?",
-        )
+        scoped(db, tenant_id=tenant_a.id, user_id=owner_b.id)
 
 
 def test_instantiate_flow_persists_tenant_id(db: Any) -> None:
     """instantiate_flow grava tenant_id no flow e nas personas materializadas."""
     owner, tenant = _tenant_owner(db, firebase_uid="uid-owner")
     template = _analysis_template()
+    session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant.id,
-        user_id=owner.id,
+        session,
         template=template,
         personas=_PERSONAS,
         question="q?",
@@ -105,10 +91,9 @@ def _analysis_inst(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> tuple[RecordID, RecordID, RecordID]:
     """Instancia analysis e retorna (flow, analyst_persona, human_persona)."""
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     inst = instantiate_flow(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        session,
         template=_analysis_template(),
         personas=_PERSONAS,
         question="q?",
@@ -116,20 +101,14 @@ def _analysis_inst(
     return inst.flow, inst.personas["analista"], inst.personas["humano"]
 
 
-def test_create_task_requires_tenant_and_persists_it(db: Any) -> None:
-    """create_task exige tenant_id/user_id e grava tenant_id no task e arestas."""
+def test_create_task_persists_tenant_id(db: Any) -> None:
+    """create_task grava tenant_id no task e arestas (scoped pela sessão)."""
     owner, tenant = _tenant_owner(db, firebase_uid="uid-task")
     flow, analyst, _ = _analysis_inst(db, tenant.id, owner.id)
-
-    with pytest.raises((TypeError, ConfigError)):
-        create_task(  # type: ignore[reportCallIssue]
-            db, flow=flow, persona=analyst, state="created"
-        )
+    session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
 
     task = create_task(
-        db,
-        tenant_id=tenant.id,
-        user_id=owner.id,
+        session,
         flow=flow,
         persona=analyst,
         state="created",
@@ -141,45 +120,35 @@ def test_create_task_requires_tenant_and_persists_it(db: Any) -> None:
 
 
 def test_list_flows_filters_by_tenant(db: Any) -> None:
-    """list_flows exige tenant e só devolve flows do tenant."""
+    """list_flows só devolve flows do tenant da sessão."""
     owner_a, tenant_a = _tenant_owner(db, firebase_uid="uid-list-a")
     owner_b, tenant_b = _tenant_owner(db, firebase_uid="uid-list-b")
     _analysis_inst(db, tenant_a.id, owner_a.id)
     _analysis_inst(db, tenant_b.id, owner_b.id)
 
-    with pytest.raises((TypeError, ConfigError)):
-        list_flows(db, limit=10, start=0)  # type: ignore[reportCallIssue]
-
-    flows_a = list_flows(db, tenant_id=tenant_a.id, user_id=owner_a.id, limit=10, start=0)
+    session_a = scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id)
+    flows_a = list_flows(session_a, limit=10, start=0)
     assert len(flows_a) == 1
-    assert count_flows(db, tenant_id=tenant_a.id, user_id=owner_a.id) == 1
+    assert count_flows(session_a) == 1
 
     with pytest.raises(MembershipRequiredError):
-        list_flows(db, tenant_id=tenant_a.id, user_id=owner_b.id, limit=10, start=0)
+        scoped(db, tenant_id=tenant_a.id, user_id=owner_b.id)
 
 
-def test_insert_deliverable_requires_tenant_and_persists_it(db: Any) -> None:
-    """insert_deliverable exige tenant e grava tenant_id no deliverable/arestas."""
+def test_insert_deliverable_persists_tenant_id(db: Any) -> None:
+    """insert_deliverable grava tenant_id no deliverable/arestas (scoped pela sessão)."""
     owner, tenant = _tenant_owner(db, firebase_uid="uid-del")
     flow, analyst, _ = _analysis_inst(db, tenant.id, owner.id)
+    session = scoped(db, tenant_id=tenant.id, user_id=owner.id)
     task = create_task(
-        db,
-        tenant_id=tenant.id,
-        user_id=owner.id,
+        session,
         flow=flow,
         persona=analyst,
         state="created",
     )
 
-    with pytest.raises((TypeError, ConfigError)):
-        insert_deliverable(  # type: ignore[reportCallIssue]
-            db, flow=flow, task=task, kind="report", content="c", consulted=[]
-        )
-
     deliverable = insert_deliverable(
-        db,
-        tenant_id=tenant.id,
-        user_id=owner.id,
+        session,
         flow=flow,
         task=task,
         kind="report",
@@ -210,17 +179,17 @@ def test_entity_and_distilled_require_tenant(db: Any) -> None:
     owner_a, tenant_a = _tenant_owner(db, firebase_uid="uid-ent-a")
     owner_b, tenant_b = _tenant_owner(db, firebase_uid="uid-ent-b")
 
-    with pytest.raises((TypeError, ConfigError)):
-        get_or_create_entity(db, name="Rust")  # type: ignore[reportCallIssue]
+    session_a = scoped(db, tenant_id=tenant_a.id, user_id=owner_a.id)
+    session_b = scoped(db, tenant_id=tenant_b.id, user_id=owner_b.id)
 
-    get_or_create_entity(db, tenant_id=tenant_a.id, user_id=owner_a.id, name="Rust")
-    get_or_create_entity(db, tenant_id=tenant_b.id, user_id=owner_b.id, name="Rust")
+    get_or_create_entity(session_a, name="Rust")
+    get_or_create_entity(session_b, name="Rust")
 
-    entities_a = list_entities(db, tenant_id=tenant_a.id, user_id=owner_a.id, limit=10, start=0)
+    entities_a = list_entities(session_a, limit=10, start=0)
     assert len(entities_a) == 1
 
     with pytest.raises(MembershipRequiredError):
-        list_entities(db, tenant_id=tenant_a.id, user_id=owner_b.id, limit=10, start=0)
+        scoped(db, tenant_id=tenant_a.id, user_id=owner_b.id)
 
     source = db.query(
         "CREATE source SET tenant_id=$t, kind='rss', canonical='c', title='t'",
@@ -229,15 +198,8 @@ def test_entity_and_distilled_require_tenant(db: Any) -> None:
     item = db.query("CREATE item SET external_id='x', content='c';")[0]["id"]
     db.query("RELATE $i->from_source->$s;", {"i": item, "s": source})
 
-    with pytest.raises((TypeError, ConfigError)):
-        insert_distilled(  # type: ignore[reportCallIssue]
-            db, item=item, summary="s", chunks=[_sample_chunk()]
-        )
-
     distilled = insert_distilled(
-        db,
-        tenant_id=tenant_a.id,
-        user_id=owner_a.id,
+        session_a,
         item=item,
         summary="s",
         chunks=[_sample_chunk()],

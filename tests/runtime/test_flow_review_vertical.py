@@ -22,6 +22,7 @@ from kubo.runtime.flow_runner import reject_gate, resume_gate, run_flow
 from kubo.store import client, knowledge, migrations
 from kubo.store.destinations import Destination
 from kubo.store.knowledge import Chunk
+from kubo.store.scoped import scoped
 from kubo.workers.analyst import ReportOutput
 
 pytestmark = pytest.mark.integration
@@ -88,14 +89,14 @@ class _FakeSender:
 
 def _seed(db: Any, tenant_id: RecordID, user_id: RecordID, title: str, summary: str) -> Any:
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical=f"src::{title}"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical=f"src::{title}"
     )
     item = knowledge.upsert_item(
         db, source=src, external_id=f"ext::{title}", content="x", title=title
     )
     chunk = Chunk(text=summary, seq=0, embedding=[0.1] * 768, model="m", dim=768, task_type="X")
     return knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary=summary, chunks=[chunk]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary=summary, chunks=[chunk]
     )
 
 
@@ -170,7 +171,9 @@ def test_approve_sends_and_delivers_both_tasks(
     arts = {r["artifact"] for r in db.query("SELECT artifact FROM dispatch;")}
     assert arts == {"gate", "report"}
     assert (
-        knowledge.last_dispatch_watermark(db, _DEST.id, tenant_id=tenant_id, user_id=user_id)
+        knowledge.last_dispatch_watermark(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), _DEST.id
+        )
         is None
     )
 

@@ -7,6 +7,7 @@ Testes unitários com store e executors mockados. O job consome materiais
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -89,6 +90,13 @@ class _FakeExecutor:
 @pytest.fixture(autouse=True)
 def stub_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stuba store + executors para o job de ingestão."""
+    monkeypatch.setattr(
+        study_ingest,
+        "scoped",
+        lambda db, *, tenant_id, user_id: SimpleNamespace(
+            tenant_id=tenant_id, user_id=user_id, query=None, query_raw=None, db=db
+        ),
+    )
     monkeypatch.setattr(study_ingest, "_list_pending", lambda db, **kw: [_pending_material()])
     monkeypatch.setattr(study_ingest, "_parse_material", lambda fmt, path: _parsed())
     monkeypatch.setattr(

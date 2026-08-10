@@ -38,6 +38,7 @@ from kubo.store.knowledge import (
 from kubo.store.knowledge import (
     items_to_score as store_items_to_score,
 )
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.store.tenancy import get_tenant_work_context
 
 
@@ -58,21 +59,32 @@ class GraphKnowledge:
         tenant_id: RecordID,
         user_id: RecordID,
     ) -> None:
-        """Guarda o handle de `db` (só a store o usa), os ids de tenancy e zera o mapa de refs."""
+        """Guarda a sessão escopada, os ids de tenancy e zera o mapa de refs.
+
+        `db` pode ser `None` em testes unitários que não usam a store — a sessão
+        só é construída no primeiro acesso (lazy), evitando `assert_membership`
+        desnecessário (KUBO-213)."""
         self._db = db
         self._tenant_id = tenant_id
         self._user_id = user_id
         self._ref_map: dict[int, RecordID] = {}
         self._counter = 0
+        self._scoped_store: ScopedStore | None = None
+
+    @property
+    def _session(self) -> ScopedStore:
+        if self._scoped_store is None:
+            if self._db is None:
+                raise RuntimeError("GraphKnowledge sem conexão (db=None)")
+            self._scoped_store = scoped(self._db, tenant_id=self._tenant_id, user_id=self._user_id)
+        return self._scoped_store
 
     def items_to_score(self, limit: int) -> list[ItemView]:
         """Lê itens pendentes de pontuação via store (ADR-0051 §I) e atribui a
         cada um um `ref` opaco, sequencial e MONOTÔNICO por-instância (nunca
         reseta entre chamadas)."""
         rows = store_items_to_score(
-            self._db,
-            tenant_id=self._tenant_id,
-            user_id=self._user_id,
+            self._session,
             limit=limit,
         )
         views: list[ItemView] = []
@@ -96,9 +108,7 @@ class GraphKnowledge:
         return [
             RetrievedView(id=str(doc.id), title=doc.title, summary=doc.summary)
             for doc in search_distilled(
-                self._db,
-                tenant_id=self._tenant_id,
-                user_id=self._user_id,
+                self._session,
                 embedding=embedding,
                 k=k,
             )
@@ -114,19 +124,15 @@ class GraphKnowledge:
         """Lê a visão completa de proveniência de um distilled (ADR-0013 §8.5),
         escopada ao tenant quando os ids de tenancy estão presentes."""
         return read_distilled(
-            self._db,
+            self._session,
             distilled,
-            tenant_id=self._tenant_id,
-            user_id=self._user_id,
         )
 
     def list_distilled(self, *, limit: int, start: int) -> list[DistilledListItem]:
         """Página do acervo de destilados, filtrada pelo tenant quando os ids
         de tenancy estão presentes."""
         return list_distilled(
-            self._db,
-            tenant_id=self._tenant_id,
-            user_id=self._user_id,
+            self._session,
             limit=limit,
             start=start,
         )
@@ -140,9 +146,7 @@ class GraphKnowledge:
         `destination` arrives as a `destination:<key>` string from the worker; convert
         it to a `RecordID` before calling the store (KUBO-48 cutover)."""
         selection = items_for_digest(
-            self._db,
-            tenant_id=self._tenant_id,
-            user_id=self._user_id,
+            self._session,
             destination=record_id_from_destination(destination),
             limit=limit,
         )
@@ -176,14 +180,12 @@ class GraphKnowledge:
             if not table or not key:
                 continue
             rids.append(RecordID(table, key))
-        return store_get_opinions(db=self._db, tenant_id=self._tenant_id, items=rids)
+        return store_get_opinions(self._session, items=rids)
 
     def get_day_summary(self, day: date) -> str | None:
         """Lê o resumo do dia para o tenant (ADR-0052 §II). Retorna `None` se
         não existe — o chamador computa via LLM e devolve `DaySummaryPayload`."""
-        result: DaySummaryView | None = store_get_day_summary(
-            self._db, tenant_id=self._tenant_id, day=day
-        )
+        result: DaySummaryView | None = store_get_day_summary(self._session, day=day)
         return result.summary if result is not None else None
 
 

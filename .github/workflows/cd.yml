@@ -59,7 +59,7 @@ jobs:
     # deploy-prd), e um redeploy do DEV em paralelo corre com a leitura do digest
     # vivo em collect-digest — já aconteceu (digest capturado vazio, container no
     # meio da troca).
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     environment: dev
     concurrency:
       group: cd-dev
@@ -92,7 +92,7 @@ jobs:
             "cd ~/kubo && bash scripts/deploy-remote.sh '${DIGEST}'" < /dev/null
 
   collect-digest:
-    needs: build
+    needs: [build, deploy-dev]
     runs-on: ubuntu-24.04-arm
     if: github.event_name == 'workflow_dispatch'
     environment: dev
@@ -127,7 +127,7 @@ jobs:
           echo "::notice::Digest vivo em kubo-test: sha256:${live_digest}"
 
   deploy-prd:
-    needs: [build, collect-digest]
+    needs: [build, deploy-dev, collect-digest]
     runs-on: ubuntu-24.04-arm
     environment: prd
     concurrency:

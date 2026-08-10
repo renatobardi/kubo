@@ -206,7 +206,7 @@ def test_topics_page_renders_pagination_links(
         ),
     )
     html = authed_client.get("/study/topics").text
-    assert 'href="/study/topics?page=2&per_page=20"' in html
+    assert 'href="/study/topics?page=2&amp;per_page=20"' in html
 
 
 def test_topics_page_redirects_when_page_exceeds_total(
@@ -234,7 +234,7 @@ def test_topics_page_preserves_per_page_in_pagination_links(
         ),
     )
     html = authed_client.get("/study/topics?per_page=1").text
-    assert 'href="/study/topics?page=2&per_page=1"' in html
+    assert 'href="/study/topics?page=2&amp;per_page=1"' in html
 
 
 # --- Criar Tema vazio --------------------------------------------------------------------

@@ -18,6 +18,7 @@ from kubo.api.pagination import clamp_size, clamp_start
 from kubo.api.rendering import templates
 from kubo.api.session import resolve_session
 from kubo.store import client, knowledge
+from kubo.store.scoped import scoped
 
 router = APIRouter()
 
@@ -47,18 +48,15 @@ def list_page(
         ctx = resolve_session(request, db)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         runs = knowledge.list_runs(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            session,
             limit=size,
             start=start,
             query=query,
         )
         total = knowledge.count_runs(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+            session,
             query=query,
         )
     return templates.TemplateResponse(

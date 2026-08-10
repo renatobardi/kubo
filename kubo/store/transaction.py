@@ -9,13 +9,28 @@ levanta `StoreError` (a transação já reverteu no servidor).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kubo.errors import StoreError
 
+if TYPE_CHECKING:
+    from kubo.store.client import DbConnection, UnscopedDb
+    from kubo.store.scoped import ScopedStore
+
+
+def _execute_transaction(db: UnscopedDb, statements: list[str], params: dict[str, Any]) -> None:
+    """Envia statements em BEGIN/COMMIT por `query_raw` e falha alta se algo ERR."""
+    body = ";\n".join(s.strip().rstrip(";") for s in statements)
+    surql = f"BEGIN;\n{body};\nCOMMIT;"  # noqa: S608 (surql montado só de literais + bind params)
+    raw = db.query_raw(surql, params)
+    failed = [r for r in raw["result"] if r.get("status") == "ERR"]
+    if failed:
+        detail = "; ".join(str(r.get("result")) for r in failed)
+        raise StoreError(f"transação revertida: {detail}")
+
 
 def run_transaction(
-    db: Any,
+    session: ScopedStore,
     statements: list[str],
     params: dict[str, Any] | None = None,
 ) -> None:
@@ -30,10 +45,16 @@ def run_transaction(
     Não retorna resultados: a store deriva IDs de forma determinística, não os lê
     da resposta. O valor deste wrapper é a garantia de atomicidade + a falha alta.
     """
-    body = ";\n".join(s.strip().rstrip(";") for s in statements)
-    surql = f"BEGIN;\n{body};\nCOMMIT;"
-    raw = db.query_raw(surql, params or {})  # noqa: S608 (surql montado só de literais + bind params)
-    failed = [r for r in raw["result"] if r.get("status") == "ERR"]
-    if failed:
-        detail = "; ".join(str(r.get("result")) for r in failed)
-        raise StoreError(f"transação revertida: {detail}")
+    _execute_transaction(session, statements, params or {})
+
+
+def run_global_transaction(
+    db: DbConnection,
+    statements: list[str],
+    params: dict[str, Any] | None = None,
+) -> None:
+    """Roda statements numa transação atômica SEM injeção de tenant (tabelas globais).
+
+    Usado pela maquinaria de tenancy/invites/migrations — acesso global legítimo
+    que não carrega escopo de tenant (ADR-0053 §5)."""
+    _execute_transaction(db, statements, params or {})

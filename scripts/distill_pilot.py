@@ -31,11 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from surrealdb import RecordID
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
 from kubo.executors.base import Executor
-from kubo.store import client, knowledge
+from kubo.store import client, knowledge, tenancy
+from kubo.store.scoped import PoolReader, scoped
 from kubo.workers.distiller import _INSTRUCTION, DistillOutput, filter_present_entities
 from scripts.audit_sample import select_sample, validated_out
 
@@ -153,14 +155,19 @@ def render_pilot(
 # ── Camada de I/O ───────────────────────────────────────────────────────────
 
 
-def _load_sample(db: Any) -> tuple[list[tuple[str, str]], dict[str, str]]:
+def _load_sample(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> tuple[list[tuple[str, str]], dict[str, str]]:
     """Reconstrói a MESMA amostra da auditoria e casa cada item com seu content e
     o baseline (summary do llama gravado). Devolve `(items, baselines)`."""
-    rows = knowledge.list_distilled_with_items(db, limit=10000)
+    session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+    rows = knowledge.list_distilled_with_items(session, limit=10000)
     sample = select_sample(rows)
     contents = {
         str(i): content
-        for i, _title, content in knowledge.items_by_ids(db, [c.item_id for c in sample])
+        for i, _title, content in knowledge.items_by_ids(
+            PoolReader(db), [c.item_id for c in sample]
+        )
     }
     items = [(str(c.item_id), contents.get(str(c.item_id), "")) for c in sample]
     baselines = {str(c.item_id): c.summary for c in sample}
@@ -189,7 +196,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     with client.connect(client.config()) as db:
-        items, baselines = _load_sample(db)
+        user, tenant = tenancy.get_or_create_user_and_tenant(
+            db, firebase_uid="distill-pilot", email="pilot@kubo.local"
+        )
+        items, baselines = _load_sample(db, tenant.id, user.id)
 
     results = [run_candidate(model, items, delay=args.delay) for model in models]
     doc = render_pilot(items, baselines, results)

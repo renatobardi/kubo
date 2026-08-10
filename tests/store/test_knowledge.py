@@ -24,6 +24,7 @@ from kubo.errors import (
 )
 from kubo.store import client, knowledge, migrations, tenancy
 from kubo.store.knowledge import Chunk
+from kubo.store.scoped import scoped
 
 pytestmark = pytest.mark.integration
 
@@ -89,12 +90,12 @@ def test_upsert_source_is_idempotent(db: Any, tenant_id: RecordID, user_id: Reco
     """2x upsert_source com o mesmo canonical resolve ao MESMO record, sem duplicar
     e sem reescrever created_at (READONLY) — chave natural, não SELECT-then-CREATE."""
     first_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     first_created = db.query("SELECT created_at FROM $s;", {"s": first_id})[0]["created_at"]
 
     second_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     second_created = db.query("SELECT created_at FROM $s;", {"s": second_id})[0]["created_at"]
 
@@ -109,7 +110,7 @@ def test_upsert_item_is_idempotent_and_creates_from_source_edge(
     """2x upsert_item para o mesmo (source, external_id) resolve ao MESMO record e
     cria a aresta item -[from_source]-> source uma única vez."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
     first_id = knowledge.upsert_item(
@@ -132,9 +133,9 @@ def test_upsert_item_with_run_creates_collected_by_edge(
     """upsert_item(run=...) cria a aresta item -[collected_by]-> run — proveniência
     de execução (quem coletou), simétrica a produced_by (ADR-0008 emenda 0005)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
 
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="bruto", run=run_id
@@ -151,10 +152,10 @@ def test_upsert_item_re_collection_is_last_wins(
     collected_by aponta para a ÚLTIMA run coletora, nunca acumula (last-wins). O
     histórico completo vive na tabela run, não na aresta."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    run_a = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
-    run_b = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    run_a = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
+    run_b = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
 
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="bruto", run=run_a
@@ -173,9 +174,9 @@ def test_upsert_item_without_run_preserves_existing_collected_by(
     não apaga proveniência já registrada por uma coleta anterior. Um upsert sem run
     não pode destruir a proveniência de quem coletou (advisor)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    run_a = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    run_a = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
 
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="bruto", run=run_a
@@ -192,7 +193,7 @@ def test_upsert_item_without_run_creates_no_collected_by_edge(
 ) -> None:
     """Um item nunca-coletado-por-run (sem param run) não tem aresta collected_by."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
@@ -205,7 +206,7 @@ def test_upsert_item_persists_published_at(db: Any, tenant_id: RecordID, user_id
     """`published_at` explícito (passado) é gravado tal qual — campo próprio (KUBO-192),
     não derivado de `collected_at`."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     published = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -223,7 +224,7 @@ def test_upsert_item_naive_published_at_is_normalized_to_utc(
     """`published_at` sem tzinfo (achado CodeRabbit no PR #222) é normalizado pra
     UTC, não descartado — preserva o mesmo horário de parede."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     naive = datetime(2020, 1, 1, 12, 0)  # sem tzinfo, no passado
 
@@ -241,7 +242,7 @@ def test_upsert_item_without_published_at_falls_back_to_collected_at(
     """Sem `published_at` na fonte (caminho dormente do RSS, KUBO-192): o item usa a
     data de coleta como valor — nunca fica sem data de publicação."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
@@ -256,7 +257,7 @@ def test_upsert_item_future_published_at_falls_back_to_collected_at(
     """Data futura é rejeitada e cai no mesmo fallback (KUBO-192) — fonte que anuncia
     amanhã não pode furar a janela de hoje (ADR-0050 item I)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     future = datetime.now(timezone.utc) + timedelta(days=1)
 
@@ -274,10 +275,10 @@ def test_get_or_create_entity_dedups_by_normalized_name(
     """ "Python" e "  python " resolvem à MESMA entity — dedup por `normalize_entity`,
     não por igualdade literal da string de entrada."""
     first_id = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python"
     )
     second_id = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="  python "
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="  python "
     )
 
     assert first_id == second_id
@@ -291,14 +292,14 @@ def test_insert_distilled_creates_record_and_all_edges_atomically(
     os `chunk` + `chunk_of -> distilled`, `produced_by -> run` e `mentions -> entity`
     numa única escrita — nada fica de fora nem precisa de segunda chamada."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="conteúdo bruto"
     )
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="scribe")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="scribe")
     entity_id = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python"
     )
     chunks = [
         _chunk(0, _vec(1.0), text="primeiro trecho"),
@@ -306,9 +307,7 @@ def test_insert_distilled_creates_record_and_all_edges_atomically(
     ]
 
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo do episódio",
         chunks=chunks,
@@ -347,7 +346,7 @@ def test_insert_distilled_rejects_wrong_dimension_and_reverts_everything(
     NENHUM rastro — nem o `distilled`, nem os `chunk` já processados antes do
     ruim na lista. Prova o wrapper transacional (ADR-0005): tudo ou nada."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="conteúdo bruto"
@@ -363,9 +362,7 @@ def test_insert_distilled_rejects_wrong_dimension_and_reverts_everything(
 
     with pytest.raises(StoreError):
         knowledge.insert_distilled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             item=item_id,
             summary="resumo que não deveria persistir",
             chunks=[bad_chunk],
@@ -383,7 +380,7 @@ def test_insert_distilled_rejects_dim_provenance_mismatch(
     não que o `dim` registrado seja verdadeiro; um `dim` mentiroso corromperia a
     proveniência do re-embed. Nada é persistido."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     lying_chunk = Chunk(
@@ -397,9 +394,7 @@ def test_insert_distilled_rejects_dim_provenance_mismatch(
 
     with pytest.raises(ValueError, match="dim"):
         knowledge.insert_distilled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             item=item_id,
             summary="resumo",
             chunks=[lying_chunk],
@@ -416,13 +411,19 @@ def test_list_sources_returns_all_with_their_fields(
     que o import usa para resolver a source de um item por canonical (sem regravá-la,
     ADR-0012) e a UI da fase 1 para listar; substitui queries de source espalhadas."""
     a = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://a/feed", title="A"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://a/feed",
+        title="A",
     )
     knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="youtube", canonical="https://b"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="youtube", canonical="https://b"
     )
 
-    by_canonical = {s.canonical: s for s in knowledge.list_sources(db)}
+    by_canonical = {
+        s.canonical: s
+        for s in knowledge.list_sources(scoped(db, tenant_id=tenant_id, user_id=user_id))
+    }
 
     assert set(by_canonical) == {"https://a/feed", "https://b"}
     assert by_canonical["https://a/feed"].id == a
@@ -438,9 +439,7 @@ def test_create_source_mints_surrogate_id_decoupled_from_canonical(
     ativo: enabled=true, tags=[], sem archived_at. É a escrita da UI (ADR-0025) — cadastro
     novo com id desacoplado da URL, distinto de upsert_source (chave natural sha256)."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
@@ -462,12 +461,12 @@ def test_create_source_rejects_duplicate_kind_canonical(
     chamada levanta DuplicateSourceError e nenhum segundo record nasce (constraint da
     store, não checagem na view — ticket #105)."""
     knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
     with pytest.raises(DuplicateSourceError):
         knowledge.create_source(
-            db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
         )
 
     assert _count(db, "source") == 1
@@ -480,10 +479,10 @@ def test_create_source_allows_same_canonical_across_kinds(
     dois Cadastros distintos — exercita o índice UNIQUE(kind, canonical) da 0009, que a
     global UNIQUE(canonical) anterior barraria."""
     a = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x"
     )
     b = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="github-repo", canonical="https://x"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="github-repo", canonical="https://x"
     )
 
     assert a != b
@@ -497,17 +496,13 @@ def test_upsert_source_reuses_record_created_by_ui(
     REUSADO pelo coletor. upsert_source resolve à mesma (kind, canonical) sem cunhar um
     segundo record que o índice UNIQUE(kind, canonical) barraria — quebrando a coleta."""
     ui_id = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )
 
     collected = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )
@@ -529,7 +524,9 @@ def test_upsert_source_reuses_legacy_sha256_record(
     )
 
     resolved = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://legacy/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://legacy/feed",
     )
 
     assert resolved == legacy
@@ -541,15 +538,13 @@ def test_get_source_returns_full_cadastro(db: Any, tenant_id: RecordID, user_id:
     archived_at) — a leitura que o form de edição (#106) precisa e que list_sources/
     sources_with_stats não dão (não trazem tags nem enabled)."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
 
     assert got is not None
     assert got.id == rid
@@ -565,7 +560,7 @@ def test_get_source_absent_returns_none(db: Any, tenant_id: RecordID, user_id: R
     """id inexistente → None (não erro): a rota traduz em staleness, não em 500."""
     assert (
         knowledge.get_source(
-            db, knowledge._rid("source", "ghost"), tenant_id=tenant_id, user_id=user_id
+            scoped(db, tenant_id=tenant_id, user_id=user_id), knowledge._rid("source", "ghost")
         )
         is None
     )
@@ -578,28 +573,34 @@ def test_active_sources_returns_only_enabled_non_archived_of_kind(
     E archived_at IS NONE) do kind pedido. Pausado, arquivado e outro kind NUNCA entram — é o
     que garante 'pausado/arquivado não gera run'."""
     a = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://a/feed", title="A"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://a/feed",
+        title="A",
     )
     b = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://b/feed", title="B"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://b/feed",
+        title="B",
     )
     paused = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://p/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://p/feed"
     )
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=paused, enabled=False)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=paused, enabled=False
+    )
     archived = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=archived)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=archived)
     knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )
 
-    active = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+    active = knowledge.active_sources(scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss")
 
     assert {str(s.id) for s in active} == {str(a), str(b)}
 
@@ -611,24 +612,22 @@ def test_active_sources_carries_canonical_title_tags_for_dispatch(
     tags precisam vir (as tags fecham o circuito de metadata dos itens; sem elas, itens novos
     nasceriam sem rótulo em silêncio)."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
     )
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rid,
         title="Feed X",
         tags=["ai", "openai"],
         canonical="https://x/feed",
     )
 
-    (source,) = knowledge.active_sources(db, tenant_id=tenant_id, user_id=user_id, kind="rss")
+    (source,) = knowledge.active_sources(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss"
+    )
 
     assert source.id == rid
     assert source.kind == "rss"
@@ -647,15 +646,13 @@ def test_active_sources_carries_created_at_as_aware_datetime(
     from datetime import datetime
 
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )
 
     (source,) = knowledge.active_sources(
-        db, tenant_id=tenant_id, user_id=user_id, kind="github-repo"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="github-repo"
     )
 
     assert source.id == rid
@@ -670,9 +667,7 @@ def test_edit_source_updates_fields_keeping_id_and_history(
     from_source do item já coletado fica intacta — histórico preservado. Editar a URL não é
     'trocar por outra fonte': é 'esta fonte mudou de endereço', os itens seguem pendurados."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://old/feed",
         title="Antigo",
@@ -680,16 +675,14 @@ def test_edit_source_updates_fields_keeping_id_and_history(
     item = knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
 
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rid,
         title="Novo",
         tags=["python", "ml"],
         canonical="https://new/feed",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.id == rid  # id preservado
     assert got.title == "Novo"
@@ -707,25 +700,21 @@ def test_edit_source_blank_title_becomes_none(
     """Título vazio na edição limpa o campo (None), simétrico ao create — full-replace dos
     três campos editáveis, sem ambiguidade 'None = não mexer'."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Tinha",
     )
 
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rid,
         title=None,
         tags=[],
         canonical="https://x/feed",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title is None
 
@@ -736,17 +725,15 @@ def test_edit_source_rejects_canonical_colliding_with_another(
     """Editar a canonical para uma que JÁ existe em outro Cadastro do mesmo kind viola
     UNIQUE(kind, canonical): recusa como DuplicateSourceError (aviso soft), sem gravar."""
     a = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://a/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://a/feed"
     )
     knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://b/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://b/feed"
     )
 
     with pytest.raises(DuplicateSourceError):
         knowledge.edit_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             id=a,
             title=None,
             tags=[],
@@ -754,7 +741,7 @@ def test_edit_source_rejects_canonical_colliding_with_another(
         )
 
     # nada mudou: `a` ainda aponta para a canonical original
-    got = knowledge.get_source(db, a, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), a)
     assert got is not None
     assert got.canonical == "https://a/feed"
 
@@ -765,25 +752,21 @@ def test_edit_source_keeping_own_canonical_is_not_a_duplicate(
     """Editar só title/tags (canonical inalterada) NÃO dispara falso-positivo de duplicata:
     o lookup exclui o próprio record (senão o cadastro colidiria consigo mesmo)."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Antes",
     )
 
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rid,
         title="Depois",
         tags=["a"],
         canonical="https://x/feed",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Depois"
     assert got.tags == ["a"]
@@ -795,27 +778,23 @@ def test_edit_source_same_canonical_across_kinds_is_allowed(
     """A colisão é por (kind, canonical): editar a canonical de um rss para uma que existe só
     num github-repo é permitido — kinds diferentes são Cadastros distintos."""
     rss = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="github-repo",
         canonical="https://github.com/o/r",
     )
 
     knowledge.edit_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         id=rss,
         title=None,
         tags=[],
         canonical="https://github.com/o/r",
     )
 
-    got = knowledge.get_source(db, rss, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rss)
     assert got is not None
     assert got.canonical == "https://github.com/o/r"
     assert got.kind == "rss"  # kind NÃO muda na edição
@@ -825,9 +804,7 @@ def test_edit_source_on_archived_is_stale(db: Any, tenant_id: RecordID, user_id:
     """Cadastro arquivado saiu do estado editável → StaleSourceError, sem escrita (belt
     `WHERE archived_at IS NONE`). (Arquivar é do #107; aqui semeamos archived_at cru.)"""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Antes",
@@ -836,16 +813,14 @@ def test_edit_source_on_archived_is_stale(db: Any, tenant_id: RecordID, user_id:
 
     with pytest.raises(StaleSourceError):
         knowledge.edit_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             id=rid,
             title="Depois",
             tags=[],
             canonical="https://x/feed",
         )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Antes"  # nada gravado no cadastro arquivado
 
@@ -855,9 +830,7 @@ def test_edit_source_absent_is_stale(db: Any, tenant_id: RecordID, user_id: Reco
     ghost = knowledge._rid("source", "ghost")
     with pytest.raises(StaleSourceError):
         knowledge.edit_source(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             id=ghost,
             title="x",
             tags=[],
@@ -872,7 +845,7 @@ def _state(
     db: Any, tenant_id: RecordID, user_id: RecordID, rid: RecordID
 ) -> tuple[bool, str | None]:
     """Lê (enabled, archived_at) cru do banco — a prova de atomicidade do estado."""
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     return got.enabled, got.archived_at
 
@@ -884,13 +857,17 @@ def test_set_source_enabled_pauses_without_archiving(
     `archived_at=NONE` é VÁLIDO — o sweep varre só os ativos, então pausar tira do ar sem
     arquivar. Retomar volta a `enabled=true` sem nunca ter tocado `archived_at`."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
+    )
     assert _state(db, tenant_id, user_id, rid) == (False, None)  # pausado, NÃO arquivado
 
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=True)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=True
+    )
     assert _state(db, tenant_id, user_id, rid) == (True, None)  # ativo de novo
 
 
@@ -900,15 +877,17 @@ def test_set_source_enabled_on_archived_is_stale(
     """`enabled` de um arquivado é sempre `false` (invariante `archived_at set ⟹ enabled=false`):
     pausar/retomar um arquivado é recusado (StaleSourceError), sem violar o invariante."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     archived_at_before = _state(db, tenant_id, user_id, rid)[
         1
     ]  # captura archived_at ANTES da tentativa
 
     with pytest.raises(StaleSourceError):
-        knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=True)
+        knowledge.set_source_enabled(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=True
+        )
     assert _state(db, tenant_id, user_id, rid) == (
         False,
         archived_at_before,
@@ -921,9 +900,7 @@ def test_set_source_enabled_absent_is_stale(
     """Pausar um Cadastro inexistente → StaleSourceError, nunca 500."""
     with pytest.raises(StaleSourceError):
         knowledge.set_source_enabled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             id=knowledge._rid("source", "ghost"),
             enabled=False,
         )
@@ -936,11 +913,11 @@ def test_archive_source_sets_both_fields_atomically(
     estado divergente arquivado-mas-ativo. O histórico (item pendurado) fica intacto: arquivar
     tira da operação, não apaga."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
 
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
     enabled, archived = _state(db, tenant_id, user_id, rid)
     assert enabled is False
@@ -955,13 +932,13 @@ def test_archive_source_already_archived_is_stale(
     """Arquivar duas vezes: a segunda é StaleSourceError (WHERE archived_at IS NONE casa 0
     linhas), sem re-carimbar `archived_at` por cima do original."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     first_stamp = _state(db, tenant_id, user_id, rid)[1]
 
     with pytest.raises(StaleSourceError):
-        knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+        knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     assert _state(db, tenant_id, user_id, rid)[1] == first_stamp  # carimbo original intacto
 
 
@@ -969,7 +946,7 @@ def test_archive_source_absent_is_stale(db: Any, tenant_id: RecordID, user_id: R
     """Arquivar um Cadastro inexistente → StaleSourceError."""
     with pytest.raises(StaleSourceError):
         knowledge.archive_source(
-            db, tenant_id=tenant_id, user_id=user_id, id=knowledge._rid("source", "ghost")
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=knowledge._rid("source", "ghost")
         )
 
 
@@ -979,11 +956,11 @@ def test_restore_source_clears_both_fields_atomically(
     """Restaurar é o oposto exato de arquivar: `enabled=true` E `archived_at=NONE` num só
     statement. Volta ao estado ATIVO (não a pausado) — restaurar sempre reativa."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
-    knowledge.restore_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.restore_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
     assert _state(db, tenant_id, user_id, rid) == (True, None)  # ativo
 
@@ -994,14 +971,14 @@ def test_restore_source_not_archived_is_stale(
     """Restaurar um Cadastro que NÃO está arquivado (ativo ou pausado) → StaleSourceError:
     o WHERE archived_at IS NOT NONE não casa nada, sem forçar enabled=true num pausado."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.set_source_enabled(
-        db, tenant_id=tenant_id, user_id=user_id, id=rid, enabled=False
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid, enabled=False
     )  # pausado, não arquivado
 
     with pytest.raises(StaleSourceError):
-        knowledge.restore_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+        knowledge.restore_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
     assert _state(db, tenant_id, user_id, rid) == (
         False,
         None,
@@ -1014,12 +991,12 @@ def test_delete_source_removes_cadastro_with_zero_items(
     """Hard delete (ADR-0025 §8, exceção estreita): Cadastro com ZERO itens é apagado de vez —
     limpa um cadastro criado por engano. Só este caminho apaga na store inteira."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
-    knowledge.delete_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.delete_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
-    assert knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id) is None
+    assert knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) is None
     assert _count(db, "source") == 0
 
 
@@ -1029,15 +1006,15 @@ def test_delete_source_with_items_is_blocked(
     """Apagar um Cadastro COM itens é impedido (SourceHasHistoryError) — proveniência é 'o
     produto', o caminho é arquivar. O record e o item seguem intactos."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=rid, external_id="ep-1", content="bruto")
 
     with pytest.raises(SourceHasHistoryError):
-        knowledge.delete_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+        knowledge.delete_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
     assert (
-        knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id) is not None
+        knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) is not None
     )  # nada apagado
     assert _count(db, "source") == 1
 
@@ -1048,20 +1025,20 @@ def test_delete_source_archived_with_zero_items_is_allowed(
     """A guarda do delete é ZERO ITENS, não o estado do ciclo de vida: um Cadastro arquivado
     (ou pausado) sem itens é apagável — não se exige um estado prévio (advisor)."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
-    knowledge.delete_source(db, tenant_id=tenant_id, user_id=user_id, id=rid)
+    knowledge.delete_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=rid)
 
-    assert knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id) is None
+    assert knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) is None
 
 
 def test_delete_source_absent_is_stale(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """Apagar um Cadastro que já sumiu → StaleSourceError, nunca 500."""
     with pytest.raises(StaleSourceError):
         knowledge.delete_source(
-            db, tenant_id=tenant_id, user_id=user_id, id=knowledge._rid("source", "ghost")
+            scoped(db, tenant_id=tenant_id, user_id=user_id), id=knowledge._rid("source", "ghost")
         )
 
 
@@ -1071,13 +1048,13 @@ def test_source_item_count_reflects_from_source_edges(
     """`source_item_count` conta os itens via `<-from_source<-item`: 0 num cadastro novo, sobe a
     cada item coletado. É a guarda do apagável (zero) e o dado da tela de confirmação."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
-    assert knowledge.source_item_count(db, rid, tenant_id=tenant_id, user_id=user_id) == 0
+    assert knowledge.source_item_count(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) == 0
 
     knowledge.upsert_item(db, source=rid, external_id="ep-1", content="a")
     knowledge.upsert_item(db, source=rid, external_id="ep-2", content="b")
-    assert knowledge.source_item_count(db, rid, tenant_id=tenant_id, user_id=user_id) == 2
+    assert knowledge.source_item_count(scoped(db, tenant_id=tenant_id, user_id=user_id), rid) == 2
 
 
 def test_sources_with_stats_carries_lifecycle_state(
@@ -1087,19 +1064,28 @@ def test_sources_with_stats_carries_lifecycle_state(
     ações: ativo, pausado (enabled=false, sem carimbo) e arquivado (com carimbo) são distinguíveis
     numa leitura só, sem N+1 get_source."""
     active = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://active/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://active/feed",
     )
     paused = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://paused/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://paused/feed",
     )
     archived = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://archived/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="rss",
+        canonical="https://archived/feed",
     )
-    knowledge.set_source_enabled(db, tenant_id=tenant_id, user_id=user_id, id=paused, enabled=False)
-    knowledge.archive_source(db, tenant_id=tenant_id, user_id=user_id, id=archived)
+    knowledge.set_source_enabled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), id=paused, enabled=False
+    )
+    knowledge.archive_source(scoped(db, tenant_id=tenant_id, user_id=user_id), id=archived)
 
     by_id = {
-        str(s.id): s for s in knowledge.sources_with_stats(db, tenant_id=tenant_id, user_id=user_id)
+        str(s.id): s
+        for s in knowledge.sources_with_stats(scoped(db, tenant_id=tenant_id, user_id=user_id))
     }
 
     assert (by_id[str(active)].enabled, by_id[str(active)].archived_at) == (True, None)
@@ -1115,24 +1101,20 @@ def test_upsert_source_preserves_owner_edited_title(
     o título que o dono editou pela UI — senão a edição do #106 seria revertida todo dia, sem
     log. Cadastro SEM título ainda é preenchido pelo feed (nicety), e uma vez preenchido, fica."""
     rid = knowledge.create_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Dono editou",
     )
 
     knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Título do feed",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Dono editou"  # coletor não clobbera
 
@@ -1143,19 +1125,17 @@ def test_upsert_source_fills_missing_title_from_feed(
     """Cadastro sem título (criado pela UI sem informar) recebe o título do feed na 1ª coleta —
     a nicety legada sobrevive; só a SOBRESCRITA de um título já presente é que some."""
     rid = knowledge.create_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
 
     knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Título do feed",
     )
 
-    got = knowledge.get_source(db, rid, tenant_id=tenant_id, user_id=user_id)
+    got = knowledge.get_source(scoped(db, tenant_id=tenant_id, user_id=user_id), rid)
     assert got is not None
     assert got.title == "Título do feed"
 
@@ -1163,16 +1143,14 @@ def test_upsert_source_fills_missing_title_from_feed(
 def _seed_distilled(db: Any, tenant_id: RecordID, user_id: RecordID, n: int) -> list[RecordID]:
     """Cria `n` destilados (cada um a partir de um item próprio) e devolve seus ids."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://feed"
     )
     ids: list[RecordID] = []
     for i in range(n):
         item = knowledge.upsert_item(db, source=src, external_id=f"ext-{i}", content=f"c{i}")
         ids.append(
             knowledge.insert_distilled(
-                db,
-                tenant_id=tenant_id,
-                user_id=user_id,
+                scoped(db, tenant_id=tenant_id, user_id=user_id),
                 item=item,
                 summary=f"resumo {i}",
                 chunks=[],
@@ -1190,9 +1168,15 @@ def test_list_distilled_paginates_without_overlap_or_gap(
     conjuntos comparam a forma string do id.)"""
     all_ids = {str(rid) for rid in _seed_distilled(db, tenant_id, user_id, 5)}
 
-    page1 = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=2, start=0)
-    page2 = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=2, start=2)
-    page3 = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=2, start=4)
+    page1 = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2, start=0
+    )
+    page2 = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2, start=2
+    )
+    page3 = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2, start=4
+    )
 
     assert len(page1) == 2
     assert len(page2) == 2
@@ -1210,13 +1194,13 @@ def test_list_distilled_ordering_is_stable(db: Any, tenant_id: RecordID, user_id
     first = [
         d.id
         for d in knowledge.list_distilled(
-            db, tenant_id=tenant_id, user_id=user_id, limit=10, start=0
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10, start=0
         )
     ]
     second = [
         d.id
         for d in knowledge.list_distilled(
-            db, tenant_id=tenant_id, user_id=user_id, limit=10, start=0
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10, start=0
         )
     ]
     assert first == second
@@ -1227,7 +1211,10 @@ def test_list_distilled_empty_acervo_returns_empty(
 ) -> None:
     """Sem destilados, a lista é vazia (não None, não erro)."""
     assert (
-        knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10, start=0) == []
+        knowledge.list_distilled(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10, start=0
+        )
+        == []
     )
 
 
@@ -1241,12 +1228,16 @@ def test_list_distilled_clamps_hostile_bounds(
     assert {
         str(d.id)
         for d in knowledge.list_distilled(
-            db, tenant_id=tenant_id, user_id=user_id, limit=10, start=-5
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10, start=-5
         )
     } == all_ids
     # limit <= 0 ainda devolve ao menos 1 (não devolve a tabela inteira nem quebra)
     assert (
-        len(knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=0, start=0))
+        len(
+            knowledge.list_distilled(
+                scoped(db, tenant_id=tenant_id, user_id=user_id), limit=0, start=0
+            )
+        )
         == 1
     )
 
@@ -1255,9 +1246,9 @@ def test_dashboard_counts_reflects_acervo(db: Any, tenant_id: RecordID, user_id:
     """dashboard_counts conta destilados, itens, fontes e entidades do acervo (Painel,
     4º StatTile de Entidades adicionado no retrofit M5)."""
     _seed_distilled(db, tenant_id, user_id, 3)  # cria 1 source + 3 items + 3 distilled
-    knowledge.get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name="Python")
-    knowledge.get_or_create_entity(db, tenant_id=tenant_id, user_id=user_id, name="Rust")
-    counts = knowledge.dashboard_counts(db, tenant_id=tenant_id, user_id=user_id)
+    knowledge.get_or_create_entity(scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python")
+    knowledge.get_or_create_entity(scoped(db, tenant_id=tenant_id, user_id=user_id), name="Rust")
+    counts = knowledge.dashboard_counts(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert counts.distilled == 3
     assert counts.items == 3
     assert counts.sources == 1
@@ -1268,7 +1259,7 @@ def test_dashboard_counts_empty_acervo_is_zero(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Acervo vazio: todas as contagens são 0, não erro."""
-    counts = knowledge.dashboard_counts(db, tenant_id=tenant_id, user_id=user_id)
+    counts = knowledge.dashboard_counts(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert (counts.distilled, counts.items, counts.sources, counts.entities) == (0, 0, 0, 0)
 
 
@@ -1277,18 +1268,16 @@ def test_recent_runs_newest_first_with_error_kind(
 ) -> None:
     """recent_runs devolve as execuções mais recentes com o error.kind extraído:
     run ok -> error_kind None; run falha -> o kind estruturado (discriminação do Painel)."""
-    ok = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
-    knowledge.finish_run(db, ok, tenant_id=tenant_id, user_id=user_id)
-    bad = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    ok = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
+    knowledge.finish_run(scoped(db, tenant_id=tenant_id, user_id=user_id), ok)
+    bad = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller")
     knowledge.fail_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         bad,
-        tenant_id=tenant_id,
-        user_id=user_id,
         error={"kind": "rate_limit", "message": "quota"},
     )
 
-    runs = knowledge.recent_runs(db, limit=10)
+    runs = knowledge.recent_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10)
 
     assert len(runs) == 2
     # newest first: `bad` (distiller) foi criado depois de `ok` (feed), com um
@@ -1307,12 +1296,10 @@ def test_recent_runs_respects_limit(db: Any, tenant_id: RecordID, user_id: Recor
     """limit trunca o resultado às N MAIS RECENTES (não N quaisquer)."""
     for i in range(4):
         knowledge.finish_run(
-            db,
-            knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker=f"w{i}"),
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker=f"w{i}"),
         )  # w3 é o mais novo
-    runs = knowledge.recent_runs(db, limit=2)
+    runs = knowledge.recent_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2)
     assert [r.worker for r in runs] == ["w3", "w2"]
 
 
@@ -1323,7 +1310,7 @@ def test_item_index_maps_external_id_to_item(
     o import resolve derived_from (distilled -> item pela chave natural) e detecta
     itens já presentes por aqui, sem 1 query por linha nem SELECT de item espalhado."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     i1 = knowledge.upsert_item(db, source=src, external_id="ext-1", content="a")
     i2 = knowledge.upsert_item(db, source=src, external_id="ext-2", content="b")
@@ -1338,10 +1325,10 @@ def test_item_index_collapses_external_id_collision_to_one_entry(
     (1ª por id) e loga — não vincula silenciosamente ao item errado (achado do
     CodeRabbit); external_id é chave natural, colisão não é esperada."""
     s1 = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://a/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://a/feed"
     )
     s2 = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://b/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://b/feed"
     )
     i1 = knowledge.upsert_item(db, source=s1, external_id="dup", content="x")
     i2 = knowledge.upsert_item(db, source=s2, external_id="dup", content="y")
@@ -1359,11 +1346,11 @@ def test_distilled_for_returns_empty_when_item_has_no_distilled(
     a leitura que o import one-off usa para pular itens já destilados (insert_distilled
     NÃO é idempotente; sem esta checagem, re-rodar o corpus duplicaria os destilados)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
 
-    assert knowledge.distilled_for(db, item_id, tenant_id=tenant_id, user_id=user_id) == []
+    assert knowledge.distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_id) == []
 
 
 def test_distilled_for_returns_distilled_derived_from_the_item(
@@ -1373,19 +1360,19 @@ def test_distilled_for_returns_distilled_derived_from_the_item(
     distilled) e SÓ eles — o destilado de outro item não vaza. É a prova de no-op do
     corpus de distillations: item com destilado é pulado na re-execução."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
 
     distilled_a = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_a, summary="resumo A", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_a, summary="resumo A", chunks=[]
     )
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_b, summary="resumo B", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_b, summary="resumo B", chunks=[]
     )
 
-    assert knowledge.distilled_for(db, item_a, tenant_id=tenant_id, user_id=user_id) == [
+    assert knowledge.distilled_for(scoped(db, tenant_id=tenant_id, user_id=user_id), item_a) == [
         distilled_a
     ]
 
@@ -1397,29 +1384,27 @@ def test_search_returns_the_distilled_for_the_nearest_chunk(
     vetorA é ortogonal a vetorB — e o hit expõe o `distilled` (o conhecimento),
     não só o `chunk` órfão."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
 
     distilled_a = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_a,
         summary="resumo A",
         chunks=[_chunk(0, _vec(1.0), text="A")],
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_b,
         summary="resumo B",
         chunks=[_chunk(0, _vec(0.0, 1.0), text="B")],
     )
 
-    hits = knowledge.search(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(1.0), k=1)
+    hits = knowledge.search(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), embedding=_vec(1.0), k=1
+    )
 
     assert len(hits) == 1
     assert hits[0].distilled == distilled_a
@@ -1433,23 +1418,23 @@ def test_attach_chunks_creates_chunks_and_makes_distilled_searchable(
     chunk_of) e o distilled passa a ser devolvido por knowledge.search — prova de
     que os chunks estão de fato LIGADOS e buscáveis, não soltos no grafo."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, summary="resumo", chunks=[]
     )
 
     knowledge.attach_chunks(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         distilled=distilled_id,
         chunks=[_chunk(0, _vec(1.0), text="primeiro"), _chunk(1, _vec(0.0, 1.0), text="segundo")],
     )
 
     assert _count(db, "chunk") == 2
-    hits = knowledge.search(db, tenant_id=tenant_id, user_id=user_id, embedding=_vec(1.0), k=1)
+    hits = knowledge.search(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), embedding=_vec(1.0), k=1
+    )
     assert len(hits) == 1
     assert hits[0].distilled == distilled_id
 
@@ -1461,17 +1446,15 @@ def test_attach_chunks_preserves_existing_provenance(
     sendo o MESMO record (mesmo id) e as arestas produced_by/mentions gravadas por
     um insert_distilled anterior (com run+entities) sobrevivem intactas depois."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="scribe")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="scribe")
     entity_id = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python"
     )
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo",
         chunks=[],
@@ -1480,9 +1463,7 @@ def test_attach_chunks_preserves_existing_provenance(
     )
 
     knowledge.attach_chunks(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         distilled=distilled_id,
         chunks=[_chunk(0, _vec(1.0))],
     )
@@ -1504,22 +1485,18 @@ def test_attach_chunks_is_noop_when_distilled_already_has_chunks(
     criado. É isso que torna o backfill retomável sem depender da disciplina de
     quem chama (script one-off pode re-rodar sem checar antes)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo",
         chunks=[_chunk(0, _vec(1.0), text="original")],
     )
 
     knowledge.attach_chunks(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         distilled=distilled_id,
         chunks=[_chunk(1, _vec(0.0, 1.0), text="novo")],
     )
@@ -1533,15 +1510,15 @@ def test_attach_chunks_with_empty_chunks_is_noop(
     """attach_chunks(chunks=[]) não cria nada e não levanta — chamada seguramente
     inofensiva quando o backfill não tem nada a anexar para aquele distilled."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, summary="resumo", chunks=[]
     )
 
     knowledge.attach_chunks(
-        db, tenant_id=tenant_id, user_id=user_id, distilled=distilled_id, chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), distilled=distilled_id, chunks=[]
     )
 
     assert _count(db, "chunk") == 0
@@ -1554,11 +1531,11 @@ def test_attach_chunks_rejects_dim_provenance_mismatch_and_reverts(
     um Chunk cujo `dim` declarado (768) não bate com o tamanho real do embedding
     levanta ValueError, e a transação reverte — nenhum chunk fica gravado."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, summary="resumo", chunks=[]
     )
     lying_chunk = Chunk(
         text="trecho",
@@ -1571,7 +1548,9 @@ def test_attach_chunks_rejects_dim_provenance_mismatch_and_reverts(
 
     with pytest.raises(ValueError, match="dim"):
         knowledge.attach_chunks(
-            db, tenant_id=tenant_id, user_id=user_id, distilled=distilled_id, chunks=[lying_chunk]
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            distilled=distilled_id,
+            chunks=[lying_chunk],
         )
 
     assert _count(db, "chunk") == 0
@@ -1584,27 +1563,25 @@ def test_distilled_without_chunks_returns_only_distilled_missing_chunks(
     chunk_of incoming — os candidatos ao backfill (ADR-0013 §VI/§VII). Um distilled
     já embeddado (resumo C, com 1 chunk) NÃO aparece na lista."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_a, summary="resumo A", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_a, summary="resumo A", chunks=[]
     )
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_b, summary="resumo B", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_b, summary="resumo B", chunks=[]
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_c,
         summary="resumo C",
         chunks=[_chunk(0, _vec(1.0))],
     )
 
-    pending = knowledge.distilled_without_chunks(db, tenant_id=tenant_id, user_id=user_id)
+    pending = knowledge.distilled_without_chunks(scoped(db, tenant_id=tenant_id, user_id=user_id))
 
     assert {summary for _, summary in pending} == {"resumo A", "resumo B"}
     for rid, summary in pending:
@@ -1619,26 +1596,24 @@ def test_distilled_without_chunks_excludes_after_attach_chunks(
     lista — prova de retomabilidade: o backfill script pode re-rodar e processar
     só o restante, sem reprocessar quem já foi resolvido."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     distilled_a = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_a, summary="resumo A", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_a, summary="resumo A", chunks=[]
     )
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_b, summary="resumo B", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_b, summary="resumo B", chunks=[]
     )
 
     knowledge.attach_chunks(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         distilled=distilled_a,
         chunks=[_chunk(0, _vec(1.0))],
     )
 
-    pending = knowledge.distilled_without_chunks(db, tenant_id=tenant_id, user_id=user_id)
+    pending = knowledge.distilled_without_chunks(scoped(db, tenant_id=tenant_id, user_id=user_id))
     assert {summary for _, summary in pending} == {"resumo B"}
 
 
@@ -1646,7 +1621,9 @@ def test_distilled_without_chunks_returns_empty_when_no_distilled(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Banco sem nenhum distilled: distilled_without_chunks devolve []."""
-    assert knowledge.distilled_without_chunks(db, tenant_id=tenant_id, user_id=user_id) == []
+    assert (
+        knowledge.distilled_without_chunks(scoped(db, tenant_id=tenant_id, user_id=user_id)) == []
+    )
 
 
 def test_items_without_distilled_filters_and_limits(
@@ -1656,7 +1633,7 @@ def test_items_without_distilled_filters_and_limits(
     nenhum derived_from incoming — candidatos à destilação nova (ADR-0013
     §III.1/§III.7). Um item já destilado (C) NÃO aparece na lista."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(
         db, source=source_id, external_id="a", content="conteúdo A", title="Título A"
@@ -1666,10 +1643,15 @@ def test_items_without_distilled_filters_and_limits(
     )
     item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo C")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_c, summary="tem destilado", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        item=item_c,
+        summary="tem destilado",
+        chunks=[],
     )
 
-    pending = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    pending = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert len(pending) == 2
     assert {str(rid) for rid, _, _ in pending} == {str(item_a), str(item_b)}
@@ -1684,13 +1666,15 @@ def test_items_without_distilled_respects_limit(
     """Com 3 items pendentes e limit=2, devolve exatamente 2 — o worker consome
     em lotes, não a lista inteira de uma vez."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
 
-    pending = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=2)
+    pending = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2
+    )
 
     assert len(pending) == 2
 
@@ -1701,14 +1685,18 @@ def test_items_without_distilled_is_deterministically_ordered(
     """Duas chamadas seguidas devolvem a MESMA ordem (por id) — sem isso, um
     worker que processa em lotes poderia pular ou reprocessar itens entre lotes."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.upsert_item(db, source=source_id, external_id="b", content="B")
     knowledge.upsert_item(db, source=source_id, external_id="c", content="C")
 
-    first = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10)
-    second = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    first = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
+    second = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert first == second
 
@@ -1718,19 +1706,25 @@ def test_items_without_distilled_returns_empty_when_none_pending(
 ) -> None:
     """Banco sem item pendente (nenhum item, ou todo item já destilado) devolve []."""
     assert (
-        knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10) == []
+        knowledge.items_without_distilled(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+        )
+        == []
     )
 
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="A")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, summary="resumo", chunks=[]
     )
 
     assert (
-        knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10) == []
+        knowledge.items_without_distilled(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+        )
+        == []
     )
 
 
@@ -1740,13 +1734,15 @@ def test_items_without_distilled_preserves_none_title_and_exact_content(
     """Um item criado sem title devolve title is None e o content exato — nenhuma
     normalização silenciosa do conteúdo bruto coletado."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="a", content="conteúdo exato sem título"
     )
 
-    pending = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    pending = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert len(pending) == 1
     rid, title, content = pending[0]
@@ -1764,13 +1760,15 @@ def test_items_without_distilled_excludes_empty_and_whitespace_content(
     item com conteúdo real (C) aparece; os link-posts sem corpo (A vazio, B whitespace)
     ficam de fora."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="")
     knowledge.upsert_item(db, source=source_id, external_id="b", content="   \n\t  ")
     item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo real")
 
-    pending = knowledge.items_without_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    pending = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert len(pending) == 1
     rid, _, content = pending[0]
@@ -1786,7 +1784,7 @@ def test_items_to_score_filters_and_limits(db: Any, tenant_id: RecordID, user_id
     scored_for ainda — candidatos à pontuação NOVA (ADR-0051 §I). Um item já
     pontuado (C) NÃO aparece na lista, mesmo sem nunca ter sido destilado."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_a = knowledge.upsert_item(
         db,
@@ -1798,9 +1796,9 @@ def test_items_to_score_filters_and_limits(db: Any, tenant_id: RecordID, user_id
     )
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo B")
     item_c = knowledge.upsert_item(db, source=source_id, external_id="c", content="conteúdo C")
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_c, score=8)
+    knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_c, score=8)
 
-    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    pending = knowledge.items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10)
 
     assert len(pending) == 2
     assert {str(rid) for rid, _, _, _ in pending} == {str(item_a), str(item_b)}
@@ -1815,12 +1813,12 @@ def test_items_to_score_excludes_empty_content(
     """Mesmo piso de proveniência de items_without_distilled (ADR-0013 §III.1/§III.7,
     ADR-0051 §IV.3): item com content vazio nunca é candidato à pontuação."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=source_id, external_id="a", content="")
     item_b = knowledge.upsert_item(db, source=source_id, external_id="b", content="conteúdo real")
 
-    pending = knowledge.items_to_score(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    pending = knowledge.items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10)
 
     assert len(pending) == 1
     assert pending[0][0] == item_b
@@ -1832,11 +1830,11 @@ def test_apply_score_creates_scored_for_edge_with_score(
     """apply_score grava a aresta item -[scored_for]-> tenant com o score dado
     (ADR-0051 §I.2) — sem título gerado, item.generated_title continua None."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
 
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=7)
+    knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, score=7)
 
     row = db.query("SELECT ->scored_for.score AS s, generated_title FROM $i;", {"i": item_id})[0]
     assert row["s"] == [7]
@@ -1849,14 +1847,12 @@ def test_apply_score_with_generated_title_sets_item_field_not_title(
     """apply_score(generated_title=...) grava em item.generated_title — NUNCA em
     item.title (ADR-0051 §IV.1: campo próprio, nunca sobrescreve o título original)."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
 
     knowledge.apply_score(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         score=9,
         generated_title="Título Gerado pelo Kubo",
@@ -1874,12 +1870,12 @@ def test_apply_score_twice_does_not_duplicate_edge(
     aresta — DELETE+RELATE, o mesmo padrão last-wins de upsert_item/from_source —
     nunca duas arestas scored_for pro mesmo item."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="a", content="conteúdo")
 
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=3)
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_id, score=9)
+    knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, score=3)
+    knowledge.apply_score(scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, score=9)
 
     row = db.query("SELECT ->scored_for.score AS s FROM $i;", {"i": item_id})[0]
     assert row["s"] == [9]
@@ -1896,19 +1892,17 @@ def test_insert_distilled_mentions_are_atomic_no_orphan_on_late_failure(
     porque insert_distilled já escreve tudo numa única transação; se um futuro
     refactor separar mentions numa chamada pós-commit, este teste vira RED."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(
         db, source=source_id, external_id="ep-1", content="conteúdo bruto"
     )
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="scribe")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="scribe")
     missing_entity = RecordID("entity", "nao-existe")
 
     with pytest.raises(StoreError):
         knowledge.insert_distilled(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
             item=item_id,
             summary="não deveria persistir",
             chunks=[_chunk(0, _vec(1.0))],
@@ -1926,12 +1920,12 @@ def test_run_lifecycle_running_then_ok_or_error(
     """start_run abre em 'running'; finish_run fecha em 'ok' com finished_at
     preenchido; fail_run (em outro run) fecha em 'error' preservando o erro
     estruturado aninhado, também com finished_at preenchido."""
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
     started = db.query("SELECT status, finished_at FROM $r;", {"r": run_id})[0]
     assert started["status"] == "running"
     assert started["finished_at"] is None
 
-    knowledge.finish_run(db, run_id, tenant_id=tenant_id, user_id=user_id)
+    knowledge.finish_run(scoped(db, tenant_id=tenant_id, user_id=user_id), run_id)
     finished = db.query("SELECT status, finished_at FROM $r;", {"r": run_id})[0]
     assert finished["status"] == "ok"
     assert finished["finished_at"] is not None
@@ -1940,13 +1934,11 @@ def test_run_lifecycle_running_then_ok_or_error(
 def test_finish_run_persists_stats(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """finish_run(stats=...) grava os contadores no campo FLEXIBLE run.stats
     (carry-over do 0003: o worker fake com métricas é o primeiro consumidor)."""
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
 
     knowledge.finish_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         run_id,
-        tenant_id=tenant_id,
-        user_id=user_id,
         stats={"items_seen": 10, "items_written": 3},
     )
 
@@ -1955,12 +1947,12 @@ def test_finish_run_persists_stats(db: Any, tenant_id: RecordID, user_id: Record
     assert row["stats"]["items_seen"] == 10
     assert row["stats"]["items_written"] == 3
 
-    other_run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    other_run_id = knowledge.start_run(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed"
+    )
     knowledge.fail_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         other_run_id,
-        tenant_id=tenant_id,
-        user_id=user_id,
         error={"kind": "http", "detail": {"status": 503}},
     )
     failed = db.query("SELECT status, error, finished_at FROM $r;", {"r": other_run_id})[0]
@@ -1977,9 +1969,7 @@ def test_read_distilled_returns_full_provenance_view(
     (`kubo query` usa `.summary`, `kubo show --provenance` usa o resto) —
     substitui a antiga `provenance` (só ids de source, insuficiente para exibir)."""
     source_id = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed X",
@@ -1992,11 +1982,9 @@ def test_read_distilled_returns_full_provenance_view(
         url="https://x/ep-1",
         title="Episódio 1",
     )
-    run_id = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="scribe")
+    run_id = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="scribe")
     distilled_id = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item_id,
         summary="resumo destilado",
         chunks=[],
@@ -2004,7 +1992,7 @@ def test_read_distilled_returns_full_provenance_view(
         run=run_id,
     )
 
-    view = knowledge.read_distilled(db, distilled_id, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id), distilled_id)
 
     assert view is not None
     assert view.id == distilled_id
@@ -2032,14 +2020,17 @@ def test_read_distilled_without_run_has_empty_runs_but_keeps_items(
     obrigatório), mas `items` continua com 1 entrada — derived_from é ENFORCED
     pelo schema, então item->source sempre resolve. claims default a []."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="ep-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo sem run", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        item=item_id,
+        summary="resumo sem run",
+        chunks=[],
     )
 
-    view = knowledge.read_distilled(db, distilled_id, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id), distilled_id)
 
     assert view is not None
     assert view.summary == "resumo sem run"
@@ -2055,7 +2046,7 @@ def test_read_distilled_returns_none_for_nonexistent_id(
     e não confunde 'sem proveniência' com 'destilado inexistente'."""
     assert (
         knowledge.read_distilled(
-            db, RecordID("distilled", "nao-existe"), tenant_id=tenant_id, user_id=user_id
+            scoped(db, tenant_id=tenant_id, user_id=user_id), RecordID("distilled", "nao-existe")
         )
         is None
     )
@@ -2068,14 +2059,16 @@ def test_read_distilled_handles_missing_optional_fields(
     `source_title is None`; item sem `url`/`title` devolve esses campos None
     também — nenhum KeyError por causa de um dado opcional não preenchido."""
     source_id = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="youtube", canonical="https://y/channel"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="youtube",
+        canonical="https://y/channel",
     )
     item_id = knowledge.upsert_item(db, source=source_id, external_id="v-1", content="bruto")
     distilled_id = knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_id, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_id, summary="resumo", chunks=[]
     )
 
-    view = knowledge.read_distilled(db, distilled_id, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id), distilled_id)
 
     assert view is not None
     item_view = view.items[0]
@@ -2098,9 +2091,7 @@ def test_list_distilled_card_carries_title_source_and_date(
     """O card do browse (E3) leva o título do item (via derived_from), a fonte
     (canonical + kind a 2 hops) e a data — não só id+summary."""
     src = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="youtube",
         canonical="https://y/@canal",
         title="Canal",
@@ -2109,10 +2100,15 @@ def test_list_distilled_card_carries_title_source_and_date(
         db, source=src, external_id="v1", content="c", title="Título do Item"
     )
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="resumo curto", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        item=item,
+        summary="resumo curto",
+        chunks=[],
     )
 
-    cards = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)
+    cards = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )
 
     assert len(cards) == 1
     card = cards[0]
@@ -2131,17 +2127,19 @@ def test_list_distilled_card_published_at_reflects_item_date(
     """`card.published_at` reflete a data de PUBLICAÇÃO do item (KUBO-192), não a
     data de criação do destilado — os dois podem divergir (destilação atrasada)."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     published = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
     item = knowledge.upsert_item(
         db, source=src, external_id="v1", content="c", published_at=published
     )
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="resumo", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item, summary="resumo", chunks=[]
     )
 
-    card = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    card = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert card.published_at == str(published)
 
@@ -2152,19 +2150,19 @@ def test_list_distilled_title_falls_back_to_summary_first_line(
     """Item sem title (NULL): o card usa a 1ª linha não-vazia do summary como título
     (E3) — nunca fica sem rótulo. Travessia sem título volta [None], vira None, cai no fallback."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c")  # sem title
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="Primeira linha do resumo.\nSegunda.",
         chunks=[],
     )
 
-    card = knowledge.list_distilled(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    card = knowledge.list_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert card.title == "Primeira linha do resumo."
 
@@ -2175,35 +2173,33 @@ def test_list_entities_counts_mentions_ordered_desc(
     """list_entities conta menções por entidade (array::len(<-mentions)) e ordena
     do mais mencionado ao menos (E2) — sem sparkline, sem relações."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c")
     popular = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python", kind="tecnologia"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python", kind="tecnologia"
     )
     rare = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Rust", kind="tecnologia"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Rust", kind="tecnologia"
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="d1",
         chunks=[],
         entities=[popular, rare],
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="d2",
         chunks=[],
         entities=[popular],
     )
 
-    entities = knowledge.list_entities(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)
+    entities = knowledge.list_entities(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )
 
     assert [e.name for e in entities] == ["Python", "Rust"]
     assert entities[0].mentions == 2
@@ -2217,28 +2213,24 @@ def test_read_entity_returns_mentioning_distilled_cards(
     """read_entity devolve a entidade + os destilados que a mencionam como cards
     (título/fonte/data, mesma resolução do browse). None quando o id não existe."""
     src = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed",
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c", title="Post A")
     ent = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python", kind="tecnologia"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python", kind="tecnologia"
     )
     knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="fala de python",
         chunks=[],
         entities=[ent],
     )
 
-    view = knowledge.read_entity(db, ent, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_entity(scoped(db, tenant_id=tenant_id, user_id=user_id), ent)
 
     assert view is not None
     assert view.name == "Python"
@@ -2250,7 +2242,7 @@ def test_read_entity_returns_mentioning_distilled_cards(
 
     assert (
         knowledge.read_entity(
-            db, RecordID("entity", "nao-existe"), tenant_id=tenant_id, user_id=user_id
+            scoped(db, tenant_id=tenant_id, user_id=user_id), RecordID("entity", "nao-existe")
         )
         is None
     )
@@ -2262,9 +2254,7 @@ def test_sources_with_stats_counts_items_and_last_collection(
     """sources_with_stats: por fonte, quantos itens acumulados e o carimbo da última
     coleta (time::max, E4). Fonte sem item nenhum → last_collected_at None (badge trata)."""
     active = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Ativa",
@@ -2272,12 +2262,14 @@ def test_sources_with_stats_counts_items_and_last_collection(
     knowledge.upsert_item(db, source=active, external_id="e1", content="c")
     knowledge.upsert_item(db, source=active, external_id="e2", content="c")
     knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="site", canonical="https://empty/site"
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        kind="site",
+        canonical="https://empty/site",
     )
 
     stats = {
         s.canonical: s
-        for s in knowledge.sources_with_stats(db, tenant_id=tenant_id, user_id=user_id)
+        for s in knowledge.sources_with_stats(scoped(db, tenant_id=tenant_id, user_id=user_id))
     }
 
     assert stats["https://x/feed"].items == 2
@@ -2294,20 +2286,22 @@ def test_list_runs_paginated_with_error_and_derived_items(
     """list_runs pagina as execuções (mais recentes primeiro) com o erro estruturado
     completo (kind + objeto p/ o painel expansível) e o nº de itens derivado de stats
     (E6: `items` do feed, `distilled` do distiller; senão None)."""
-    feed = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
+    feed = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
     knowledge.finish_run(
-        db, feed, tenant_id=tenant_id, user_id=user_id, stats={"entries_seen": 12, "items": 5}
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        feed,
+        stats={"entries_seen": 12, "items": 5},
     )
-    distiller = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    distiller = knowledge.start_run(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller"
+    )
     knowledge.fail_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         distiller,
-        tenant_id=tenant_id,
-        user_id=user_id,
         error={"kind": "rate_limit", "message": "quota estourada"},
     )
 
-    runs = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)
+    runs = knowledge.list_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0)
 
     assert [r.worker for r in runs] == ["distiller", "feed"]  # newest first
     failed, ok = runs
@@ -2324,13 +2318,17 @@ def test_list_runs_derives_items_from_distiller_stats(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Quando o worker é o distiller, o nº de itens vem de stats['distilled'] (E6)."""
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller")
     knowledge.finish_run(
-        db, run, tenant_id=tenant_id, user_id=user_id, stats={"distilled": 7, "malformed": 1}
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        run,
+        stats={"distilled": 7, "malformed": 1},
     )
 
     assert (
-        knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0].items
+        knowledge.list_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0)[
+            0
+        ].items
         == 7
     )
 
@@ -2341,16 +2339,18 @@ def test_list_runs_derives_repos_total_and_discovered_from_stats(
     """D57: `repos_total`/`repos_discovered` (stats do github-releases) aparecem no card
     de run quando presentes -- o instrumento de verificação da migração REST->GraphQL
     (o dono confere `repos_total` contra a contagem real de watches)."""
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="github-releases")
+    run = knowledge.start_run(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), worker="github-releases"
+    )
     knowledge.finish_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         run,
-        tenant_id=tenant_id,
-        user_id=user_id,
         stats={"repos_total": 261, "repos_discovered": 259, "items": 4},
     )
 
-    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    result = knowledge.list_runs(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert result.repos_total == 261
     assert result.repos_discovered == 259
@@ -2361,10 +2361,12 @@ def test_list_runs_repo_counts_are_none_when_absent(
 ) -> None:
     """Workers que não descobrem repos (feed, distiller) não têm `repos_total`/
     `repos_discovered` em stats -- fallback gracioso pra None, mesmo padrão de `items`."""
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
-    knowledge.finish_run(db, run, tenant_id=tenant_id, user_id=user_id, stats={"items": 3})
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
+    knowledge.finish_run(scoped(db, tenant_id=tenant_id, user_id=user_id), run, stats={"items": 3})
 
-    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    result = knowledge.list_runs(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert result.repos_total is None
     assert result.repos_discovered is None
@@ -2376,16 +2378,16 @@ def test_list_runs_derives_scored_and_approved_from_distiller_stats(
     """KUBO-193 (ADR-0051 §I): `scored`/`approved` do destilador aparecem no card de
     run — o funil invertido precisa dos 3 contadores (pontuados/aprovados/destilados)
     visíveis em Execuções, não só o `items` (que já mostra `distilled`)."""
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller")
     knowledge.finish_run(
-        db,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         run,
-        tenant_id=tenant_id,
-        user_id=user_id,
         stats={"scored": 10, "approved": 3, "distilled": 3},
     )
 
-    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    result = knowledge.list_runs(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert result.scored == 10
     assert result.approved == 3
@@ -2397,10 +2399,12 @@ def test_list_runs_scored_and_approved_are_none_when_absent(
 ) -> None:
     """Workers que não pontuam (feed, github-releases) não têm `scored`/`approved`
     em stats -- fallback gracioso pra None, mesmo padrão de `repos_total`."""
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed")
-    knowledge.finish_run(db, run, tenant_id=tenant_id, user_id=user_id, stats={"items": 3})
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed")
+    knowledge.finish_run(scoped(db, tenant_id=tenant_id, user_id=user_id), run, stats={"items": 3})
 
-    result = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0)[0]
+    result = knowledge.list_runs(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0
+    )[0]
 
     assert result.scored is None
     assert result.approved is None
@@ -2410,12 +2414,10 @@ def test_list_runs_pagination_start_skips(db: Any, tenant_id: RecordID, user_id:
     """start pula as N execuções mais recentes — paginação estável."""
     for i in range(3):
         knowledge.finish_run(
-            db,
-            knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker=f"w{i}"),
-            tenant_id=tenant_id,
-            user_id=user_id,
+            scoped(db, tenant_id=tenant_id, user_id=user_id),
+            knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker=f"w{i}"),
         )
-    page2 = knowledge.list_runs(db, tenant_id=tenant_id, user_id=user_id, limit=2, start=2)
+    page2 = knowledge.list_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=2, start=2)
     assert [r.worker for r in page2] == ["w0"]
 
 
@@ -2427,36 +2429,30 @@ def test_list_runs_pagination_start_skips(db: Any, tenant_id: RecordID, user_id:
 def _graph(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[RecordID, RecordID]:
     """Grafo mínimo: 1 source + 1 item + 3 entidades + 2 destilados. Devolve (d1, d2)."""
     src = knowledge.upsert_source(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         kind="rss",
         canonical="https://x/feed",
         title="Feed",
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c", title="Post A")
     py = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Python", kind="tecnologia"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Python", kind="tecnologia"
     )
     rust = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Rust", kind="tecnologia"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Rust", kind="tecnologia"
     )
     guido = knowledge.get_or_create_entity(
-        db, tenant_id=tenant_id, user_id=user_id, name="Guido van Rossum", kind="pessoa"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), name="Guido van Rossum", kind="pessoa"
     )
     d1 = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="py",
         chunks=[],
         entities=[py, guido],
     )
     d2 = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="py e rust",
         chunks=[],
@@ -2468,8 +2464,8 @@ def _graph(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[RecordID, R
 def test_count_distilled_and_entities(db: Any, tenant_id: RecordID, user_id: RecordID) -> None:
     """count_distilled/count_entities dão o total do acervo (paginação sem busca)."""
     _graph(db, tenant_id, user_id)
-    assert knowledge.count_distilled(db, tenant_id=tenant_id, user_id=user_id) == 2
-    assert knowledge.count_entities(db, tenant_id=tenant_id, user_id=user_id) == 3
+    assert knowledge.count_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 2
+    assert knowledge.count_entities(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 3
 
 
 def test_list_entities_search_by_name_and_kind(
@@ -2479,20 +2475,26 @@ def test_list_entities_search_by_name_and_kind(
     count_entities usa o MESMO filtro — o 'X de Y' não mente durante a busca."""
     _graph(db, tenant_id, user_id)
     by_name = knowledge.list_entities(
-        db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0, query="pyth"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0, query="pyth"
     )
     assert [e.name for e in by_name] == ["Python"]
     by_kind = {
         e.name
         for e in knowledge.list_entities(
-            db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0, query="pessoa"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0, query="pessoa"
         )
     }
     assert by_kind == {"Guido van Rossum"}
     assert (
-        knowledge.count_entities(db, tenant_id=tenant_id, user_id=user_id, query="tecnologia") == 2
+        knowledge.count_entities(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), query="tecnologia"
+        )
+        == 2
     )  # Python + Rust
-    assert knowledge.count_entities(db, tenant_id=tenant_id, user_id=user_id, query="pyth") == 1
+    assert (
+        knowledge.count_entities(scoped(db, tenant_id=tenant_id, user_id=user_id), query="pyth")
+        == 1
+    )
 
 
 def test_list_runs_search_by_worker_and_status(
@@ -2500,26 +2502,24 @@ def test_list_runs_search_by_worker_and_status(
 ) -> None:
     """list_runs(query=…) filtra por worker OU status; count_runs usa o mesmo filtro."""
     knowledge.finish_run(
-        db,
-        knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="feed"),
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="feed"),
     )  # status ok
     knowledge.fail_run(
-        db,
-        knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller"),
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller"),
         error={"kind": "x"},
     )
     assert [
         r.worker
         for r in knowledge.list_runs(
-            db, tenant_id=tenant_id, user_id=user_id, limit=20, start=0, query="dist"
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=20, start=0, query="dist"
         )
     ] == ["distiller"]
-    assert knowledge.count_runs(db, tenant_id=tenant_id, user_id=user_id, query="error") == 1
-    assert knowledge.count_runs(db, tenant_id=tenant_id, user_id=user_id) == 2
+    assert (
+        knowledge.count_runs(scoped(db, tenant_id=tenant_id, user_id=user_id), query="error") == 1
+    )
+    assert knowledge.count_runs(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 2
 
 
 def test_read_distilled_includes_mentioned_entities(
@@ -2527,7 +2527,7 @@ def test_read_distilled_includes_mentioned_entities(
 ) -> None:
     """read_distilled passa a trazer as entidades mencionadas (chips do detalhe)."""
     d1, _ = _graph(db, tenant_id, user_id)
-    view = knowledge.read_distilled(db, d1, tenant_id=tenant_id, user_id=user_id)
+    view = knowledge.read_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id), d1)
     assert view is not None
     names = {e.name for e in view.entities}
     assert names == {"Python", "Guido van Rossum"}
@@ -2540,7 +2540,9 @@ def test_related_distilled_shares_entity_excludes_self(
 ) -> None:
     """related_distilled devolve destilados que compartilham entidade, SEM o próprio."""
     d1, d2 = _graph(db, tenant_id, user_id)  # d1 e d2 compartilham Python
-    related = knowledge.related_distilled(db, d1, tenant_id=tenant_id, user_id=user_id, limit=10)
+    related = knowledge.related_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), d1, limit=10
+    )
     ids = {str(c.id) for c in related}
     assert str(d2) in ids
     assert str(d1) not in ids  # nunca ele mesmo
@@ -2561,7 +2563,7 @@ def test_items_by_ids_returns_id_title_content(
     reenvia os MESMOS itens da amostra ao candidato, então precisa do content bruto
     por id, não da proveniência."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     a = knowledge.upsert_item(
         db, source=src, external_id="a", content="conteúdo A", title="Título A"
@@ -2587,21 +2589,21 @@ def test_list_distilled_with_items_carries_summary_item_and_run_worker(
     (distilled_id, summary, item_id, created_at, run_worker="distiller") — o script
     da auditoria classifica RECENTE por `run_worker == "distiller"`."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c1")
-    run = knowledge.start_run(db, tenant_id=tenant_id, user_id=user_id, worker="distiller")
+    run = knowledge.start_run(scoped(db, tenant_id=tenant_id, user_id=user_id), worker="distiller")
     dist = knowledge.insert_distilled(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
         item=item,
         summary="resumo recente",
         chunks=[],
         run=run,
     )
 
-    rows = knowledge.list_distilled_with_items(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    rows = knowledge.list_distilled_with_items(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert len(rows) == 1
     d_id, summary, item_id, created_at, run_worker = rows[0]
@@ -2618,14 +2620,19 @@ def test_list_distilled_with_items_legacy_without_run_has_none_worker(
     """Um distilled SEM produced_by (legado do import Neon) devolve `run_worker is None`
     — o discriminador nunca crasha na ausência do run; o script trata None como legado."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     item = knowledge.upsert_item(db, source=src, external_id="e1", content="c1")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item, summary="resumo legado", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        item=item,
+        summary="resumo legado",
+        chunks=[],
     )
 
-    rows = knowledge.list_distilled_with_items(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+    rows = knowledge.list_distilled_with_items(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
 
     assert len(rows) == 1
     assert rows[0][4] is None
@@ -2636,7 +2643,9 @@ def test_list_distilled_with_items_empty_returns_empty(
 ) -> None:
     """Sem destilados, a leitura é [] (não None, não erro)."""
     assert (
-        knowledge.list_distilled_with_items(db, tenant_id=tenant_id, user_id=user_id, limit=10)
+        knowledge.list_distilled_with_items(
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+        )
         == []
     )
 
@@ -2648,24 +2657,33 @@ def test_count_items_without_distilled_matches_the_filter(
     (sem derived_from + content não-vazio) — métrica de progresso/reconciliação do dreno
     (0014), sem puxar o content de milhares de itens só para contá-los."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A")
     knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")
     knowledge.upsert_item(db, source=src, external_id="empty", content="   ")  # vazio: fora
     item_done = knowledge.upsert_item(db, source=src, external_id="c", content="conteúdo C")
     knowledge.insert_distilled(
-        db, tenant_id=tenant_id, user_id=user_id, item=item_done, summary="já destilado", chunks=[]
+        scoped(db, tenant_id=tenant_id, user_id=user_id),
+        item=item_done,
+        summary="já destilado",
+        chunks=[],
     )  # fora
 
-    assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 2
+    assert (
+        knowledge.count_items_without_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id))
+        == 2
+    )
 
 
 def test_count_items_without_distilled_zero_when_none_pending(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Banco sem candidato pendente conta 0 (não None, não erro)."""
-    assert knowledge.count_items_without_distilled(db, tenant_id=tenant_id, user_id=user_id) == 0
+    assert (
+        knowledge.count_items_without_distilled(scoped(db, tenant_id=tenant_id, user_id=user_id))
+        == 0
+    )
 
 
 def test_count_items_to_score_matches_the_filter(
@@ -2677,18 +2695,20 @@ def test_count_items_to_score_matches_the_filter(
     não é "travado"); item aprovado-mas-não-destilado nunca chega a ter nota
     persistida (fix do PR #223), então continua contando como pendente."""
     src = knowledge.upsert_source(
-        db, tenant_id=tenant_id, user_id=user_id, kind="rss", canonical="https://x/feed"
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://x/feed"
     )
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo A")
     knowledge.upsert_item(db, source=src, external_id="empty", content="   ")  # vazio: fora
     item_rejected = knowledge.upsert_item(db, source=src, external_id="b", content="conteúdo B")
-    knowledge.apply_score(db, tenant_id=tenant_id, user_id=user_id, item=item_rejected, score=2)
+    knowledge.apply_score(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), item=item_rejected, score=2
+    )
 
-    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 1
+    assert knowledge.count_items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 1
 
 
 def test_count_items_to_score_zero_when_none_pending(
     db: Any, tenant_id: RecordID, user_id: RecordID
 ) -> None:
     """Banco sem candidato pendente de pontuação conta 0 (não None, não erro)."""
-    assert knowledge.count_items_to_score(db, tenant_id=tenant_id, user_id=user_id) == 0
+    assert knowledge.count_items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 0

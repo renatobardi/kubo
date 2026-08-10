@@ -35,6 +35,7 @@ from kubo.runtime.integrations import resolve_readonly_secret
 from kubo.runtime.personas import load_persona
 from kubo.store import client, knowledge
 from kubo.store.knowledge import SourceDetail, SourceStat
+from kubo.store.scoped import ScopedStore, scoped
 from kubo.workers import feed as feed_mod
 from kubo.workers import github_releases as github_releases_mod
 from kubo.workers.feed import FeedPreview, preview_feed
@@ -243,9 +244,11 @@ def _render_list(
     Filtra pelo tenant ativo da sessão (KUBO-128)."""
     if db is None:
         with client.connect() as ro:
-            sources = knowledge.sources_with_stats(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            sources = knowledge.sources_with_stats(session)
     else:
-        sources = knowledge.sources_with_stats(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        sources = knowledge.sources_with_stats(session)
     sources = sorted(sources, key=_sort_key, reverse=True)
     return templates.TemplateResponse(
         request,
@@ -297,11 +300,10 @@ def create(
         return _render_list(request, ctx, notice="Teste o feed antes de salvar.", status=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
                 knowledge.create_source(
-                    db,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
+                    session,
                     kind=payload.kind,
                     canonical=payload.canonical,
                     title=payload.title,
@@ -346,11 +348,10 @@ def edit_page(request: Request, sid: str) -> Response:
         ctx = resolve_session(request, ro)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         detail = knowledge.get_source(
-            ro,
+            session,
             RecordID("source", sid),
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
         )
     if detail is None or detail.archived_at is not None:
         return RedirectResponse("/sources", status_code=303)
@@ -390,11 +391,10 @@ def edit(
         ctx = resolve_session(request, ro)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         detail = knowledge.get_source(
-            ro,
+            session,
             source_id,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
         )
     if detail is None or detail.archived_at is not None:
         with client.connect() as db:
@@ -421,11 +421,10 @@ def _apply_edit(
         return _render_edit(request, detail, notice=str(exc), status=400)
     try:
         with client.connect_rw() as db:
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
                 knowledge.edit_source(
-                    db,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
+                    session,
                     id=source_id,
                     title=payload.title,
                     tags=payload.tags,
@@ -449,9 +448,9 @@ _DELETE_TEMPLATE = "sources/delete.html"
 
 
 def _lifecycle_action(
-    request: Request, csrf: str, action: Callable[[SessionContext, Any], None]
+    request: Request, csrf: str, action: Callable[[SessionContext, ScopedStore], None]
 ) -> Response:
-    """Executa uma ação de ciclo de vida (`action(ctx, db)`) no molde ADR-0018 comum a
+    """Executa uma ação de ciclo de vida (`action(ctx, session)`) no molde ADR-0018 comum a
     pausar/retomar/arquivar/restaurar: CSRF (403) → `connect_rw` (503 sem a credencial) → a
     escrita da store → redirect 303 (PRG). `StaleSourceError` (Cadastro saiu do estado da ação)
     reabre a lista com aviso SOFT (409). Extraído para não repetir o molde por rota (e manter a
@@ -463,8 +462,9 @@ def _lifecycle_action(
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
-                action(ctx, db)
+                action(ctx, session)
             except StaleSourceError:
                 return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
             return RedirectResponse("/sources", status_code=303)
@@ -481,10 +481,8 @@ def disable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Re
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: knowledge.set_source_enabled(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+        lambda ctx, session: knowledge.set_source_enabled(
+            session,
             id=rid,
             enabled=False,
         ),
@@ -498,10 +496,8 @@ def enable(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: knowledge.set_source_enabled(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+        lambda ctx, session: knowledge.set_source_enabled(
+            session,
             id=rid,
             enabled=True,
         ),
@@ -516,10 +512,8 @@ def archive(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Re
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: knowledge.archive_source(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+        lambda ctx, session: knowledge.archive_source(
+            session,
             id=rid,
         ),
     )
@@ -532,10 +526,8 @@ def restore(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Re
     return _lifecycle_action(
         request,
         csrf,
-        lambda ctx, db: knowledge.restore_source(
-            db,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
+        lambda ctx, session: knowledge.restore_source(
+            session,
             id=rid,
         ),
     )
@@ -576,18 +568,15 @@ def delete_page(request: Request, sid: str) -> Response:
         ctx = resolve_session(request, ro)
         if ctx is None:
             return PlainTextResponse(_DENIED, status_code=403)
+        session = scoped(ro, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
         detail = knowledge.get_source(
-            ro,
+            session,
             rid,
-            tenant_id=ctx.tenant_id,
-            user_id=ctx.user_id,
         )
         items = (
             knowledge.source_item_count(
-                ro,
+                session,
                 rid,
-                tenant_id=ctx.tenant_id,
-                user_id=ctx.user_id,
             )
             if detail is not None
             else 0
@@ -612,27 +601,22 @@ def delete(request: Request, sid: str, csrf: Annotated[str, Form()] = "") -> Res
             ctx = resolve_session(request, db)
             if ctx is None:
                 return PlainTextResponse(_DENIED, status_code=403)
+            session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
             try:
                 knowledge.delete_source(
-                    db,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
+                    session,
                     id=rid,
                 )
             except SourceHasHistoryError:
                 detail = knowledge.get_source(
-                    db,
+                    session,
                     rid,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
                 )
                 if detail is None:
                     return _render_list(request, ctx, notice=_STALE_NOTICE, status=409, db=db)
                 items = knowledge.source_item_count(
-                    db,
+                    session,
                     rid,
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
                 )
                 return _render_delete(
                     request,

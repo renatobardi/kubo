@@ -537,7 +537,7 @@ def test_move_entry_htmx_returns_partial_fragment(
     """HTMX request (HX-Request header) returns the _plan_entries partial, not 303."""
     from kubo.api.routes import study as study_routes
 
-    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda db, ctx, topic_id: [])
+    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda session, topic_id: [])
     resp = authed_client.post(
         "/study/topics/abc123/plan/entries/e1/move",
         data={"csrf": _csrf(authed_client), "direction": "down"},
@@ -565,7 +565,7 @@ def test_remove_section_htmx_returns_partial_fragment(
     """HTMX remove-section returns the partial, not 303."""
     from kubo.api.routes import study as study_routes
 
-    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda db, ctx, topic_id: [])
+    monkeypatch.setattr(study_routes, "_collect_all_sections", lambda session, topic_id: [])
     resp = authed_client.post(
         "/study/topics/abc123/plan/entries/e2/remove-section",
         data={"csrf": _csrf(authed_client), "section_id": "material_section:s3"},

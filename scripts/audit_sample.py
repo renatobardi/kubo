@@ -37,6 +37,7 @@ from typing import Any
 import structlog
 
 from kubo.store import client, knowledge, tenancy
+from kubo.store.scoped import PoolReader, scoped
 from scripts.backfill_chunks import language_guess
 
 _log = structlog.get_logger().bind(worker="audit_sample")
@@ -206,13 +207,13 @@ def main(
             tenant_id = tenant.id
             user_id = user.id
         rows = knowledge.list_distilled_with_items(
-            db, tenant_id=tenant_id, user_id=user_id, limit=args.scan_limit
+            scoped(db, tenant_id=tenant_id, user_id=user_id), limit=args.scan_limit
         )
         sample = select_sample(rows)
         contents = {
             str(i): content
             for i, _title, content in knowledge.items_by_ids(
-                db, [c.item_id for c in sample], tenant_id=tenant_id, user_id=user_id
+                PoolReader(db), [c.item_id for c in sample]
             )
         }
 
