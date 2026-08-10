@@ -1479,6 +1479,7 @@ def items_without_distilled(
     rows = session.query(
         "SELECT id, title, content FROM item "
         'WHERE string::trim(content) != "" '
+        "AND $tenant_id IN ->from_source->source.tenant_id "
         "AND id NOT IN (SELECT VALUE out FROM derived_from WHERE tenant_id = $tenant_id) "
         "ORDER BY id LIMIT $limit;",
         {"limit": limit},
@@ -1494,6 +1495,7 @@ def count_items_without_distilled(session: ScopedStore) -> int:
     rows = session.query(
         "SELECT count() FROM item "
         'WHERE string::trim(content) != "" '
+        "AND $tenant_id IN ->from_source->source.tenant_id "
         "AND id NOT IN (SELECT VALUE out FROM derived_from WHERE tenant_id = $tenant_id) "
         "GROUP ALL;",
     )
@@ -1515,6 +1517,7 @@ def items_to_score(
     rows = session.query(
         "SELECT id, title, url, content FROM item "
         'WHERE string::trim(content) != "" '
+        "AND $tenant_id IN ->from_source->source.tenant_id "
         "AND id NOT IN (SELECT VALUE in FROM scored_for WHERE out = $tenant_id) "
         "ORDER BY id LIMIT $limit;",
         {"limit": limit},
@@ -1564,6 +1567,7 @@ def count_items_to_score(session: ScopedStore) -> int:
     rows = session.query(
         "SELECT count() FROM item "
         'WHERE string::trim(content) != "" '
+        "AND $tenant_id IN ->from_source->source.tenant_id "
         "AND id NOT IN (SELECT VALUE in FROM scored_for WHERE out = $tenant_id) "
         "GROUP ALL;",
     )

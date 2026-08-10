@@ -2712,3 +2712,71 @@ def test_count_items_to_score_zero_when_none_pending(
 ) -> None:
     """Banco sem candidato pendente de pontuação conta 0 (não None, não erro)."""
     assert knowledge.count_items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id)) == 0
+
+
+# ── Cross-tenant isolation: items_to_score / items_without_distilled ───────
+
+
+def test_items_to_score_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """items_to_score só devolve itens cuja source (Cadastro) pertence ao tenant
+    da sessão (ADR-0040 §VI). Itens de outro tenant não aparecem — sem esse
+    filtro, o distiller de um tenant pontua itens do outro, queimando cota e
+    carimbando scored_for no tenant errado (incidente 2026-08-08)."""
+    # Tenant B
+    user_b = tenancy.create_user(db, firebase_uid="uid-tenant-b")
+    tenant_b = tenancy.create_tenant(db, name="Tenant B", owner_user_id=user_b.id)
+
+    # Tenant A (o fixture) cria source e item
+    src_a = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://a/feed"
+    )
+    knowledge.upsert_item(db, source=src_a, external_id="a1", content="conteúdo A1")
+
+    # Tenant B cria source e item
+    src_b = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_b.id, user_id=user_b.id), kind="rss", canonical="https://b/feed"
+    )
+    knowledge.upsert_item(db, source=src_b, external_id="b1", content="conteúdo B1")
+
+    # items_to_score do tenant A só deve ver 1 item (o seu), não 2
+    pending_a = knowledge.items_to_score(scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10)
+    assert len(pending_a) == 1
+
+    # items_to_score do tenant B só deve ver 1 item (o seu)
+    pending_b = knowledge.items_to_score(
+        scoped(db, tenant_id=tenant_b.id, user_id=user_b.id), limit=10
+    )
+    assert len(pending_b) == 1
+
+
+def test_items_without_distilled_does_not_leak_cross_tenant(
+    db: Any, tenant_id: RecordID, user_id: RecordID
+) -> None:
+    """items_without_distilled também isola por tenant — mesmo motivo que
+    items_to_score (ADR-0040 §VI)."""
+    user_b = tenancy.create_user(db, firebase_uid="uid-tenant-b2")
+    tenant_b = tenancy.create_tenant(db, name="Tenant B2", owner_user_id=user_b.id)
+
+    src_a = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), kind="rss", canonical="https://a/feed2"
+    )
+    knowledge.upsert_item(db, source=src_a, external_id="a1", content="conteúdo A1")
+
+    src_b = knowledge.upsert_source(
+        scoped(db, tenant_id=tenant_b.id, user_id=user_b.id),
+        kind="rss",
+        canonical="https://b/feed2",
+    )
+    knowledge.upsert_item(db, source=src_b, external_id="b1", content="conteúdo B1")
+
+    pending_a = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_id, user_id=user_id), limit=10
+    )
+    assert len(pending_a) == 1
+
+    pending_b = knowledge.items_without_distilled(
+        scoped(db, tenant_id=tenant_b.id, user_id=user_b.id), limit=10
+    )
+    assert len(pending_b) == 1
