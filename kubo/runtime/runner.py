@@ -140,9 +140,7 @@ def _persist(
         if isinstance(payload, ItemPayload):
             _persist_item(session, payload, run_id)
         elif isinstance(payload, DistilledPayload):
-            unresolved += _persist_distilled(
-                session, payload, run_id, knowledge, tenant_id=tenant_id, user_id=user_id
-            )
+            unresolved += _persist_distilled(session, payload, run_id, knowledge)
         elif isinstance(payload, ScorePayload):
             unresolved += _persist_score(session, payload, knowledge)
         elif isinstance(payload, DispatchPayload):
@@ -196,9 +194,6 @@ def _persist_distilled(
     payload: DistilledPayload,
     run_id: RecordID,
     knowledge: GraphKnowledge,
-    *,
-    tenant_id: RecordID,
-    user_id: RecordID,
 ) -> int:
     """Persiste um DistilledPayload (ADR-0013 §III): resolve `ref` via
     `knowledge.resolve`, entidades por nome, grava distilled + chunks + arestas.
