@@ -113,6 +113,43 @@ Transversal ao Kubo: qualquer persona pode consumi-lo para contextualizar output
 o primeiro cliente. Entra em prompts — nunca contém segredos. Código: `work_context`.
 _Evite_: "bio", "perfil" solto.
 
+## Camada LLM
+
+**Ponto de contato LLM**:
+Cada lugar do sistema que fala com um modelo. Existem três **portas de saída**, e só três:
+`api` (via LiteLLM), `cli` (loop de agente via Claude Agent SDK) e `embedding` (REST do
+provedor de embeddings). As portas diferem porque os mecanismos são diferentes — loop de
+agente com tools não é uma completion, e vetor não é texto. Mas **todo** ponto de contato lê
+sua configuração do mesmo lugar: nenhum escolhe modelo ou parâmetro por conta própria.
+_Evite_: "chamada de LLM" quando a distinção entre porta e configuração importa; tratar
+LiteLLM como se fosse o ponto único (ele é uma das três portas).
+
+**Persona de sistema**:
+[[Persona]] que serve ação do próprio sistema — embedding hoje, chat e outras
+ações internas depois. Não entra em cast de flow e não recebe task atribuída. É obrigatória:
+semeada na criação do tenant e não deletável. Pode declarar [[Campo travado|campos travados]].
+_Evite_: chamá-la de "persona" solto num contexto de flow (ali persona significa papel).
+
+**Persona de cast**:
+A persona-papel da spec §3.1: papel a quem tasks são atribuídas e que um flow instancia no seu
+cast. Todo cast inclui a persona Humano. Contrasta com [[Persona de sistema]], que não é papel.
+_Evite_: "persona de flow" (o flow instancia, não define).
+
+**Registry de modelos**:
+Mapa `modelo → capacidades` — se o modelo aceita `temperature`, se aceita `reasoning_effort`, e
+o que mais precisa ser sabido para montar uma chamada válida. É **fato sobre o provedor, não
+escolha de tenant**: nenhum tenant tem opinião sobre o que um modelo aceita. Por isso vive em
+código, é idêntico em todo tenant e ambiente, e **não é um quarto catálogo** (invariante 3
+segue intacto). Modelo ausente do registry recebe só o mínimo seguro, nunca bloqueia o uso.
+_Evite_: "catálogo de modelos" (catálogo é a coisa por-tenant que o dono edita).
+
+**Campo travado**:
+Campo de [[Persona de sistema]] visível mas não editável. Existe para o caso em que o valor é
+pinado por uma decisão de outra camada — `embedder.model` é travado porque a dimensão do vetor
+está pinada no schema do banco, e trocar o modelo tornaria incomparáveis os vetores já
+gravados. Config que aparenta ser configurável e não é seria pior que constante.
+_Evite_: "campo read-only" (a UI toda é read-only por default; travado é sobre o dado).
+
 ## Tenancy
 
 **Tenant**:

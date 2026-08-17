@@ -61,3 +61,4 @@ Formato: cada ADR segue o template em `template.md`, com seções de Contexto, D
 | [0051](0051-titulo-gerado-nota-parecer-destilador.md) | Destilador vira portão: nota de relevância, título gerado sob proveniência, prosa limpa | aceito |
 | [0052](0052-parecer-resumo-dia-artefato-compartilhado.md) | Parecer por item e resumo do dia: onde vivem, quem escreve | aceito |
 | [0053](0053-scopedstore-escopo-tenant-na-conexao.md) | ScopedStore: escopo de tenant na sessão de store, não na assinatura | proposto |
+| [0054](0054-camada-configuracao-llm.md) | Camada de configuração de LLM: três portas, registry, persona de sistema, BYOK | proposto |
