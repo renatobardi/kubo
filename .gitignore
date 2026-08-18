@@ -247,3 +247,6 @@ scripts/ops/
 
 # Docs efêmeros de auditoria (conteúdo coletado, nunca commitar) — sessão 0014
 *.local.md
+
+# Devin / scratch workspace (arquivos temporários de sessão, não versionados)
+.scratch/
