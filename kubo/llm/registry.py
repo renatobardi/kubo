@@ -47,3 +47,30 @@ def get_capabilities(model: str) -> ModelCapabilities:
     `model` + `max_tokens` + `timeout`.
     """
     return _REGISTRY.get(model, ModelCapabilities())
+
+
+def get_ignored_params(
+    model: str, *, temperature: float | None, reasoning_effort: str | None
+) -> list[dict[str, str]]:
+    """Return the list of persona fields that will be ignored for `model`.
+
+    Each entry contains the field name and a human-readable reason. Unknown
+    models are treated safely: optional fields are ignored.
+    """
+    caps = get_capabilities(model)
+    ignored: list[dict[str, str]] = []
+    if temperature is not None and not caps.supports_temperature:
+        ignored.append(
+            {
+                "field": "temperature",
+                "reason": "model does not support sampling parameters",
+            }
+        )
+    if reasoning_effort is not None and not caps.supports_reasoning_effort:
+        ignored.append(
+            {
+                "field": "reasoning_effort",
+                "reason": "model does not support reasoning effort",
+            }
+        )
+    return ignored
