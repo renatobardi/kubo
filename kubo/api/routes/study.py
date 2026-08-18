@@ -43,13 +43,12 @@ from kubo.errors import (
     StoreError,
     UploadRejectionError,
 )
-from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.executors.api import ApiExecutor
+from kubo.llm.resolver import resolve_api_config
 from kubo.runtime.personas import resolve_persona
 from kubo.store import client, tenancy
 from kubo.store import study as study_store
 from kubo.store.scoped import ScopedStore, scoped
-from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
-from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.history import sliding_window_history
 from kubo.study.mentor import VALID_DEPTHS, Mentor, MentorReply, extract_reply
 from kubo.study.parsing import MaterialFormat
@@ -118,10 +117,6 @@ _TOPIC_FROZEN = "O plano já está em andamento; não é possível alterar a cad
 _LESSON_ALREADY_DONE = "Você já concluiu esta lição."
 _VALID_REACTIONS = frozenset({"facil", "ok", "dificil"})
 _INVALID_REACTION = "Reação inválida: use facil, ok ou dificil."
-_MENTOR_MAX_TOKENS = 2048
-_MENTOR_TIMEOUT = 60.0
-_PLANNER_MAX_TOKENS = 4096
-_PLANNER_TIMEOUT = 120.0
 
 _MAX_LOG_KEY = 64
 
@@ -284,18 +279,14 @@ def _summarizer(ctx: SessionContext, session: ScopedStore | None = None) -> Summ
     aninhada (C4). Sem session, abre própria (backward compat).
     """
     if session is not None:
-        persona = resolve_persona(session, ctx.tenant_id, ctx.user_id, "summarizer")
+        target = session
+        persona = resolve_persona(target, ctx.tenant_id, ctx.user_id, "summarizer")
+        executor = ApiExecutor(resolve_api_config(target, "summarizer"), max_attempts=1)
     else:
-        with client.connect() as db_conn:
-            persona = resolve_persona(db_conn, ctx.tenant_id, ctx.user_id, "summarizer")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_SUMMARY_MAX_TOKENS,
-            timeout=30.0,
-        ),
-        max_attempts=1,
-    )
+        with client.connect() as db:
+            target = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+            persona = resolve_persona(target, ctx.tenant_id, ctx.user_id, "summarizer")
+            executor = ApiExecutor(resolve_api_config(target, "summarizer"), max_attempts=1)
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
@@ -844,14 +835,9 @@ def _auto_revert_if_empty(
 def _mentor(ctx: SessionContext) -> Mentor:
     """Constrói o mentor com a persona `mentor` (modelo vem do catálogo)."""
     with client.connect() as db:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "mentor")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_MENTOR_MAX_TOKENS,
-            timeout=_MENTOR_TIMEOUT,
-        ),
-    )
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        persona = resolve_persona(session, ctx.tenant_id, ctx.user_id, "mentor")
+        executor = ApiExecutor(resolve_api_config(session, "mentor"))
     return Mentor(executor=executor, prompt=persona.prompt)
 
 
@@ -1046,14 +1032,9 @@ def _planner(ctx: SessionContext) -> tuple[Planner, ApiExecutor]:
     `stream_chat`. `ApiExecutor` implementa ambos.
     """
     with client.connect() as db:
-        persona = resolve_persona(db, ctx.tenant_id, ctx.user_id, "planner")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_PLANNER_MAX_TOKENS,
-            timeout=_PLANNER_TIMEOUT,
-        ),
-    )
+        session = scoped(db, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
+        persona = resolve_persona(session, ctx.tenant_id, ctx.user_id, "planner")
+        executor = ApiExecutor(resolve_api_config(session, "planner"))
     return Planner(executor=executor, prompt=persona.prompt), executor
 
 
@@ -2005,7 +1986,7 @@ def generate_lesson(
                 return PlainTextResponse("Entrada do plano não encontrada.", status_code=400)
             from kubo.scheduler.study_lessons import _build_tutor, _generate_lesson_content
 
-            tutor = _build_tutor(db, ctx.tenant_id, ctx.user_id)
+            tutor = _build_tutor(session)
             _generate_lesson_content(
                 session,
                 plan_id=plan.id,

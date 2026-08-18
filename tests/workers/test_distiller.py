@@ -181,7 +181,7 @@ def test_run_scores_then_distills_approved_items_with_ref_summary_entities_and_c
     embedder = _FakeEmbedder()
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), embedder)
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     scores = [_as_score(p) for p in result.payloads if isinstance(p, ScorePayload)]
@@ -212,7 +212,7 @@ def test_score_call_receives_title_and_url_not_content() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    DistillerWorker(executor).run(ctx)
+    DistillerWorker(lambda _: executor).run(ctx)
 
     score_call_content = executor.received_content[0]
     assert "Meu Título" in score_call_content
@@ -234,7 +234,7 @@ def test_score_instruction_carries_tenant_work_context() -> None:
         DistillerConfig(), _FakeKnowledge(items, work_context="Adora Rust."), _FakeEmbedder()
     )
 
-    DistillerWorker(executor).run(ctx)
+    DistillerWorker(lambda _: executor).run(ctx)
 
     assert "Adora Rust." in executor.received_instructions[0]
 
@@ -249,7 +249,7 @@ def test_score_instruction_falls_back_when_work_context_is_empty() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items, work_context=""), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     assert "(sem contexto definido)" in executor.received_instructions[0]
@@ -263,7 +263,7 @@ def test_item_below_cutoff_gets_scored_but_never_distilled() -> None:
     executor = _FakeExecutor(outputs={0: ScoreOutput(score=3)})
     ctx = _ctx(config, _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     assert executor.call_count == 1  # só a pontuação, nunca a destilação
@@ -286,7 +286,7 @@ def test_item_at_exact_cutoff_is_approved() -> None:
     )
     ctx = _ctx(config, _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert executor.call_count == 3  # pontua + destila + resumo do dia (ADR-0052 §III)
     stats = result.stats.model_dump()
@@ -306,7 +306,7 @@ def test_generated_title_only_when_item_has_no_title() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     score = _as_score(next(p for p in result.payloads if isinstance(p, ScorePayload)))
     assert score.generated_title is None
@@ -324,7 +324,7 @@ def test_generated_title_populated_when_item_has_no_title() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     score = _as_score(next(p for p in result.payloads if isinstance(p, ScorePayload)))
     assert score.generated_title == "Título Gerado"
@@ -345,7 +345,7 @@ def test_structural_markdown_is_stripped_from_summary_before_persisting() -> Non
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     distilled = _as_distilled(next(p for p in result.payloads if isinstance(p, DistilledPayload)))
     assert "## SUMMARY" not in distilled.summary
@@ -366,7 +366,7 @@ def test_run_skips_malformed_item_and_counts_it_without_failing_the_run() -> Non
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
@@ -391,7 +391,7 @@ def test_run_skips_malformed_distill_call_and_does_not_persist_the_score() -> No
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     assert result.payloads == []
@@ -415,7 +415,7 @@ def test_run_stops_on_rate_limit_exhausted_during_scoring() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert len(result.payloads) == 2  # score + distilled do item 0
     assert result.error is not None
@@ -437,7 +437,7 @@ def test_run_stops_on_rate_limit_exhausted_during_distillation() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is not None
     assert result.error.kind == "rate_limit_exhausted"
@@ -452,7 +452,7 @@ def test_run_maps_rate_limit_scope_minute_to_error_kind() -> None:
     executor = _FakeExecutor(errors={0: RateLimitExhausted("janela de minuto", scope="minute")})
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is not None
     assert result.error.kind == "rate_limit_minute"
@@ -464,7 +464,7 @@ def test_run_maps_rate_limit_scope_day_to_error_kind() -> None:
     executor = _FakeExecutor(errors={0: RateLimitExhausted("janela de dia", scope="day")})
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is not None
     assert result.error.kind == "rate_limit_day"
@@ -508,7 +508,7 @@ def test_run_stops_on_embedding_error_and_returns_partial_with_error() -> None:
     embedder = _FailingEmbedder(fail_at=1)  # item 0 embedda; item 1 falha
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), embedder)
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
     scores = [p for p in result.payloads if isinstance(p, ScorePayload)]
@@ -533,7 +533,7 @@ def test_run_truncates_content_to_input_char_cap_before_calling_executor() -> No
     config = DistillerConfig(input_char_cap=20000)
     ctx = _ctx(config, _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert len(executor.received_content[1]) <= 20000
     assert result.stats.model_dump()["truncated"] >= 1
@@ -549,7 +549,7 @@ def test_run_raises_config_error_when_embedder_missing() -> None:
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), embedder=None)
 
     with pytest.raises(ConfigError):
-        DistillerWorker(executor).run(ctx)
+        DistillerWorker(lambda _: executor).run(ctx)
 
 
 def test_run_filters_entities_not_present_in_content() -> None:
@@ -574,7 +574,7 @@ def test_run_filters_entities_not_present_in_content() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     distilled = _as_distilled(next(p for p in result.payloads if isinstance(p, DistilledPayload)))
     assert distilled.entities == [EntityRef(name="Anthropic", kind="org")]
@@ -595,7 +595,7 @@ def test_run_filters_entities_case_insensitively() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     distilled = _as_distilled(next(p for p in result.payloads if isinstance(p, DistilledPayload)))
     assert distilled.entities == [EntityRef(name="anthropic", kind="org")]
@@ -634,7 +634,7 @@ def test_run_skips_item_with_whitespace_only_summary_and_counts_empty_summary() 
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     distilled = [p for p in result.payloads if isinstance(p, DistilledPayload)]
@@ -658,7 +658,7 @@ def test_run_echoes_item_ref_never_invents_it() -> None:
     )
     ctx = _ctx(DistillerConfig(), _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     distilled = _as_distilled(next(p for p in result.payloads if isinstance(p, DistilledPayload)))
     assert distilled.ref == 42
@@ -682,7 +682,7 @@ def test_max_distill_items_breaks_the_loop_without_stranding_unscored_items() ->
     )
     ctx = _ctx(config, _FakeKnowledge(items), _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     assert result.error is None
     assert executor.call_count == 3  # pontuou+destilou item 0 + resumo do dia (ADR-0052 §III)
@@ -713,7 +713,7 @@ def test_max_score_items_limits_how_many_items_are_read() -> None:
     executor = _FakeExecutor()
     ctx = _ctx(config, knowledge, _FakeEmbedder())
 
-    DistillerWorker(executor).run(ctx)
+    DistillerWorker(lambda _: executor).run(ctx)
 
     assert knowledge.seen_limit == 7
 
@@ -749,7 +749,7 @@ def test_distiller_writes_day_summary_after_run() -> None:
     knowledge = _FakeKnowledge(items)
     ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
     assert len(day_summaries) == 1
@@ -767,7 +767,7 @@ def test_distiller_no_day_summary_when_nothing_distilled() -> None:
     knowledge = _FakeKnowledge(items)
     ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
     assert len(day_summaries) == 0
@@ -784,7 +784,7 @@ def test_distiller_day_summary_malformed_does_not_fail_run() -> None:
     knowledge = _FakeKnowledge(items)
     ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
     assert len(day_summaries) == 0
@@ -806,7 +806,7 @@ def test_distiller_day_summary_rate_limited_does_not_fail_run() -> None:
     knowledge = _FakeKnowledge(items)
     ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
     assert len(day_summaries) == 0
@@ -824,7 +824,7 @@ def test_distiller_day_summary_strips_structural_markdown() -> None:
     knowledge = _FakeKnowledge(items)
     ctx = _ctx(DistillerConfig(), knowledge, _FakeEmbedder())
 
-    result = DistillerWorker(executor).run(ctx)
+    result = DistillerWorker(lambda _: executor).run(ctx)
 
     day_summaries = [p for p in result.payloads if isinstance(p, DaySummaryPayload)]
     assert len(day_summaries) == 1

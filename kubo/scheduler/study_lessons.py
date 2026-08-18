@@ -24,7 +24,8 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.errors import StoreError
-from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.executors.api import ApiExecutor
+from kubo.llm.resolver import resolve_api_config
 from kubo.runtime.personas import resolve_persona
 from kubo.store import study as study_store
 from kubo.store.scoped import ScopedStore, scoped
@@ -32,11 +33,6 @@ from kubo.study.planning import next_study_day
 from kubo.study.tutor import Tutor
 
 _log = structlog.get_logger(__name__)
-
-# Modelo pinado para o tutor (mesmo princípio do distiller: gate humano no cron).
-_TUTOR_MODEL = "anthropic/claude-sonnet-5"
-_TUTOR_MAX_TOKENS = 16384
-_TUTOR_TIMEOUT = 60.0
 
 
 def _to_date(dt: datetime) -> date:
@@ -46,17 +42,10 @@ def _to_date(dt: datetime) -> date:
     return dt.date()
 
 
-def _build_tutor(db: Any, tenant_id: RecordID, user_id: RecordID) -> Tutor:
+def _build_tutor(session: ScopedStore) -> Tutor:
     """Constrói o Tutor com a persona `tutor` (modelo vem do catálogo)."""
-    persona = resolve_persona(db, tenant_id, user_id, "tutor")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _TUTOR_MODEL,
-            max_tokens=_TUTOR_MAX_TOKENS,
-            timeout=_TUTOR_TIMEOUT,
-        ),
-        max_attempts=1,
-    )
+    persona = resolve_persona(session, session.tenant_id, session.user_id, "tutor")
+    executor = ApiExecutor(resolve_api_config(session, "tutor"), max_attempts=1)
     return Tutor(executor=executor, prompt=persona.prompt)
 
 
@@ -126,7 +115,7 @@ def execute_study_transition_job(
     """
     session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     topics = study_store.list_topics_by_state(session, state="scheduled")
-    tutor = _build_tutor(db, tenant_id, user_id)
+    tutor = _build_tutor(session)
     for topic in topics:
         try:
             plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)
@@ -193,7 +182,7 @@ def execute_study_lesson_job(
     """
     session = scoped(db, tenant_id=tenant_id, user_id=user_id)
     topics = study_store.list_topics_by_state(session, state="running")
-    tutor = _build_tutor(db, tenant_id, user_id)
+    tutor = _build_tutor(session)
     for topic in topics:
         try:
             plan, entries = study_store.get_plan_for_topic(session, topic_id=topic.id)

@@ -56,8 +56,6 @@ from kubo.workers.analyst import AnalystWorker, Sender, render_telegram
 from kubo.workers.dev import DevWorker, KuboDevWorker
 from kubo.workers.registry import WORKER_REGISTRY
 
-# summary + análise no relatório precisa de folga (R4); o default 1024 truncaria.
-_REPORT_MAX_TOKENS = 4096
 _ANALYST_PERSONA = "analista"
 _HUMAN_PERSONA = "humano"
 # Estados do board (o handler É template-específico, E4). As transições são validadas contra
@@ -682,7 +680,14 @@ def _build_executor(persona: Persona) -> Executor:
         )
     if not persona.model:
         raise ConfigError(f"persona '{persona.name}' (executor api) sem model")
-    return ApiExecutor(ApiExecutorConfig(model=persona.model, max_tokens=_REPORT_MAX_TOKENS))
+    return ApiExecutor(
+        ApiExecutorConfig(
+            model=persona.model,
+            max_tokens=persona.max_tokens,
+            temperature=persona.temperature,
+            timeout=persona.timeout,
+        )
+    )
 
 
 def _run_succeeded(db: Any, run_id: RecordID, *, tenant_id: RecordID, user_id: RecordID) -> bool:

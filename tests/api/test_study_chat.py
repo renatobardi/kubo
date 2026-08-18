@@ -15,6 +15,8 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.executors.api import ApiExecutorConfig
+from kubo.runtime.personas import Persona
 from kubo.store.study import ChatMessage, Material, Topic
 from kubo.study.mentor import MentorReply
 
@@ -103,9 +105,22 @@ def stub_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_topic_fields", lambda db, **kw: None)
     monkeypatch.setattr(
         "kubo.api.routes.study.resolve_persona",
-        lambda *a, **kw: type(
-            "P", (), {"prompt": "Você é o mentor.", "model": "anthropic/claude-haiku-4-5"}
-        )(),
+        lambda *a, **kw: Persona(
+            name="mentor",
+            executor="api",
+            model="anthropic/claude-haiku-4-5",
+            prompt="Você é o mentor.",
+            max_tokens=2048,
+            timeout=60.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.resolve_api_config",
+        lambda *a, **kw: ApiExecutorConfig(
+            model="anthropic/claude-haiku-4-5",
+            max_tokens=2048,
+            timeout=60.0,
+        ),
     )
 
     # Mentor.stream_chat mockado: yields chunks fixos.
