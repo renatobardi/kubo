@@ -45,7 +45,7 @@ class PersonaResolver:
 
     A run resolves each persona at most once: the config is frozen for the
     lifetime of the run, so an in-flight run is unaffected by catalog edits
-    (ADR-0054 §VII, "template versionado, instância snapshot").
+    (ADR-0054 §VII, "template versionado, instancia snapshot").
     """
 
     def __init__(self, session: ScopedStore) -> None:
