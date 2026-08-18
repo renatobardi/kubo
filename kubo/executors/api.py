@@ -20,12 +20,11 @@ from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 
 import litellm
-import structlog
 from litellm import exceptions as litellm_exceptions
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
-from kubo.llm.registry import get_capabilities
+from kubo.llm.registry import build_api_call_params
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -45,8 +44,6 @@ _PROVIDER_ERROR = "falha do provider de LLM"
 _PROVIDER_ERROR_STREAMING = "falha do provider de LLM durante streaming"
 
 _FENCE = "```"
-
-_log = structlog.get_logger(__name__)
 
 
 def _strip_code_fence(content: str) -> str:
@@ -156,46 +153,6 @@ def _wrap_untrusted(untrusted_content: str, purpose: str) -> str:
     )
 
 
-def _build_call_params(config: ApiExecutorConfig) -> dict[str, Any]:
-    """Monta os parâmetros de chamada a partir da config e das capacidades do modelo.
-
-    Parâmetros opcionais (`temperature`, `reasoning_effort`) são omitidos quando o
-    modelo não os aceita, com log estruturado explicando a omissão. Modelos desconhecidos
-    recebem o mínimo seguro: `model`, `max_tokens`, `timeout`, `api_key`.
-    """
-    caps = get_capabilities(config.model)
-    params: dict[str, Any] = {
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "timeout": config.timeout,
-        "api_key": config.api_key or None,
-        "num_retries": 0,
-    }
-
-    if caps.supports_temperature:
-        params["temperature"] = config.temperature
-    else:
-        _log.info(
-            "llm.param_omitted",
-            param="temperature",
-            model=config.model,
-            reason="model does not support sampling parameters",
-        )
-
-    if config.reasoning_effort is not None:
-        if caps.supports_reasoning_effort:
-            params["reasoning_effort"] = config.reasoning_effort
-        else:
-            _log.info(
-                "llm.param_omitted",
-                param="reasoning_effort",
-                model=config.model,
-                reason="model does not support reasoning_effort",
-            )
-
-    return params
-
-
 class ApiExecutor:
     """Executor de LLM via LiteLLM, sem tools, com backoff próprio (ADR-0013 §IV/§V).
 
@@ -243,7 +200,7 @@ class ApiExecutor:
         zero seria confuso para o dono (chunks duplicados).
         """
         messages = self._build_chat_messages(instruction, untrusted_content)
-        params = _build_call_params(self._config)
+        params = build_api_call_params(self._config)
         try:
             response = litellm.completion(
                 messages=messages,
@@ -302,7 +259,7 @@ class ApiExecutor:
         exceções encadeia a original — o corpo cru do provider nunca
         atravessa a fronteira (§VIII).
         """
-        params = _build_call_params(self._config)
+        params = build_api_call_params(self._config)
         for attempt in range(self._max_attempts):
             try:
                 return litellm.completion(

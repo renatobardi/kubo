@@ -607,7 +607,7 @@ def test_reasoning_effort_reaches_litellm_when_supported(monkeypatch: pytest.Mon
     mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
     monkeypatch.setattr(litellm, "completion", mock_completion)
     monkeypatch.setattr(
-        "kubo.executors.api.get_capabilities",
+        "kubo.llm.registry.get_capabilities",
         lambda _model: ModelCapabilities(supports_reasoning_effort=True),
     )
 
@@ -624,7 +624,7 @@ def test_reasoning_effort_omitted_when_not_supported(monkeypatch: pytest.MonkeyP
     mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
     monkeypatch.setattr(litellm, "completion", mock_completion)
     monkeypatch.setattr(
-        "kubo.executors.api.get_capabilities",
+        "kubo.llm.registry.get_capabilities",
         lambda _model: ModelCapabilities(supports_reasoning_effort=False),
     )
 
@@ -643,7 +643,7 @@ def test_temperature_omitted_when_model_does_not_support_sampling(
     mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
     monkeypatch.setattr(litellm, "completion", mock_completion)
     monkeypatch.setattr(
-        "kubo.executors.api.get_capabilities",
+        "kubo.llm.registry.get_capabilities",
         lambda _model: ModelCapabilities(supports_temperature=False),
     )
 
@@ -661,7 +661,7 @@ def test_omitted_param_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
     monkeypatch.setattr(litellm, "completion", mock_completion)
     monkeypatch.setattr(
-        "kubo.executors.api.get_capabilities",
+        "kubo.llm.registry.get_capabilities",
         lambda _model: ModelCapabilities(
             supports_temperature=True, supports_reasoning_effort=False
         ),
@@ -673,14 +673,14 @@ def test_omitted_param_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
         def info(event: str, **kw: Any) -> None:
             logs.append({"event": event, **kw})
 
-    monkeypatch.setattr("kubo.executors.api._log", _FakeLogger())
+    monkeypatch.setattr("kubo.llm.registry._log", _FakeLogger())
 
     executor = ApiExecutor(_config(reasoning_effort="high"))
     executor.complete("instrução", "conteúdo", _Out)
 
     assert any(
         log.get("event") == "llm.param_omitted"
-        and log.get("param") == "reasoning_effort"
+        and log.get("parameter") == "reasoning_effort"
         and "does not support" in (log.get("reason") or "").lower()
         for log in logs
     )
