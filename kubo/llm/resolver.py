@@ -35,6 +35,7 @@ def resolve_api_config(
         model=persona.model,
         max_tokens=persona.max_tokens,
         temperature=persona.temperature,
+        reasoning_effort=persona.reasoning_effort,
         timeout=persona.timeout,
         api_key=None,
     )

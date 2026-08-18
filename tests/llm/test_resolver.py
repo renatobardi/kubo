@@ -31,6 +31,7 @@ def test_resolve_api_config_uses_persona_fields(monkeypatch: pytest.MonkeyPatch)
         model="anthropic/claude-haiku-4-5",
         max_tokens=16384,
         temperature=0.0,
+        reasoning_effort="high",
         timeout=60.0,
     )
     monkeypatch.setattr(
@@ -43,6 +44,7 @@ def test_resolve_api_config_uses_persona_fields(monkeypatch: pytest.MonkeyPatch)
     assert config.model == "anthropic/claude-haiku-4-5"
     assert config.max_tokens == 16384
     assert config.temperature == 0.0
+    assert config.reasoning_effort == "high"
     assert config.timeout == 60.0
     assert config.api_key is None
 

@@ -593,3 +593,94 @@ def test_stream_mid_iteration_error_raises_executor_error(monkeypatch: pytest.Mo
 
     with pytest.raises(ExecutorError, match="durante streaming"):
         list(executor.stream("instrução", "conteúdo"))
+
+
+# ---------------------------------------------------------------------------
+# KUBO-222: model capabilities move to the registry; reasoning effort.
+# ---------------------------------------------------------------------------
+
+
+def test_reasoning_effort_reaches_litellm_when_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`reasoning_effort` is forwarded to litellm.completion when the model supports it."""
+    from kubo.llm.registry import ModelCapabilities
+
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    monkeypatch.setattr(
+        "kubo.llm.registry.get_capabilities",
+        lambda _model: ModelCapabilities(supports_reasoning_effort=True),
+    )
+
+    executor = ApiExecutor(_config(reasoning_effort="high"))
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert mock_completion.call_args.kwargs["reasoning_effort"] == "high"
+
+
+def test_reasoning_effort_omitted_when_not_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`reasoning_effort` is omitted when the model does not support it."""
+    from kubo.llm.registry import ModelCapabilities
+
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    monkeypatch.setattr(
+        "kubo.llm.registry.get_capabilities",
+        lambda _model: ModelCapabilities(supports_reasoning_effort=False),
+    )
+
+    executor = ApiExecutor(_config(reasoning_effort="high"))
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert "reasoning_effort" not in mock_completion.call_args.kwargs
+
+
+def test_temperature_omitted_when_model_does_not_support_sampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Temperature is omitted for models that do not support sampling parameters."""
+    from kubo.llm.registry import ModelCapabilities
+
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    monkeypatch.setattr(
+        "kubo.llm.registry.get_capabilities",
+        lambda _model: ModelCapabilities(supports_temperature=False),
+    )
+
+    executor = ApiExecutor(_config(model="provider/unknown-model"))
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert "temperature" not in mock_completion.call_args.kwargs
+    assert mock_completion.call_args.kwargs["model"] == "provider/unknown-model"
+
+
+def test_omitted_param_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting an unsupported parameter is logged with name and reason."""
+    from kubo.llm.registry import ModelCapabilities
+
+    mock_completion = MagicMock(return_value=_fake_response(json.dumps({"summary": "x"})))
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+    monkeypatch.setattr(
+        "kubo.llm.registry.get_capabilities",
+        lambda _model: ModelCapabilities(
+            supports_temperature=True, supports_reasoning_effort=False
+        ),
+    )
+    logs: list[dict[str, Any]] = []
+
+    class _FakeLogger:
+        @staticmethod
+        def info(event: str, **kw: Any) -> None:
+            logs.append({"event": event, **kw})
+
+    monkeypatch.setattr("kubo.llm.registry._log", _FakeLogger())
+
+    executor = ApiExecutor(_config(reasoning_effort="high"))
+    executor.complete("instrução", "conteúdo", _Out)
+
+    assert any(
+        log.get("event") == "llm.param_omitted"
+        and log.get("parameter") == "reasoning_effort"
+        and "does not support" in (log.get("reason") or "").lower()
+        for log in logs
+    )

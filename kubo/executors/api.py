@@ -24,6 +24,7 @@ from litellm import exceptions as litellm_exceptions
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kubo.errors import ExecutorError, MalformedOutputError, RateLimitExhausted
+from kubo.llm.registry import build_api_call_params
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -43,27 +44,6 @@ _PROVIDER_ERROR = "falha do provider de LLM"
 _PROVIDER_ERROR_STREAMING = "falha do provider de LLM durante streaming"
 
 _FENCE = "```"
-
-# Prefixos de provider que RECUSAM sampling params (`temperature`/`top_p`/`top_k`).
-_NO_SAMPLING_PROVIDERS = ("anthropic/",)
-# Exceções DENTRO do prefixo: a remoção dos sampling params veio com a geração 4.7/5 do
-# Claude. Haiku 4.5 ainda os aceita, e o destilador depende de `temperature=0` para
-# extração estável — sem a exceção, migrar de provider mudaria SILENCIOSAMENTE também a
-# amostragem, que não é o que este ticket decidiu.
-_SAMPLING_EXCEPTIONS = ("anthropic/claude-haiku-4-5",)
-
-
-def _supports_sampling(model: str) -> bool:
-    """Se o `model` aceita `temperature` na requisição.
-
-    Os modelos Claude da geração atual removeram os sampling params: mandá-los devolve
-    HTTP 400 do provider. O teste é por prefixo porque `get_supported_openai_params`
-    ainda lista `temperature` para `anthropic/claude-opus-5` — ela não codifica essa
-    restrição. A lista é NEGATIVA de propósito: um provider novo que recuse sampling
-    falha alto (400 localizado), em vez de perder `temperature=0` em silêncio."""
-    if model.startswith(_SAMPLING_EXCEPTIONS):
-        return True
-    return not model.startswith(_NO_SAMPLING_PROVIDERS)
 
 
 def _strip_code_fence(content: str) -> str:
@@ -150,6 +130,7 @@ class ApiExecutorConfig(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 1024
     timeout: float = 60.0
+    reasoning_effort: str | None = None
     # api_key may come from tenant_credential (BYOK, KUBO-115). None = litellm uses env.
     api_key: str | None = Field(default=None, repr=False)
 
@@ -219,21 +200,12 @@ class ApiExecutor:
         zero seria confuso para o dono (chunks duplicados).
         """
         messages = self._build_chat_messages(instruction, untrusted_content)
-        sampling: dict[str, Any] = (
-            {"temperature": self._config.temperature}
-            if _supports_sampling(self._config.model)
-            else {}
-        )
+        params = build_api_call_params(self._config)
         try:
             response = litellm.completion(
-                model=self._config.model,
                 messages=messages,
-                max_tokens=self._config.max_tokens,
                 stream=True,
-                num_retries=0,
-                timeout=self._config.timeout,
-                api_key=self._config.api_key or None,
-                **sampling,
+                **params,
             )
         except Exception:  # noqa: BLE001
             raise ExecutorError(_PROVIDER_ERROR) from None
@@ -287,22 +259,13 @@ class ApiExecutor:
         exceções encadeia a original — o corpo cru do provider nunca
         atravessa a fronteira (§VIII).
         """
-        sampling: dict[str, Any] = (
-            {"temperature": self._config.temperature}
-            if _supports_sampling(self._config.model)
-            else {}
-        )
+        params = build_api_call_params(self._config)
         for attempt in range(self._max_attempts):
             try:
                 return litellm.completion(
-                    model=self._config.model,
                     messages=messages,
-                    max_tokens=self._config.max_tokens,
                     response_format={"type": "json_object"},
-                    num_retries=0,
-                    timeout=self._config.timeout,
-                    api_key=self._config.api_key or None,
-                    **sampling,
+                    **params,
                 )
             except _TRANSIENT as exc:
                 # A decisão do transiente (honrar retry-after, desistir ou dormir) mora em
