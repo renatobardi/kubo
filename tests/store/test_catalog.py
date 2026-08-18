@@ -100,6 +100,9 @@ def test_upsert_persona_writes_changelog(db: Any) -> None:
             "model": "groq/llama-3.3-70b-versatile",
             "prompt": "prompt alterado",
             "permissions": ["telegram"],
+            "max_tokens": 1024,
+            "temperature": 0.0,
+            "timeout": 60.0,
         },
     )
     changelog = catalog.list_changelog(session)
@@ -162,6 +165,9 @@ def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
             "model": None,
             "prompt": "tenant-a-prompt",
             "permissions": [],
+            "max_tokens": 1024,
+            "temperature": 0.0,
+            "timeout": 60.0,
         },
     )
     catalog.upsert_persona(
@@ -172,6 +178,9 @@ def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
             "model": None,
             "prompt": "tenant-b-prompt",
             "permissions": [],
+            "max_tokens": 1024,
+            "temperature": 0.0,
+            "timeout": 60.0,
         },
     )
     catalog.upsert_integration(
@@ -215,6 +224,9 @@ def test_tenant_isolation_session_cannot_see_other_tenant(db: Any) -> None:
             "model": None,
             "prompt": "secret-b",
             "permissions": [],
+            "max_tokens": 1024,
+            "temperature": 0.0,
+            "timeout": 60.0,
         },
     )
     assert catalog.get_persona(session_b, name="only-in-b") is not None

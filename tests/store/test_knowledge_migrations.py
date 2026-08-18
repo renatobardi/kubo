@@ -157,6 +157,8 @@ def test_apply_is_idempotent(db: Any) -> None:
         "0042_opinion_day_summary.surql",
         # 0043 (KUBO-207): invite vinculado a tenant.
         "0043_invite_tenant_id.surql",
+        # 0044 (KUBO-221, ADR-0054): LLM call parameters on catalog_persona.
+        "0044_persona_llm_config.surql",
     }
 
 

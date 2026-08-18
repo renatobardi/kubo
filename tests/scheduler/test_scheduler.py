@@ -300,18 +300,28 @@ def test_build_scheduler_rejects_invalid_worker_config() -> None:
 def test_instantiate_distiller_builds_worker_with_executor_and_embedder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_instantiate("distiller")` monta o `DistillerWorker` com executor (Groq,
-    modelo pinado) + `GeminiEmbedder` lido da env — `from_env` só LÊ a env
-    (não valida a key), então uma key fake já constrói."""
+    """`_instantiate("distiller")` monta o `DistillerWorker` com executor cujos
+    modelo e `max_tokens` vêm do resolvedor + `GeminiEmbedder` lido da env."""
     from kubo.embedding import GeminiEmbedder
+    from kubo.executors.api import ApiExecutor, ApiExecutorConfig
     from kubo.scheduler import _instantiate
     from kubo.workers.distiller import DistillerWorker
 
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key-teste")
+    resolved = ApiExecutorConfig(model="anthropic/claude-haiku-4-5", max_tokens=16384)
+    monkeypatch.setattr("kubo.scheduler.resolve_api_config", lambda _s, _n: resolved)
 
-    worker, embedder = _instantiate("distiller")
+    worker, embedder = _instantiate(
+        "distiller",
+        MagicMock(),
+        RecordID("tenant", "x"),
+        RecordID("user", "x"),
+    )
 
     assert isinstance(worker, DistillerWorker)
+    assert isinstance(worker._executor, ApiExecutor)
+    assert worker._executor._config.model == "anthropic/claude-haiku-4-5"
+    assert worker._executor._config.max_tokens == 16384
     assert isinstance(embedder, GeminiEmbedder)
 
 
@@ -321,7 +331,12 @@ def test_instantiate_feed_builds_worker_without_embedder() -> None:
     from kubo.scheduler import _instantiate
     from kubo.workers.feed import FeedWorker
 
-    worker, embedder = _instantiate("feed")
+    worker, embedder = _instantiate(
+        "feed",
+        MagicMock(),
+        RecordID("tenant", "x"),
+        RecordID("user", "x"),
+    )
 
     assert isinstance(worker, FeedWorker)
     assert embedder is None
@@ -911,19 +926,22 @@ def test_check_and_reschedule_digest_keeps_current_when_settings_missing() -> No
 
 
 def test_distiller_usa_claude_haiku() -> None:
-    """O destilador diário roda no Claude Haiku 4.5 (KUBO-139)."""
-    from kubo.scheduler import _DISTILLER_MODEL
+    """O destilador resolve a persona `distiller` do catálogo; o default ainda
+    aponta para Claude Haiku 4.5 (KUBO-221 / KUBO-139)."""
+    from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
+    from kubo.scheduler import _DISTILLER_PERSONA
 
-    assert _DISTILLER_MODEL == "anthropic/claude-haiku-4-5"
+    assert _DISTILLER_PERSONA == "distiller"
+    distiller = next(p for p in DEFAULT_PERSONAS if p["name"] == "distiller")
+    assert distiller["model"] == "anthropic/claude-haiku-4-5"
 
 
 def test_distiller_tem_folga_de_max_tokens_para_thinking() -> None:
     """O teto de tokens do destilador comporta thinking + JSON (KUBO-139).
 
-    Nos modelos Claude atuais o thinking adaptativo é ligado por padrão e consome do
-    MESMO `max_tokens` da resposta: o teto antigo truncaria o JSON no meio e o item
-    voltaria como saída malformada — falha silenciosa, indistinguível de LLM ruim.
+    O default do catálogo preserva o teto original, agora editável pelo dono.
     """
-    from kubo.scheduler import _DISTILLER_MAX_TOKENS
+    from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
 
-    assert _DISTILLER_MAX_TOKENS >= 8192
+    distiller = next(p for p in DEFAULT_PERSONAS if p["name"] == "distiller")
+    assert distiller["max_tokens"] >= 8192

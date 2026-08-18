@@ -38,12 +38,16 @@ Executor = Literal["api", "cli", "human"]
 
 
 class Persona(BaseModel):
-    """Uma persona do catálogo (1 YAML por arquivo).
+    """A catalog persona (one YAML per file).
 
-    `model` é obrigatório para executores de LLM (`api`/`cli`) e ausente para
-    `human` (uma pessoa não tem modelo). `permissions` são os nomes de integração
-    que a persona pode acessar — o flow runner valida `permissions ⊇
-    manifest.integrations` do worker (R6, least-privilege).
+    `model` is required for LLM executors (`api`/`cli`) and absent for `human`.
+    `permissions` are integration names the persona may access; the flow runner
+    validates `permissions ⊇ worker.manifest.integrations` (least-privilege).
+
+    The `max_tokens`, `temperature`, `reasoning_effort`, `timeout` and
+    `max_turns` fields are the LLM call configuration; they come from the
+    per-tenant catalog (ADR-0054). Default values preserve the previous behavior
+    until the catalog is edited.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -53,6 +57,13 @@ class Persona(BaseModel):
     model: str | None = None
     prompt: str = ""
     permissions: list[str] = Field(default_factory=list)
+
+    # LLM call parameters (ADR-0054 §II)
+    max_tokens: int = 1024
+    temperature: float = 0.0
+    reasoning_effort: str | None = None
+    timeout: float = 60.0
+    max_turns: int | None = None
 
     @model_validator(mode="after")
     def _model_matches_executor(self) -> Self:

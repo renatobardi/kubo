@@ -137,20 +137,20 @@ def _header_value(exc: BaseException, name: str) -> str | None:
 
 
 class ApiExecutorConfig(BaseModel):
-    """Configuração do `ApiExecutor`: modelo LiteLLM e parâmetros de geração.
+    """Configuration for `ApiExecutor`: a LiteLLM model and generation parameters.
 
-    `extra="forbid"` fecha a superfície de configuração por construção — nenhum
-    campo espúrio (ex.: `tools`) entra por acidente via config; `revalidate_instances`
-    garante que reatribuições futuras também passem pela validação.
+    `extra="forbid"` closes the config surface by construction — no spurious
+    field (e.g. `tools`) can enter via config; `frozen=True` makes the resolved
+    config immutable for the lifetime of a request/run (ADR-0054 §VII).
     """
 
-    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
 
     model: str
     temperature: float = 0.0
     max_tokens: int = 1024
     timeout: float = 60.0
-    # api_key pode vir de tenant_credential (BYOK, KUBO-115). None = litellm usa env.
+    # api_key may come from tenant_credential (BYOK, KUBO-115). None = litellm uses env.
     api_key: str | None = Field(default=None, repr=False)
 
 

@@ -164,6 +164,11 @@ def _persona_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "model": row.get("model"),
         "prompt": row.get("prompt", ""),
         "permissions": list(row.get("permissions") or []),
+        "max_tokens": row.get("max_tokens"),
+        "temperature": row.get("temperature"),
+        "reasoning_effort": row.get("reasoning_effort"),
+        "timeout": row.get("timeout"),
+        "max_turns": row.get("max_turns"),
     }
 
 
@@ -253,7 +258,22 @@ def seed_catalog(session: ScopedStore) -> None:
     # would have no effect (ADR-0046 §IV).
     _seeded_personas = [p for p in DEFAULT_PERSONAS if p["name"] not in _NON_SEEDED_PERSONAS]
     for i, persona in enumerate(_seeded_personas):
-        _add(f"p{i}_", "catalog_persona", persona, ("executor", "model", "prompt", "permissions"))
+        _add(
+            f"p{i}_",
+            "catalog_persona",
+            persona,
+            (
+                "executor",
+                "model",
+                "prompt",
+                "permissions",
+                "max_tokens",
+                "temperature",
+                "reasoning_effort",
+                "timeout",
+                "max_turns",
+            ),
+        )
     for i, integration in enumerate(DEFAULT_INTEGRATIONS):
         _add(
             f"i{i}_", "catalog_integration", integration, ("kind", "auth", "rate_limit", "base_url")
@@ -300,13 +320,19 @@ def upsert_persona(session: ScopedStore, *, persona: dict[str, Any]) -> dict[str
         kind="persona",
         set_clause=(
             "UPSERT $r SET tenant_id = $tenant_id, name = $n, executor = $e, model = $m, "
-            "prompt = $p, permissions = $perms, updated_at = time::now()"
+            "prompt = $p, permissions = $perms, max_tokens = $mt, temperature = $temp, "
+            "reasoning_effort = $re, timeout = $to, max_turns = $mturns, updated_at = time::now()"
         ),
         fields={
             "e": persona["executor"],
             "m": persona.get("model"),
             "p": persona.get("prompt", ""),
             "perms": list(persona.get("permissions", [])),
+            "mt": persona.get("max_tokens"),
+            "temp": persona.get("temperature"),
+            "re": persona.get("reasoning_effort"),
+            "to": persona.get("timeout"),
+            "mturns": persona.get("max_turns"),
         },
         from_row=_persona_from_row,
     )

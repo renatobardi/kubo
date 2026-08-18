@@ -1,7 +1,7 @@
 # ADR-0054 — Camada de configuração de LLM: três portas, registry, persona de sistema, BYOK
 
-> Status: **proposto** · Data: 2026-08-10
-> Emenda a especificação funcional §2.4; emenda os ADR-0013, ADR-0016, ADR-0019, ADR-0039 §IV e ADR-0042; preserva o ADR-0006 e o ADR-0009.
+> Status: **aceito** · Data: 2026-08-17
+> Emenda a especificação funcional §2.4; emenda os ADR-0010, ADR-0013, ADR-0016, ADR-0019, ADR-0039 §IV e ADR-0042; preserva o ADR-0006 e o ADR-0009.
 
 ## Contexto
 
@@ -87,6 +87,8 @@ DEV e PRD já têm bancos SurrealDB fisicamente separados. As linhas de `catalog
 O resolvedor entrega um objeto **imutável/frozen** (Pydantic `frozen=True`) uma vez por request HTTP ou uma vez no início de um run do scheduler. Todas as chamadas daquele request/run usam a mesma config. Editar `catalog_persona` durante um run em andamento não muda o comportamento daquele run — coerente com o invariante 4 (template versionado, instância snapshot) e com o snapshot de flow (ADR-0016 §II).
 
 ### VIII. Relação com ADRs anteriores
+
+- **ADR-0010 (agendamento fase 1):** esclarece que `schedules.yaml` continua sendo configuração de *quando* (cron/timezone); a escolha de modelo do distilador passa a ser dado de `catalog_persona`, não operacional. O gate humano para nova config de *agendamento* (novo worker/cron) permanece; o gate para troca de modelo vira changelog de catálogo com escrita restrita ao owner (ADR-0042 §I).
 
 - **ADR-0013 (destilação e grafo buscável):** emende a §IV/§V — o `ApiExecutor` continua sem tools e com demarcação untrusted, mas o modelo e `max_tokens` passam a vir da persona, não de constantes do scheduler. O embedding continua por REST direto (§I deste ADR).
 - **ADR-0016 (persona + flow mínimo):** emende a modelagem da `persona` — a config da persona ganha campos de modelo/parâmetros e continua congelada por flow. O `budget_usd` continua no template de flow, não na persona.
