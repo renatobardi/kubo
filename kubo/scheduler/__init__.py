@@ -22,11 +22,13 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from surrealdb import RecordID
 
 from kubo.distribution.config import resolve_base_url
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
-from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.executors.api import ApiExecutor
+from kubo.llm.resolver import resolve_api_config
 from kubo.runtime.runner import run_worker
 from kubo.scheduler.study_ingest import execute_study_ingest_job
 from kubo.scheduler.study_lessons import (
@@ -57,14 +59,9 @@ _DIGEST_POLL_MINUTES = 5
 # cai silenciosamente no limite do Telegram.
 _DIGEST_MAX_ITEMS_BY_CHANNEL = {"telegram": 5, "email": 10}
 
-# Modelo do destilador PINADO no código: trocar = editar aqui + PR (gate humano,
-# ADR-0010) — nunca fica configurável em schedules.yaml (evitaria o gate).
-_DISTILLER_MODEL = "anthropic/claude-haiku-4-5"
-# summary até 8000 chars + entidades no JSON precisa de folga; o default 1024 do
-# ApiExecutorConfig truncaria a resposta antes do fim do JSON. Nos modelos Claude o
-# thinking adaptativo é ligado por padrão e divide ESTE mesmo teto com a resposta —
-# daí a folga sobre os 4096 que já bastavam para o JSON sozinho.
-_DISTILLER_MAX_TOKENS = 16384
+# Persona usada pelo destilador. Modelo e parâmetros vêm do catálogo por-tenant
+# (ADR-0054); esta constante é só o nome da persona, nunca um modelo ou token teto.
+_DISTILLER_PERSONA = "distiller"
 
 
 class WorkerEntry(BaseModel):
@@ -130,13 +127,18 @@ def load_schedules(path: Path = _SCHEDULES_PATH) -> Schedules:
         raise ConfigError(f"schedules inválido: {format_validation_error(exc)}") from exc
 
 
-def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
+def _instantiate(
+    worker_name: str,
+    db: Any,
+    tenant_id: RecordID,
+    user_id: RecordID,
+) -> tuple[Any, Embedder | None]:
     """Constrói o worker com suas dependências (marco 8.7, ADR-0013 §VIII).
 
-    O destilador ganha executor (Groq, modelo pinado por evidência) + embedder
-    (Gemini, via env); os demais workers não precisam de nenhum dos dois.
-    `GeminiEmbedder.from_env()` roda AQUI, no disparo do job — não no boot do
-    scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`. Se a key faltar
+    O destilador ganha executor (modelo e parâmetros do catálogo via resolvedor)
+    + embedder (Gemini, via env); os demais workers não precisam de nenhum dos
+    dois. `GeminiEmbedder.from_env()` roda AQUI, no disparo do job — não no boot
+    do scheduler (`main`): o scheduler sobe sem `GEMINI_API_KEY`. Se a key faltar
     na hora do disparo, o `ConfigError` sobe a `execute_job` e é registrado como
     `scheduler_job_failed` (o mesmo tratamento de qualquer falha de SETUP que
     ocorre ANTES de `run_worker` abrir o run — não vira `run.error` estruturado,
@@ -146,9 +148,8 @@ def _instantiate(worker_name: str) -> tuple[Any, Embedder | None]:
     scheduler único e o log já dá visibilidade.
     """
     if worker_name == "distiller":
-        executor = ApiExecutor(
-            ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
-        )
+        session = scoped(db, tenant_id=tenant_id, user_id=user_id)
+        executor = ApiExecutor(resolve_api_config(session, _DISTILLER_PERSONA))
         return DistillerWorker(executor), GeminiEmbedder.from_env()
     return WORKER_REGISTRY[worker_name](), None
 
@@ -159,9 +160,9 @@ def execute_job(worker_name: str, config: dict[str, Any]) -> None:
     DB (um ws de vida longa apodrece num processo que roda dias).
     """
     try:
-        worker, embedder = _instantiate(worker_name)
         with client.connect(client.config()) as db:
             tenant_id, user_id = resolve_scheduler_tenant_and_user(db)
+            worker, embedder = _instantiate(worker_name, db, tenant_id, user_id)
             run_worker(
                 db,
                 worker,
@@ -241,18 +242,16 @@ def execute_digest_sweep_job() -> None:
             session = scoped(list_db, tenant_id=tenant_id, user_id=user_id)
             destination_list = destination_store.active_destinations(session)
 
-        # Executor LLM para enriquecimento editorial (ADR-0052, KUBO-195) —
-        # mesmo modelo do destilador. Criado uma vez por sweep, compartilhado
-        # entre destinos (stateless). Se a construção falhar (config inválida,
-        # env faltando), o sweep aborta com log estruturado — sem executor não
-        # há enriquecimento, mas os destinos ainda recebem o digest sem parecer.
-        try:
-            digest_executor = ApiExecutor(
-                ApiExecutorConfig(model=_DISTILLER_MODEL, max_tokens=_DISTILLER_MAX_TOKENS)
-            )
-        except Exception:  # noqa: BLE001 — setup failure, log and abort
-            _log.exception("digest_sweep_executor_setup_failed")
-            return
+            # Executor LLM para enriquecimento editorial (ADR-0052, KUBO-195) —
+            # mesmo persona do destilador. Criado uma vez por sweep, compartilhado
+            # entre destinos (stateless). Se a construção falhar (config inválida,
+            # env faltando), o sweep aborta com log estruturado — sem executor não
+            # há enriquecimento, mas os destinos ainda recebem o digest sem parecer.
+            try:
+                digest_executor = ApiExecutor(resolve_api_config(session, _DISTILLER_PERSONA))
+            except Exception:  # noqa: BLE001 — setup failure, log and abort
+                _log.exception("digest_sweep_executor_setup_failed")
+                return
 
         dispatched = 0
         failed = 0

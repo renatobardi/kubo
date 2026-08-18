@@ -77,3 +77,26 @@ def test_load_persona_rejects_non_mapping(tmp_path: Path) -> None:
     (tmp_path / "x.yaml").write_text("- a\n- b\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_persona(tmp_path / "x.yaml")
+
+
+def test_persona_llm_fields_have_sensible_defaults() -> None:
+    """New LLM config fields have defaults preserving previous behavior and can be
+    overridden."""
+    default = Persona(name="x", executor="api", model="m")
+    assert default.max_tokens == 1024
+    assert default.temperature == 0.0
+    assert default.timeout == 60.0
+    assert default.reasoning_effort is None
+    assert default.max_turns is None
+
+    customized = Persona(
+        name="x",
+        executor="api",
+        model="m",
+        max_tokens=4096,
+        temperature=0.7,
+        timeout=30.0,
+    )
+    assert customized.max_tokens == 4096
+    assert customized.temperature == 0.7
+    assert customized.timeout == 30.0

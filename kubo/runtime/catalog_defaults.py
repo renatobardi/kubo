@@ -29,18 +29,39 @@ def _persona(
     model: str | None,
     prompt: str,
     permissions: list[str],
+    *,
+    max_tokens: int = 1024,
+    temperature: float = 0.0,
+    reasoning_effort: str | None = None,
+    timeout: float = 60.0,
+    max_turns: int | None = None,
 ) -> dict[str, Any]:
-    """Helper para evitar repetição dos campos comuns de cada persona."""
+    """Helper to avoid repeating the common fields of every persona."""
     return {
         "name": name,
         "executor": executor,
         "model": model,
         "prompt": prompt,
         "permissions": permissions,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "reasoning_effort": reasoning_effort,
+        "timeout": timeout,
+        "max_turns": max_turns,
     }
 
 
 DEFAULT_PERSONAS: list[dict[str, Any]] = [
+    _persona(
+        "distiller",
+        "api",
+        _HAIKU_MODEL,
+        "",
+        [],
+        max_tokens=16384,
+        temperature=0.0,
+        timeout=60.0,
+    ),
     _persona(
         "analista",
         "api",
