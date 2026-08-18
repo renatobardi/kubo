@@ -61,7 +61,7 @@ class _FakeSectionizer:
     def __init__(self) -> None:
         self.called = False
 
-    def __call__(self, db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[Any, str]:
+    def __call__(self, session: Any) -> tuple[Any, str]:
         self.called = True
         return _FakeExecutor(), "prompt"
 
@@ -99,13 +99,11 @@ def stub_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(study_ingest, "_list_pending", lambda db, **kw: [_pending_material()])
     monkeypatch.setattr(study_ingest, "_parse_material", lambda fmt, path: _parsed())
-    monkeypatch.setattr(
-        study_ingest, "_build_summarizer", lambda db, tenant_id, user_id: _FakeSummarizer()
-    )
+    monkeypatch.setattr(study_ingest, "_build_summarizer", lambda session: _FakeSummarizer())
     monkeypatch.setattr(
         study_ingest,
         "_build_sectionizer",
-        lambda db, tenant_id, user_id: (_FakeExecutor(), "prompt"),
+        lambda session: (_FakeExecutor(), "prompt"),
     )
     monkeypatch.setattr(study_ingest, "_ingest_material", lambda db, **kw: _pending_material())
     monkeypatch.setattr(study_ingest, "_mark_failed", lambda db, **kw: _pending_material())
@@ -150,7 +148,7 @@ def test_ingest_job_marks_failed_on_summarizer_error(
         def generate(self, parsed: ParsedMaterial) -> str:
             raise ExecutorError("LLM down")
 
-    monkeypatch.setattr(study_ingest, "_build_summarizer", lambda db, t, u: _BoomSummarizer())
+    monkeypatch.setattr(study_ingest, "_build_summarizer", lambda session: _BoomSummarizer())
     failed: list[dict[str, Any]] = []
     monkeypatch.setattr(
         study_ingest, "_mark_failed", lambda db, **kw: failed.append(kw) or _pending_material()

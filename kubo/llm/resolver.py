@@ -8,7 +8,8 @@ ready for the call. No other module should build an LLM call on its own
 from __future__ import annotations
 
 from kubo.errors import ConfigError
-from kubo.executors.api import ApiExecutorConfig
+from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.executors.base import Executor
 from kubo.runtime.personas import resolve_persona
 from kubo.store.scoped import ScopedStore
 
@@ -37,3 +38,21 @@ def resolve_api_config(
         timeout=persona.timeout,
         api_key=None,
     )
+
+
+class PersonaResolver:
+    """Resolve persona names to `Executor` instances, caching per run.
+
+    A run resolves each persona at most once: the config is frozen for the
+    lifetime of the run, so an in-flight run is unaffected by catalog edits
+    (ADR-0054 §VII, "template versionado, instância snapshot").
+    """
+
+    def __init__(self, session: ScopedStore) -> None:
+        self._session = session
+        self._cache: dict[str, Executor] = {}
+
+    def __call__(self, persona_name: str) -> Executor:
+        if persona_name not in self._cache:
+            self._cache[persona_name] = ApiExecutor(resolve_api_config(self._session, persona_name))
+        return self._cache[persona_name]

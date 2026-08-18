@@ -297,13 +297,14 @@ def test_build_scheduler_rejects_invalid_worker_config() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_instantiate_distiller_builds_worker_with_executor_and_embedder(
+def test_instantiate_distiller_builds_worker_with_resolver_and_embedder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_instantiate("distiller")` monta o `DistillerWorker` com executor cujos
-    modelo e `max_tokens` vêm do resolvedor + `GeminiEmbedder` lido da env."""
+    """`_instantiate("distiller")` monta o `DistillerWorker` com resolvedor de
+    persona + `GeminiEmbedder` lido da env."""
     from kubo.embedding import GeminiEmbedder
     from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+    from kubo.llm.resolver import PersonaResolver
     from kubo.scheduler import _instantiate
     from kubo.workers.distiller import DistillerWorker
 
@@ -319,9 +320,11 @@ def test_instantiate_distiller_builds_worker_with_executor_and_embedder(
     )
 
     assert isinstance(worker, DistillerWorker)
-    assert isinstance(worker._executor, ApiExecutor)
-    assert worker._executor._config.model == "anthropic/claude-haiku-4-5"
-    assert worker._executor._config.max_tokens == 16384
+    assert isinstance(worker._resolver, PersonaResolver)
+    scorer = worker._executor("distiller-score")
+    assert isinstance(scorer, ApiExecutor)
+    assert scorer._config.model == "anthropic/claude-haiku-4-5"
+    assert scorer._config.max_tokens == 16384
     assert isinstance(embedder, GeminiEmbedder)
 
 
@@ -926,14 +929,12 @@ def test_check_and_reschedule_digest_keeps_current_when_settings_missing() -> No
 
 
 def test_distiller_usa_claude_haiku() -> None:
-    """O destilador resolve a persona `distiller` do catálogo; o default ainda
-    aponta para Claude Haiku 4.5 (KUBO-221 / KUBO-139)."""
+    """As três personas do destilador apontam para Claude Haiku 4.5 (KUBO-221)."""
     from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
-    from kubo.scheduler import _DISTILLER_PERSONA
 
-    assert _DISTILLER_PERSONA == "distiller"
-    distiller = next(p for p in DEFAULT_PERSONAS if p["name"] == "distiller")
-    assert distiller["model"] == "anthropic/claude-haiku-4-5"
+    for name in ("distiller-score", "distiller-distill", "distiller-day-summary"):
+        persona = next(p for p in DEFAULT_PERSONAS if p["name"] == name)
+        assert persona["model"] == "anthropic/claude-haiku-4-5", name
 
 
 def test_distiller_tem_folga_de_max_tokens_para_thinking() -> None:
@@ -943,5 +944,6 @@ def test_distiller_tem_folga_de_max_tokens_para_thinking() -> None:
     """
     from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
 
-    distiller = next(p for p in DEFAULT_PERSONAS if p["name"] == "distiller")
-    assert distiller["max_tokens"] >= 8192
+    for name in ("distiller-score", "distiller-distill", "distiller-day-summary"):
+        persona = next(p for p in DEFAULT_PERSONAS if p["name"] == name)
+        assert persona["max_tokens"] >= 8192, name

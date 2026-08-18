@@ -18,12 +18,11 @@ import structlog
 from surrealdb import RecordID
 
 from kubo.errors import ConfigError, ExecutorError, MaterialParseError, StoreError
-from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.executors.api import ApiExecutor
+from kubo.llm.resolver import resolve_api_config
 from kubo.runtime.personas import resolve_persona
 from kubo.store import study as study_store
 from kubo.store.scoped import ScopedStore, scoped
-from kubo.study.config import DEFAULT_MODEL as _DEFAULT_MODEL
-from kubo.study.config import SUMMARY_MAX_TOKENS as _SUMMARY_MAX_TOKENS
 from kubo.study.parsing import MaterialFormat, ParsedMaterial, parse_material
 from kubo.study.sectionizer import sectionize
 from kubo.study.summarizer import Summarizer
@@ -36,11 +35,6 @@ def _as_fmt(value: str) -> MaterialFormat:
     if value not in ("epub", "pdf"):
         raise MaterialParseError(f"formato desconhecido: {value!r}")
     return value  # type: ignore[return-value]  # validado acima
-
-
-# Pinos de LLM compartilhados com routes/study.py (kubo.study.config).
-_SECTIONIZER_MAX_TOKENS = 8192
-_LLM_TIMEOUT = 30.0
 
 
 # --- seams para testes (monkeypatcháveis sem tocar no banco/API real) -------------------
@@ -58,29 +52,15 @@ def _parse_material(fmt: MaterialFormat, path: str) -> ParsedMaterial:
     return parse_material(data, fmt)
 
 
-def _build_summarizer(db: Any, tenant_id: RecordID, user_id: RecordID) -> Summarizer:
-    persona = resolve_persona(db, tenant_id, user_id, "summarizer")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_SUMMARY_MAX_TOKENS,
-            timeout=_LLM_TIMEOUT,
-        ),
-        max_attempts=1,
-    )
+def _build_summarizer(session: ScopedStore) -> Summarizer:
+    persona = resolve_persona(session, session.tenant_id, session.user_id, "summarizer")
+    executor = ApiExecutor(resolve_api_config(session, "summarizer"), max_attempts=1)
     return Summarizer(executor=executor, prompt=persona.prompt)
 
 
-def _build_sectionizer(db: Any, tenant_id: RecordID, user_id: RecordID) -> tuple[ApiExecutor, str]:
-    persona = resolve_persona(db, tenant_id, user_id, "sectionizer")
-    executor = ApiExecutor(
-        ApiExecutorConfig(
-            model=persona.model or _DEFAULT_MODEL,
-            max_tokens=_SECTIONIZER_MAX_TOKENS,
-            timeout=_LLM_TIMEOUT,
-        ),
-        max_attempts=1,
-    )
+def _build_sectionizer(session: ScopedStore) -> tuple[ApiExecutor, str]:
+    persona = resolve_persona(session, session.tenant_id, session.user_id, "sectionizer")
+    executor = ApiExecutor(resolve_api_config(session, "sectionizer"), max_attempts=1)
     return executor, persona.prompt
 
 
@@ -131,7 +111,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
 
     # Setup de personas (uma vez por execução). Falha aqui = todos pending falham.
     try:
-        summarizer = _build_summarizer(db, tenant_id, user_id)
+        summarizer = _build_summarizer(session)
     except (ConfigError, StoreError) as exc:
         _log.warning("study.ingest.summarizer_setup_failed", worker="study_ingest", exc_info=True)
         for material in pending:
@@ -144,7 +124,7 @@ def execute_study_ingest_job(db: Any, *, tenant_id: RecordID, user_id: RecordID)
 
     sectionizer_executor: tuple[ApiExecutor, str] | None
     try:
-        sectionizer_executor = _build_sectionizer(db, tenant_id, user_id)
+        sectionizer_executor = _build_sectionizer(session)
     except (ConfigError, StoreError):
         _log.warning("study.ingest.sectionizer_setup_failed", worker="study_ingest", exc_info=True)
         sectionizer_executor = None  # fallback: 1 section = 1 capítulo

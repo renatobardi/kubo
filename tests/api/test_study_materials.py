@@ -15,6 +15,8 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.executors.api import ApiExecutorConfig
+from kubo.runtime.personas import Persona
 from kubo.store.study import Material, Topic
 
 _TENANT = RecordID("tenant", "breakglass")
@@ -85,12 +87,25 @@ def stub_study_material_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
         "kubo.api.routes.study.study_store.get_material", lambda db, **kw: _material()
     )
     monkeypatch.setattr("kubo.api.routes.study.study_store.list_chat_messages", lambda db, **kw: [])
-    # Persona mockada: devolve um prompt stub + model (usado no chat do mentor).
+    # Persona mockada: devolve um prompt stub + model (usado no _summarizer do mentor).
     monkeypatch.setattr(
         "kubo.api.routes.study.resolve_persona",
-        lambda *a, **kw: type(
-            "P", (), {"prompt": "Resuma.", "model": "anthropic/claude-haiku-4-5"}
-        )(),
+        lambda *a, **kw: Persona(
+            name="summarizer",
+            executor="api",
+            model="anthropic/claude-haiku-4-5",
+            prompt="Resuma.",
+            max_tokens=1024,
+            timeout=30.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.resolve_api_config",
+        lambda *a, **kw: ApiExecutorConfig(
+            model="anthropic/claude-haiku-4-5",
+            max_tokens=1024,
+            timeout=30.0,
+        ),
     )
     # client.connect mockado para o _summarizer (chat do mentor).
     monkeypatch.setattr("kubo.api.routes.study.client.connect", _fake_connect)

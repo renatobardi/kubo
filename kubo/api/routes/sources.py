@@ -10,7 +10,6 @@ na borda, fail-fast 503 sem a credencial. Duplicata (kind+canonical) é recusada
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
@@ -31,8 +30,8 @@ from kubo.errors import (
     format_validation_error,
 )
 from kubo.executors.api import ApiExecutor, ApiExecutorConfig
+from kubo.runtime.catalog_defaults import DEFAULT_PERSONAS
 from kubo.runtime.integrations import resolve_readonly_secret
-from kubo.runtime.personas import load_persona
 from kubo.store import client, knowledge
 from kubo.store.knowledge import SourceDetail, SourceStat
 from kubo.store.scoped import ScopedStore, scoped
@@ -202,24 +201,25 @@ class SourceTestForm(BaseModel):
         return value
 
 
-_FINDER_PATH = Path(__file__).parents[3] / "catalogs" / "personas" / "finder.yaml"
 _FINDER_INSTANCE: Finder | None = None
 
 
 def get_finder() -> Finder:
-    """Singleton lazy do finder: lê o YAML do catálogo e monta o ApiExecutor."""
+    """Singleton lazy do finder: usa a persona default `finder` do catálogo."""
     global _FINDER_INSTANCE
     if _FINDER_INSTANCE is None:
-        persona = load_persona(_FINDER_PATH)
+        persona = next((p for p in DEFAULT_PERSONAS if p["name"] == "finder"), None)
+        if persona is None:
+            raise ConfigError("finder persona not found")
         executor = ApiExecutor(
             ApiExecutorConfig(
-                model=persona.model or "groq/llama-3.3-70b-versatile",
-                max_tokens=256,
-                timeout=15.0,
+                model=persona["model"],
+                max_tokens=persona["max_tokens"],
+                timeout=persona["timeout"],
             ),
             max_attempts=1,
         )
-        _FINDER_INSTANCE = Finder(executor=executor, prompt=persona.prompt)
+        _FINDER_INSTANCE = Finder(executor=executor, prompt=persona["prompt"])
     return _FINDER_INSTANCE
 
 

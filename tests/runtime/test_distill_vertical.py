@@ -182,7 +182,7 @@ def test_run_worker_distills_pending_items_into_graph(
 
     run_id = run_worker(
         db,
-        DistillerWorker(executor),
+        DistillerWorker(lambda _: executor),
         config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
@@ -230,7 +230,7 @@ def test_run_worker_skips_malformed_item_persists_the_rest(
 
     run_id = run_worker(
         db,
-        DistillerWorker(executor),
+        DistillerWorker(lambda _: executor),
         config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,
@@ -269,7 +269,7 @@ def test_run_worker_rate_limit_returns_partial_and_marks_run_error(
 
     run_id = run_worker(
         db,
-        DistillerWorker(executor),
+        DistillerWorker(lambda _: executor),
         config={"max_score_items": 10, "max_distill_items": 10},
         embedder=_FakeEmbedder(),
         tenant_id=tenant_id,

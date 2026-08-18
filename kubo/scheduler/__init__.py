@@ -28,7 +28,7 @@ from kubo.distribution.config import resolve_base_url
 from kubo.embedding import Embedder, GeminiEmbedder
 from kubo.errors import ConfigError, format_validation_error
 from kubo.executors.api import ApiExecutor
-from kubo.llm.resolver import resolve_api_config
+from kubo.llm.resolver import PersonaResolver, resolve_api_config
 from kubo.runtime.runner import run_worker
 from kubo.scheduler.study_ingest import execute_study_ingest_job
 from kubo.scheduler.study_lessons import (
@@ -59,9 +59,9 @@ _DIGEST_POLL_MINUTES = 5
 # cai silenciosamente no limite do Telegram.
 _DIGEST_MAX_ITEMS_BY_CHANNEL = {"telegram": 5, "email": 10}
 
-# Persona usada pelo destilador. Modelo e parâmetros vêm do catálogo por-tenant
-# (ADR-0054); esta constante é só o nome da persona, nunca um modelo ou token teto.
-_DISTILLER_PERSONA = "distiller"
+# Persona usada pelo resumo do dia no digest (mesmo tipo de chamada do resumo
+# do destilador, ADR-0052).
+_DIGEST_DAY_SUMMARY_PERSONA = "distiller-day-summary"
 
 
 class WorkerEntry(BaseModel):
@@ -149,8 +149,7 @@ def _instantiate(
     """
     if worker_name == "distiller":
         session = scoped(db, tenant_id=tenant_id, user_id=user_id)
-        executor = ApiExecutor(resolve_api_config(session, _DISTILLER_PERSONA))
-        return DistillerWorker(executor), GeminiEmbedder.from_env()
+        return DistillerWorker(PersonaResolver(session)), GeminiEmbedder.from_env()
     return WORKER_REGISTRY[worker_name](), None
 
 
@@ -248,7 +247,9 @@ def execute_digest_sweep_job() -> None:
             # env faltando), o sweep aborta com log estruturado — sem executor não
             # há enriquecimento, mas os destinos ainda recebem o digest sem parecer.
             try:
-                digest_executor = ApiExecutor(resolve_api_config(session, _DISTILLER_PERSONA))
+                digest_executor = ApiExecutor(
+                    resolve_api_config(session, _DIGEST_DAY_SUMMARY_PERSONA)
+                )
             except Exception:  # noqa: BLE001 — setup failure, log and abort
                 _log.exception("digest_sweep_executor_setup_failed")
                 return

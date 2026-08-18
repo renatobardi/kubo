@@ -143,7 +143,7 @@ def test_lesson_job_fills_lesson_with_ai(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(lesson_output),
+        lambda session: _FakeTutor(lesson_output),
     )
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
@@ -189,7 +189,7 @@ def test_lesson_job_skips_fill_when_tutor_fails(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(None),
+        lambda session: _FakeTutor(None),
     )
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
@@ -253,7 +253,7 @@ def test_lesson_job_retries_placeholder_lesson(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(lesson_output),
+        lambda session: _FakeTutor(lesson_output),
     )
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
@@ -329,7 +329,7 @@ def test_transition_job_generates_lesson_content(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(lesson_output),
+        lambda session: _FakeTutor(lesson_output),
     )
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
@@ -370,7 +370,7 @@ def test_transition_job_skips_fill_when_no_lesson_returned(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(None),
+        lambda session: _FakeTutor(None),
     )
 
     study_lessons.execute_study_transition_job(
@@ -415,7 +415,7 @@ def test_transition_job_skips_fill_when_sections_empty(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: _FakeTutor(None),
+        lambda session: _FakeTutor(None),
     )
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")
 
@@ -476,7 +476,7 @@ def test_lesson_job_passes_recent_misses_to_tutor(
     monkeypatch.setattr(
         study_lessons,
         "_build_tutor",
-        lambda db, tenant_id, user_id: fake_tutor,
+        lambda session: fake_tutor,
     )
     monkeypatch.setattr(study_lessons.study_store, "fill_lesson", lambda db, **kw: None)
     monkeypatch.setattr(study_lessons, "_work_context_for", lambda db, user_id: "")

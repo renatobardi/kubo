@@ -181,8 +181,8 @@ def _get_reviewer() -> WorkContextReviewer:
         executor=ApiExecutor(
             ApiExecutorConfig(
                 model=persona["model"],
-                max_tokens=1024,
-                timeout=15.0,
+                max_tokens=persona["max_tokens"],
+                timeout=persona["timeout"],
             ),
             max_attempts=1,
         ),

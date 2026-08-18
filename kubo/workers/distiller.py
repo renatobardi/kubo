@@ -27,6 +27,7 @@ no worker, sobre o `summary` já limpo — nunca sobre o conteúdo coletado brut
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -244,9 +245,19 @@ class DistillerWorker:
         name="distiller", version="2", integrations=[], config=DistillerConfig
     )
 
-    def __init__(self, executor: Executor) -> None:
-        """Guarda o executor de LLM (seam); não faz chamada de rede aqui."""
-        self._executor = executor
+    _SCORER = "distiller-score"
+    _DISTILLER = "distiller-distill"
+    _DAY_SUMMARY = "distiller-day-summary"
+
+    def __init__(self, resolver: Callable[[str], Executor]) -> None:
+        """Guarda o resolvedor de persona (seam); não faz chamada de rede aqui."""
+        self._resolver = resolver
+        self._executors: dict[str, Executor] = {}
+
+    def _executor(self, persona_name: str) -> Executor:
+        if persona_name not in self._executors:
+            self._executors[persona_name] = self._resolver(persona_name)
+        return self._executors[persona_name]
 
     def run(self, ctx: RunContext) -> RunResult:
         """Pontua até `config.max_score_items` itens pendentes; destila os
@@ -352,7 +363,7 @@ class DistillerWorker:
         (contado, logado); senão `(ScorePayload, aprovado)`. Deixa
         `RateLimitExhausted` propagar — falha sistêmica, tratada em `run`."""
         try:
-            score_out = self._executor.complete(
+            score_out = self._executor(self._SCORER).complete(
                 score_instruction, _score_content(item.title, item.url), ScoreOutput
             )
         except MalformedOutputError:
@@ -384,7 +395,7 @@ class DistillerWorker:
             content = content[: config.input_char_cap]
             counters.truncated += 1
         try:
-            out = self._executor.complete(_INSTRUCTION, content, DistillOutput)
+            out = self._executor(self._DISTILLER).complete(_INSTRUCTION, content, DistillOutput)
         except MalformedOutputError:
             counters.malformed += 1
             ctx.logger.warning("distiller.malformed", ref=item.ref)
@@ -451,7 +462,9 @@ class DistillerWorker:
             return None
         content = "\n\n".join(summaries)
         try:
-            out = self._executor.complete(_DAY_SUMMARY_INSTRUCTION, content, DaySummaryOutput)
+            out = self._executor(self._DAY_SUMMARY).complete(
+                _DAY_SUMMARY_INSTRUCTION, content, DaySummaryOutput
+            )
         except MalformedOutputError:
             ctx.logger.warning("distiller.day_summary_malformed")
             return None

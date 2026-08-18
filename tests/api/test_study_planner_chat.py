@@ -15,6 +15,8 @@ import pytest
 from starlette.testclient import TestClient
 from surrealdb import RecordID
 
+from kubo.executors.api import ApiExecutorConfig
+from kubo.runtime.personas import Persona
 from kubo.store.study import Material, PlanEntry, StudyPlan, Topic
 from kubo.study.planner import PlanLesson, PlanProposal
 
@@ -154,9 +156,22 @@ def stub_planner_chat_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("kubo.api.routes.study.study_store.set_plan_cadence", lambda db, **kw: None)
     monkeypatch.setattr(
         "kubo.api.routes.study.resolve_persona",
-        lambda *a, **kw: type(
-            "P", (), {"prompt": "Você é o planner.", "model": "anthropic/claude-opus-5"}
-        )(),
+        lambda *a, **kw: Persona(
+            name="planner",
+            executor="api",
+            model="anthropic/claude-opus-5",
+            prompt="Você é o planner.",
+            max_tokens=4096,
+            timeout=120.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "kubo.api.routes.study.resolve_api_config",
+        lambda *a, **kw: ApiExecutorConfig(
+            model="anthropic/claude-opus-5",
+            max_tokens=4096,
+            timeout=120.0,
+        ),
     )
 
     # Planner.stream_chat mockado: devolve chunks que formam texto + bloco JSON.

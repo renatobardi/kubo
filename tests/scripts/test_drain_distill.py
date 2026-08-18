@@ -115,7 +115,7 @@ def test_drain_distills_backlog_and_reconciles(db, tenant_id, user_id, monkeypat
             DistillOutput(summary="resumo B", entities=[]),
         ]
     )
-    monkeypatch.setattr(dd, "_build_worker", lambda: DistillerWorker(executor))
+    monkeypatch.setattr(dd, "_build_worker", lambda: DistillerWorker(lambda _: executor))
     monkeypatch.setattr(dd.GeminiEmbedder, "from_env", staticmethod(lambda: _FakeEmbedder()))
 
     initial, final, drained, reason = dd.drain(
@@ -154,7 +154,7 @@ def test_drain_treats_rejected_item_as_progress_not_stuck(
     knowledge.upsert_item(db, source=src, external_id="a", content="conteúdo irrelevante")
 
     executor = _FakeExecutor([ScoreOutput(score=1)])  # abaixo do min_score default (6)
-    monkeypatch.setattr(dd, "_build_worker", lambda: DistillerWorker(executor))
+    monkeypatch.setattr(dd, "_build_worker", lambda: DistillerWorker(lambda _: executor))
     monkeypatch.setattr(dd.GeminiEmbedder, "from_env", staticmethod(lambda: _FakeEmbedder()))
 
     initial, final, drained, reason = dd.drain(
