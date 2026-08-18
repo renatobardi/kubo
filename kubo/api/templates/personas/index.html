@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% import "_macros.html" as macros %}
+{% block title %}Personas · Kubo{% endblock %}
+{% block content %}
+<div class="space-y-4">
+  {{ macros.page_header("Personas", "Modelo e parâmetros de LLM por persona. Só o owner pode editar.") }}
+
+  {% if notice %}
+  <output class="block rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ notice }}</output>
+  {% endif %}
+
+  <div class="space-y-4">
+    {% for item in personas %}
+    {% set p = item.persona %}
+    <section class="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+      <div class="border-b border-border p-4">
+        <h2 class="text-sm font-medium">{{ p.name }}</h2>
+        <p class="mt-0.5 text-xs text-muted-foreground">Executor: {{ p.executor }}</p>
+      </div>
+      <form method="post" action="/personas/{{ p.name }}" class="space-y-4 p-4">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+
+        <div>
+          <label for="model_{{ p.name }}" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Modelo</label>
+          <input list="models_{{ p.name }}" id="model_{{ p.name }}" name="model" value="{{ p.model or '' }}" required
+                 class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                 placeholder="anthropic/claude-haiku-4-5">
+          <datalist id="models_{{ p.name }}">
+            {% for m in model_choices %}
+            <option value="{{ m }}">
+            {% endfor %}
+          </datalist>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label for="max_tokens_{{ p.name }}" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Max tokens</label>
+            <input id="max_tokens_{{ p.name }}" name="max_tokens" value="{{ p.max_tokens }}" required
+                   class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                   placeholder="1024">
+          </div>
+
+          <div>
+            <label for="temperature_{{ p.name }}" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Temperature</label>
+            <input id="temperature_{{ p.name }}" name="temperature" value="{{ p.temperature }}" required
+                   class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                   placeholder="0">
+          </div>
+
+          <div>
+            <label for="reasoning_effort_{{ p.name }}" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Reasoning effort</label>
+            <input id="reasoning_effort_{{ p.name }}" name="reasoning_effort" value="{{ p.reasoning_effort or '' }}"
+                   class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                   placeholder="high / medium / low (deixe em branco para omitir)">
+          </div>
+
+          <div>
+            <label for="timeout_{{ p.name }}" class="mb-1.5 block text-xs font-semibold text-muted-foreground">Timeout (s)</label>
+            <input id="timeout_{{ p.name }}" name="timeout" value="{{ p.timeout }}" required
+                   class="h-9 w-full rounded-4xl border border-input bg-input/30 px-4 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                   placeholder="60">
+          </div>
+        </div>
+
+        {% if item.ignored %}
+        <div class="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700">
+          <p class="font-medium">Campos sem efeito no modelo escolhido:</p>
+          <ul class="mt-1 list-disc pl-4 text-xs">
+            {% for field in item.ignored %}
+            <li>{{ field.field }} — {{ field.reason }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        <button type="submit"
+                class="h-9 w-full rounded-4xl bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 active:translate-y-px">
+          Salvar {{ p.name }}
+        </button>
+      </form>
+    </section>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
