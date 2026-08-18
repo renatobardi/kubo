@@ -40,9 +40,7 @@ def test_known_model_caps_match_provider_facts(
 
 def test_unknown_model_ignores_optional_params() -> None:
     """Unknown models safely ignore optional persona fields."""
-    ignored = get_ignored_params(
-        "provider/unknown", temperature=0.0, reasoning_effort="high"
-    )
+    ignored = get_ignored_params("provider/unknown", temperature=0.0, reasoning_effort="high")
 
     assert {i["field"] for i in ignored} == {"temperature", "reasoning_effort"}
     assert all("does not support" in i["reason"].lower() for i in ignored)
@@ -68,8 +66,6 @@ def test_groq_keeps_temperature_ignores_reasoning() -> None:
 
 def test_unset_params_never_reported_as_ignored() -> None:
     """Only configured persona fields are reported; omitted (None) fields are ignored."""
-    ignored = get_ignored_params(
-        "anthropic/claude-opus-5", temperature=0.0, reasoning_effort=None
-    )
+    ignored = get_ignored_params("anthropic/claude-opus-5", temperature=0.0, reasoning_effort=None)
 
     assert [i["field"] for i in ignored] == ["temperature"]
