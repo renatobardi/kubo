@@ -35,7 +35,6 @@ from kubo.study.tutor import Tutor
 _log = structlog.get_logger(__name__)
 
 
-
 def _to_date(dt: datetime) -> date:
     """Converte datetime para date (UTC se tiver tzinfo, senão naive)."""
     if dt.tzinfo is not None:
