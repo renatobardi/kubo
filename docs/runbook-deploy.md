@@ -412,7 +412,7 @@ Fase 1 = logs, não dashboard. Scheduler sem porta não tem healthcheck honesto;
 docker compose ps                          # estado + health do surrealdb e kubo-api
 docker compose logs -f kubo-scheduler      # jobs, coletas (feed_collected), erros
 docker compose logs -f kubo-api            # requests, api.login.failed, api.search.unavailable
-docker compose logs backup                 # dump diario
+docker compose logs backup                 # dump periódico (mensal no DEV, semanal na PRD)
 ```
 
 O scheduler loga `scheduler_starting jobs=6 timezone=America/Sao_Paulo` no boot e
@@ -454,8 +454,12 @@ como registro de auditoria).
 
 ## 4. Backup e restore
 
-Dump diário automático pelo sidecar → `oute-server:~/backups/kubo/kubo-<TS>.surql`
-(retenção 7d). Sobrevive a `lxc delete kubo-test`.
+Dump automático pelo sidecar → `oute-server:~/backups/kubo/kubo-<TS>.surql`.
+Sobrevive a `lxc delete kubo-test`. Cadência e retenção por ambiente (ADR-0011
+§VI, emenda 2026-10-01): **DEV mensal, 95 dias de retenção; PRD semanal, 35
+dias**. Os valores ficam nos overlays (`BACKUP_INTERVAL_SECONDS`,
+`BACKUP_RETENTION_DAYS`). O sidecar faz um dump ao subir e depois dorme o
+intervalo; para forçar um dump fora de hora, `docker compose restart backup`.
 
 ### Restore (DOIS PASSOS — obrigatório, ADR-0011 §VI)
 

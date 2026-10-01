@@ -11,11 +11,19 @@
 # Backup separado do DEV: o volume surreal-backups é redefinido para
 # `/backups/prd`, mapeado pelo disk device do LXD para `~/backups/kubo-prd`
 # no host. Assim os dumps da PRD não cruzam com os do kubo-test.
+#
+# Cadência do dump: semanal na PRD, mensal no DEV (ADR-0011 §VI, emenda 2026-10-01).
 
 services:
   kubo-api:
     ports:
       - "${KUBO_PRD_LXC_IP:?defina KUBO_PRD_LXC_IP no .env do servidor}:2900:8000"
+
+  # Dump semanal, cinco guardados (ADR-0011 §VI, emenda 2026-10-01).
+  backup:
+    environment:
+      BACKUP_INTERVAL_SECONDS: "604800"   # 7 dias
+      BACKUP_RETENTION_DAYS: "35"
 
 volumes:
   surreal-backups:
