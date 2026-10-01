@@ -3,6 +3,7 @@
 > Status: **aceito** · Data: 2026-07-05
 > · **Emendado por ADR-0034** (§IV: a promessa "PRD/OCI mantém AppArmor intocado" cai — a PRD é LXC irmão, mesmo Docker aninhado do kubo-test)
 > · **Estendido por ADR-0037** (a direção não-normativa "build-once / promote-by-tag" vira normativa na esteira de CD).
+> · **Emenda 2026-10-01** (§VI: cadência e retenção do backup passam a ser por ambiente — DEV mensal, PRD semanal).
 
 ## Contexto
 
@@ -148,6 +149,57 @@ externo** (D2 emendada): o dump é encadeado até o host —
 — e **sobrevive a `lxc delete kubo-test`**. Retenção 7d no próprio loop
 (`find /backups -name 'kubo-*.surql' -mtime +7 -delete` — nunca `rm -rf`). O rsync
 do Mac puxa do host (launchd, tarefa do dono — runbook). Bucket OCI fica para PRD.
+
+> **Emenda (2026-10-01, decisão do dono — renatobardi/kubo#252):** o dump deixa de
+> ser diário e a retenção deixa de ser 7d fixos. Cadência e retenção viram
+> variáveis do sidecar (`BACKUP_INTERVAL_SECONDS`, `BACKUP_RETENTION_DAYS`),
+> fixadas por ambiente nos overlays:
+>
+> | Ambiente | Intervalo | Retenção | Dumps guardados |
+> |---|---|---|---|
+> | DEV (`kubo-test`, `compose.dev-lxc.yml`) | 30 dias | 95 dias | pelo menos 3 |
+> | PRD (`kubo-prd`, `compose.prd-lxc.yml`) | 7 dias | 35 dias | pelo menos 5 |
+> | sem overlay (default do `docker-compose.yml`) | 7 dias | 35 dias | pelo menos 5 |
+>
+> **Por quê:** medido no oute-server em 2026-10-01, cada `/export` deixa o
+> SurrealDB v3.1.5 com ~140 MiB de memória anônima a mais, que ele não devolve
+> (o degrau tem o tamanho do dump). Com um export por dia, o `kubo-test` foi de
+> 1,3 GB a 3,0 GB em dez dias e ficou colado no teto de 3 GiB do LXC, para um
+> diretório de dados de 278 MB. O dono não usa a granularidade diária. A causa
+> da retenção de memória (vazamento do export, alocador ou cache) **não foi
+> determinada**: a emenda reduz a frequência, não corrige o defeito — bump do
+> pin do SurrealDB (ADR-0005) exige remedir.
+>
+> **O sidecar não é o único exportador.** O backup do host (Restic, repositório
+> `renatobardi/lab`) roda `surreal export` nos mesmos containers e mudou junto,
+> no mesmo dia (lab#248): semanal no `kubo-prd`, mensal no `kubo-test`. Somando
+> os dois, o `kubo-test` passa de ~34 exports por mês para ~2, e o `kubo-prd` de
+> ~60 para ~9. Alternativa não adotada: remover o sidecar e ficar só com o
+> backup do host — o sidecar é o "backup por-ambiente" que o ADR-0037 §V nomeia
+> como snapshot pré-migração, e a decisão do dono foi reduzir a cadência.
+>
+> **Duas regras que vêm junto:** (1) a retenção cobre pelo menos 3 intervalos —
+> com os 7d antigos, um dump mensal seria apagado antes de existir o seguinte;
+> (2) a retenção só roda depois de um dump bom — com intervalo longo, o dump
+> anterior já passou da retenção quando o novo é tentado, e um export que
+> falhasse apagaria o único dump válido. Ambas cobertas por
+> `tests/test_compose_backup.py`.
+>
+> **Consequências aceitas:** o ponto de restauração da PRD pode ter até 7 dias
+> (antes, 1), contando sidecar e backup do host, ambos semanais agora.
+>
+> **Pendência aberta — conflito com o ADR-0037 §V:** ele manda usar o backup
+> por-ambiente como snapshot pré-migração na PRD, mas o passo "Backup antes de
+> migrar" do `cd.yml` só grava um marcador em `/backups`; quem garantia um dump
+> recente era a cadência diária. Com a semanal, uma migration pode rodar sobre
+> um snapshot de até 7 dias. Enquanto o passo não fizer um dump de verdade e
+> esperar ele terminar, forçar um antes de promover: `docker compose restart
+> backup` na PRD e conferir a linha `dump local` no log.
+>
+> O loop continua sendo `dump → sleep`: reiniciar o sidecar (deploy que mude sua
+> config, reboot do LXC) faz um dump na hora e reinicia a contagem. Intervalo
+> não numérico ou menor que 1 h, e retenção não numérica, voltam ao default com
+> uma linha no log, em vez de deixar o loop girar sem pausa.
 
 **Restore em DOIS PASSOS (defeito descoberto e contornado):** o `/export` do
 SurrealDB v3.1.5 emite as tabelas em ordem **alfabética**, então as relações

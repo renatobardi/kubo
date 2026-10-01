@@ -4,9 +4,10 @@
 # `COMPOSE_FILE=docker-compose.yml:compose.dev-lxc.yml` no .env do servidor
 # (ambiente-específico, não commitado). Verifique o merge com `docker compose config`.
 #
-# Única diferença do ambiente DEV vs. PRD (ADR-0011): o volume de backup vira um
+# Diferença do ambiente DEV vs. PRD (ADR-0011): o volume de backup vira um
 # bind no /backups do container — disk device LXD (shift=true) → ~/backups/kubo do
 # host. O dump sobrevive a `lxc delete kubo-test` e o rsync do dono puxa do host.
+# E a cadência do dump: mensal no DEV, semanal em PRD (ADR-0011 §VI, emenda 2026-10-01).
 # Em PRD o backup vai para bucket OCI (outro mecanismo), então o compose principal
 # mantém o volume nomeado portável.
 #
@@ -30,6 +31,13 @@ services:
   kubo-api:
     ports:
       - "10.173.117.18:3900:8000"
+
+  # Dump mensal, três guardados. O teto de 3 GiB do LXC não aguenta o crescimento
+  # de memória de um /export por dia (ADR-0011 §VI, emenda 2026-10-01).
+  backup:
+    environment:
+      BACKUP_INTERVAL_SECONDS: "2592000"   # 30 dias
+      BACKUP_RETENTION_DAYS: "95"
 
 volumes:
   surreal-backups:

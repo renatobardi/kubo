@@ -1,6 +1,6 @@
 # docker-compose.yml — Kubo (produção)
 # SurrealDB (único datastore, invariante 2) + scheduler da fase 1 + sidecar de
-# backup diário. Pin DEFINITIVO (v3.1.5) por evidência do spike M2 — ADR-0005.
+# backup periódico. Pin DEFINITIVO (v3.1.5) por evidência do spike M2 — ADR-0005.
 # Casado com o SDK surrealdb==2.0.0 (pyproject). Bump do par sobe junto.
 #
 # Postura de rede (CLAUDE.md §Segurança): SurrealDB NUNCA é exposto fora da rede
@@ -300,12 +300,18 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  # Backup diário. A imagem oficial do SurrealDB é distroless (sem shell/cron),
+  # Backup periódico. A imagem oficial do SurrealDB é distroless (sem shell/cron),
   # então o dump não roda dentro dela: um sidecar alpine consome o endpoint HTTP
   # de export do SurrealDB (equivalente ao `surreal export` — D2) via busybox wget.
-  # Loop de sleep = cron de 1 job/dia. Sem upload externo (D2 emendada): o dump
-  # local, encadeado até o host pelo bind /backups, é a cópia fora do container;
-  # bucket OCI fica para PRD. Retenção 7d no próprio loop.
+  # Loop de sleep = cron de 1 job por intervalo. Sem upload externo (D2 emendada):
+  # o dump local, encadeado até o host pelo bind /backups, é a cópia fora do
+  # container; bucket OCI fica para PRD.
+  #
+  # Cadência e retenção por ambiente (ADR-0011 §VI, emenda 2026-10-01): cada
+  # /export deixa o SurrealDB v3.1.5 com ~140 MiB a mais que ele não devolve, e o
+  # dump diário levou o kubo-test ao teto de memória do LXC. Default semanal com
+  # 35 dias de retenção; os overlays fixam o valor de cada ambiente. A retenção
+  # tem de cobrir pelo menos 3 intervalos (tests/test_compose_backup.py).
   backup:
     image: alpine:3.20
     restart: unless-stopped
@@ -319,15 +325,27 @@ services:
       SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-604800}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
     command:
       - sh
       - -c
       - |
-        set -u   # sem -e: uma falha transitória de rede não pode matar o loop diário
+        set -u   # sem -e: uma falha transitória de rede não pode matar o loop
         # tr -d '\n': o base64 do busybox quebra linha a cada 76 chars — com uma
         # senha longa (32+ aleatória, ADR-0014 amendment) o header Authorization
         # ganharia um \n no meio e o /export responde 400. Achado no deploy 0010.
         AUTH=$$(printf '%s:%s' "$$SURREAL_USER" "$$SURREAL_PASS" | base64 | tr -d '\n')
+        # Valor inválido ou curto demais volta ao default: um `sleep` que falha
+        # deixaria o loop girando sem pausa em cima do /export.
+        [ "$$BACKUP_INTERVAL_SECONDS" -ge 3600 ] 2>/dev/null || {
+          echo "[backup] BACKUP_INTERVAL_SECONDS inválido ($$BACKUP_INTERVAL_SECONDS) — usando 604800"
+          BACKUP_INTERVAL_SECONDS=604800
+        }
+        [ "$$BACKUP_RETENTION_DAYS" -ge 1 ] 2>/dev/null || {
+          echo "[backup] BACKUP_RETENTION_DAYS inválido ($$BACKUP_RETENTION_DAYS) — usando 35"
+          BACKUP_RETENTION_DAYS=35
+        }
         while true; do
           TS=$$(date -u +%Y%m%dT%H%M%SZ)
           OUT="/backups/kubo-$$TS.surql"
@@ -337,14 +355,16 @@ services:
               --header="surreal-db: $$SURREAL_DB" \
               "http://surrealdb:8000/export"; then
             echo "[backup] dump local: $$OUT ($$(wc -c < "$$OUT") bytes)"
+            # Retenção: só depois de um dump bom — se o export falha, o último
+            # dump válido fica, por mais velho que esteja. `find -delete` (nunca
+            # rm -rf), escopo estreito no glob kubo-*.surql — não toca mais nada
+            # em /backups.
+            find /backups -name 'kubo-*.surql' -mtime +"$$BACKUP_RETENTION_DAYS" -delete 2>/dev/null || true
           else
             echo "[backup] export FALHOU (timeout/erro) — nova tentativa no próximo ciclo"
             rm -f "$$OUT"
           fi
-          # Retenção: apaga dumps com mais de 7 dias. `find -delete` (nunca rm -rf),
-          # escopo estreito no glob kubo-*.surql — não toca mais nada em /backups.
-          find /backups -name 'kubo-*.surql' -mtime +7 -delete 2>/dev/null || true
-          sleep 86400
+          sleep "$$BACKUP_INTERVAL_SECONDS"
         done
 
 volumes:
