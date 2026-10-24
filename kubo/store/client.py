@@ -39,9 +39,14 @@ class DbConnection(UnscopedDb, Protocol):
 
 
 _DEFAULT_URL = "ws://127.0.0.1:8000/rpc"
-# Usuário de ESCRITA da UI (ROOT-level EDITOR). Nome fixo (não é segredo); a senha vem por
-# env, rotação idêntica ao kubo_ro. ADR-0018 §I.
+# Usuário de ESCRITA da UI (EDITOR). Default `kubo_rw` (ROOT-level, deploy próprio); na instância
+# central é `rw_<db>` (DATABASE-level) e vem de `KUBO_RW_SURREAL_USER`. Nome não é segredo; a senha
+# vem por env, rotação idêntica ao kubo_ro. ADR-0018 §I.
 _RW_USER = "kubo_rw"
+# `root`: usuário no nível ROOT (signin só com usuário/senha — deploy próprio, dev/CI).
+# `database`: usuário de DATABASE (instância central): o signin leva namespace+database, senão o
+# servidor não acha o usuário. Escolha por `SURREAL_AUTH_LEVEL`; default `root` (não muda nada).
+_AUTH_LEVELS = ("root", "database")
 
 
 @dataclass(frozen=True)
@@ -58,11 +63,13 @@ class Config:
     password: str
     namespace: str
     database: str
+    auth_level: str = "root"
 
     def __repr__(self) -> str:
         return (
             f"Config(url={self.url!r}, user={self.user!r}, password=***, "
-            f"namespace={self.namespace!r}, database={self.database!r})"
+            f"namespace={self.namespace!r}, database={self.database!r}, "
+            f"auth_level={self.auth_level!r})"
         )
 
 
@@ -99,12 +106,18 @@ def config() -> Config:
             "SURREAL_USER e SURREAL_PASS são obrigatórios para endpoint não-loopback "
             f"({url!r}) — não caia no default root/root contra um host real."
         )
+    auth_level = os.environ.get("SURREAL_AUTH_LEVEL", "root")
+    if auth_level not in _AUTH_LEVELS:
+        raise ConfigError(
+            f"SURREAL_AUTH_LEVEL inválido ({auth_level!r}) — use um de {', '.join(_AUTH_LEVELS)}."
+        )
     return Config(
         url=url,
         user=user,
         password=password,
         namespace=os.environ.get("SURREAL_NS", "kubo"),
         database=os.environ.get("SURREAL_DB", "kubo"),
+        auth_level=auth_level,
     )
 
 
@@ -121,7 +134,17 @@ def connect(cfg: Config | None = None) -> Generator[DbConnection, None, None]:
     # signin/use DENTRO do try: se qualquer um falhar, o finally ainda fecha a
     # conexão (senão vaza socket a cada falha de auth).
     try:
-        db.signin({"username": cfg.user, "password": cfg.password})
+        if cfg.auth_level == "database":
+            db.signin(
+                {
+                    "namespace": cfg.namespace,
+                    "database": cfg.database,
+                    "username": cfg.user,
+                    "password": cfg.password,
+                }
+            )
+        else:
+            db.signin({"username": cfg.user, "password": cfg.password})
         db.use(cfg.namespace, cfg.database)
         yield cast(DbConnection, db)
     finally:
@@ -129,8 +152,9 @@ def connect(cfg: Config | None = None) -> Generator[DbConnection, None, None]:
 
 
 def rw_config() -> Config:
-    """Config de ESCRITA (kubo_rw, ROLES EDITOR — ADR-0018 §I). Herda url/ns/db da config base
-    (MESMO endpoint que o kubo_ro), troca só user→kubo_rw e password→`KUBO_RW_SURREAL_PASS`.
+    """Config de ESCRITA (EDITOR — ADR-0018 §I). Herda url/ns/db/auth_level da config base (MESMO
+    endpoint que o kubo_ro), troca só user→`KUBO_RW_SURREAL_USER` (default kubo_rw) e
+    password→`KUBO_RW_SURREAL_PASS`.
 
     Fail-fast: a env ausente levanta ConfigError — os 2 handlers de escrita traduzem em 503, e
     o resto da UI (kubo_ro) segue vivo. A senha nunca tem default (invariante 8)."""
@@ -143,10 +167,11 @@ def rw_config() -> Config:
     base = config()
     return Config(
         url=base.url,
-        user=_RW_USER,
+        user=os.environ.get("KUBO_RW_SURREAL_USER", _RW_USER),
         password=password,
         namespace=base.namespace,
         database=base.database,
+        auth_level=base.auth_level,
     )
 
 
