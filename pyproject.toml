@@ -11,7 +11,7 @@ dependencies = [
     # separado na imagem. Spawn + turno completo + custo (total_cost_usd) provados
     # DENTRO da imagem no kubo-test (LXC aninhado). O CLI vive no wheel: pinar o wheel
     # pina o CLI. Bump revalida o spike.
-    "claude-agent-sdk==0.2.119",
+    "claude-agent-sdk==0.2.121",
     "defusedxml>=0.7.1",
     "fastapi>=0.139.0",
     "feedparser>=6.0.11",
