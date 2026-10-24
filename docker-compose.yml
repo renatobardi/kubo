@@ -64,6 +64,8 @@ services:
       SURREAL_PASS: ${SURREAL_PASS:?defina SURREAL_PASS explicitamente (invariante 8)}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
+      # root (default) | database (instância central: signin leva ns+db). Ver ADR-0055.
+      SURREAL_AUTH_LEVEL: ${SURREAL_AUTH_LEVEL:-root}
       # Keys de LLM (M6): substituídas do .env do servidor (invariante 8, nunca
       # literal). SEM `:?` fail-fast — o scheduler sobe para os feed workers que não
       # usam LLM; a ausência só falha quando o backfill/destilação a exige de fato
@@ -197,6 +199,8 @@ services:
       SURREAL_PASS: ${KUBO_RO_SURREAL_PASS:?defina KUBO_RO_SURREAL_PASS — senha do usuário read-only da UI (runbook); a UI nunca roda com credencial de escrita}
       SURREAL_NS: ${SURREAL_NS:-kubo}
       SURREAL_DB: ${SURREAL_DB:-kubo}
+      # root (default) | database (instância central: signin leva ns+db). Ver ADR-0055.
+      SURREAL_AUTH_LEVEL: ${SURREAL_AUTH_LEVEL:-root}
       # Segredos da UI (invariante 8), fail-fast como o SURREAL_PASS. O hash sai do
       # helper `python -m kubo.api.hashpw`; o secret de sessão é um token aleatório.
       KUBO_PASSWORD_HASH: ${KUBO_PASSWORD_HASH:?defina KUBO_PASSWORD_HASH — gere com python -m kubo.api.hashpw}
@@ -224,6 +228,7 @@ services:
       # `:?` fail-fast: ausente, a UI de leitura segue viva e SÓ os 2 handlers de
       # escrita (aprovar/rejeitar gate, disparar flow) dão 503. Criação = passo
       # one-time do runbook (§2d), senha via env (invariante 8), nunca migration.
+      KUBO_RW_SURREAL_USER: ${KUBO_RW_SURREAL_USER:-kubo_rw}
       KUBO_RW_SURREAL_PASS: ${KUBO_RW_SURREAL_PASS:-}
       # Custo NOMEADO do write-path (ADR-0018 §I): a kubo-api agora dispara flows e
       # entrega relatórios na aprovação, logo carrega LLM + Telegram + base URL. SEM
