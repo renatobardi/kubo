@@ -109,6 +109,8 @@ print(json.dumps({
 }))' | "${SSH[@]}" "lxc exec ${LXC_NAME} -- python3 -c \"import base64;exec(base64.b64decode('${MERGE_B64}'))\""
 
 echo "[central] validando o compose resultante (sem subir nada)"
-"${SSH[@]}" "lxc exec ${LXC_NAME} -- bash -c 'cd /home/ubuntu/kubo && set -a && . ./.env && set +a && KUBO_IMAGE=x docker compose config --quiet && docker compose config --services | tr \"\\n\" \" \"'" </dev/null
+# O compose lê o .env sozinho (COMPOSE_FILE e interpolação); NÃO fazer `source` dele: o .env do
+# servidor tem valores com espaço sem aspas e não é shell válido.
+"${SSH[@]}" "lxc exec ${LXC_NAME} -- sudo -u ubuntu -H bash -c 'cd ~/kubo && KUBO_IMAGE=x docker compose config --quiet && docker compose config --services | tr \"\\n\" \" \"'" </dev/null
 echo
 echo "[central] OK: .env pronto. Nada foi reiniciado; o rollback é restaurar .env.pre-central."
