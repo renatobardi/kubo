@@ -89,19 +89,32 @@ else
   docker compose build
 fi
 
+# Com o overlay compose.central.yml o banco é o da instância central (ADR-0055): o `surrealdb` local fica
+# atrás do profile `local-db` e subi-lo pelo nome o religaria a cada deploy. Lido do COMPOSE_FILE do
+# ambiente (modo CD já o exportou; no modo build vem do shell ou do .env).
+compose_files="${COMPOSE_FILE:-$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | tail -n1)}"
+uses_central_database=0
+case ":${compose_files}:" in
+  *:compose.central.yml:*) uses_central_database=1 ;;
+esac
+
 # Quiesce writers before destructive migrations (ADR-0030 §5).
 docker compose stop kubo-api kubo-scheduler
-docker compose up -d --no-build surrealdb
-deadline=$((SECONDS + 120))
-until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)" 2>/dev/null || true)" == healthy ]]; do
-  if (( SECONDS >= deadline )); then
-    echo "[deploy] FALHOU: surrealdb não ficou healthy em 120s" >&2
-    docker compose ps surrealdb >&2 || true
-    docker compose logs --tail=100 surrealdb >&2 || true
-    exit 1
-  fi
-  sleep 3
-done
+if [ "$uses_central_database" -eq 1 ]; then
+  echo "[deploy] overlay central ativo — banco local não é iniciado nem aguardado"
+else
+  docker compose up -d --no-build surrealdb
+  deadline=$((SECONDS + 120))
+  until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q surrealdb)" 2>/dev/null || true)" == healthy ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "[deploy] FALHOU: surrealdb não ficou healthy em 120s" >&2
+      docker compose ps surrealdb >&2 || true
+      docker compose logs --tail=100 surrealdb >&2 || true
+      exit 1
+    fi
+    sleep 3
+  done
+fi
 
 docker compose run -T --rm kubo-scheduler python -m kubo.store.migrations
 # Seed das fontes RSS legadas como Cadastros (#108): passo IRMÃO das migrations —
