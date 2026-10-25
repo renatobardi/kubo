@@ -16,6 +16,8 @@
 #   KUBO_TEST_NAME     container LXC (default: kubo-test)
 #   KUBO_CENTRAL_URL   endpoint (default: ws://10.173.117.50:8000/rpc)
 #   KUBO_CENTRAL_DB    database no central (default: test)
+#   KUBO_BASE_COMPOSE_FILE  COMPOSE_FILE base, usado só se o .env ainda não tiver a chave
+#                           (default: docker-compose.yml:compose.dev-lxc.yml; no prd, o wrapper define o do prd)
 set -euo pipefail
 
 REMOTE_HOST="${KUBO_REMOTE_HOST:-oute-server}"
@@ -104,7 +106,7 @@ python3 -c '
 import json, os
 d = os.environ["CENTRAL_DB_"]
 print(json.dumps({
-    "COMPOSE_FILE": "docker-compose.yml:compose.dev-lxc.yml",
+    "COMPOSE_FILE": os.environ.get("KUBO_BASE_COMPOSE_FILE", "docker-compose.yml:compose.dev-lxc.yml"),
     "SURREAL_URL": os.environ["CENTRAL_URL_"], "SURREAL_AUTH_LEVEL": "database",
     "SURREAL_NS": "kubo", "SURREAL_DB": d,
     "SURREAL_USER": "app_" + d, "SURREAL_PASS": os.environ["KUBO_CENTRAL_APP_PASS"],

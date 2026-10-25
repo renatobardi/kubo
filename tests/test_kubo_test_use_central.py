@@ -107,3 +107,51 @@ def test_second_run_is_idempotent_and_does_not_overwrite_the_backup(
     assert env_file.read_text() == first
     assert _backup_path(env_file).read_text() == backup
     assert "SURREAL_PASS=old" in backup  # pragma: allowlist secret
+
+
+def _payload(env: dict[str, str]) -> dict[str, str]:
+    """Executa o gerador do payload (o `python3 -c '...'` do script) com as variáveis dadas."""
+    import subprocess
+
+    match = re.search(r"python3 -c '\n(import json, os.*?\}\)\))'", SCRIPT.read_text(), re.S)
+    assert match, "gerador do payload não encontrado no script"
+    base = {"PATH": os.environ["PATH"], "CENTRAL_URL_": "ws://c:8000/rpc"}
+    base.update(
+        {"KUBO_CENTRAL_APP_PASS": "a", "KUBO_CENTRAL_RW_PASS": "b", "KUBO_CENTRAL_RO_PASS": "c"}
+    )
+    out = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", match.group(1)],
+        env={**base, **env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_payload_defaults_to_the_dev_compose_files() -> None:
+    payload = _payload({"CENTRAL_DB_": "test"})
+    assert payload["COMPOSE_FILE"] == "docker-compose.yml:compose.dev-lxc.yml"
+
+
+def test_payload_uses_the_base_compose_of_the_environment() -> None:
+    """No prd o COMPOSE_FILE base é o do prd (só vale se o .env ainda não tiver a chave)."""
+    payload = _payload(
+        {"CENTRAL_DB_": "prd", "KUBO_BASE_COMPOSE_FILE": "docker-compose.yml:compose.prd-lxc.yml"}
+    )
+    assert payload["COMPOSE_FILE"] == "docker-compose.yml:compose.prd-lxc.yml"
+
+
+def test_payload_builds_the_three_users_from_the_database_name() -> None:
+    payload = _payload({"CENTRAL_DB_": "prd"})
+    assert payload["SURREAL_DB"] == "prd"
+    assert (
+        payload["SURREAL_USER"],
+        payload["KUBO_RW_SURREAL_USER"],
+        payload["KUBO_RO_SURREAL_USER"],
+    ) == (
+        "app_prd",
+        "rw_prd",
+        "ro_prd",
+    )
+    assert payload["SURREAL_AUTH_LEVEL"] == "database"
