@@ -45,9 +45,15 @@ def _run(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int
     return chowns
 
 
+def _backup_path(env_file: Path) -> Path:
+    """O backup mora FORA da pasta do .env: o rsync --delete do CD apaga o que não está no repo."""
+    return env_file.parent.parent / ".env.pre-central"
+
+
 @pytest.fixture
 def env_file(tmp_path: Path) -> Path:
-    path = tmp_path / ".env"
+    (tmp_path / "kubo").mkdir()
+    path = tmp_path / "kubo" / ".env"
     path.write_text(
         "COMPOSE_FILE=docker-compose.yml:compose.dev-lxc.yml\nSURREAL_PASS=old\nOTHER=1\n"
     )
@@ -64,6 +70,10 @@ def test_rewritten_env_and_backup_keep_the_original_owner(
     expected = (original.st_uid, original.st_gid)
     assert owners.get(".env.tmp") == expected, "o .env novo precisa manter o dono original"
     assert owners.get(".env.pre-central") == expected, "o backup também"
+    assert (
+        Path(next(p for p, _, _ in chowns if p.endswith(".env.pre-central"))).parent
+        == env_file.parent.parent
+    )
 
 
 def test_env_ends_with_mode_600_and_keeps_unrelated_lines(
@@ -77,13 +87,23 @@ def test_env_ends_with_mode_600_and_keeps_unrelated_lines(
     assert "SURREAL_PASS=new-app-pass" in text  # pragma: allowlist secret
 
 
+def test_backup_is_kept_outside_the_directory_the_cd_syncs(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressão: com o backup em ~/kubo, o `rsync --delete` do CD o apagou no primeiro deploy."""
+    _run(env_file, monkeypatch)
+    assert _backup_path(env_file).exists()
+    assert not (env_file.parent / ".env.pre-central").exists()
+    assert "SURREAL_PASS=old" in _backup_path(env_file).read_text()  # pragma: allowlist secret
+
+
 def test_second_run_is_idempotent_and_does_not_overwrite_the_backup(
     env_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _run(env_file, monkeypatch)
     first = env_file.read_text()
-    backup = Path(str(env_file) + ".pre-central").read_text()
+    backup = _backup_path(env_file).read_text()
     _run(env_file, monkeypatch)
     assert env_file.read_text() == first
-    assert Path(str(env_file) + ".pre-central").read_text() == backup
+    assert _backup_path(env_file).read_text() == backup
     assert "SURREAL_PASS=old" in backup  # pragma: allowlist secret
