@@ -811,6 +811,41 @@ firewall do central, e o database com os usuários `app_/rw_/ro_<db>` criados pe
 **Rollback**: restaurar `~/.env.pre-central` sobre `~/kubo/.env` e `docker compose --profile local-db up -d` (o banco local
 volta com os dados de antes da troca); se preciso, `lxc restore kubo-test pre-central`.
 
+## 5c. Cutover do kubo-prd para a instância central (PRODUÇÃO) — ADR-0055
+
+Mesmo caminho que o kubo-test fez (§5b), com mais cuidado. **Só com o dono presente** (janela de uns 10 min
+sem scheduler/api; a UI fica fora do ar nesse intervalo).
+
+**Antes (uma vez):**
+1. **Renovar o auth key do Tailscale do PRD.** O secret `TS_AUTHKEY_PRD` (environment `prd`) é de 25/07: é a chave
+   `kubo-cd-prd`, que **expirou em 23/10** (auth keys duram no máximo 90 dias). Gerar outra (reusable + ephemeral, sem tag,
+   como a anterior) e atualizar o secret.
+2. **Promover o código novo ao PRD** (signin de database + o arquivo `compose.central.yml`; o `.env` do prd não muda, então
+   o comportamento fica idêntico): Actions → `cd` → *Run workflow* na `main`. O `deploy-dev` redeploya o kubo-test,
+   o `collect-digest` lê o digest vivo do kubo-test e o `deploy-prd` **espera a aprovação do reviewer do environment `prd`**.
+   Dispare **depois de qualquer outro merge**: o job revalida o digest do kubo-test e aborta se ele mudou desde a coleta.
+   Conferir depois: kubo-prd healthy, UI 200, `compose.central.yml` presente em `~/kubo`.
+3. No central, os usuários `app_prd`/`rw_prd`/`ro_prd` já existem (criados pelo `init`).
+
+**Janela (no repo `oute-surreal-db`, no Mac):**
+1. `./ops/migrate_kubo_data.sh prd --check`, depois `./ops/migrate_kubo_data.sh prd`: pára scheduler/api, exporta o banco local
+   (por pipe), importa no central e **confere** contagem por tabela e KNN. Se divergir, para e mostra como retomar o local.
+2. `./scripts/ops/kubo-prd-use-central.sh` (neste repo): pede confirmação (`kubo-prd`) e as 3 senhas; guarda o `.env` anterior em
+   `~/.env.pre-central`; soma o overlay. Não reinicia nada.
+3. `./ops/start_kubo_on_central.sh prd`: prova `app`/`ro`/`rw`, recria api+scheduler na mesma imagem, digest-guard + health-guard e
+   smoke que grava no central.
+
+**Não tire snapshot do LXC kubo-prd:** no pool `dir` o snapshot congela a instância por minutos (em produção, indisponibilidade).
+O rollback não precisa dele.
+
+**Rollback** (o banco local nunca é tocado): restaurar `~/.env.pre-central` sobre `~/kubo/.env` e
+`docker compose --profile local-db up -d`; depois `docker compose up -d --no-build --force-recreate kubo-api kubo-scheduler`.
+O que for escrito no central depois da troca não volta para o banco local.
+
+**Depois, e antes de desligar o banco local + o sidecar de backup do prd:** o passo *Backup antes de migrar* do `deploy-prd`
+(`.github/workflows/cd.yml`) faz `docker compose exec backup …`; sem o sidecar, **todo deploy de PRD quebra**. Trocar esse passo
+pelo snapshot/backup do central (ou pulá-lo quando o overlay central estiver ativo) antes de desligar o sidecar.
+
 ## 6. Cheat-sheet
 
 | Ação | Comando |
