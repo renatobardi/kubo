@@ -21,7 +21,7 @@ A instância central cria, por database, três usuários **de database**: `app_<
 
 - Positivo: a credencial do Kubo na instância central só alcança `kubo/<db>`; nenhum ROOT em app.
 - Positivo: mudança pequena e retrocompatível (um campo, uma condicional); coberta por testes unitários e de integração contra SurrealDB real.
-- Neutro: migrar o deploy para o central é mudança de configuração (`SURREAL_URL`, `SURREAL_AUTH_LEVEL=database`, usuários/senhas `*_test`/`*_prd`), sem novo código.
+- Neutro: migrar o deploy para o central é configuração: o overlay `compose.central.yml` (banco local e backup atrás do profile `local-db`, `SURREAL_URL` por env) e as variáveis `SURREAL_AUTH_LEVEL=database`, usuários/senhas `app_/rw_/ro_<db>`. Procedimento e rollback em `runbook-deploy.md` §5b.
 - Negativo/atenção: scripts de operação que fazem signin próprio (fora de `kubo/store/client.py`) precisam do mesmo ajuste (`namespace`/`database` no signin quando `SURREAL_AUTH_LEVEL=database`).
 - Atenção: a instância central roda SurrealDB v3.3.0 e o Kubo está pinado em v3.1.5 ↔ SDK 2.0.0 (ADR-0005). A validação é o piloto kubo-test (dados já importados lá: 55 tabelas, 0 divergências); o bump do par SDK/servidor segue o ADR-0005.
 

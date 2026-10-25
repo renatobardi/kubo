@@ -792,6 +792,25 @@ curl -I https://kubo.oute.pro/healthz
 
 ---
 
+## 5b. Usar a instância SurrealDB central (oute-surreal-db) — ADR-0055
+
+O kubo pode usar a instância central em vez do banco local do compose. O banco local e o sidecar de
+backup ficam atrás do profile `local-db`; o backup do central é snapshot do LXC dele. Pré-requisitos:
+o código do ADR-0055 já deployado (`SURREAL_AUTH_LEVEL`), o IP do LXC do kubo na lista de clientes do
+firewall do central, e o database com os usuários `app_/rw_/ro_<db>` criados pelo `init` do central.
+
+1. **Snapshot do LXC** (rollback completo): `lxc snapshot kubo-test pre-central` (no oute-server).
+2. **Parar a escrita**: `docker compose stop kubo-scheduler kubo-api` (o banco local fica parado, intacto).
+3. **Reimportar os dados no central** (a cópia anterior fica velha): exportar o banco local e importar com
+   `scripts/import_dump.py` do repo `oute-surreal-db` (runbook dele, seção 8), conferindo contagem por tabela.
+4. **`.env` do servidor**: `./scripts/ops/kubo-test-use-central.sh` (pede as 3 senhas no terminal, guarda
+   o `.env` anterior em `.env.pre-central`, soma `compose.central.yml` ao `COMPOSE_FILE`). `--check` só confere.
+5. **Subir**: `docker compose up -d` (com `KUBO_IMAGE` do deploy). Os serviços não dependem mais do banco local.
+6. **Smoke**: UI abre, leitura (`kubo_ro`→`ro_<db>`) e uma escrita da UI (`rw_<db>`), scheduler sem erro de auth.
+
+**Rollback**: restaurar `.env.pre-central` sobre `.env` e `docker compose --profile local-db up -d` (o banco local
+volta com os dados de antes da troca); se preciso, `lxc restore kubo-test pre-central`.
+
 ## 6. Cheat-sheet
 
 | Ação | Comando |

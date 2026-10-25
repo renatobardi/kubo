@@ -1,0 +1,36 @@
+# compose.central.yml — overlay: o kubo usa a instância SurrealDB central (oute-surreal-db) em vez
+# do banco local do compose. ADR-0055.
+#
+# NÃO é um compose autônomo: soma-se ao docker-compose.yml na lista COMPOSE_FILE do `.env` do
+# servidor (ambiente-específico, não commitado), depois do overlay do ambiente:
+#   COMPOSE_FILE=docker-compose.yml:compose.dev-lxc.yml:compose.central.yml
+# (o deploy-remote.sh acrescenta compose.cd.yml ao final). Verifique com `docker compose config`.
+#
+# No `.env` do servidor, além do COMPOSE_FILE:
+#   SURREAL_URL=ws://10.173.117.50:8000/rpc      # obrigatório (fail-fast abaixo)
+#   SURREAL_AUTH_LEVEL=database                  # usuários do central são de database
+#   SURREAL_NS=kubo  SURREAL_DB=test|prd
+#   SURREAL_USER=app_<db>  SURREAL_PASS=...      # migrations e workers (OWNER)
+#   KUBO_RW_SURREAL_USER=rw_<db>  KUBO_RW_SURREAL_PASS=...   # escrita da UI (EDITOR)
+#   KUBO_RO_SURREAL_USER=ro_<db>  KUBO_RO_SURREAL_PASS=...   # leitura da UI (VIEWER)
+#
+# O banco local e o sidecar de backup (que exporta DO banco local) ficam atrás do profile
+# `local-db`: o backup do central é snapshot do LXC dele. Rollback para o banco local:
+#   docker compose --profile local-db up -d   (e tirar este overlay do COMPOSE_FILE)
+
+services:
+  surrealdb:
+    profiles: ["local-db"]
+
+  backup:
+    profiles: ["local-db"]
+
+  kubo-scheduler:
+    depends_on: !reset {}
+    environment:
+      SURREAL_URL: ${SURREAL_URL:?defina SURREAL_URL - endpoint da instância central}
+
+  kubo-api:
+    depends_on: !reset {}
+    environment:
+      SURREAL_URL: ${SURREAL_URL:?defina SURREAL_URL - endpoint da instância central}
