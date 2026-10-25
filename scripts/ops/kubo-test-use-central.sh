@@ -62,10 +62,12 @@ MERGE_PY="$(cat <<'PY'
 import json, os, shutil, sys
 path = "/home/ubuntu/kubo/.env"
 new = json.load(sys.stdin)
+owner = os.stat(path)  # dono original: o `lxc exec` roda como root e não pode deixar o .env root:root
 backup = path + ".pre-central"
 if not os.path.exists(backup):
     shutil.copy2(path, backup)
     os.chmod(backup, 0o600)
+    os.chown(backup, owner.st_uid, owner.st_gid)
 lines = open(path).read().splitlines()
 seen = set()
 out = []
@@ -87,6 +89,7 @@ tmp = path + ".tmp"
 with open(tmp, "w") as fh:
     fh.write("\n".join(out) + "\n")
 os.chmod(tmp, 0o600)
+os.chown(tmp, owner.st_uid, owner.st_gid)
 os.replace(tmp, path)
 print("chaves gravadas:", ", ".join(sorted(new)))
 PY
@@ -106,7 +109,7 @@ print(json.dumps({
     "SURREAL_USER": "app_" + d, "SURREAL_PASS": os.environ["KUBO_CENTRAL_APP_PASS"],
     "KUBO_RW_SURREAL_USER": "rw_" + d, "KUBO_RW_SURREAL_PASS": os.environ["KUBO_CENTRAL_RW_PASS"],
     "KUBO_RO_SURREAL_USER": "ro_" + d, "KUBO_RO_SURREAL_PASS": os.environ["KUBO_CENTRAL_RO_PASS"],
-}))' | "${SSH[@]}" "lxc exec ${LXC_NAME} -- python3 -c \"import base64;exec(base64.b64decode('${MERGE_B64}'))\""
+}))' | "${SSH[@]}" "lxc exec ${LXC_NAME} -- sudo -u ubuntu -H python3 -c \"import base64;exec(base64.b64decode('${MERGE_B64}'))\""
 
 echo "[central] validando o compose resultante (sem subir nada)"
 # O compose lê o .env sozinho (COMPOSE_FILE e interpolação); NÃO fazer `source` dele: o .env do
