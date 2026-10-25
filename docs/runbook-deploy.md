@@ -804,11 +804,11 @@ firewall do central, e o database com os usuários `app_/rw_/ro_<db>` criados pe
 3. **Reimportar os dados no central** (a cópia anterior fica velha): exportar o banco local e importar com
    `scripts/import_dump.py` do repo `oute-surreal-db` (runbook dele, seção 8), conferindo contagem por tabela.
 4. **`.env` do servidor**: `./scripts/ops/kubo-test-use-central.sh` (pede as 3 senhas no terminal, guarda
-   o `.env` anterior em `.env.pre-central`, soma `compose.central.yml` ao `COMPOSE_FILE`). `--check` só confere.
+   o `.env` anterior em `~/.env.pre-central` (fora de `~/kubo`: o `rsync --delete` do CD apaga o que não está no repo), soma `compose.central.yml` ao `COMPOSE_FILE`). `--check` só confere.
 5. **Subir**: `docker compose up -d` (com `KUBO_IMAGE` do deploy). Os serviços não dependem mais do banco local.
 6. **Smoke**: UI abre, leitura (`kubo_ro`→`ro_<db>`) e uma escrita da UI (`rw_<db>`), scheduler sem erro de auth.
 
-**Rollback**: restaurar `.env.pre-central` sobre `.env` e `docker compose --profile local-db up -d` (o banco local
+**Rollback**: restaurar `~/.env.pre-central` sobre `~/kubo/.env` e `docker compose --profile local-db up -d` (o banco local
 volta com os dados de antes da troca); se preciso, `lxc restore kubo-test pre-central`.
 
 ## 6. Cheat-sheet

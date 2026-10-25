@@ -5,7 +5,7 @@
 #
 # Segredos: pedidos no terminal (read -s) ou lidos de KUBO_CENTRAL_APP_PASS / _RW_PASS / _RO_PASS.
 # Seguem pelo stdin do ssh; nunca em argumento, log ou disco local. O `.env` anterior é guardado
-# uma vez em `.env.pre-central` (modo 600) — é o rollback.
+# uma vez em `~/.env.pre-central` (FORA de ~/kubo, que o rsync --delete do CD limpa; modo 600) — é o rollback.
 #
 # Uso:
 #   ./scripts/ops/kubo-test-use-central.sh --check   # só confere o ambiente (não altera nada)
@@ -63,7 +63,8 @@ import json, os, shutil, sys
 path = "/home/ubuntu/kubo/.env"
 new = json.load(sys.stdin)
 owner = os.stat(path)  # dono original: o `lxc exec` roda como root e não pode deixar o .env root:root
-backup = path + ".pre-central"
+# FORA da pasta do .env: o rsync --delete do CD apaga de ~/kubo tudo que não está no repo (já apagou um).
+backup = os.path.join(os.path.dirname(os.path.dirname(path)), ".env.pre-central")
 if not os.path.exists(backup):
     shutil.copy2(path, backup)
     os.chmod(backup, 0o600)
@@ -96,7 +97,7 @@ PY
 )"
 MERGE_B64="$(printf '%s' "${MERGE_PY}" | base64 | tr -d '\n')"
 
-echo "[central] gravando no .env de ${LXC_NAME} (backup em .env.pre-central)"
+echo "[central] gravando no .env de ${LXC_NAME} (backup em ~/.env.pre-central)"
 CENTRAL_URL_="${CENTRAL_URL}" CENTRAL_DB_="${CENTRAL_DB}" \
 KUBO_CENTRAL_APP_PASS="${KUBO_CENTRAL_APP_PASS}" KUBO_CENTRAL_RW_PASS="${KUBO_CENTRAL_RW_PASS}" KUBO_CENTRAL_RO_PASS="${KUBO_CENTRAL_RO_PASS}" \
 python3 -c '
@@ -116,4 +117,4 @@ echo "[central] validando o compose resultante (sem subir nada)"
 # servidor tem valores com espaço sem aspas e não é shell válido.
 "${SSH[@]}" "lxc exec ${LXC_NAME} -- sudo -u ubuntu -H bash -c 'cd ~/kubo && KUBO_IMAGE=x docker compose config --quiet && docker compose config --services | tr \"\\n\" \" \"'" </dev/null
 echo
-echo "[central] OK: .env pronto. Nada foi reiniciado; o rollback é restaurar .env.pre-central."
+echo "[central] OK: .env pronto. Nada foi reiniciado; o rollback é restaurar ~/.env.pre-central."
